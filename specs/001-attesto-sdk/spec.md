@@ -134,6 +134,15 @@ Why this reads cleanly (the MCP idiom): the `inputSchema` is shown inline, so `{
 `order` comes from your `priceCart(items)`; `requires` comes from the visible `attesto.requirements(...)`
 call. Nothing is injected off-screen.
 
+**`structuredContent` is JSON on the wire — `requires` is data, not policy.** The tool result is serialized
+(JSON-RPC) to **both** the agent and the widget (`src/app.tsx` reads the tool output; ChatGPT via
+`window.openai.toolOutput`), so it must be plain JSON. The policy you pass holds **functions** (`hasAlcohol`,
+each credential's `verify`) — those never serialize. `attesto.requirements(order, policy)` **resolves** the
+policy server-side in Context 1: it runs your `.when()` predicates, picks the applicable gates, and emits a
+flat descriptor array — `[{ credential, required, effect, label, minAge? }]`, no functions — so a non-alcohol
+cart simply omits the `age` entry. `requirements()` is the **code → data boundary**; an optional tool
+`outputSchema` can validate the emitted shape.
+
 **The policy** (one ordered array — the single source of truth):
 - **order** = array position (top-to-bottom = run order; payment always settles last).
 - **required / optional** = the explicit wrappers.
