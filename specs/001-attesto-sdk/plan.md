@@ -56,7 +56,7 @@ consolidated (Mode A) only; DCO sign-off; presence-only trust (real verifier def
 | IV. Ordered, conditional policy array | ✅ PASS | Policy is an ordered array; payment-last invariant in the resolver; `.when()` / `appliesTo` carry conditionality; amount derived from the order. |
 | V. Extensible to any credential | ✅ PASS | `defineCredential` + `gate()/discount()/authorize()`; built-ins are pre-defined credentials; by-object use. |
 | VI. structuredContent is data, not policy | ✅ PASS | `requirements()` resolves functions server-side and emits a flat manifest; a contract test asserts `JSON.stringify` round-trips with no functions. |
-| VII. Honesty in types; prefer simplicity | ✅ PASS | `enforcedAt` / `trust_level` typed; presence-only fenced; real verifier deferred. |
+| VII. Honesty in types; prefer simplicity | ✅ PASS | `enforcedAt` / `trust_level` are fields on `VerificationManifestEntry` (data-model + contract CT8), not prose; presence-only fenced; real verifier deferred. |
 | Security Requirements (6 invariants) | ✅ PASS | Enforcement stays on every completion path (unchanged web routes + the tool envelope); amounts re-derived; per-order store; explicit positive claims (`verify.ts` unchanged); origin/nonce binding unchanged. Bypass tests required. |
 | Workflow (spec-grounded, tested, DCO) | ✅ PASS | Artifacts cite real code; bypass + build verification per task; `git commit -s`. |
 

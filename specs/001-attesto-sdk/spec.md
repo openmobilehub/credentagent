@@ -30,7 +30,7 @@ them is what made every earlier draft confusing.
 │    pay              /payment-gate/passkey or /dc-payment → WebAuthn / wallet-signed AP2 (caBLE) │
 │    settle           completion.ts → re-price + x402→Hedera → orderStore.write                   │
 │  Age is RE-ENFORCED server-side on every completion path → 403 (passkey/routes.ts:67,          │
-│  dc-payment/routes.ts:58, app.ts:71). Fail-closed regardless of what Context 1 returned.       │
+│  dc-payment/routes.ts:58, app.ts:81). Fail-closed regardless of what Context 1 returned.       │
 └───────────────────────────────────────────────────────────────────────────────────────────────┘
                          │
                          ▼
@@ -71,13 +71,13 @@ Consolidated is the default. (The separate-blocking shape survives only for **Mo
 
 | Credential | Reported in Ctx 1 | Proof ceremony (Ctx 2) | Enforced server-side |
 | :-- | :-- | :-- | :-- |
-| **age** (required, *conditional*) | ✅ when the cart is age-restricted | `/credential-gate/age` — OpenID4VP/mdoc, phone *(mounted by the SDK)* | `/verify` **+ every completion path → 403** (`passkey/routes.ts:67`, `dc-payment/routes.ts:58`, `app.ts:71`) |
+| **age** (required, *conditional*) | ✅ when the cart is age-restricted | `/credential-gate/age` — OpenID4VP/mdoc, phone *(mounted by the SDK)* | `/verify` **+ every completion path → 403** (`passkey/routes.ts:67`, `dc-payment/routes.ts:58`, `app.ts:81`) |
 | **membership** (optional) | ✅ in `requires` | `/credential-gate/loyalty` — a **discount card**; present loyalty → 10% off | discount reconciled in pricing (`mandate.ts` Gate 1) |
 | **payment** (required) | ✅ in `requires` | `/payment-gate/passkey` or `/dc-payment` (WebAuthn / wallet-signed AP2 over caBLE) | 4 mandate gates + settlement gates completion (`completion.ts`) |
 
 Age is **proven once** (`/credential-gate/age/verify`) and then **re-enforced server-side on all three
 completion paths** — `place-order`, `passkey`, `dc-payment` each independently re-check `isAgeUnverified`
-→ 403 (`app.ts:71`, `passkey/routes.ts:67`, `dc-payment/routes.ts:58`), because the page's payment lock is
+→ 403 (`app.ts:81`, `passkey/routes.ts:67`, `dc-payment/routes.ts:58`), because the page's payment lock is
 **render-only** and a direct POST would otherwise bypass it (`checkout.ts:6`). Context 1 only *surfaces*
 the requirement to the agent — awareness, not enforcement. This is CLAUDE.md invariant #1: hiding a button
 is not enforcement; enforce on every completion path.
@@ -104,8 +104,9 @@ import { z } from "zod";
 const attesto = new Attesto({ walletOrigin: "https://shop.example" });
 attesto.mount(app);   // Context 2: mounts /credential-gate/* + owns the per-order verification store
 
-// How YOU decide an item is age-restricted, in YOUR catalog (the SDK doesn't guess):
-const hasAlcohol = (order) => order.lines.some((l) => l.category === "alcohol");
+// How YOU decide an item is age-restricted, in YOUR catalog (the SDK doesn't guess). In this catalog
+// the alcohol items carry `minimumAge: 21` (re-derived onto the order line, inv #2):
+const hasAlcohol = (order) => order.lines.some((l) => l.minimumAge != null);
 
 server.registerTool(
   "checkout",
@@ -204,7 +205,7 @@ attesto.requirements(order, [
   apply `.when(predicate)` at the call site — same `(order) => boolean` shape. Fires only when relevant
   (prescription only for Rx lines); omit both → always applies.
 
-**v0.1 scope [clarify]:** ship the three built-ins + `defineCredential` + the generic ceremony route, with
+**v0.1 scope (resolved — research §6):** ship the three built-ins + `defineCredential` + the generic ceremony route, with
 one custom example (a prescription `gate()`) proving the extension point. Arbitrary `discount()` amounts
 stay bounded by the engine's discount reconciliation (invariant #3) until generalized — see roadmap.
 
@@ -246,8 +247,9 @@ Two orthogonal typed axes, surfaced (never silent):
 - **Package name:** `@openmobilehub/attesto-gate`.
 - **Wallet interaction:** **sequential / progressive disclosure** (age, then payment, on the page) — may
   use multiple wallets. Not combined into a single OpenID4VP request.
-- **Builders naming:** `required` / `optional` (keep `requireCredential` / `optionalCredential` as
-  deprecated aliases).
+- **Builders naming:** `required` / `optional` (over `Credential` objects) **replace** the old string-based
+  `requireCredential` / `optionalCredential`. Clean break — they're type-incompatible, so no drop-in alias;
+  the package is 0.x/pre-release and the old assertions in `index.test.ts` are migrated.
 - **mdoc trust:** real-verifier integration **deliberately deferred** to keep v0.1 simple (see §6).
 - **Additional credential gates:** ✅ supported via `defineCredential` — custom credentials drop into the
   same ordered `required` / `optional` policy with a `gate()` / `discount()` / `authorize()` effect (§4).

@@ -33,12 +33,12 @@ The server-priced order (Principle: re-derived, never the raw token).
 
 | Field | Type | Notes |
 |-------|------|-------|
-| `id` / `sku` | `string` | Product id. |
-| `qty` | `number` | Quantity. |
+| `id` | `string` | Product id. |
+| `quantity` | `number` | Quantity (matches the demo's `PricedCartLine.quantity`). |
 | `unitPrice` | `number` | Cents; authoritative (catalog). |
-| `category` | `string?` | e.g. `"alcohol"` — read by a `.when()` predicate. |
-| `minimumAge` | `number?` | Optional per-product threshold (demo's `requiredAgeForLines`). |
-| `requiresRx` | `boolean?` | Example custom flag for a `prescription` `appliesTo`. |
+| `minimumAge` | `number?` | Per-product age threshold (21 for alcohol), **re-derived server-side** onto the line from the catalog (inv #2). `PricedCartLine` doesn't carry it natively — the gate enriches the order. |
+| `category` | `string?` | Product category (e.g. `"Beverages"`), same re-derivation; available to custom `.when()` predicates. |
+| `requiresRx` | `boolean?` | Example custom flag a `prescription` `appliesTo` reads. |
 
 ## Credential (policy — code)
 
@@ -81,6 +81,8 @@ The flat, JSON-safe element of `requires`. **No functions.**
 | `credential` | `string` | id. |
 | `required` | `boolean` | required vs optional. |
 | `effect` | `"gate" \| "discount" \| "authorize"` | the kind only. |
+| `enforcedAt` | `"tool" \| "checkout"` | where it runs (Principle VII — honesty in the type). |
+| `trust_level` | `"presence-only-demo" \| "issuer-verified"` | mdoc trust (Principle VII; matches the envelope's field — no regression). |
 | `label` | `string` | from `ui.label`, human-readable for agent/widget. |
 | `minAge?` | `number` | age only. |
 | `discountPct?` | `number` | discount only. |

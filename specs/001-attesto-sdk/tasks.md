@@ -37,26 +37,33 @@ per task; DCO sign-off (`git commit -s`).
 ## Phase 1: Setup
 
 - [ ] T001 Refactor `packages/attesto-gate/src/` into the module layout from `plan.md` — `client.ts`,
-      `credentials.ts`, `manifest.ts`, keep `envelope.ts`; rebuild `index.ts` exports. Build stays green.
+      `credentials.ts`, `manifest.ts`, keep `envelope.ts`; rebuild `index.ts` exports. Split the existing
+      `index.test.ts`: move the envelope wire-shape asserts to `packages/attesto-gate/src/envelope.test.ts`,
+      drop the old string-builder asserts (replaced in T006). Build stays green.
 - [ ] T002 [P] Add the public types from `data-model.md` to `packages/attesto-gate/src/types.ts`
       (`AttestoOptions`, `GateOrder`/`OrderLine`, `Credential`, `Step`, `Effect`, `VerificationManifestEntry`, `DcqlQuery`).
 
 ## Phase 2: Foundational (blocking — the primitives every story needs)
 
-- [ ] T003 [P] Contract test (serialization): `JSON.stringify(requirements(...))` round-trips with **no
-      functions** in `packages/attesto-gate/src/manifest.test.ts`.
+- [ ] T003 [P] Contract test (serialization + honesty): `JSON.stringify(requirements(...))` round-trips
+      with **no functions**, AND every entry carries `enforcedAt` + `trust_level` (CT8) — in
+      `packages/attesto-gate/src/manifest.test.ts`.
 - [ ] T004 [P] Contract test (ordering): a payment-bearing step resolves **last** even when declared
       earlier, in `packages/attesto-gate/src/manifest.test.ts`.
 - [ ] T005 [P] Contract test (type-safety): `age.over(21).in("usd")` is a **compile error** (expect-error
       test) in `packages/attesto-gate/src/types.test-d.ts`.
 - [ ] T006 Implement builders + `.when()`/`appliesTo` + `defineCredential` + `dcql` + effects
-      (`gate()`/`discount()`/`authorize()` as tagged data) in `packages/attesto-gate/src/credentials.ts`.
+      (`gate()`/`discount()`/`authorize()` as tagged data) + the `required(c)`/`optional(c)` wrappers in
+      `packages/attesto-gate/src/credentials.ts`. **Remove** the string-based `requireCredential` /
+      `optionalCredential` and the legacy string `Step` (clean break — type-incompatible, 0.x package).
 - [ ] T007 Implement `requirements()` resolver (run predicates, drop inapplicable, payment-last, emit the
       flat manifest) in `packages/attesto-gate/src/manifest.ts` → T003/T004 green.
 - [ ] T008 Implement the `Attesto` client constructor + `requirements()` delegation in
       `packages/attesto-gate/src/client.ts`.
 - [ ] T009 Keep `envelope.ts` (`buildVerificationRequired`/`isVerificationRequired`/`ageDcql`) as the
-      Mode-B/roadmap primitive and `gated()` as a deprecated shim; re-export all from `index.ts`.
+      Mode-B/roadmap primitive and `gated()` as a deprecated shim; re-export from `index.ts`. Keep the
+      envelope **wire-shape** assertions in `packages/attesto-gate/src/envelope.test.ts` (the
+      `_attesto`/`present.min_age`/`trust_level` checks moved out of `checkout-gate.test.ts` per T001).
 
 **Checkpoint**: package builds + foundational contract tests green.
 
@@ -75,8 +82,10 @@ and no completable link; a non-alcohol cart → a normal link. **Independent tes
 - [ ] T013 [US1] Implement `attesto.mount(app)` to mount the **existing** `/credential-gate` ceremony +
       `verificationStore` (do NOT reimplement OpenID4VP/mdoc; keep `payment-gate/credential-gate/verify.ts`
       fail-closed checks) in `packages/attesto-gate/src/client.ts`, wired in `app.ts`.
-- [ ] T014 [US1] Wire `server.ts` checkout tool to `attesto.requirements(order, [required(age.over(21).when(hasAlcohol))])`
-      with `hasAlcohol` over catalog `category`/`minimumAge`; return the manifest in `structuredContent.requires`.
+- [ ] T014 [US1] Wire `server.ts` checkout tool to `attesto.requirements(order, [required(age.over(21).when(hasAlcohol))])`.
+      Enrich the `GateOrder` lines with `minimumAge` **re-derived from the catalog** server-side (inv #2 — the
+      real `PricedCartLine` doesn't carry it); the grounded predicate is `hasAlcohol = (o) => o.lines.some(l => l.minimumAge != null)`
+      (alcohol items have `minimumAge: 21`). Return the manifest in `structuredContent.requires`.
 - [ ] T015 [US1] Verify: `npm run build` green (deploy-safe) + `checkout-gate.test.ts` green; commit (DCO).
 
 **Checkpoint**: US1 is a shippable MVP — the gate works end to end in the demo.
@@ -114,8 +123,10 @@ payment last; the demo shows age + membership + pay cards.
 
 - [ ] T024 [P] Update repo-root `README.md` to the v0.1 API and point its usage section at
       `specs/001-attesto-sdk/quickstart.md` (README is stale — early `gated()` shape).
-- [ ] T025 [P] Verify `/llms.txt` + `/.well-known/attesto.json` (`attesto-discovery.ts`) reflect the v0.1
-      manifest/contract; update the `requires`/credential shape if drifted.
+- [ ] T025 [P] No-regression check on the discovery surface: `/llms.txt` + `/.well-known/attesto.json`
+      (`attesto-discovery.ts`) still serve and don't contradict the v0.1 manifest (incl. `enforcedAt` /
+      `trust_level`). (The discovery surface is repo-level, not part of the SDK contract — keep it honest,
+      no new shape claims.)
 - [ ] T026 [P] Re-run the existing completion-path bypass tests (`app.test.ts`, passkey/dc-payment) to
       confirm the six security invariants still hold (every completion path 403s an unverified order).
 - [ ] T027 Deprecate `gated()` — `@deprecated` JSDoc + a one-time console warning; keep one minor version,

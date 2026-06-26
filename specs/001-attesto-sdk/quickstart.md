@@ -25,8 +25,9 @@ import { z } from "zod";
 const attesto = new Attesto({ walletOrigin: "https://shop.example" });
 attesto.mount(app);   // serves the wallet ceremony on your origin + owns the per-order verification store
 
-// You decide what "alcohol" means in your catalog — the SDK never guesses:
-const hasAlcohol = (order) => order.lines.some((l) => l.category === "alcohol");
+// You decide what counts as age-restricted in your catalog — the SDK never guesses. Here the alcohol
+// items carry `minimumAge: 21` (re-derived onto the order line):
+const hasAlcohol = (order) => order.lines.some((l) => l.minimumAge != null);
 
 server.registerTool(
   "checkout",

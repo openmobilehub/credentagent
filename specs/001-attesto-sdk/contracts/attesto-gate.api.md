@@ -56,6 +56,8 @@ export interface VerificationManifestEntry {
   credential: string;
   required: boolean;
   effect: "gate" | "discount" | "authorize";
+  enforcedAt: "tool" | "checkout";                       // Principle VII — honesty carried in the type
+  trust_level: "presence-only-demo" | "issuer-verified"; // matches the envelope's wire field (no regression)
   label: string;
   minAge?: number;
   discountPct?: number;
@@ -86,3 +88,14 @@ export type TrustLevel = "presence-only-demo" | "issuer-verified";
    age-restricted, unverified cart returns the manifest (age `gate`) and **no completable link**; the test
    fails if the gate is removed.
 7. **Type safety:** `age.over(21).in("usd")` is a compile error (builders are credential-specific).
+8. **Honesty axes (Principle VII):** every manifest entry carries `enforcedAt` (`"tool" | "checkout"`) and
+   `trust_level` (`"presence-only-demo"` in v0.1); the serialized manifest preserves both — no regression
+   from the envelope's `trust_level`.
+
+## Redefined / removed (breaking — package is 0.x, pre-release)
+
+- **`Step` is redefined:** `{ credential: Credential (object); required }` (was `{ credential: string;
+  required }`). The old string-based shape is gone, not aliased.
+- **`requireCredential` / `optionalCredential` (string-based) are removed** in favour of `required(c)` /
+  `optional(c)` over `Credential` objects (they were type-incompatible, so no drop-in alias). The existing
+  `index.test.ts` assertions for the old shapes are migrated as part of the module split.

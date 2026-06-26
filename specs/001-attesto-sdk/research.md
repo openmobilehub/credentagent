@@ -46,14 +46,17 @@ asset); requiring the developer to pass `isAgeUnverified`/`approveUrl` callbacks
 
 ## 4. Backward-compatibility with the overnight package
 
-**Decision**: The existing `packages/attesto-gate` exports (`gated`, `buildVerificationRequired`,
-`isVerificationRequired`, `ageDcql`, `Step`, `TrustLevel`, `VerificationRequired`) are **kept**.
-`buildVerificationRequired`/`isVerificationRequired` become the Mode-B/roadmap primitive and back the
-envelope contract test. `gated()` is superseded by the `Attesto` client; keep it as a thin deprecated
-shim for one minor version.
+**Decision**: KEPT verbatim — `buildVerificationRequired`, `isVerificationRequired`, `ageDcql`,
+`TrustLevel`, `VerificationRequired` (the Mode-B/roadmap primitive). REDEFINED — `Step` becomes
+`{ credential: Credential (object); required }` (was string-based); the legacy shape is removed, not
+aliased. REMOVED — `requireCredential`/`optionalCredential` (string-based) → replaced by
+`required(c)`/`optional(c)` (type-incompatible, so a clean break since the package is 0.x). `gated()`
+becomes a thin deprecated shim for one minor version.
 
-**Rationale**: The tested `verification_required` wire shape (asserted by `checkout-gate.test.ts`) must not
-break (Principle VI / additive-not-breaking). Deprecation, not deletion.
+**Rationale**: The envelope's `verification_required` **wire shape** must not break (Principle VI). That
+assertion lives in a dedicated **envelope test** (`packages/attesto-gate/src/envelope.test.ts`) — separate
+from the new consolidated-tool test (`checkout-gate.test.ts`), which asserts the **`requires` manifest**.
+The two shapes (envelope vs manifest) are different and tested independently.
 
 ## 5. Demo consumes the package via workspaces (already wired)
 
