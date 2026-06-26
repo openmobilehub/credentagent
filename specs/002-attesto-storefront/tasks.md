@@ -44,10 +44,10 @@ stays OUT (feature 003); preserve the six security invariants; HTTP transport; `
 
 - [X] T003 Move cart/order state into `packages/attesto-storefront/src/state.ts` (`cartStore` + `orderStore`,
       in-memory default, keyed per session/order — never process-global); export them.
-- [ ] T004 [P] Extend the catalog model in `packages/attesto-storefront/src/index.ts`: add `Review` +
+- [X] T004 [P] Extend the catalog model in `packages/attesto-storefront/src/index.ts`: add `Review` +
       `StorefrontOptions.reviews`; keep `Product` (`minimumAge`/`category`), `SAMPLE_CATALOG`, and the
       pricing functions unchanged.
-- [ ] T005 Rewrite `createStorefront()` skeleton in `packages/attesto-storefront/src/server.ts` — `app`
+- [X] T005 Rewrite `createStorefront()` skeleton in `packages/attesto-storefront/src/server.ts` — `app`
       (`createMcpExpressApp`), `mcpServer()` factory (no tools yet), `gate(resolve)`, `listen()`, `catalog`;
       the HTTP `/mcp` route (StreamableHTTP, mirroring `app.ts`). Supersedes the v0.1 minimal storefront.
 
@@ -71,15 +71,15 @@ the `ui://` widget; the product-picker **renders AND works** in a widget-capable
 - [X] T010 [US1] Move the widget: repo-root `src/app.tsx` (+ helpers, ~574 LOC) → `packages/attesto-storefront/src/ui/`;
       `mcp-app.html` as the vite entry; build the single-file bundle to `dist/ui/`. Preserve runtime host
       detection (`chatgpt`/`mcp`/`standalone`).
-- [ ] T011 [US1] Move the nine tools into `packages/attesto-storefront/src/tools.ts` + `catalog-tools.ts`,
+- [X] T011 [US1] Move the nine tools into `packages/attesto-storefront/src/tools.ts` + `catalog-tools.ts`,
       **preserving the demo's split** — six UI-linked (`registerAppTool` via the shared tool-meta) + three
       plain (`registerTool`: `get-product-details`/`get-product-reviews`/`get-order-status`); `checkout` keeps
       Mode A and calls the injected `gate` resolver (the priced `Order` feeds it directly, no `toGateOrder`);
       register them in `mcpServer()`.
-- [ ] T012 [US1] Move the checkout page: `checkout.ts` → `packages/attesto-storefront/src/checkout-page.ts`;
+- [X] T012 [US1] Move the checkout page: `checkout.ts` → `packages/attesto-storefront/src/checkout-page.ts`;
       serve `GET /checkout` on `store.app`; render the order + the `requires`; **link** to the ceremony
       routes (`/credential-gate/age`, passkey, dc-payment) — do NOT implement the ceremony (feature 003).
-- [ ] T013 [US1] Register the `ui://` widget resource in `createStorefront()` (`registerAppResource`,
+- [X] T013 [US1] Register the `ui://` widget resource in `createStorefront()` (`registerAppResource`,
       bundle-version stamping), serving the single-file bundle with mime `text/html+skybridge`.
 
 ### ChatGPT widget contract (US1, FR-014) — the widget must render AND be interactive in ChatGPT
@@ -92,7 +92,7 @@ the `ui://` widget; the product-picker **renders AND works** in a widget-capable
       **and** the `openai/*` set (`outputTemplate`, **`widgetAccessible: true`**, `toolInvocation` invoking/
       invoked) — and use it for the six UI-linked tools. (Root cause of "renders but dead in ChatGPT": the
       demo's `UI_META` set only `outputTemplate`, so `window.openai.callTool` was rejected.)
-- [ ] T016 [US1] Make widget-rendering tool results carry **cart-bearing `structuredContent`** — `checkout`
+- [X] T016 [US1] Make widget-rendering tool results carry **cart-bearing `structuredContent`** — `checkout`
       returns `{ ...payload, products, cart }` (not only `{ orderId, checkoutUrl, requires }`) so a fresh
       ChatGPT widget instance hydrates the real cart instead of `emptyCart()`; decide per tool whether it
       should carry the UI meta at all. In `packages/attesto-storefront/src/tools.ts`.

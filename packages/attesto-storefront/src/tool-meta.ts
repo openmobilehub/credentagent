@@ -12,6 +12,8 @@
 // omission impossible (FR-014).
 
 export interface AppToolMeta {
+  // Index signature so this satisfies the MCP tool `_meta` shape (`{ [k]: unknown } & …`).
+  [key: string]: unknown;
   /** MCP-Apps (Claude) — the widget resource to render. */
   ui: { resourceUri: string };
   /** ChatGPT — the skybridge template (the registered `text/html+skybridge` resource). */

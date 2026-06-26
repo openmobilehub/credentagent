@@ -25,12 +25,12 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@modelcontextprotocol/ext-apps": "^1.0.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "express": "^5.1.0",
     "zod": "^4.1.13"
   },
   "devDependencies": {
-    "@modelcontextprotocol/ext-apps": "^1.0.0",
     "@types/react": "^19.2.2",
     "@types/react-dom": "^19.2.2",
     "@vitejs/plugin-react": "^4.3.4",
