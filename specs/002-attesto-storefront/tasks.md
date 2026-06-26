@@ -32,7 +32,7 @@ stays OUT (feature 003); preserve the six security invariants; HTTP transport; `
 
 ## Phase 1: Setup
 
-- [ ] T001 Add the widget build to `packages/attesto-storefront`: add deps (`react`, `react-dom`,
+- [X] T001 Add the widget build to `packages/attesto-storefront`: add deps (`react`, `react-dom`,
       `@vitejs/plugin-react`, `vite`, `vite-plugin-singlefile`, `@modelcontextprotocol/ext-apps`); create
       `packages/attesto-storefront/vite.config.ts` (react + singlefile, input `src/ui/mcp-app.html`, outDir
       `dist/ui`); set `package.json` `build` = `vite build && tsc -p tsconfig.json`; `files` ships `dist`.
@@ -68,7 +68,7 @@ the `ui://` widget; the product-picker **renders AND works** in a widget-capable
       `get-order-status`) do NOT; in `packages/attesto-storefront/src/server.test.ts`.
 - [ ] T009 [P] [US1] Contract test (CT6): cart/order state is per session/order — two orders don't bleed; in
       `packages/attesto-storefront/src/server.test.ts`.
-- [ ] T010 [US1] Move the widget: repo-root `src/app.tsx` (+ helpers, ~574 LOC) → `packages/attesto-storefront/src/ui/`;
+- [X] T010 [US1] Move the widget: repo-root `src/app.tsx` (+ helpers, ~574 LOC) → `packages/attesto-storefront/src/ui/`;
       `mcp-app.html` as the vite entry; build the single-file bundle to `dist/ui/`. Preserve runtime host
       detection (`chatgpt`/`mcp`/`standalone`).
 - [ ] T011 [US1] Move the nine tools into `packages/attesto-storefront/src/tools.ts` + `catalog-tools.ts`,
