@@ -55,7 +55,7 @@ stays OUT (feature 003); preserve the six security invariants; HTTP transport; `
 
 ## Phase 3: User Story 1 — the real storefront in one line (P1)
 
-**Goal**: `createStorefront()` serves the nine UI-linked tools + the checkout page over HTTP and registers
+**Goal**: `createStorefront()` serves the nine tools (six UI-linked + three plain) + the checkout page over HTTP and registers
 the `ui://` widget; the product-picker **renders AND works** in a widget-capable host (incl. ChatGPT).
 **Independent test**: `server.test.ts` + manual.
 
@@ -63,16 +63,19 @@ the `ui://` widget; the product-picker **renders AND works** in a widget-capable
       `packages/attesto-storefront/src/server.test.ts` (in-memory transport).
 - [ ] T007 [P] [US1] Contract test (CT2/CT3): `checkout` ungated ⇒ `{ orderId, checkoutUrl }`; with a stub
       gate resolver ⇒ `+ requires`; in `packages/attesto-storefront/src/server.test.ts`.
-- [ ] T008 [P] [US1] Contract test (CT5): the `ui://` resource is registered and the UI-linked tools carry
-      the tool-meta, in `packages/attesto-storefront/src/server.test.ts`.
+- [ ] T008 [P] [US1] Contract test (CT5): the `ui://` resource is registered; the **six** UI-linked tools
+      carry the tool-meta and the **three** plain tools (`get-product-details`/`get-product-reviews`/
+      `get-order-status`) do NOT; in `packages/attesto-storefront/src/server.test.ts`.
 - [ ] T009 [P] [US1] Contract test (CT6): cart/order state is per session/order — two orders don't bleed; in
       `packages/attesto-storefront/src/server.test.ts`.
 - [ ] T010 [US1] Move the widget: repo-root `src/app.tsx` (+ helpers, ~574 LOC) → `packages/attesto-storefront/src/ui/`;
       `mcp-app.html` as the vite entry; build the single-file bundle to `dist/ui/`. Preserve runtime host
       detection (`chatgpt`/`mcp`/`standalone`).
-- [ ] T011 [US1] Move the nine tools into `packages/attesto-storefront/src/tools.ts` + `catalog-tools.ts`
-      (UI-linked via the shared tool-meta; `checkout` keeps Mode A and calls the injected `gate` resolver —
-      the priced `Order` feeds it directly, no `toGateOrder`); register them in `mcpServer()`.
+- [ ] T011 [US1] Move the nine tools into `packages/attesto-storefront/src/tools.ts` + `catalog-tools.ts`,
+      **preserving the demo's split** — six UI-linked (`registerAppTool` via the shared tool-meta) + three
+      plain (`registerTool`: `get-product-details`/`get-product-reviews`/`get-order-status`); `checkout` keeps
+      Mode A and calls the injected `gate` resolver (the priced `Order` feeds it directly, no `toGateOrder`);
+      register them in `mcpServer()`.
 - [ ] T012 [US1] Move the checkout page: `checkout.ts` → `packages/attesto-storefront/src/checkout-page.ts`;
       serve `GET /checkout` on `store.app`; render the order + the `requires`; **link** to the ceremony
       routes (`/credential-gate/age`, passkey, dc-payment) — do NOT implement the ceremony (feature 003).
@@ -81,13 +84,13 @@ the `ui://` widget; the product-picker **renders AND works** in a widget-capable
 
 ### ChatGPT widget contract (US1, FR-014) — the widget must render AND be interactive in ChatGPT
 
-- [ ] T014 [P] [US1] Contract test (FR-014): every UI-linked tool's `_meta` carries `openai/outputTemplate`
+- [ ] T014 [P] [US1] Contract test (CT9, FR-014): every UI-linked tool's `_meta` carries `openai/outputTemplate`
       (== the `ui://` resource URI) **and `openai/widgetAccessible: true`** + the `openai/toolInvocation`
       status; in `packages/attesto-storefront/src/server.test.ts` (assert via `tools/list`).
 - [ ] T015 [US1] Implement a single canonical tool-meta builder in
       `packages/attesto-storefront/src/tool-meta.ts` that emits **both** surfaces — the MCP-Apps `ui.*` form
       **and** the `openai/*` set (`outputTemplate`, **`widgetAccessible: true`**, `toolInvocation` invoking/
-      invoked) — and use it for all nine UI-linked tools. (Root cause of "renders but dead in ChatGPT": the
+      invoked) — and use it for the six UI-linked tools. (Root cause of "renders but dead in ChatGPT": the
       demo's `UI_META` set only `outputTemplate`, so `window.openai.callTool` was rejected.)
 - [ ] T016 [US1] Make widget-rendering tool results carry **cart-bearing `structuredContent`** — `checkout`
       returns `{ ...payload, products, cart }` (not only `{ orderId, checkoutUrl, requires }`) so a fresh
@@ -98,8 +101,8 @@ the `ui://` widget; the product-picker **renders AND works** in a widget-capable
       (cross-instance sync) reading globals from `openai:set_globals`; resilient host detection (re-detect/
       subscribe, not a single module-load read); an `openExternal` fallback; and surface (not swallow)
       poll/connect failures. Centralize the checkout origin so `connect_domains` and the poll URL share one config.
-- [ ] T018 [US1] Verify: `npm run build:packages` green (the widget bundle is produced) + `server.test.ts`
-      green; commit (DCO).
+- [ ] T018 [US1] Verify (CT8 build): `npm run build:packages` green (the widget bundle is produced) +
+      `server.test.ts` green; commit (DCO).
 
 **Checkpoint**: US1 is a shippable MVP — `createStorefront()` is the real storefront over HTTP; manual check:
 the widget renders **and is interactive** in the Claude native app AND ChatGPT.
@@ -122,7 +125,7 @@ the widget renders **and is interactive** in the Claude native app AND ChatGPT.
       `cartStore.ts`, `orderStore.ts` — moved to the package); update the root `vite.config.ts` /
       `tsconfig.server.json` so the root build no longer builds the widget (the package does) and the build
       order stays `build:packages` → app, Vercel-safe.
-- [ ] T023 [US2] Verify: full `npm test` green (242 / 1 known skip — demo parity, no regression) + `npm run
+- [ ] T023 [US2] Verify (CT7 demo parity): full `npm test` green (242 / 1 known skip — demo parity, no regression) + `npm run
       build` green (deploy-safe; Vercel pipeline unchanged); commit (DCO).
 
 **Checkpoint**: the demo is a thin consumer; nothing a user sees changed; the deploy stays green.

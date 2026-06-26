@@ -34,13 +34,14 @@ logic into the package while the demo consumes it keeps the live deploy green an
 **Alternatives rejected**: fork the storefront (two copies drift); delete the demo (loses the integration
 harness + the live deploy + the caBLE reference).
 
-## 3. The nine tools keep their UI-linked (`registerAppTool`) shape
+## 3. The nine tools keep the demo's split — six UI-linked, three plain
 
-**Decision**: Move the nine tools (`browse-products`, `add-to-cart`, `set-quantity`, `remove-from-cart`,
-`get-cart`, `get-product-details`, `get-product-reviews`, `checkout`, `get-order-status`) into the package,
-preserving their `@modelcontextprotocol/ext-apps` `registerAppTool` + `UI_META` wiring so a widget-capable
-host renders the native UI. The `checkout` tool keeps the consolidated-Mode-A shape from 001 and calls the
-injected `gate` resolver.
+**Decision**: Move all nine tools into the package, **preserving the demo's split**: **six UI-linked**
+(`registerAppTool` + the tool-meta → the widget: `browse-products`, `add-to-cart`, `set-quantity`,
+`remove-from-cart`, `get-cart`, `checkout`) and **three plain** (`registerTool`, no widget:
+`get-product-details`, `get-product-reviews`, `get-order-status`). The `checkout` tool keeps the
+consolidated-Mode-A shape from 001 and calls the injected `gate` resolver. (FR-008: behave identically — no
+tool gains/loses its widget link.)
 
 **Rationale**: Principle II (the tools are Context 1) + the widget needs the `ui://` resource link — keeping
 `registerAppTool` is what makes the rich UI show. The checkout tool's gate hook is the seam where Attesto
@@ -82,7 +83,7 @@ dc-payment). Those routes are served by whatever is mounted on `store.app` — t
 `payment-gate/*`; in feature 003, `attesto.mount()`. The package does NOT implement the ceremony.
 
 **Rationale**: Principle VII honesty — the page is real (it's the demo's page), the ceremony is honestly a
-separate concern (003). Keeps `payment-gate/` (27 files, the real caBLE crypto) untouched and out of the
+separate concern (003). Keeps `payment-gate/` (~28 source files, the real caBLE crypto) untouched and out of the
 storefront.
 
 **Alternatives rejected**: pull `payment-gate/` into the storefront (bloats it, wrong owner, blocks 003);
@@ -104,7 +105,7 @@ must be self-contained (ship the bundle) for that to work.
 
 ## 8. One canonical tool-meta builder emits both host surfaces (FR-014)
 
-**Decision**: The package exports a single `appToolMeta()` (in `tool-meta.ts`) used by all nine UI-linked
+**Decision**: The package exports a single `appToolMeta()` (in `tool-meta.ts`) used by the six UI-linked
 tools, emitting **both** the MCP-Apps `ui.resourceUri` form (Claude) **and** the ChatGPT `openai/*` set:
 `openai/outputTemplate` (== the `ui://` URI), **`openai/widgetAccessible: true`**, and the
 `openai/toolInvocation` status. Widget-rendering tool results carry **cart-bearing `structuredContent`**,

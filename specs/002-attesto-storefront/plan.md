@@ -44,8 +44,8 @@ package build now produces a React bundle (vite) **plus** TS, in workspace order
 six security invariants; HTTP transport; DCO sign-off; the caBLE ceremony stays out (feature 003).
 
 **Scale/Scope**: One package (gains the widget + 9 tools + page + state) + one consumer (the demo, slimmed)
-+ the example + the composition test. ~574 widget LOC + the 9 tools + checkout page move; `payment-gate/`
-(27 files) does NOT move.
++ the example + the composition test. ~570 widget LOC + the 9 tools (6 UI-linked + 3 plain) + checkout page
+move; `payment-gate/` (~28 source files, 56 incl. tests/READMEs) does NOT move.
 
 ## Constitution Check
 

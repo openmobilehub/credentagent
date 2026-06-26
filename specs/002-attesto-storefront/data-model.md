@@ -87,8 +87,10 @@ Unchanged from the pricing slice (001), now owned + served by the package.
 | `checkout` | `{ items? }` | `{ orderId, checkoutUrl, requires? }` (Mode A; `requires` when gated) |
 | `get-order-status` | `{ orderId }` | `{ orderId, status, order? }` |
 
-All UI-linked (`registerAppTool` + `UI_META`) so widget-capable hosts render the native UI; all results are
-serializable (Principle VI).
+**Six** are UI-linked (`registerAppTool` + the tool-meta → the widget: `browse-products`, `add-to-cart`,
+`set-quantity`, `remove-from-cart`, `get-cart`, `checkout`); **three** are plain (`registerTool`, no widget:
+`get-product-details`, `get-product-reviews`, `get-order-status`) — preserving the demo's split. All results
+are serializable (Principle VI).
 
 ## Widget bundle (the `ui://` resource)
 

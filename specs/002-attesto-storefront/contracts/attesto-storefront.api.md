@@ -31,7 +31,10 @@ not redefine it.
 
 ## MCP tools (registered by `mcpServer()`)
 
-Nine UI-linked tools (`registerAppTool` + `UI_META` → the `ui://` widget). Names and shapes:
+Nine tools — **six UI-linked** (`registerAppTool` + the tool-meta → the `ui://` widget: `browse-products`,
+`add-to-cart`, `set-quantity`, `remove-from-cart`, `get-cart`, `checkout`) and **three plain**
+(`registerTool`, no widget: `get-product-details`, `get-product-reviews`, `get-order-status`) — preserving
+the demo's split. Names and shapes:
 
 | Tool | Input (zod) | structuredContent |
 |------|-------------|-------------------|
@@ -76,7 +79,8 @@ cart. The widget CSP MUST allow `data:` (the image placeholder). Runtime host de
    the `storefront-gate.test.ts` composition test, updated to the extracted storefront.)
 4. **Zero glue:** the priced `Order` is accepted by `attesto.requirements(order, policy)` directly — no
    `toGateOrder` mapping (the line carries `minimumAge`).
-5. **UI resource present:** the `ui://` resource is registered and the UI-linked tools carry `UI_META`.
+5. **UI resource present:** the `ui://` resource is registered and the **six** UI-linked tools carry the
+   tool-meta; the **three** plain tools (`get-product-details`/`get-product-reviews`/`get-order-status`) do not.
 6. **State per order/session:** two carts / two orders do not bleed into each other (no process-global
    state); `get-order-status` reflects only the queried order.
 7. **Demo parity:** the demo, refactored to consume the package, passes the existing suite unchanged
