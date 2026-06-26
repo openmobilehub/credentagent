@@ -75,8 +75,12 @@ Consolidated is the default. (The separate-blocking shape survives only for **Mo
 | **membership** (optional) | ✅ in `requires` | `/credential-gate/loyalty` — a **discount card**; present loyalty → 10% off | discount reconciled in pricing (`mandate.ts` Gate 1) |
 | **payment** (required) | ✅ in `requires` | `/payment-gate/passkey` or `/dc-payment` (WebAuthn / wallet-signed AP2 over caBLE) | 4 mandate gates + settlement gates completion (`completion.ts`) |
 
-Age is enforced at **three layers** (reported in Ctx 1, proven + checked at `/verify`, re-checked at every
-completion path) — exactly CLAUDE.md invariant #1.
+Age is **proven once** (`/credential-gate/age/verify`) and then **re-enforced server-side on all three
+completion paths** — `place-order`, `passkey`, `dc-payment` each independently re-check `isAgeUnverified`
+→ 403 (`app.ts:71`, `passkey/routes.ts:67`, `dc-payment/routes.ts:58`), because the page's payment lock is
+**render-only** and a direct POST would otherwise bypass it (`checkout.ts:6`). Context 1 only *surfaces*
+the requirement to the agent — awareness, not enforcement. This is CLAUDE.md invariant #1: hiding a button
+is not enforcement; enforce on every completion path.
 
 **Optional credentials are displayed, not hidden.** Membership never *blocks* checkout, but it shows up as
 a **discount card** among the initial verifications (Context 2) so the buyer can opt in — present loyalty →
