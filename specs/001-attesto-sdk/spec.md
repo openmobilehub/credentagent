@@ -137,6 +137,51 @@ call. Nothing is injected off-screen.
   `payment.in("usd")`. An age gate that sets a currency is a compile error. Payment amount is **derived**
   from the order, never a field you pass (keeps amount-binding in agreement — invariant #3).
 
+**Additional credential gates — beyond the three built-ins.** `age` / `membership` / `payment` are just
+*pre-defined* credentials. Any consequential check is added the same way: define it once, drop it into the
+same ordered policy. A credential is four things — what to ask, how to read it, what proving it does, how
+it shows up:
+
+```ts
+import { defineCredential, dcql, gate, discount } from "@openmobilehub/attesto-gate";
+
+const prescription = defineCredential({
+  id:      "prescription",
+  request: dcql({ docType: "org.hl7.prescription.1", claims: ["rx_valid"] }), // what to ask the wallet
+  verify:  (c) => c.rx_valid === true,                                        // is it proven?
+  effect:  gate(),                                                            // gate() | discount() | authorize()
+  ui:      { label: "Prescription", action: "Verify prescription" },          // the card shown in Context 2
+});
+
+const veteran = defineCredential({
+  id: "veteran",
+  request: dcql({ docType: "org.example.veteran.1", claims: ["is_veteran"] }),
+  verify:  (c) => c.is_veteran === true,
+  effect:  discount({ percent: 10 }),
+  ui:      { label: "Military discount", action: "Verify service" },
+});
+
+attesto.requirements(order, [
+  required(age.over(21)),
+  required(prescription),          // your custom gate — blocks until proven
+  optional(veteran),               // your custom optional discount
+  required(payment.in("usd")),
+]);
+```
+
+- **`effect` decides what proving it *does*,** reusing the built-ins' three behaviors: `gate()` blocks
+  (age, prescription, KYC) · `discount()` reduces the total (membership, veteran, coupon) · `authorize()`
+  binds payment. A built-in is literally a credential with one of these effects.
+- It rides the **same three contexts**: surfaced in `requires` (Ctx 1); shown as a card and proven on the
+  phone via the SDK's generic `/credential-gate` ceremony (Ctx 2, mounted by `attesto.mount`); re-checked
+  server-side at completion for `gate()` / `authorize()` effects.
+- Passed **by object, no registration** — `required(prescription)`. Publish one as its own tiny package
+  and anyone can `required(theirCredential)` it.
+
+**v0.1 scope [clarify]:** ship the three built-ins + `defineCredential` + the generic ceremony route, with
+one custom example (a prescription `gate()`) proving the extension point. Arbitrary `discount()` amounts
+stay bounded by the engine's discount reconciliation (invariant #3) until generalized — see roadmap.
+
 ## §5 · Modes — v0.1 ships Consolidated only
 
 - **Mode A — Consolidated checkout (v0.1, the only flow).** Context 1 returns the link + `requires`;
@@ -178,3 +223,9 @@ Two orthogonal typed axes, surfaced (never silent):
 - **Builders naming:** `required` / `optional` (keep `requireCredential` / `optionalCredential` as
   deprecated aliases).
 - **mdoc trust:** real-verifier integration **deliberately deferred** to keep v0.1 simple (see §6).
+- **Additional credential gates:** ✅ supported via `defineCredential` — custom credentials drop into the
+  same ordered `required` / `optional` policy with a `gate()` / `discount()` / `authorize()` effect (§4).
+  v0.1 ships the three built-ins + the extension point + one worked example; arbitrary `discount()`
+  generalization is roadmap.
+- **Storefront testing:** v0.1 uses the storefront as the integration **harness** (the gate is proven by
+  running it in the real checkout); the storefront gets its own `specs/002-attesto-storefront` later.
