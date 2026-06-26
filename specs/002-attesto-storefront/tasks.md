@@ -59,14 +59,14 @@ stays OUT (feature 003); preserve the six security invariants; HTTP transport; `
 the `ui://` widget; the product-picker **renders AND works** in a widget-capable host (incl. ChatGPT).
 **Independent test**: `server.test.ts` + manual.
 
-- [ ] T006 [P] [US1] Contract test (CT1): `mcpServer()` registers exactly the nine tools, in
+- [X] T006 [P] [US1] Contract test (CT1): `mcpServer()` registers exactly the nine tools, in
       `packages/attesto-storefront/src/server.test.ts` (in-memory transport).
-- [ ] T007 [P] [US1] Contract test (CT2/CT3): `checkout` ungated ⇒ `{ orderId, checkoutUrl }`; with a stub
+- [X] T007 [P] [US1] Contract test (CT2/CT3): `checkout` ungated ⇒ `{ orderId, checkoutUrl }`; with a stub
       gate resolver ⇒ `+ requires`; in `packages/attesto-storefront/src/server.test.ts`.
-- [ ] T008 [P] [US1] Contract test (CT5): the `ui://` resource is registered; the **six** UI-linked tools
+- [X] T008 [P] [US1] Contract test (CT5): the `ui://` resource is registered; the **six** UI-linked tools
       carry the tool-meta and the **three** plain tools (`get-product-details`/`get-product-reviews`/
       `get-order-status`) do NOT; in `packages/attesto-storefront/src/server.test.ts`.
-- [ ] T009 [P] [US1] Contract test (CT6): cart/order state is per session/order — two orders don't bleed; in
+- [X] T009 [P] [US1] Contract test (CT6): cart/order state is per session/order — two orders don't bleed; in
       `packages/attesto-storefront/src/server.test.ts`.
 - [X] T010 [US1] Move the widget: repo-root `src/app.tsx` (+ helpers, ~574 LOC) → `packages/attesto-storefront/src/ui/`;
       `mcp-app.html` as the vite entry; build the single-file bundle to `dist/ui/`. Preserve runtime host
@@ -84,7 +84,7 @@ the `ui://` widget; the product-picker **renders AND works** in a widget-capable
 
 ### ChatGPT widget contract (US1, FR-014) — the widget must render AND be interactive in ChatGPT
 
-- [ ] T014 [P] [US1] Contract test (CT9, FR-014): every UI-linked tool's `_meta` carries `openai/outputTemplate`
+- [X] T014 [P] [US1] Contract test (CT9, FR-014): every UI-linked tool's `_meta` carries `openai/outputTemplate`
       (== the `ui://` resource URI) **and `openai/widgetAccessible: true`** + the `openai/toolInvocation`
       status; in `packages/attesto-storefront/src/server.test.ts` (assert via `tools/list`).
 - [X] T015 [US1] Implement a single canonical tool-meta builder in
