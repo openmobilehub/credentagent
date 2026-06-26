@@ -144,6 +144,12 @@ in-memory transport.
   `attesto.mount()` in feature 003. This feature delivers the widget (gap #1), not the caBLE page (gap #2).
 - **FR-012**: `examples/storefront.mjs` and `storefront-gate.test.ts` MUST be updated to the extracted
   storefront and stay green; every commit DCO-signed.
+- **FR-013**: The package MUST be **publish-ready** for the npm registry — correct `exports` (incl. the
+  `./server` subpath and the shipped widget bundle), `files`, `types`, and `publishConfig` — so an adopter
+  installs `@openmobilehub/attesto-gate` + `@openmobilehub/attesto-storefront` from npm in their **own**
+  project (not a clone). The **final quickstart MUST present the npm-install path as the primary adopter
+  flow**; the clone + workspace `npm install` path is for running this demo / contributing only. (The actual
+  `npm publish` + `@openmobilehub` scope reservation is a release action, OUT of code scope.)
 
 ### Key Entities *(include if feature involves data)*
 
