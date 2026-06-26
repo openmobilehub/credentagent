@@ -24,10 +24,11 @@ them is what made every earlier draft confusing.
                          ▼
 ┌─ CONTEXT 2 · the checkout page (browser + phone) — where the gates actually run ──────────────┐
 │    src/app.tsx:281  openLink({ url: checkoutUrl })  → opens /checkout?order=ID                 │
-│  Separate HTTP routes, NOT the Context-1 handler:                                              │
-│    verify age  (/credential-gate/age → OpenID4VP/mdoc on the phone → /verify → back, page.ts:75)│
-│    pay         (/payment-gate/passkey or /dc-payment → WebAuthn / wallet-signed AP2 over caBLE) │
-│    settle      (completion.ts → re-price + x402→Hedera → orderStore.write)                      │
+│  Separate HTTP routes, NOT the Context-1 handler — each shown as a CARD on the page:           │
+│    verify age       /credential-gate/age → mdoc on the phone → /verify → back (page.ts:75)      │
+│    membership card  /credential-gate/loyalty → present loyalty → 10% off; OPTIONAL, never blocks│
+│    pay              /payment-gate/passkey or /dc-payment → WebAuthn / wallet-signed AP2 (caBLE) │
+│    settle           completion.ts → re-price + x402→Hedera → orderStore.write                   │
 │  Age is RE-ENFORCED server-side on every completion path → 403 (passkey/routes.ts:67,          │
 │  dc-payment/routes.ts:58, app.ts:71). Fail-closed regardless of what Context 1 returned.       │
 └───────────────────────────────────────────────────────────────────────────────────────────────┘
@@ -57,7 +58,8 @@ them is what made every earlier draft confusing.
 checkout({ items })  ──▶  Context 1: priceCart(items) → order; report requirements
               ◀──  { orderId, checkoutUrl, requires: ["age 21+", "payment"] }
 agent → user: "Opening checkout — you'll verify you're 21 and pay on your phone: <checkoutUrl>"
-user opens checkoutUrl  ── ONE handoff ──▶  Context 2: verify age → pay → settle (one session)
+user opens checkoutUrl  ── ONE handoff ──▶  Context 2 (one session, cards on one page):
+                                            verify age → [membership discount card] → pay → settle
 Context 3: poll → COMPLETED { total, gates, settlement+HashScan }  →  agent confirms in chat
 ```
 
@@ -70,11 +72,16 @@ Consolidated is the default. (The separate-blocking shape survives only for **Mo
 | Credential | Reported in Ctx 1 | Proof ceremony (Ctx 2) | Enforced server-side |
 | :-- | :-- | :-- | :-- |
 | **age** (required) | ✅ in `requires` | `/credential-gate/age` — OpenID4VP/mdoc, phone *(mounted by the SDK)* | `/verify` **+ every completion path → 403** (`passkey/routes.ts:67`, `dc-payment/routes.ts:58`, `app.ts:71`) |
-| **membership** (optional) | ✅ in `requires` | `/credential-gate/loyalty` | discount reconciled in pricing (`mandate.ts` Gate 1) |
+| **membership** (optional) | ✅ in `requires` | `/credential-gate/loyalty` — a **discount card**; present loyalty → 10% off | discount reconciled in pricing (`mandate.ts` Gate 1) |
 | **payment** (required) | ✅ in `requires` | `/payment-gate/passkey` or `/dc-payment` (WebAuthn / wallet-signed AP2 over caBLE) | 4 mandate gates + settlement gates completion (`completion.ts`) |
 
 Age is enforced at **three layers** (reported in Ctx 1, proven + checked at `/verify`, re-checked at every
 completion path) — exactly CLAUDE.md invariant #1.
+
+**Optional credentials are displayed, not hidden.** Membership never *blocks* checkout, but it shows up as
+a **discount card** among the initial verifications (Context 2) so the buyer can opt in — present loyalty →
+10% off, reconciled into the order total before payment binds. So the page presents three cards in one
+session: **verify age** (required) · **membership discount** (optional) · **pay** (required).
 
 ## §3 · What the SDK owns vs. what stays yours
 
@@ -109,7 +116,7 @@ server.registerTool(
     ]);
     return {
       structuredContent: { orderId: order.id, checkoutUrl: yourCheckoutPage(order), requires },
-      content: [{ type: "text", text: `Checkout ready — verify age 21+ and pay on your phone: ${yourCheckoutPage(order)}` }],
+      content: [{ type: "text", text: `Checkout ready — verify age 21+, optionally apply your membership discount, and pay on your phone: ${yourCheckoutPage(order)}` }],
     };
   },
 );
