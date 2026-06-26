@@ -49,6 +49,19 @@ server.registerTool(
 );
 ```
 
+### Or — let your coding agent wire it (no hand-coding)
+
+Don't want to wire it yourself? Point **Claude Code** (or any coding agent) at this quickstart — or the
+package's **`llms.txt`** / **`/.well-known/attesto.json`**, which **ship today** — and ask:
+
+> *"Add Attesto to my `checkout` tool: require age 21+ when the cart has alcohol, an optional membership
+> discount, and payment."*
+
+The agent reads your `registerTool` handler, installs the package, wraps it with `requirements(...)`, calls
+`mount(app)`, and adds the security-bypass test — the integration writes itself. 🔭 A dedicated
+**`attesto-gate-my-tool`** skill that does this in one command is on the roadmap (v0.2); the runtime
+discovery it relies on already ships.
+
 **What happens** (the three contexts, spec §0): the handler mints the link + a `requires` manifest
 (Context 1); the buyer opens it once and does age → membership discount → pay on one page (Context 2); the
 agent polls `get-order-status` and confirms (Context 3). A non-alcohol cart ⇒ `requires` has no `age`
