@@ -11,38 +11,41 @@ leads; payments is one application.**
 
 ## The idea
 
-When an agent calls a gated tool and the buyer hasn't proven the required credential,
-the tool returns a typed **`verification_required`** envelope an agent can *drive* —
-why it stopped, which credential, a per-order approve link, and the tool to poll —
-instead of a dead error string. A refused tool call is a protocol, not a wall.
+A gated tool tells the agent exactly what the buyer must prove instead of dead-erroring.
+Configure once, then resolve a credential **policy** to a serializable `requires` manifest:
 
 ```ts
-import { gated, ageDcql } from "@openmobilehub/attesto-gate";
+import { Attesto, age, membership, payment, required, optional } from "@openmobilehub/attesto-gate";
 
-const checkout = gated(
-  async (args, { order }) => ({
-    structuredContent: { orderId: order.id, checkoutUrl: linkFor(order) },
-    content: [{ type: "text", text: "checkout ready" }],
-  }),
-  { age: true },
-  {
-    resolveOrder: (args) => buildOrder(args),          // created once — stable id
-    isAgeUnverified: (order) => store.isAgeUnverified(order),
-    approveUrl: (order) => `${origin}/credential-gate/age?order=${token(order)}`,
-    minAge: (order) => requiredAge(order),
-  },
-);
+const attesto = new Attesto({ walletOrigin: "https://shop.example" });
+attesto.mount(app);   // wallet-ceremony seam + per-order verification store
+
+// In your checkout tool handler — resolve the policy against the server-priced order:
+const requires = attesto.requirements(order, [
+  required(age.over(21).when(hasAlcohol)),   // 21+ — only when the cart has alcohol
+  optional(membership.discount(10)),          // 10% off if a loyalty credential is presented
+  required(payment.in("usd")),                // amount derived from the order; settles last
+]);
+return { structuredContent: { orderId: order.id, checkoutUrl, requires }, content: [/* … */] };
 ```
 
-If the cart is age-restricted and unproven, `checkout(args)` returns a
-`verification_required` envelope; otherwise it runs your handler.
+`requirements()` is the **code→data boundary**: it runs your `.when()` predicates server-side
+and emits a flat, JSON-safe manifest (no functions cross the wire). The checkout tool mints the
+link and surfaces `requires` (consolidated **Mode A**); the page runs the gates and the
+completion path enforces.
+
+> **A refused tool call is a protocol, not a wall.** For a page-less tool, `gated()` returns a
+> typed **`verification_required`** envelope the agent *drives* (which credential, a per-order
+> approve link, the tool to poll) instead of completing — the blocking **Mode B** variant.
 
 ## What's real in v0.1
 
-- `buildVerificationRequired()` / `isVerificationRequired()` — the agent-drivable envelope.
-- `gated()` — wraps a tool handler to enforce the **age** gate at the tool layer.
-- `ageDcql()` — the DCQL request, matching the reference ISO 18013-5 mDL verifier.
-- `requireCredential` / `optionalCredential`, the credential model, and types.
+- `Attesto` + `requirements()` — the configure-once client and the policy→manifest resolver.
+- Typed builders `age.over(n)` / `membership.discount(n)` / `payment.in(cur)` with `.when()`,
+  composed with `required()` / `optional()`.
+- `defineCredential()` + `dcql()` + `gate()` / `discount()` / `authorize()` — gate ANY credential.
+- `gated()` + `buildVerificationRequired()` / `isVerificationRequired()` / `ageDcql()` — the
+  Mode-B blocking envelope (page-less tools), retained.
 
 ## Honest status
 
@@ -52,7 +55,8 @@ device signatures) — a self-crafted mdoc would pass. The envelope says so
 (`trust_level: "presence-only-demo"`). This is a flow demo, not a safety control,
 until mdoc trust verification lands (Multipaz / `@auth0/mdl`). See the roadmap.
 
-`mountGate()` (mounting the full OpenID4VP ceremony routes) is provided by the
-reference server today; its extraction into this package is on the roadmap.
+`attesto.mount(app)` wires the per-order verification store seam today; the reference
+server still owns the full OpenID4VP ceremony routes, and folding them behind `mount()`
+is on the roadmap.
 
 Apache-2.0 · part of [Open Mobile Hub](https://openmobilehub.org) (Linux Foundation).

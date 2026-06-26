@@ -36,7 +36,7 @@ server.registerTool(
     inputSchema: { items: z.array(z.object({ productId: z.string(), quantity: z.number().int().positive() })) },
   },
   async ({ items }) => {
-    const order = priceCart(items);                         // your catalog → order (stable id)
+    const order = priceCart(items, catalog);                // your storefront prices the cart → order (stable id)
     const requires = attesto.requirements(order, [          // resolved, serializable manifest
       required(age.over(21).when(hasAlcohol)),               // 21+ — only when the cart has alcohol
       optional(membership.discount(10)),                     // 10% off if a loyalty credential is presented
