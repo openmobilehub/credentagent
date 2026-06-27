@@ -45,6 +45,7 @@ import type { CartStore, OrderStore } from "./state.js";
 // (`./index.js`) does not.
 import {
   completeOrder,
+  renderRequirements,
   MemoryVerificationStore,
   type CartItemRef,
   type CeremonyCatalog,
@@ -54,6 +55,9 @@ import {
   type CompletionInput,
   type CompletionResult,
   type RepriceOpts,
+  type RenderVerification,
+  type VerificationManifestEntry,
+  type VerificationRecord,
   type VerificationStore,
 } from "@openmobilehub/attesto-gate";
 
@@ -221,9 +225,10 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
   const UI_META = appToolMeta({ resourceUri: RESOURCE_URI, skybridgeUri: SKYBRIDGE_URI });
 
   const app = createMcpExpressApp({ host: "0.0.0.0" });
-  // The checkout page submits its "complete purchase" form as
-  // application/x-www-form-urlencoded; the SDK app only parses JSON, so add a
-  // urlencoded parser or place-order's `req.body.order` is always undefined.
+  // place-order accepts the order id from either a JSON fetch (the shared checkout
+  // page's instant-demo method) or an x-www-form-urlencoded form post; the SDK app
+  // only parses JSON, so add a urlencoded parser too or a form post's `req.body.order`
+  // is undefined and completion is never recorded.
   app.use(express.urlencoded({ extended: false }));
 
   // ── Attesto ceremony seams (Context 2) ──────────────────────────────────────
@@ -450,28 +455,57 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
     }
   });
 
-  // Minimal checkout page: render the order + what's required, link to the ceremony
-  // routes attesto.mount() / the demo provides (this page does NOT run the ceremony).
+  // The checkout page: the ONE shared three-gate page (renderRequirements), so the
+  // storefront and the committed demo render the same polished checkout (T030). This
+  // page LINKS to the ceremony routes attesto.mount() registered (re-homed onto this
+  // origin, in policy order, payment last); it does NOT run the ceremony — completion
+  // happens on the mounted /attesto/* rails, which enforce the gates fail-closed.
   app.get("/checkout", async (req: Request, res: Response) => {
-    const order = await createdOrderStore.read(String(req.query.order ?? ""));
-    if (!order) return res.status(404).type("html").send("<h1>Unknown order</h1>");
-    // Link to the mounted ceremony routes, re-homed onto this server's origin (in
-    // policy order, payment last). This page links; it does NOT run the ceremony.
-    const requires = homeRequires(resolveGate?.(order) ?? [], baseUrl) as Array<{ label?: string; credential?: string; approveUrl?: string }>;
-    const reqList = requires.length
-      ? `<ul>${requires.map((r) => `<li>${r.approveUrl ? `<a href="${r.approveUrl}">${r.label ?? r.credential}</a>` : (r.label ?? r.credential)}</li>`).join("")}</ul>`
-      : "<p>No verification required.</p>";
-    res.type("html").send(
-      `<!doctype html><meta charset="utf-8"><title>Checkout ${order.id}</title>` +
-      `<body style="font-family:system-ui;max-width:32rem;margin:3rem auto">` +
-      `<h1>Checkout — ${order.id}</h1>` +
-      `<p>${order.lines.map((l) => `${l.quantity}× ${l.name}`).join(", ")} — <b>${order.total} ${order.currency}</b></p>` +
-      `<h3>Required to complete</h3>${reqList}` +
-      `<form method="post" action="/checkout/place-order"><input type="hidden" name="order" value="${order.id}">` +
-      `<button style="padding:.6rem 1rem">Complete purchase (demo)</button></form>` +
-      `<p style="color:#888;font-size:.85rem">Demo completion — real fail-closed verification is provided by ` +
-      `<code>attesto.mount()</code> + the reference demo's caBLE ceremony.</p></body>`,
+    const created = await createdOrderStore.read(String(req.query.order ?? ""));
+    if (!created) return res.status(404).type("html").send("<h1>Unknown order</h1>");
+
+    // Read THIS order's verification (per order id — never global; Security
+    // invariant 4) so the page reflects what the buyer has proven so far, and
+    // re-price from the catalog with it (the discount opts in only once membership
+    // is presented — never trust the token's total; invariant 2/3).
+    const v = ((await verificationStore.read(created.id)) ?? {}) as VerificationRecord;
+    const ageVerified = v.ageVerified === true;
+    const loyaltyApplied = v.loyalty?.applied === true;
+    const order = ceremonyCatalog.createOrder(
+      created.lines.map((l) => ({ productId: l.id, quantity: l.quantity })),
+      created.id,
+      { ageVerified, loyaltyApplied },
     );
+
+    // A revisit of an already-completed order shows the paid state instead of the
+    // payment methods.
+    const done = (await orderStore.read(created.id)) ?? null;
+
+    // Resolve + re-home the manifest onto this server's mounted routes (each gate
+    // carries its OWN approveUrl — the renderer is route-agnostic). Resolve against
+    // the created order (the policy reads line ids + minimumAge — the re-priced
+    // `order` carries the same lines; the discounted total shows via `order` below).
+    const requires = homeRequires(resolveGate?.(created) ?? [], baseUrl) as VerificationManifestEntry[];
+    const verification: RenderVerification = { ageVerified, loyaltyApplied };
+    const paid = done ? { amount: done.amount, currency: done.currency, method: done.method } : null;
+
+    // An UNGATED storefront has no payment gate, so the manifest carries no
+    // `authorize` entry the renderer could derive a Pay CTA from — keep a simple
+    // instant-demo complete path (POST the order id to /checkout/place-order). A
+    // GATED order has NO such bypass: completion goes through the fail-closed payment
+    // gate (the manifest's `authorize` approveUrl → the renderer's single Pay CTA).
+    const ungated = requires.length === 0;
+    const payment = ungated
+      ? {
+          methods: [
+            { value: "demo", name: `Complete purchase (demo) — ${order.total} ${order.currency}`, desc: "No real charge — records the order and clears the cart.", placeOrder: true },
+          ],
+          placeOrderPath: "/checkout/place-order",
+          orderToken: order.id,
+        }
+      : undefined;
+
+    res.type("html").send(renderRequirements(order, requires, verification, { ...(payment ? { payment } : {}), paid }));
   });
   app.post("/checkout/place-order", async (req: Request, res: Response) => {
     const order = await createdOrderStore.read(String(req.body?.order ?? ""));

@@ -8,6 +8,7 @@ import request from "supertest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createStorefront, originFromRequest, type Storefront } from "./server.js";
+import { Attesto, age, membership, payment, required, optional } from "@openmobilehub/attesto-gate";
 import type { Request } from "express";
 
 const mockReq = (headers: Record<string, string>, protocol = "http"): Request =>
@@ -110,6 +111,64 @@ describe("checkout completion round-trip — the HTTP form post the widget poll 
     const after = await request(store.app).get(`/checkout/order-status?orderId=${orderId}`);
     expect(after.body.completed).toBe(true);
     expect(after.body.order?.orderId).toBe(orderId);
+  });
+});
+
+// The unified three-gate checkout page (T030): the storefront renders the SAME
+// renderRequirements() page as the committed demo. Drives the real GET /checkout
+// over supertest; the manifest's approveUrls home onto this server's mounted routes.
+describe("GET /checkout — the shared three-gate page (renderRequirements)", () => {
+  function gatedStore(): Storefront {
+    const store = createStorefront();
+    const attesto = new Attesto();
+    attesto.mount(store.app);
+    store.gate((order) =>
+      attesto.requirements(order, [
+        required(age.over(21).when((o: { lines: { minimumAge?: number }[] }) => o.lines.some((l) => l.minimumAge != null))),
+        optional(membership.discount(10)),
+        required(payment.in("usd")),
+      ]),
+    );
+    return store;
+  }
+
+  const checkoutId = async (c: Client, productId: string): Promise<string> =>
+    ((await c.callTool({ name: "checkout", arguments: { items: [{ productId, quantity: 1 }] } })).structuredContent as any).orderId;
+
+  it("a gated alcohol order locks payment behind the age gate and links each gate to its mounted approveUrl — NO bypass button", async () => {
+    const store = gatedStore();
+    const orderId = await checkoutId(await connect(store), "oak-whiskey");
+    const res = await request(store.app).get(`/checkout?order=${orderId}`);
+    expect(res.status).toBe(200);
+    // Numbered gates linking to the mounted ceremony routes (route-agnostic render).
+    expect(res.text).toContain("/attesto/credential?order=");
+    expect(res.text).toContain("cred=age");
+    // Payment is withheld until age is proven (presentation reflects the server gate).
+    expect(res.text).toContain("Payment is locked");
+    // The confusing "Complete purchase (demo)" bypass is gone on a gated order.
+    expect(res.text).not.toContain("Complete purchase (demo)");
+    // The presence-only honesty note is intact (FR-011).
+    expect(res.text).toContain("presence-only-demo");
+  });
+
+  it("once age is proven, the gated order offers the mounted payment rail as the Pay CTA (still no bypass)", async () => {
+    const store = gatedStore();
+    const orderId = await checkoutId(await connect(store), "oak-whiskey");
+    await request(store.app).post("/attesto/credential/verify").send({ order: orderId, cred: "age", claims: { age_over_21: true } });
+    const res = await request(store.app).get(`/checkout?order=${orderId}`);
+    expect(res.text).not.toContain("Payment is locked");
+    expect(res.text).toContain("Age verified");
+    expect(res.text).toContain("/attesto/dc-payment?order="); // the payment rail, as the Pay CTA
+    expect(res.text).not.toContain("Complete purchase (demo)");
+  });
+
+  it("an ungated order keeps a simple instant-demo complete path", async () => {
+    const store = createStorefront(); // ungated
+    const orderId = await checkoutId(await connect(store), "drift-mouse");
+    const res = await request(store.app).get(`/checkout?order=${orderId}`);
+    expect(res.status).toBe(200);
+    expect(res.text).toContain("Complete purchase (demo)");
+    expect(res.text).not.toContain("Payment is locked");
   });
 });
 

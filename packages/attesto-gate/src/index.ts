@@ -29,6 +29,22 @@ export { MemoryVerificationStore } from "./store.js";
 // SAME shared path every rail uses (FR-008). The ceremony entity types let the host
 // type those seam adapters without re-declaring them.
 export { completeOrder } from "./ceremony/completion.js";
+
+// ── Ceremony presentation (the ONE shared three-gate checkout page) ─────────
+// Both the committed demo and @openmobilehub/attesto-storefront render their
+// checkout page through `renderRequirements(order, manifest, verification)` — one
+// polished, route-agnostic page driven by the `requires` manifest (each gate links
+// to its OWN approveUrl) so the two surfaces never drift (T030).
+export { renderRequirements } from "./ceremony/checkout-page.js";
+export type {
+  RenderOrder,
+  RenderOrderLine,
+  RenderVerification,
+  RenderPaid,
+  PaymentMethod,
+  PaymentOptions,
+  RenderRequirementsOptions,
+} from "./ceremony/checkout-page.js";
 export type {
   CompletionContext,
   CompletedRecord,
