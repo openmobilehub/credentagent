@@ -1,0 +1,106 @@
+// The shared completion seam (every rail records through this one path):
+//   gates → catalog re-derivation → idempotency → settlement (when configured) →
+//   completed record + cart clear + per-order verification clear.
+// Extracted from the demo's payment-gate/completion.ts, but injected-seam based
+// (no hardcoded demo imports) so dc-payment and passkey reconcile against the same
+// amount-binding logic. Settlement GATES completion: a configured-but-failed
+// settle means authorized-but-not-completed (no record, cart intact — FR-013).
+import type { VerificationStore } from "../types.js";
+import type { CartItemRef, CeremonyCatalog, CompletionInput, CompletionResult, GateOutcome } from "./types.js";
+
+// One on-chain (demo-mode) settlement backing a completed order. Kept structural
+// so the demo's richer SettlementRecord is assignable without the package taking
+// a settlement dependency.
+export interface SettlementRecordLike {
+  network: string;
+  txId: string;
+  status: string;
+  [k: string]: unknown;
+}
+
+// A completed-purchase record. On a successful ceremony the gate writes one of
+// these so the agent can later poll it (MCP has no server→client push) and
+// confirm the purchase. Keyed by order id — never process-global (invariant 4).
+export interface CompletedRecord {
+  orderId: string;
+  mandateId: string;
+  amount: number;
+  currency: string;
+  method: string;
+  instrument?: unknown;
+  gates: GateOutcome[];
+  completedAt: string;
+  settlement?: SettlementRecordLike;
+}
+
+export interface CompletedOrderStore {
+  read(orderId: string): CompletedRecord | undefined | Promise<CompletedRecord | undefined>;
+  write(record: CompletedRecord): void | Promise<void>;
+}
+
+export interface ClearableCart {
+  clear(): void | Promise<void>;
+}
+
+export interface CompletionContext {
+  catalog: CeremonyCatalog;
+  verificationStore: VerificationStore;
+  /** Idempotent completed-order store, keyed by order id. */
+  records: CompletedOrderStore;
+  /** Cart to empty on completion (optional). */
+  cart?: ClearableCart;
+  /** Optional demo-mode settlement; throwing GATES completion (no record). */
+  settle?: (order: CompletionInput["order"]) => Promise<SettlementRecordLike>;
+}
+
+export async function completeOrder(input: CompletionInput, ctx: CompletionContext): Promise<CompletionResult> {
+  // Every deterministic gate must have passed; one failure refuses, recording
+  // nothing.
+  if (!input.gates.every((g) => g.pass)) return { completed: false, reason: "gates" };
+
+  // Idempotency: a replayed verify for an already-recorded order echoes the
+  // recorded outcome — it settles/records nothing twice. Keyed by order id so it
+  // can't collide across orders, and it runs BEFORE re-pricing because completion
+  // clears the order's verification (a replayed discounted order would otherwise
+  // reprice high and refuse).
+  const existing = await ctx.records.read(input.order.id);
+  if (existing) {
+    return { completed: true, ...(existing.settlement ? { settlement: existing.settlement } : {}) };
+  }
+
+  // Invariant 2: never trust the order token — re-price the lines against the
+  // catalog and refuse if the inbound total doesn't match what those items cost.
+  // Invariant 3: a loyalty discount only counts when THIS order's verification
+  // says it was applied; a token merely claiming the discounted total reprices
+  // higher and is refused.
+  const verification = await ctx.verificationStore.read(input.order.id);
+  const loyaltyApplied = !!(verification as { loyalty?: { applied?: boolean } } | undefined)?.loyalty?.applied;
+  const items: CartItemRef[] = input.order.lines.map((l) => ({ productId: l.id, quantity: l.quantity }));
+  const repriced = ctx.catalog.createOrder(items, input.order.id, { loyaltyApplied });
+  if (repriced.total !== input.order.total) return { completed: false, reason: "reprice" };
+
+  let settlement: SettlementRecordLike | undefined;
+  if (ctx.settle) {
+    try {
+      settlement = await ctx.settle(input.order);
+    } catch (err) {
+      return { completed: false, settlementError: (err as Error).message };
+    }
+  }
+
+  await ctx.records.write({
+    orderId: input.order.id,
+    mandateId: input.mandateId,
+    amount: input.amount,
+    currency: input.currency,
+    method: input.method,
+    instrument: input.instrument,
+    gates: input.gates,
+    completedAt: new Date().toISOString(),
+    ...(settlement ? { settlement } : {}),
+  });
+  if (ctx.cart) await ctx.cart.clear();
+  // Completed purchase: clear this order's age/loyalty verification.
+  await ctx.verificationStore.clear(input.order.id);
+  return { completed: true, ...(settlement ? { settlement } : {}) };
+}

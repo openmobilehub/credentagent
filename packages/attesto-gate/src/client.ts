@@ -5,6 +5,11 @@
 import type { AttestoOptions, GateOrder, Step, VerificationManifestEntry, VerificationStore } from "./types.js";
 import { resolveRequirements } from "./manifest.js";
 import { MemoryVerificationStore } from "./store.js";
+import { mountCeremony, type CeremonyApp, type CeremonySeams } from "./ceremony/mount.js";
+
+/** The ceremony seams the host supplies to `mount()`; the per-order
+ *  verification store is Attesto's own, so the host never passes it here. */
+export type MountCeremony = Omit<Partial<CeremonySeams>, "verificationStore">;
 
 /**
  * Minimal structural type for an Express app — the package stays dependency-free
@@ -57,15 +62,24 @@ export class Attesto {
   }
 
   /**
-   * Context 2 — wire the verification ceremony onto your Express app. v0.1
-   * exposes the per-order store via `app.locals.attesto` so your credential-gate
-   * routes resolve verification state THROUGH Attesto (keyed by order id, never
-   * process-global — Security invariant 4). The reference server's existing
-   * fail-closed `/credential-gate/*` routes (OpenID4VP + mdoc disclosure/nonce
-   * checks in `verify.ts`) remain the verifier — this seam does NOT reimplement
-   * the crypto. Full route-ownership extraction is tracked on the roadmap.
+   * Context 2 — wire the verification ceremony onto your Express app.
+   *
+   * Pass the ceremony seams (`{ orderStore, catalog, completion, signingKey, … }`)
+   * to register the gate's routes through `mountCeremony`: it validates the seams,
+   * FAILS FAST on a missing required one (CT2), and attaches each rail. Attesto's
+   * own per-order store is injected as the `verificationStore` (keyed by order id,
+   * never process-global — Security invariant 4), so the host never passes it.
+   *
+   * Called WITHOUT seams it keeps the v0.1 behavior: expose the per-order store
+   * via `app.locals.attesto` so a host's existing fail-closed `/credential-gate/*`
+   * routes resolve verification state THROUGH Attesto. The rails register only
+   * when seams are supplied; with none extracted yet, that path attaches no routes.
    */
-  mount(app: ExpressApp): void {
+  mount(app: ExpressApp, ceremony?: MountCeremony): void {
+    if (ceremony) {
+      mountCeremony(app as CeremonyApp, { ...ceremony, verificationStore: this.store });
+      return;
+    }
     const existing = app.locals.attesto as { store?: VerificationStore } | undefined;
     if (existing?.store === this.store) return; // idempotent
     app.locals.attesto = { store: this.store, walletOrigin: this.walletOrigin };

@@ -13,5 +13,13 @@
     "noUnusedParameters": true,
     "verbatimModuleSyntax": true
   },
-  "include": ["src/index.ts"]
+  "include": [
+    "src/index.ts",
+    "src/ceremony/mount.ts",
+    "src/ceremony/types.ts",
+    "src/ceremony/origin.ts",
+    "src/ceremony/challengeToken.ts",
+    "src/ceremony/completion.ts",
+    "src/ceremony/mandate.ts"
+  ]
 }

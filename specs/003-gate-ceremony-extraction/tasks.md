@@ -24,8 +24,8 @@ stays green at every commit; DCO `git commit -s` on every commit).
 
 ## Phase 1: Setup (Shared Infrastructure)
 
-- [ ] T001 Create the ceremony module skeleton in `packages/attesto-gate/src/ceremony/` (`mount.ts` entry + `passkey/`, `dc-payment/`, `credential-gate/` subdirs); add the files to `packages/attesto-gate/tsconfig.json` `include` and ensure `npm run build:packages` compiles them.
-- [ ] T002 [P] Add the WebAuthn + test deps to `packages/attesto-gate/package.json` (`@simplewebauthn/server`, `@simplewebauthn/browser`; `supertest` dev) and confirm `build:packages` (vite + tsc) stays green with the new files present.
+- [X] T001 Create the ceremony module skeleton in `packages/attesto-gate/src/ceremony/` (`mount.ts` entry + `passkey/`, `dc-payment/`, `credential-gate/` subdirs); add the files to `packages/attesto-gate/tsconfig.json` `include` and ensure `npm run build:packages` compiles them.
+- [X] T002 [P] Add the WebAuthn + test deps to `packages/attesto-gate/package.json` (`@simplewebauthn/server`, `@simplewebauthn/browser`; `supertest` dev) and confirm `build:packages` (vite + tsc) stays green with the new files present.
 
 ---
 
@@ -33,13 +33,13 @@ stays green at every commit; DCO `git commit -s` on every commit).
 
 **Purpose**: the shared seams + helpers EVERY rail depends on. No user story can land until these exist.
 
-- [ ] T003 Define the injected-seam contract in `packages/attesto-gate/src/ceremony/mount.ts`: read `verificationStore`, `orderStore`, `completion`, `signingKey`, `origin`, `catalog`, optional `settlement` from `app.locals.attesto`/options; **fail fast** when a required seam is missing; `signingKey` required unless `allowEphemeralKey: true` is passed (never infer "serverless") (FR-009, CT2; A3).
-- [ ] T003a Implement the shared **order resolution + re-pricing** helper in `packages/attesto-gate/src/ceremony/mount.ts` (resolve order by id from `orderStore`; re-price from the injected `catalog`; reject a tampered/unknown id), and use it on every rail's GET page/options route so the displayed + bound amounts come from the catalog, never the id/token (FR-004, FR-010, CT3).
-- [ ] T004 [P] Extract the stateless sealed-HMAC nonce into `packages/attesto-gate/src/ceremony/challengeToken.ts` (issue/verify; signed by the injected stable `signingKey`; single-use within expiry) (data-model: Challenge token; D6).
-- [ ] T005 [P] Extract `deriveOrigin(req)` (from `x-forwarded-proto/host`, else Host → `{rpID, origin}`) into `packages/attesto-gate/src/ceremony/origin.ts` (FR-007).
-- [ ] T006 Extract the shared completion seam into `packages/attesto-gate/src/ceremony/completion.ts` (`completeOrder`: idempotent record + re-price from injected catalog + optional settlement + clear cart & per-order verification) (FR-008, FR-013, CT8).
-- [ ] T007 Extract the AP2 mandate + the four deterministic gates (amount integrity, authorization present, user verification asserted, subject/credential binding) into `packages/attesto-gate/src/ceremony/mandate.ts`; mandate carries `trust_level: "presence-only-demo"` (dev-signed, FR-011) (data-model: AP2 mandate, four gates).
-- [ ] T008 Implement route registration in `packages/attesto-gate/src/ceremony/mount.ts` and wire it from `Attesto.mount(app)` in `packages/attesto-gate/src/client.ts` so all three rails' routes attach to the host app (CT1).
+- [X] T003 Define the injected-seam contract in `packages/attesto-gate/src/ceremony/mount.ts`: read `verificationStore`, `orderStore`, `completion`, `signingKey`, `origin`, `catalog`, optional `settlement` from `app.locals.attesto`/options; **fail fast** when a required seam is missing; `signingKey` required unless `allowEphemeralKey: true` is passed (never infer "serverless") (FR-009, CT2; A3).
+- [X] T003a Implement the shared **order resolution + re-pricing** helper in `packages/attesto-gate/src/ceremony/mount.ts` (resolve order by id from `orderStore`; re-price from the injected `catalog`; reject a tampered/unknown id), and use it on every rail's GET page/options route so the displayed + bound amounts come from the catalog, never the id/token (FR-004, FR-010, CT3).
+- [X] T004 [P] Extract the stateless sealed-HMAC nonce into `packages/attesto-gate/src/ceremony/challengeToken.ts` (issue/verify; signed by the injected stable `signingKey`; single-use within expiry) (data-model: Challenge token; D6).
+- [X] T005 [P] Extract `deriveOrigin(req)` (from `x-forwarded-proto/host`, else Host → `{rpID, origin}`) into `packages/attesto-gate/src/ceremony/origin.ts` (FR-007).
+- [X] T006 Extract the shared completion seam into `packages/attesto-gate/src/ceremony/completion.ts` (`completeOrder`: idempotent record + re-price from injected catalog + optional settlement + clear cart & per-order verification) (FR-008, FR-013, CT8).
+- [X] T007 Extract the AP2 mandate + the four deterministic gates (amount integrity, authorization present, user verification asserted, subject/credential binding) into `packages/attesto-gate/src/ceremony/mandate.ts`; mandate carries `trust_level: "presence-only-demo"` (dev-signed, FR-011) (data-model: AP2 mandate, four gates).
+- [X] T008 Implement route registration in `packages/attesto-gate/src/ceremony/mount.ts` and wire it from `Attesto.mount(app)` in `packages/attesto-gate/src/client.ts` so all three rails' routes attach to the host app (CT1).
 
 **Checkpoint**: `mount(app)` wires up + fails fast; `npm run build:packages` green. No rail behavior yet.
 
