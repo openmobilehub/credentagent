@@ -6,7 +6,11 @@
 import { describe, it, expect } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { createStorefront, type Storefront } from "./server.js";
+import { createStorefront, originFromRequest, type Storefront } from "./server.js";
+import type { Request } from "express";
+
+const mockReq = (headers: Record<string, string>, protocol = "http"): Request =>
+  ({ headers, protocol } as unknown as Request);
 
 const ALL_TOOLS = [
   "browse-products", "add-to-cart", "set-quantity", "remove-from-cart", "get-cart",
@@ -59,6 +63,20 @@ describe("CT2/CT3 — checkout (Mode A), ungated vs gated", () => {
     const c = await connect(store);
     const sc = (await c.callTool({ name: "checkout", arguments: { items: [{ productId: "oak-whiskey", quantity: 1 }] } })).structuredContent as any;
     expect(sc.requires?.find((e: any) => e.credential === "age")?.minAge).toBe(21);
+  });
+});
+
+describe("origin derivation — absolute checkout URLs behind a proxy", () => {
+  it("prefers x-forwarded-* (Vercel/tunnel), else Host; strips trailing slash", () => {
+    expect(originFromRequest(mockReq({ "x-forwarded-proto": "https", "x-forwarded-host": "preview.vercel.app" })))
+      .toBe("https://preview.vercel.app");
+    // proxy may send a comma list; take the first hop
+    expect(originFromRequest(mockReq({ "x-forwarded-proto": "https, http", "x-forwarded-host": "a.example, b" })))
+      .toBe("https://a.example");
+    // no forwarded headers ⇒ fall back to Host + req.protocol
+    expect(originFromRequest(mockReq({ host: "localhost:3005" }))).toBe("http://localhost:3005");
+    // nothing to go on ⇒ empty (caller keeps the relative path)
+    expect(originFromRequest(mockReq({}))).toBe("");
   });
 });
 

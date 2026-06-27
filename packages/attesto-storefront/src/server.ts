@@ -105,6 +105,17 @@ async function loadBundle(): Promise<string> {
   throw new Error(`attesto-storefront: widget bundle not found (looked in: ${bundleCandidates().join(", ")})`);
 }
 
+// Derive this server's public origin from the incoming request. Proxies (Vercel,
+// tunnels) set x-forwarded-*; fall back to the Host header. Lets the storefront
+// build absolute checkout URLs at any origin when baseUrl wasn't configured.
+export function originFromRequest(req: Request): string {
+  const fwd = (name: string): string | undefined =>
+    (req.headers[name] as string | undefined)?.split(",")[0]?.trim();
+  const proto = fwd("x-forwarded-proto") ?? req.protocol ?? "http";
+  const host = fwd("x-forwarded-host") ?? (req.headers.host as string | undefined);
+  return host ? `${proto}://${host}`.replace(/\/+$/, "") : "";
+}
+
 export function createStorefront(opts: StorefrontOptions = {}): Storefront {
   const catalog = opts.catalog ?? SAMPLE_CATALOG;
   const reviews = opts.reviews;
@@ -290,6 +301,10 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
 
   // MCP over streamable HTTP (stateless per request), mirroring the reference server.
   app.all("/mcp", async (req: Request, res: Response) => {
+    // Self-derive the public origin from the first request so checkout URLs are
+    // absolute behind any proxy (Vercel, a tunnel) with zero config — without it,
+    // `${baseUrl}/checkout` would be relative and the widget's `new URL()` throws.
+    if (!baseUrl) baseUrl = originFromRequest(req);
     const server = buildServer();
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     res.on("close", () => { transport.close().catch(() => {}); server.close().catch(() => {}); });
