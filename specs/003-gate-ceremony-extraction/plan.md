@@ -31,7 +31,7 @@ deploy staying green. Trust stays **presence-only, fenced as demo** (Principle V
 
 **Performance Goals**: Ceremony page interactive on mobile; settlement is demo-mode (Hedera testnet) and may take seconds — surfaced honestly, never blocking the gate logic.
 
-**Constraints**: Serverless-safe — a **stable signing key** and **shared stores** must survive instance splits (the options→verify and place-order→poll requests may hit different instances; this is the class of bug already fixed in the storefront's order round-trip). All six Security Requirements hold. Presence-only trust fenced (Principle VII). `npm run build` + full `npm test` (253/1 skip) + live deploy green at every step. DCO on every commit.
+**Constraints**: Serverless-safe — a **stable signing key** and **shared stores** must survive instance splits (the options→verify and place-order→poll requests may hit different instances; this is the class of bug already fixed in the storefront's order round-trip). All six Security Requirements hold. Presence-only trust fenced (Principle VII). `npm run build` + live deploy green at every step; the pre-existing suite (253/1-skip baseline, a floor) stays green with no new skips and the new bypass tests pass. DCO on every commit.
 
 **Scale/Scope**: ~28 ceremony source files extracted across 3 rails from `payment-gate/` into `packages/attesto-gate/src/`, plus the demo rewired to consume `mount()`.
 
@@ -42,12 +42,12 @@ deploy staying green. Trust stays **presence-only, fenced as demo** (Principle V
 | Article | Verdict | How this feature complies |
 |---|---|---|
 | **I. Stripe-grade, MCP-idiomatic API** | ✅ PASS | `attesto.mount(app)` is one declarative call; the policy stays the single ordered array on `requirements()`. No injected-callback grab-bags — dependencies are explicit injected seams, each origin visible. |
-| **II. Three execution contexts are sacred** | ✅ PASS | This feature *is* Context 2 (the page/phone where gates run). The MCP tool still only mints the link + reports requirements (Context 1); the poll reports completion (Context 3). `mount()` adds Context-2 routes only; it does not move ceremony work into the tool handler. |
+| **II. Three execution contexts are sacred** | ✅ PASS | This feature *is* Context 2 (the page/phone where gates run). The link-minting `checkout` tool stays Context-1 (mint + report only); the poll reports completion (Context 3). The FR-003 "enforce on the MCP tool" means the **order-completion** tool **refuses** an unproven order — refusing completion is not running the ceremony, so this does not conflict with Principle II. `mount()` adds Context-2 routes only. |
 | **III. Consolidated checkout flow** | ✅ PASS | One hand-off page serves all three rails; the buyer completes verifications + payment in one browser session. The agent orchestrates + polls, never runs the ceremony. |
 | **IV. One ordered, conditional policy array** | ✅ PASS | `requirements(order, [required(age...).when(), optional(membership.discount()), required(payment.in())])` — array order = run order, payment settles last, amount derived server-side (re-priced from catalog), `.when()` predicate owned by the developer. |
 | **V. Extensible to any credential** | ✅ PASS | The three rails are the built-in credentials (`age`/`membership`/`payment`); `defineCredential` + custom credentials by object are unaffected. mount() registers the ceremony for whatever credentials the policy names. |
 | **VI. structuredContent is data, not policy** | ✅ PASS | `requirements()` stays the code→data boundary, emitting the flat manifest; mount() consumes the resolved manifest server-side; no functions cross the wire. |
-| **VII. Honesty in the types; prefer simplicity** | ✅ PASS | `trust_level: "presence-only-demo"` is carried + fenced (FR-011, SC-006). Real KB-JWT signing + mdoc issuer-trust verification are explicitly deferred (v0.2) rather than overbuilt. |
+| **VII. Honesty in the types; prefer simplicity** | ✅ PASS | `trust_level: "presence-only-demo"` is carried + fenced (FR-011, SC-006). The companion `enforcedAt` axis is already emitted by the pre-existing `requirements()` manifest and is **out of extraction scope** (unchanged here) — confirm-not-modify. Real KB-JWT signing + mdoc issuer-trust verification are explicitly deferred (v0.2) rather than overbuilt. |
 | **Security Requirements (all six)** | ✅ PASS | Enforce on every completion path (FR-003); never trust the token / re-derive amounts (FR-004); discounts reconcile with amount binding (FR-005); per-order state (FR-006); explicit positive claims (FR-002); origin & replay binding (FR-007). Bypass tests required (FR-014). |
 
 **Result: PASS — no violations.** Complexity Tracking is empty.

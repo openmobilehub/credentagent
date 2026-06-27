@@ -12,7 +12,7 @@ mirror the demo's existing ceremony so extraction preserves behavior.
 | `verificationStore` | per-order: `read(orderId) → {age?, membership?, payment?}`, `write(orderId, claim)`, `clear(orderId)` | in-memory | host injects shared/Redis |
 | `orderStore` | resolve order: `read(orderId) → Order \| null` | in-memory | host injects shared/Redis |
 | `completion` | `completeOrder(order, ctx) → CompletedRecord` (idempotent; re-prices; optional settle; clears cart+verification) | provided | — |
-| `signingKey` | stable secret for the challenge HMAC | per-process random (dev only) | **required** stable value |
+| `signingKey` | stable secret for the challenge HMAC | **required** (ephemeral only behind `allowEphemeralKey: true`) | host provides a stable value |
 | `origin` | `deriveOrigin(req) → { rpID, origin }` from `x-forwarded-proto/host`, else Host | provided | honors TLS termination |
 | `catalog` | products for server-side re-pricing | required | — |
 | `settlement?` | optional demo-mode Hedera/x402 settle seam | absent ⇒ mock-complete | — |

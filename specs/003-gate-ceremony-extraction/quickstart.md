@@ -47,8 +47,8 @@ discount applied once + reconciles (CT5); the four passkey gates + nonce/origin 
 ```bash
 npm test
 ```
-**Expected**: full suite green (253 pass / 1 known skip baseline) — the demo, now consuming `attesto.mount()`,
-behaves identically. (CT12)
+**Expected**: green — the pre-existing 253/1-skip baseline holds as a floor (no new skips), the new bypass tests
+pass, and the demo (now consuming `attesto.mount()`) is **user-visibly** identical. (CT12)
 
 ### 4. Ceremony renders (manual)
 Connect the demo (`http://localhost:3001/mcp`) or your storefront (`:3005`) to the Claude native app: add the 21+

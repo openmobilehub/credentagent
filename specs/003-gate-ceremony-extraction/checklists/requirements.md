@@ -32,7 +32,8 @@
 ## Notes
 
 - All five maintainer decisions are encoded; **no [NEEDS CLARIFICATION] markers remain**. FR-010 (injected store
-  seam) is explicitly flagged as the one item to sanity-check at `/speckit-plan` — it is *decided*, not open.
+  seam) was the one item flagged to sanity-check — **confirmed at `/speckit-plan` (research D2)** and reconciled
+  with `/speckit-analyze` (FR-010 trimmed to store-seam resolution; re-pricing governed by FR-004).
 - **Protocol naming is intentional.** This is an *extraction* of an existing, protocol-defined ceremony, so the
   spec names the standards it moves (WebAuthn, OpenID4VP/mdoc, AP2 mandate, x402/Hedera settlement) as **domain
   entities**, not as implementation choices — the same precedent as the 002 storefront spec. The spec deliberately

@@ -11,8 +11,9 @@ description: "Task list — Gate Ceremony Extraction (attesto.mount)"
 **Tests**: REQUIRED. The constitution (Security Requirements) + spec FR-014 mandate bypass tests — a test that
 still passes with its control removed is rejected.
 
-**Branch**: `feat/attesto-gate-v0.1` (brownfield — demo consumes `attesto.mount()`; full suite 253/1-skip + live
-deploy green at every commit; DCO `git commit -s` on every commit).
+**Branch**: `feat/attesto-gate-v0.1` (brownfield — demo consumes `attesto.mount()`; the pre-existing suite
+(253/1-skip *baseline*, a floor) stays green with no new skips, the new bypass tests pass, and the live deploy
+stays green at every commit; DCO `git commit -s` on every commit).
 
 ## Format: `[ID] [P?] [Story] Description`
 
@@ -32,7 +33,8 @@ deploy green at every commit; DCO `git commit -s` on every commit).
 
 **Purpose**: the shared seams + helpers EVERY rail depends on. No user story can land until these exist.
 
-- [ ] T003 Define the injected-seam contract in `packages/attesto-gate/src/ceremony/mount.ts`: read `verificationStore`, `orderStore`, `completion`, `signingKey`, `origin`, `catalog`, optional `settlement` from `app.locals.attesto`/options; **fail fast** with a clear error when a required seam is missing (FR-009, CT2).
+- [ ] T003 Define the injected-seam contract in `packages/attesto-gate/src/ceremony/mount.ts`: read `verificationStore`, `orderStore`, `completion`, `signingKey`, `origin`, `catalog`, optional `settlement` from `app.locals.attesto`/options; **fail fast** when a required seam is missing; `signingKey` required unless `allowEphemeralKey: true` is passed (never infer "serverless") (FR-009, CT2; A3).
+- [ ] T003a Implement the shared **order resolution + re-pricing** helper in `packages/attesto-gate/src/ceremony/mount.ts` (resolve order by id from `orderStore`; re-price from the injected `catalog`; reject a tampered/unknown id), and use it on every rail's GET page/options route so the displayed + bound amounts come from the catalog, never the id/token (FR-004, FR-010, CT3).
 - [ ] T004 [P] Extract the stateless sealed-HMAC nonce into `packages/attesto-gate/src/ceremony/challengeToken.ts` (issue/verify; signed by the injected stable `signingKey`; single-use within expiry) (data-model: Challenge token; D6).
 - [ ] T005 [P] Extract `deriveOrigin(req)` (from `x-forwarded-proto/host`, else Host → `{rpID, origin}`) into `packages/attesto-gate/src/ceremony/origin.ts` (FR-007).
 - [ ] T006 Extract the shared completion seam into `packages/attesto-gate/src/ceremony/completion.ts` (`completeOrder`: idempotent record + re-price from injected catalog + optional settlement + clear cart & per-order verification) (FR-008, FR-013, CT8).
@@ -50,7 +52,7 @@ applied. The GDC hero. **Independent test**: the bypass tests in T009 + the manu
 
 ### Tests (write first — must fail before impl, and fail if the control is later removed)
 
-- [ ] T009 [P] [US1] Bypass/contract tests in `packages/attesto-gate/src/ceremony/credential-gate/credential-gate.test.ts` (supertest): CT4 (verify succeeds only on `age_over_21 === true`; an `age_over_18` proof is REFUSED for a 21+ gate); CT9 (an unverified age-restricted order is refused on the verify handler, `place-order`, AND the MCP checkout/completion tool); CT10 (verifying order A does not unlock order B); CT5 (a verified membership applies the discount exactly once and line sum == total); CT11 (page/receipt state `presence-only-demo`).
+- [ ] T009 [P] [US1] Bypass/contract tests in `packages/attesto-gate/src/ceremony/credential-gate/credential-gate.test.ts` (supertest): CT4 (verify succeeds only on `age_over_21 === true`; an `age_over_18` proof is REFUSED for a 21+ gate); CT9 (an unverified age-restricted order is refused on the verify handler, `place-order`, AND the MCP checkout/completion tool); CT10 (verifying order A does not unlock order B); CT5 (a verified membership applies the discount exactly once and line sum == total); CT3 (a tampered/unknown order id is refused and the amount comes from the catalog, not the token); CT11 (page/receipt state `presence-only-demo`). The MCP path tested here is the **order-completion** tool, not the link-minting `checkout` tool (A2).
 
 ### Implementation
 
@@ -59,7 +61,7 @@ applied. The GDC hero. **Independent test**: the bypass tests in T009 + the manu
 - [ ] T012 [US1] Membership verify marks the order; the GATE owns the `membership.discount` effect and the storefront's `priceCart` re-derives the discounted total once — line sum == total == any payment amount on every path (FR-005, CT5).
 - [ ] T013 [US1] Enforce age/membership server-side on EVERY completion path — the credential `verify` handler, `place-order`, and the MCP checkout/completion tool — re-deriving restriction from the order lines, never the token (FR-003, FR-004, CT9).
 - [ ] T014 [US1] Demo consumes `attesto.mount()` for this rail: the demo checkout page links to the credential routes; remove the demo's storefront-local age stub (supersedes `feat/storefront-age-enforcement`; keep the `place-order` 403, move verification ownership to the gate).
-- [ ] T015 [US1] Verify US1: `npm run build` green; `npx vitest run packages/attesto-gate packages/attesto-storefront` green incl. T009 bypass tests; full `npm test` green (253/1-skip parity, CT12).
+- [ ] T015 [US1] Verify US1: `npm run build` green; `npx vitest run packages/attesto-gate packages/attesto-storefront` green incl. T009 bypass tests; full `npm test` green — pre-existing 253/1-skip baseline holds as a floor (no new skips) and the new tests pass; user-visible behavior unchanged (CT12).
 
 **Checkpoint**: age blocks + membership discounts through the gate; MVP demoable independently.
 
@@ -95,9 +97,9 @@ Hedera-testnet settlement. **Independent test**: T016.
 
 - [ ] T025 [P] Collapse the demo's `payment-gate/` modules to thin re-export shims pointing at `packages/attesto-gate/src/ceremony/` so no import path dies (actual file deletion is the steered follow-up — `rm`/`git rm` is sandbox-blocked); confirm no logic is duplicated (no drift).
 - [ ] T026 [P] Audit the presence-only honesty surfaces (ceremony page + receipt) — every surface states `trust_level: "presence-only-demo"`, none presents the gate as a real safety control (FR-011, SC-006, CT11).
-- [ ] T027 Serverless verify: a stable injected `signingKey` + shared `verificationStore`/`orderStore` survive an instance split (options→verify and place-order→poll on different instances); smoke on a Vercel preview (re-point the `attesto-storefront.vercel.app` alias) (D6, CT2).
-- [ ] T028 [P] Update the package README + `specs/003-…/quickstart.md` references to the live `mount()` pattern; confirm the adopter path is ≤ 10 lines (SC-005); reconcile the 002 quickstart's `mount()` comment (no longer "feature 003").
-- [ ] T029 Final gate: full `npm test` green (253/1-skip baseline, CT12) + `npm run build` deploy-safe; every commit DCO-signed; every bypass test verified to FAIL with its control removed (FR-014).
+- [ ] T027 Serverless verify: a stable injected `signingKey` + shared `verificationStore`/`orderStore` survive an instance split (options→verify and place-order→poll on different instances); smoke on the **preview** alias `attesto-storefront.vercel.app` (the package-storefront preview — re-point it; this is NOT the demo's stable served origin `mcp-apps-nine.vercel.app/mcp`, which must stay untouched) (D6, CT2; I2).
+- [ ] T028 [P] Update the package README + `specs/003-…/quickstart.md` references to the live `mount()` pattern; confirm the adopter path is ≤ 10 lines (SC-005); reconcile the 002 quickstart's `mount()` comment (no longer "feature 003"); **document the no-GUI/Goose host limitation** — the ceremony is a browser hand-off, surfaced as a link there (spec Edge Cases; U2).
+- [ ] T029 Final gate: full `npm test` green — the pre-existing 253/1-skip baseline holds as a floor (no new skips) and all new bypass tests pass (CT12) + `npm run build` deploy-safe; every commit DCO-signed; every bypass test verified to FAIL with its control removed (FR-014).
 
 ---
 

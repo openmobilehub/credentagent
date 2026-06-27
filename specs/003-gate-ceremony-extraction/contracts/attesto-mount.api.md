@@ -13,9 +13,9 @@ attesto.mount(app);   // registers the ceremony routes onto a host Express app
 
 - **CT1 — mount registers all three rails.** After `mount(app)`, the app serves the passkey, dc-payment, and
   credential-gate routes (below). `requirements(order, policy)` is unchanged (the code→data manifest).
-- **CT2 — fail fast on missing seams.** If a required seam (verificationStore, orderStore, signingKey on
-  serverless, origin, catalog, completion) is absent, `mount()` throws a clear error at wire-up — never silently
-  degrades to an insecure path. (FR-009)
+- **CT2 — fail fast on missing seams.** If a required seam (verificationStore, orderStore, origin, catalog,
+  completion) is absent, `mount()` throws a clear error at wire-up — never silently degrades. The `signingKey` is
+  required unless the host passes `allowEphemeralKey: true` (dev-only); `mount()` never infers "serverless". (FR-009)
 - **CT3 — injected store seam.** `mount()` resolves the order by id from the injected `orderStore`; amounts are
   re-derived from the injected `catalog` regardless. A tampered order/total is refused. (FR-004, FR-010)
 
@@ -53,8 +53,9 @@ attesto.mount(app);   // registers the ceremony routes onto a host Express app
 - **CT10 — per-order isolation.** Verifying order A does not unlock order B (state keyed by order id). (FR-006)
 - **CT11 — presence-only honesty.** The page and any receipt state `trust_level: "presence-only-demo"`; no surface
   presents the gate as a real safety control. (FR-011, SC-006)
-- **CT12 — brownfield parity.** With the demo consuming `mount()`, `npm run build` + full `npm test` (253/1-skip
-  baseline) + the live deploy stay green; behavior identical. (FR-012)
+- **CT12 — brownfield parity.** With the demo consuming `mount()`, `npm run build` + the live deploy stay green;
+  the pre-existing suite stays green (253/1-skip baseline as a floor, no new skips) and the new bypass tests pass;
+  the **user-visible** result is identical (discount mechanism intentionally unified, FR-005). (FR-012)
 
 ## Out of scope (v0.2+)
 Real KB-JWT / key-bound mandate signing; cryptographic mdoc issuer-trust verification; any *new* ceremony behavior.

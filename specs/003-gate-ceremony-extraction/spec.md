@@ -69,8 +69,9 @@ membership and assert the order total, line sum, and any payment amount all reco
    agree on every path.
 4. **Given** two concurrent orders, **When** one is age-verified, **Then** the other remains unverified (state is
    per order id; no cross-order/cross-user bleed).
-5. **Given** the demo now consumes `attesto.mount()` for this rail, **When** the full test suite and the live
-   build run, **Then** behavior is identical to before (no regression).
+5. **Given** the demo now consumes `attesto.mount()` for this rail, **When** the full suite and the live build run,
+   **Then** the **user-visible** result (totals, gating) is identical, the pre-existing suite stays green, and the
+   new bypass tests pass — the discount mechanism is intentionally unified to the gate effect (FR-005), not a regression.
 
 ---
 
@@ -145,8 +146,11 @@ bound, completion runs through the same `completeOrder` seam as passkey, and the
   so the storefront's checkout page can link to them and a buyer can satisfy every declared requirement.
 - **FR-002**: The credential gate MUST enforce **explicit positive claims** — e.g. `age_over_21 === true`, with
   the threshold matching the order's restriction — and MUST refuse on a lower-threshold or absent claim.
-- **FR-003**: Gate enforcement MUST run server-side on **every** completion path (the gate verify handlers,
-  `place-order`, and the MCP checkout/completion tool), not only in the rendered page. Hiding a button is not enforcement.
+- **FR-003**: Gate enforcement MUST run server-side on **every** completion path: the gate `verify` handlers, the
+  order-completion path (`place-order`), and the MCP **order-completion** tool — **not** the link-minting `checkout`
+  tool, which stays Context-1 (mint link + report requirements only, per Principle II). Enforcement here means
+  **refusing completion** when a required credential is unproven; it never runs the ceremony. Not only in the
+  rendered page — hiding a button is not enforcement.
 - **FR-004**: Amounts MUST be **re-derived from the catalog** server-side on every path; the order id/token MUST
   never be trusted to carry the price. A tampered order MUST be refused by the amount-integrity gate.
 - **FR-005**: The membership **discount** MUST be owned by the gate as an effect and applied to the order total by
@@ -161,17 +165,21 @@ bound, completion runs through the same `completeOrder` seam as passkey, and the
 - **FR-008**: The Digital Credentials payment rail MUST complete through the **same** `completeOrder` path as the
   passkey rail (idempotent recording, re-pricing check, optional settlement, cart + verification clear).
 - **FR-009**: `mount(app)` MUST take its dependencies as **injected seams**, not hardcoded demo imports: a
-  per-order verification store (default in-memory; a shared/Redis store on serverless), a stable signing key for
-  challenge tokens, request-derived origin/RP-ID, and the order + completion seams. Missing required seams MUST
-  fail fast.
-- **FR-010**: The order MUST be resolved via the **injected store seam** (id → order; default in-memory, shared
-  store on serverless), with amounts always re-derived from the catalog (FR-004). *(Sanity-check item — confirm at plan time.)*
+  per-order verification store, an order store, a stable signing key for challenge tokens, request-derived
+  origin/RP-ID, and the completion seam. Missing required seams MUST cause `mount()` to **fail fast** with a clear
+  error. The signing key MUST be required explicitly; `mount()` MUST NOT infer "serverless" — a per-process
+  ephemeral key is allowed only when the host opts in via an explicit `allowEphemeralKey: true` (dev-only) flag.
+- **FR-010**: The order MUST be **resolved by id** via the injected order-store seam (default in-memory; a
+  host-injected shared store on serverless). Re-pricing of the resolved order is governed by FR-004.
 - **FR-011**: The trust level MUST remain **presence-only, fenced as demo**: real protocol flows, but the mandate
   is dev-signed (not key-bound) and there is no issuer/device-signature trust verification. The ceremony page and
   any receipt MUST state this honestly; it MUST NOT be presented as a real safety control.
 - **FR-012**: The demo MUST keep working by **consuming `attesto.mount()`** (becoming a thin consumer, as it
-  consumed the storefront in 002). The full test suite (currently 253 pass / 1 skip) and the live deploy MUST stay
-  green, with behavior identical to before.
+  consumed the storefront in 002). The **pre-existing** test suite (253 pass / 1 skip *baseline*) MUST stay green
+  with **no new skips**, the **new bypass tests MUST pass** (the total count rises — the baseline is a floor, not a
+  target), and the live deploy MUST stay green. The **user-visible** result (totals, gating, payment) MUST be
+  identical; the one intentional change is unifying the discount to the single gate-owned effect (FR-005), which
+  fixes the prior storefront-flag divergence — so "identical" means user-visible behavior, not the internal mechanism.
 - **FR-013**: A failed settlement MUST NOT produce a completed/paid record; settlement stays demo-mode (Hedera
   testnet, x402) and is clearly labeled as such.
 - **FR-014**: Every commit MUST carry a DCO `Signed-off-by` line, and tests MUST exercise the security-critical /
@@ -199,8 +207,9 @@ bound, completion runs through the same `completeOrder` seam as passkey, and the
   on 100% of completion paths (no path accepts a total another path would refuse).
 - **SC-003**: Payment authorizes via passkey both same-device and cross-device, and a tampered amount or replayed
   challenge is rejected in 100% of attempts.
-- **SC-004**: The demo, now consuming `attesto.mount()`, behaves identically — the full suite stays green
-  (253 pass / 1 skip baseline) and the live deploy stays green at every step.
+- **SC-004**: The demo, now consuming `attesto.mount()`, is user-visibly identical (totals, gating, payment) — the
+  pre-existing suite stays green (253/1-skip baseline as a floor, no new skips), the new bypass tests pass, and the
+  live deploy stays green at every step. (The discount mechanism is intentionally unified per FR-005.)
 - **SC-005**: An adopter can reach a real, working ceremony with `createStorefront()` + `attesto.mount(app)` +
   `store.gate(...)` in ≤ 10 lines (the quickstart becomes true end-to-end).
 - **SC-006**: Every honesty surface (page, receipt) states the presence-only/demo trust level; no surface presents
@@ -208,12 +217,13 @@ bound, completion runs through the same `completeOrder` seam as passkey, and the
 
 ## Assumptions
 
-- **Injected store seam is the chosen order-resolution path** (default in-memory, shared/Redis on serverless),
-  with catalog re-pricing on every path. This is the one decision flagged to sanity-check at `/speckit-plan`.
+- **Injected store seam is the order-resolution path** (default in-memory, host-injected shared/Redis on
+  serverless), with catalog re-pricing per FR-004. *(Confirmed at `/speckit-plan` — research D2.)*
 - The package stays **dependency-light**: no Redis dependency is added to the package; the shared store is injected
   by the host (as the storefront does today).
-- A **stable signing key** (`GATE_SECRET` or equivalent) is provided in any multi-instance deployment; a
-  per-process random key is acceptable only for a single long-running process / local dev.
+- A **stable signing key** (`GATE_SECRET` or equivalent) is provided in any multi-instance deployment; an ephemeral
+  per-process key is allowed only behind an explicit `allowEphemeralKey: true` flag (single long-running process /
+  local dev), never inferred from the environment (FR-009).
 - The demo's existing catalog, settlement config, and checkout page remain the source of truth for products,
   pricing, and the link target; `mount()` provides the ceremony the page links to.
 - `@simplewebauthn/*` (already a demo dependency) backs the WebAuthn rail and is served same-origin.
