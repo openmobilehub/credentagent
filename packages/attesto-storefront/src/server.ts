@@ -51,6 +51,13 @@ export interface StorefrontOptions {
   cartStore?: CartStore;
   /** Completed-order store (read by `get-order-status`); default in-memory. */
   orderStore?: OrderStore<CompletedOrderRecord>;
+  /**
+   * Created-but-not-yet-completed orders (read by the checkout page + place-order),
+   * keyed by order id. Default in-memory. Inject a shared store (e.g. Redis) on a
+   * multi-instance serverless deployment, or the checkout page lands on a cold
+   * instance that never saw the order.
+   */
+  createdOrderStore?: OrderStore<Order>;
 }
 
 /** A completed-order record the widget poll + `get-order-status` read (the demo's ceremony writes a richer one). */
@@ -121,10 +128,11 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
   const reviews = opts.reviews;
   const cartStore: CartStore = opts.cartStore ?? new MemoryCartStore();
   const orderStore: OrderStore<CompletedOrderRecord> = opts.orderStore ?? new MemoryOrderStore<CompletedOrderRecord>();
-  const createdOrders = new Map<string, Order>(); // created-but-not-completed, for the checkout page
+  // Created-but-not-completed orders, for the checkout page + place-order. A store
+  // (not a process Map) so it can be shared across serverless instances.
+  const createdOrderStore: OrderStore<Order> = opts.createdOrderStore ?? new MemoryOrderStore<Order>();
   let resolveGate: GateResolver | undefined;
   let baseUrl = opts.baseUrl?.replace(/\/+$/, "") ?? "";
-  let seq = 0;
 
   const BUNDLE_VERSION = bundleVersion();
   const RESOURCE_URI = `ui://product-picker/mcp-app-${BUNDLE_VERSION}.html`;
@@ -234,8 +242,10 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
       async ({ items }): Promise<CallToolResult> => {
         const entries = items?.length ? items : [...(await cartStore.read()).entries()].map(([productId, quantity]) => ({ productId, quantity }));
         if (entries.length === 0) return { content: [{ type: "text", text: "The cart is empty — add items before checking out." }], isError: true };
-        const order = createOrder(entries, `ORD-${++seq}`, catalog);
-        createdOrders.set(order.id, order);
+        // Random id (not a per-instance counter): two serverless instances must
+        // not both mint "ORD-1" for different carts.
+        const order = createOrder(entries, `ORD-${Math.random().toString(36).slice(2, 8)}`, catalog);
+        await createdOrderStore.write(order.id, order);
         const checkoutUrl = `${baseUrl}/checkout?order=${order.id}`;
         const requires = resolveGate?.(order); // ← where Attesto mounts on
         const priced = priceFrom(new Map(entries.map((e) => [e.productId, e.quantity])));
@@ -318,8 +328,8 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
 
   // Minimal checkout page: render the order + what's required, link to the ceremony
   // routes attesto.mount() / the demo provides (this page does NOT run the ceremony).
-  app.get("/checkout", (req: Request, res: Response) => {
-    const order = createdOrders.get(String(req.query.order ?? ""));
+  app.get("/checkout", async (req: Request, res: Response) => {
+    const order = await createdOrderStore.read(String(req.query.order ?? ""));
     if (!order) return res.status(404).type("html").send("<h1>Unknown order</h1>");
     const requires = (resolveGate?.(order) ?? []) as Array<{ label?: string; credential?: string; approveUrl?: string }>;
     const reqList = requires.length
@@ -338,7 +348,7 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
     );
   });
   app.post("/checkout/place-order", async (req: Request, res: Response) => {
-    const order = createdOrders.get(String(req.body?.order ?? ""));
+    const order = await createdOrderStore.read(String(req.body?.order ?? ""));
     if (order) {
       await orderStore.write(order.id, { orderId: order.id, amount: order.total, currency: order.currency, method: "demo", completedAt: new Date().toISOString() });
       await cartStore.write(new Map()); // completion empties the cart
