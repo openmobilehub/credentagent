@@ -79,6 +79,17 @@ export async function completeOrder(input: CompletionInput, ctx: CompletionConte
   const repriced = ctx.catalog.createOrder(items, input.order.id, { loyaltyApplied });
   if (repriced.total !== input.order.total) return { completed: false, reason: "reprice" };
 
+  // Invariant 1: enforce the age gate on EVERY completion path. The age restriction
+  // is re-derived from the catalog-priced lines (never the token); an age-restricted
+  // order must carry a positive per-order age claim — written by the credential
+  // gate's verify handler (credential-gate/routes.ts) — before it can complete. This
+  // is the shared-completion-seam half of CT9; the demo's place-order + MCP
+  // order-completion-tool halves are wired in T014.
+  const ageRestricted = repriced.lines.some((l) => typeof l.minimumAge === "number" && l.minimumAge > 0);
+  if (ageRestricted && (verification as { ageVerified?: boolean } | undefined)?.ageVerified !== true) {
+    return { completed: false, reason: "age" };
+  }
+
   let settlement: SettlementRecordLike | undefined;
   if (ctx.settle) {
     try {

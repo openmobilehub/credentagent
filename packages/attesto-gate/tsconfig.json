@@ -20,6 +20,11 @@
     "src/ceremony/origin.ts",
     "src/ceremony/challengeToken.ts",
     "src/ceremony/completion.ts",
-    "src/ceremony/mandate.ts"
+    "src/ceremony/mandate.ts",
+    "src/ceremony/credential-gate/dcql.ts",
+    "src/ceremony/credential-gate/request.ts",
+    "src/ceremony/credential-gate/verify.ts",
+    "src/ceremony/credential-gate/page.ts",
+    "src/ceremony/credential-gate/routes.ts"
   ]
 }

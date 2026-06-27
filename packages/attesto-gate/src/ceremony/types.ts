@@ -99,9 +99,10 @@ export interface CompletionResult {
   completed: boolean;
   settlement?: SettlementRecordLike;
   settlementError?: string;
-  /** Why a non-completion happened — a failed ceremony ("gates") vs a tampered
-   *  token re-priced against the catalog ("reprice"). */
-  reason?: "gates" | "reprice";
+  /** Why a non-completion happened — a failed ceremony ("gates"), a tampered token
+   *  re-priced against the catalog ("reprice"), or an age-restricted order with no
+   *  proven per-order age claim ("age"). */
+  reason?: "gates" | "reprice" | "age";
 }
 
 /**
