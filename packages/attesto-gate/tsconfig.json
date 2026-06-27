@@ -25,6 +25,12 @@
     "src/ceremony/credential-gate/request.ts",
     "src/ceremony/credential-gate/verify.ts",
     "src/ceremony/credential-gate/page.ts",
-    "src/ceremony/credential-gate/routes.ts"
+    "src/ceremony/credential-gate/routes.ts",
+    "src/ceremony/dc-payment/dcql.ts",
+    "src/ceremony/dc-payment/txData.ts",
+    "src/ceremony/dc-payment/request.ts",
+    "src/ceremony/dc-payment/verify.ts",
+    "src/ceremony/dc-payment/page.ts",
+    "src/ceremony/dc-payment/routes.ts"
   ]
 }

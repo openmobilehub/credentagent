@@ -19,6 +19,7 @@ import type {
   SettlementSeam,
 } from "./types.js";
 import { registerCredentialGate } from "./credential-gate/routes.js";
+import { registerDcPaymentGate } from "./dc-payment/routes.js";
 
 /** Minimal Express-app shape mount() needs (no `express` dependency). */
 export interface CeremonyApp {
@@ -72,7 +73,7 @@ export type RailRegistrar = (app: CeremonyApp, ctx: CeremonyContext) => void;
 // the credential gate (age + membership); passkey / dc-payment follow (US2/US3).
 // Each registrar no-ops on a route-less app shape, so mount()'s fail-fast tests
 // (which pass a `{ locals }`-only app) are unaffected.
-const RAILS: RailRegistrar[] = [registerCredentialGate];
+const RAILS: RailRegistrar[] = [registerCredentialGate, registerDcPaymentGate];
 
 /**
  * Read + validate the injected seams, build the CeremonyContext, and register

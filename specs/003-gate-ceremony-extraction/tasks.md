@@ -86,8 +86,8 @@ Hedera-testnet settlement. **Independent test**: T016.
 
 **Goal**: amount-bound DC API / OpenID4VP payment completing through the SHARED `completeOrder`. **Independent test**: T021.
 
-- [ ] T021 [P] [US3] Test in `packages/attesto-gate/src/ceremony/dc-payment/dc-payment.test.ts`: CT8 (dc-payment records through the same `completeOrder` seam as passkey — idempotent, re-priced, cart + verification cleared; amount bound).
-- [ ] T022 [US3] Extract the dc-payment rail (`dcql`/`request`/`verify`/`page`/`routes`) into `packages/attesto-gate/src/ceremony/dc-payment/`, completing via the shared `completeOrder` (no second completion path) (FR-008, CT8).
+- [X] T021 [P] [US3] Test in `packages/attesto-gate/src/ceremony/dc-payment/dc-payment.test.ts`: CT8 (dc-payment records through the same `completeOrder` seam as passkey — idempotent, re-priced, cart + verification cleared; amount bound).
+- [X] T022 [US3] Extract the dc-payment rail (`dcql`/`request`/`verify`/`page`/`routes`) into `packages/attesto-gate/src/ceremony/dc-payment/`, completing via the shared `completeOrder` (no second completion path) (FR-008, CT8).
 - [ ] T023 [US3] Demo consumes the dc-payment route via `mount()`.
 - [ ] T024 [US3] Verify US3: `npm run build` + `npx vitest run packages/attesto-gate` (incl. T021) + full `npm test` green.
 
