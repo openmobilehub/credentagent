@@ -1,0 +1,26 @@
+{
+  "name": "attesto",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Attesto — the consent layer for AI agents (@openmobilehub/attesto-* packages)",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/openmobilehub/attesto",
+  "repository": { "type": "git", "url": "https://github.com/openmobilehub/attesto.git" },
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.10.0",
+    "@types/supertest": "^7.2.0",
+    "supertest": "^7.2.2",
+    "typescript": "^5.9.3",
+    "vitest": "^2.1.0"
+  }
+}

@@ -1,0 +1,9 @@
+node_modules/
+dist/
+*.log
+.env*.local
+.DS_Store
+
+# Local git worktrees / agent scratch
+.worktrees/
+.claude/worktrees/
