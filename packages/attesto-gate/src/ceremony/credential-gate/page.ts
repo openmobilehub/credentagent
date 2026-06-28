@@ -18,6 +18,12 @@ export interface CredentialPageArgs {
   currency?: string;
   /** Membership discount percent (membership gate). */
   percent?: number;
+  /**
+   * Where to send the buyer after this gate succeeds — the checkout hub, so the
+   * sequence flows (hub → gate → back to hub with this gate ✓ → next gate).
+   * Defaults to this server's `/checkout?order=<id>`.
+   */
+  returnUrl?: string;
 }
 
 const TRUST_NOTE = "trust_level: presence-only-demo — a flow demo, not a real safety control (no cryptographic mdoc trust check yet).";
@@ -39,6 +45,7 @@ export function renderCredentialPage(args: CredentialPageArgs): string {
   // through the SAME server-side explicit-positive-claim check as a real wallet.
   const demoClaims = isAge ? { [`age_over_${minimumAge}`]: true } : { membership_id: "DEMO-MEMBER-0001" };
   const totalLine = args.total != null ? `<p class="amount">Order ${escapeHtml(args.order)} · ${escapeHtml(args.currency ?? "USD")} ${args.total}</p>` : "";
+  const returnUrl = args.returnUrl ?? `/checkout?order=${encodeURIComponent(args.order)}`;
 
   return `<!doctype html>
 <html lang="en">
@@ -67,12 +74,13 @@ export function renderCredentialPage(args: CredentialPageArgs): string {
   <button id="go">${escapeHtml(cta)}</button>
   <p class="inflight">OpenID4VP wallet presentation (navigator.credentials.get) — scaffolded, in-flight.</p>
   <div id="log"></div>
-  <div id="done">Done — you can close this page and return to the chat.</div>
+  <div id="done">✓ Done — returning to checkout… <a id="back" href="${escapeHtml(returnUrl)}">continue now ›</a></div>
   <div class="trust">${escapeHtml(TRUST_NOTE)}</div>
   <script type="module">
     const ORDER = ${JSON.stringify(args.order)};
     const CRED = ${JSON.stringify(args.kind)};
     const DEMO_CLAIMS = ${JSON.stringify(demoClaims)};
+    const RETURN_URL = ${JSON.stringify(returnUrl)};
     const log = document.getElementById("log");
     const go = document.getElementById("go");
     const doneEl = document.getElementById("done");
@@ -88,6 +96,9 @@ export function renderCredentialPage(args: CredentialPageArgs): string {
         if (!out.verified) throw new Error(out.error || "not verified");
         step("✓ verified (" + out.trust_level + ")", "ok");
         doneEl.style.display = "block";
+        // Return to the checkout hub so the next gate is one tap away (no manual
+        // browser-back). The hub re-reads verification state and shows this gate ✓.
+        setTimeout(() => { window.location.assign(RETURN_URL); }, 650);
       } catch (err) {
         step("✗ " + (err?.message ?? String(err)), "err");
         go.disabled = false;

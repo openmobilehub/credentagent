@@ -21,6 +21,9 @@ export interface DcPaymentPageArgs {
   total: number;
   currency: string;
   lines: DcPaymentLine[];
+  /** Where to send the buyer after payment — the checkout hub, which then shows the
+   *  paid confirmation. Defaults to this server's `/checkout?order=<id>`. */
+  returnUrl?: string;
 }
 
 const TRUST_NOTE = "trust_level: presence-only-demo — a flow demo, not a real safety control (the wallet's device/issuer signatures are not cryptographically verified yet).";
@@ -45,6 +48,7 @@ function money(amount: number, currency: string): string {
 
 export function renderDcPaymentPage(args: DcPaymentPageArgs): string {
   const { order, total, currency, lines } = args;
+  const returnUrl = args.returnUrl ?? `/checkout?order=${encodeURIComponent(order)}`;
   const rows = lines
     .map((l) => `<tr><td>${escapeHtml(l.name)} <span style="color:#999;">×${l.quantity}</span></td><td class="amt">${money(l.lineTotal, l.currency)}</td></tr>`)
     .join("\n");
@@ -89,6 +93,7 @@ export function renderDcPaymentPage(args: DcPaymentPageArgs): string {
     const ORDER = ${JSON.stringify(order)};
     const AMOUNT = ${JSON.stringify(total)};
     const DEMO_CLAIMS = ${JSON.stringify(DEMO_CLAIMS)};
+    const RETURN_URL = ${JSON.stringify(returnUrl)};
     const log = document.getElementById("log");
     const btn = document.getElementById("go");
     const step = (t, c = "") => { const d = document.createElement("div"); d.className = "step " + c; d.textContent = t; log.appendChild(d); };
@@ -112,12 +117,17 @@ export function renderDcPaymentPage(args: DcPaymentPageArgs): string {
       const el = document.getElementById("receipt");
       const gates = out.gates.map((g) => '<div class="gate ' + (g.pass ? "pass" : "fail") + '">' + (g.pass ? "✓" : "✗") + " " + g.gate + " — " + g.detail + "</div>").join("");
       const done = out.completed
-        ? '<div style="background:#0a7f2e;color:#fff;font-size:1.1rem;font-weight:700;line-height:1.4;padding:1rem 1.1rem;border-radius:8px;margin-bottom:1rem;text-align:center;">✓ Purchase complete<div style="font-size:0.9rem;font-weight:500;margin-top:0.25rem;">You can close this page and return to the chat.</div></div>'
+        ? '<div style="background:#0a7f2e;color:#fff;font-size:1.1rem;font-weight:700;line-height:1.4;padding:1rem 1.1rem;border-radius:8px;margin-bottom:1rem;text-align:center;">✓ Purchase complete<div style="font-size:0.9rem;font-weight:500;margin-top:0.25rem;">Returning to checkout… <a href="' + RETURN_URL + '" style="color:#fff;text-decoration:underline;">continue now ›</a></div></div>'
         : "";
       el.innerHTML = done + '<div style="font-weight:600;color:#0a7f2e;">✓ Payment Mandate authorized (amount-bound)</div>' +
         '<div style="font-size:0.8rem;color:#666;margin:0.3rem 0 0.6rem;">' + out.mandate.id + "</div>" + gates;
       el.style.display = "block";
-      if (out.completed) btn.textContent = "Authorized ✓";
+      if (out.completed) {
+        btn.textContent = "Authorized ✓";
+        // Final gate done — return to the checkout hub, which shows the paid
+        // confirmation (and the widget poll picks it up in the chat).
+        setTimeout(() => { window.location.assign(RETURN_URL); }, 1400);
+      }
     }
   </script>
 </body>
