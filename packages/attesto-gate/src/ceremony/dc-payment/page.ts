@@ -15,6 +15,8 @@
 // crypto is real; the wallet's device/issuer trust anchor is not — never a real safety
 // control. Self-contained: takes the re-priced amount + lines, not a demo Order type.
 
+import { pageHead, brandHeader, progressRail, orderSummaryCard, trustFooter } from "../theme.js";
+
 export interface DcPaymentLine {
   name: string;
   quantity: number;
@@ -34,8 +36,6 @@ export interface DcPaymentPageArgs {
   returnUrl?: string;
 }
 
-const TRUST_NOTE = "trust_level: presence-only-demo — a flow demo, not a real safety control (the wallet's device/issuer signatures are not cryptographically verified yet).";
-
 // The canonical disclosed instrument the instant-demo button presents — it goes
 // through the SAME server-side amount-binding gates as a real wallet presentation.
 const DEMO_CLAIMS = {
@@ -46,10 +46,6 @@ const DEMO_CLAIMS = {
   expiry_date: "2032-09-01",
 };
 
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-}
-
 function money(amount: number, currency: string): string {
   return new Intl.NumberFormat("en-US", { style: "currency", currency }).format(amount);
 }
@@ -57,47 +53,37 @@ function money(amount: number, currency: string): string {
 export function renderDcPaymentPage(args: DcPaymentPageArgs): string {
   const { order, total, currency, lines } = args;
   const returnUrl = args.returnUrl ?? `/checkout?order=${encodeURIComponent(order)}`;
-  const rows = lines
-    .map((l) => `<tr><td>${escapeHtml(l.name)} <span style="color:#999;">×${l.quantity}</span></td><td class="amt">${money(l.lineTotal, l.currency)}</td></tr>`)
-    .join("\n");
+  // The shared order summary card (line items + bold Total) — same chrome as the hub.
+  const summary = orderSummaryCard({
+    lines: lines.map((l) => ({ name: l.name, quantity: l.quantity, lineTotal: l.lineTotal, currency: l.currency })),
+    total,
+    currency,
+    caption: `Order ${order}`,
+  });
+  // The progress rail with Pay as the current (final) step; the upstream gates are done.
+  const rail = progressRail([{ label: "Age", done: true }, { label: "Membership", done: true }, { label: "Pay" }], 2);
+  // Page-local chrome layered over the shared design system: the verify-progress rows
+  // reuse `.step`; the receipt gate rows + the success card are page-specific.
+  const extraCss = `
+  #receipt { display: none; margin-top: 16px; }
+  .gate { font-size: .82rem; padding: 3px 0; }
+  .gate.pass { color: var(--success); } .gate.fail { color: var(--danger); }`;
   return `<!doctype html>
 <html lang="en">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Authorize payment (cross-device) · ${escapeHtml(order)}</title>
-<style>
-  body { font-family: -apple-system, system-ui, sans-serif; max-width: 560px; margin: 3rem auto; padding: 0 1.25rem; color: #1a1a1a; }
-  h1 { font-size: 1.35rem; margin-bottom: 0.25rem; }
-  p.lede { color: #555; margin-top: 0; line-height: 1.45; }
-  table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: 0.95rem; }
-  td { padding: 0.35rem 0; border-bottom: 1px solid #f0f0f0; }
-  td.amt { text-align: right; font-variant-numeric: tabular-nums; }
-  tr.total td { border-bottom: none; font-weight: 600; padding-top: 0.6rem; }
-  button { font-size: 1rem; padding: 0.75rem 1.1rem; border-radius: 6px; border: 1px solid #1a7f37; background: #1a7f37; color: #fff; cursor: pointer; width: 100%; margin-top: 0.75rem; }
-  button.secondary { background: #fff; color: #1a7f37; }
-  button:disabled { opacity: 0.5; cursor: not-allowed; }
-  .step { padding: 0.4rem 0; font-family: ui-monospace, Menlo, monospace; font-size: 0.85rem; }
-  .step.ok { color: #0a7f2e; } .step.err { color: #b00020; white-space: pre-wrap; }
-  .notice { margin-top: 1rem; padding: 0.9rem 1rem; background: #fff7ed; border-left: 4px solid #d97706; border-radius: 6px; font-size: 0.9rem; }
-  .trust { margin-top: 1rem; padding: 0.9rem 1rem; background: #fff7ed; border-left: 4px solid #d97706; border-radius: 6px; font-size: 0.85rem; color: #7c2d12; }
-  #receipt { display: none; margin-top: 1.25rem; padding: 1rem 1.1rem; background: #ecfdf3; border-left: 4px solid #0a7f2e; border-radius: 6px; }
-  .gate { font-family: ui-monospace, Menlo, monospace; font-size: 0.82rem; padding: 0.15rem 0; }
-  .gate.pass { color: #0a7f2e; } .gate.fail { color: #b00020; }
-</style>
-</head>
+${pageHead(`Authorize payment (cross-device) · ${order}`, extraCss)}
 <body>
-  <h1>Authorize payment · cross-device</h1>
-  <p class="lede">Present a payment credential from your phone wallet. Chrome shows a QR; scanning it uses the cross-device channel (FIDO caBLE). Your wallet signs over this exact amount — nothing is charged (demo).</p>
-  <table>
-    ${rows}
-    <tr class="total"><td>Total · order ${escapeHtml(order)}</td><td class="amt">${money(total, currency)}</td></tr>
-  </table>
-  <button id="go-dc">Authorize ${money(total, currency)} with my wallet</button>
-  <button id="go" class="secondary">Authorize ${money(total, currency)} (instant demo)</button>
-  <div id="log"></div>
-  <div id="receipt"></div>
-  <div class="trust">${escapeHtml(TRUST_NOTE)}</div>
+  <div class="wrap">
+  ${brandHeader({ h1: "Authorize payment", tagline: "Authorize from your wallet" })}
+  ${rail}
+  ${summary}
+  <div class="card">
+    <p class="lede">Present a payment credential from your phone wallet. Chrome shows a QR; scanning it uses the cross-device channel (FIDO caBLE). Your wallet signs over this exact amount — nothing is charged (demo).</p>
+    <button id="go-dc" class="btn btn-primary">Authorize ${money(total, currency)} with my wallet</button>
+    <button id="go" class="btn btn-secondary">Authorize ${money(total, currency)} (instant demo)</button>
+    <div id="log"></div>
+    <div id="receipt"></div>
+  </div>
+  ${trustFooter()}
   <script type="module">
     const ORDER = ${JSON.stringify(order)};
     const AMOUNT = ${JSON.stringify(total)};
@@ -178,10 +164,10 @@ export function renderDcPaymentPage(args: DcPaymentPageArgs): string {
       const el = document.getElementById("receipt");
       const gates = out.gates.map((g) => '<div class="gate ' + (g.pass ? "pass" : "fail") + '">' + (g.pass ? "✓" : "✗") + " " + g.gate + " — " + g.detail + "</div>").join("");
       const done = out.completed
-        ? '<div style="background:#0a7f2e;color:#fff;font-size:1.1rem;font-weight:700;line-height:1.4;padding:1rem 1.1rem;border-radius:8px;margin-bottom:1rem;text-align:center;">✓ Purchase complete<div style="font-size:0.9rem;font-weight:500;margin-top:0.25rem;">Returning to checkout… <a href="' + RETURN_URL + '" style="color:#fff;text-decoration:underline;">continue now ›</a></div></div>'
+        ? '<div class="receipt-banner">✓ Purchase complete<div class="sub">Returning to checkout… <a href="' + RETURN_URL + '">continue now ›</a></div></div>'
         : "";
-      el.innerHTML = done + '<div style="font-weight:600;color:#0a7f2e;">✓ Payment Mandate authorized (amount-bound)</div>' +
-        '<div style="font-size:0.8rem;color:#666;margin:0.3rem 0 0.6rem;">' + out.mandate.id + "</div>" + gates;
+      el.innerHTML = done + '<div class="row-ok">✓ Payment Mandate authorized (amount-bound)</div>' +
+        '<div class="small" style="margin:4px 0 8px;">' + out.mandate.id + "</div>" + gates;
       el.style.display = "block";
       if (out.completed) {
         goDc.disabled = true;
@@ -192,6 +178,7 @@ export function renderDcPaymentPage(args: DcPaymentPageArgs): string {
       }
     }
   </script>
+  </div>
 </body>
 </html>`;
 }

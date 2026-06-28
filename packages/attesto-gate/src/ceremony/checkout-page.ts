@@ -16,7 +16,8 @@
 // age gate server-side (Security invariant 1). Hiding the payment group is not the
 // control; it just keeps the UI honest about what the server will refuse.
 
-import type { TrustLevel, VerificationManifestEntry } from "../types.js";
+import type { VerificationManifestEntry } from "../types.js";
+import { pageHead, brandHeader, progressRail, trustFooter, type RailStep } from "./theme.js";
 
 // ── Inputs ──────────────────────────────────────────────────────────────────
 
@@ -113,12 +114,29 @@ function escapeHtml(s: string): string {
 }
 
 // The single honesty surface (FR-011 / Principle VII): every entry carries the same
-// trust_level; state it once on the page so the gates never read as a real safety
-// control. Defaults to presence-only-demo when the manifest is empty.
+// trust_level; state it once on the page (the shared discreet footer) so the gates
+// never read as a real safety control. Suppressed only when the flow is issuer-verified.
 function trustNote(entries: VerificationManifestEntry[]): string {
-  const level: TrustLevel = entries[0]?.trust_level ?? "presence-only-demo";
-  if (level === "issuer-verified") return "";
-  return `<div class="trust">trust_level: presence-only-demo — a flow demo, not a real safety control (no cryptographic mdoc trust check yet).</div>`;
+  if (entries[0]?.trust_level === "issuer-verified") return "";
+  return trustFooter();
+}
+
+// Map the manifest to the three-step progress rail (Age · Membership · Pay) with live
+// status, so the hub mirrors the same stepper the gate pages render. A gate the manifest
+// doesn't carry simply doesn't appear; payment is always the trailing step.
+function railSteps(
+  gateEntries: VerificationManifestEntry[],
+  ageVerified: boolean,
+  loyaltyApplied: boolean,
+  paid: boolean,
+): RailStep[] {
+  const steps: RailStep[] = [];
+  for (const e of gateEntries) {
+    if (e.effect === "gate" && e.credential === "age") steps.push({ label: "Age", done: ageVerified || paid });
+    else if (e.effect === "discount") steps.push({ label: "Membership", done: loyaltyApplied || paid });
+  }
+  steps.push({ label: "Pay", done: paid });
+  return steps;
 }
 
 // ── The page ──────────────────────────────────────────────────────────────────
@@ -170,7 +188,7 @@ export function renderRequirements(
   const rows = order.lines
     .map((l) => {
       const name = l.name ?? l.id ?? "Item";
-      return `<tr><td>${l.quantity}× ${escapeHtml(name)}</td><td class="num">${formatMoney(l.lineTotal, l.currency ?? order.currency)}</td></tr>`;
+      return `<tr class="line"><td>${escapeHtml(name)} <span class="qty">×${l.quantity}</span></td><td class="num">${formatMoney(l.lineTotal, l.currency ?? order.currency)}</td></tr>`;
     })
     .join("\n");
   const discountPct = manifest.find((e) => e.effect === "discount")?.discountPct;
@@ -196,66 +214,41 @@ export function renderRequirements(
       : []);
   const paymentNumber = gateEntries.length + 1;
   const paidSection = paid ? renderPaid(paid) : "";
+  // Calm, muted lock — never alarming. Keeps the literal "Payment is locked" the flow
+  // tests pin, framed as a gentle "unlocks after age verification" message.
   const paymentSection = paid
-    ? `<div class="section">${paidSection}</div>`
+    ? `<div class="card section">${paidSection}</div>`
     : blocked
-      ? `<div class="locked">Payment is locked until age verification is complete.</div>`
+      ? `<div class="lock">🔒 Payment is locked · unlocks after age verification</div>`
       : renderPayment(order, paymentNumber, methods);
   const placeScript = paid || blocked ? "" : renderPlaceScript(order, methods, opts.payment);
 
+  // Progress rail mirrors the live gate status; current = first not-done step.
+  const steps = railSteps(gateEntries, ageVerified, loyaltyApplied, !!paid);
+  const rail = progressRail(steps, steps.findIndex((s) => !s.done));
+  const itemCount = order.itemCount ?? order.lines.reduce((n, l) => n + l.quantity, 0);
+
   return `<!doctype html>
 <html lang="en">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Checkout · ${escapeHtml(order.id)}</title>
-<style>
-  body { font-family: system-ui, -apple-system, sans-serif; max-width: 560px; margin: 40px auto; padding: 0 16px; color: #1a1a1a; }
-  h1 { font-size: 20px; }
-  .meta { color: #666; font-size: 13px; margin-bottom: 24px; }
-  table { width: 100%; border-collapse: collapse; }
-  td { padding: 10px 0; border-bottom: 1px solid #eee; font-size: 14px; }
-  .num { text-align: right; font-variant-numeric: tabular-nums; }
-  .disc td { color: #0a7f2e; }
-  .total { font-weight: 600; font-size: 16px; }
-  .total td { border-bottom: none; padding-top: 16px; }
-  .note { color: #888; font-size: 12px; margin-top: 12px; text-align: center; }
-  .section { margin-top: 20px; }
-  .step-no { display: inline-block; min-width: 1.4em; color: #888; font-variant-numeric: tabular-nums; }
-  .ok { color: #0a7f2e; font-weight: 600; font-size: 14px; padding: 10px 0; }
-  .warn { background: #fff7ed; border-left: 4px solid #d97706; border-radius: 6px; padding: 10px 12px; font-size: 13px; color: #92400e; margin-bottom: 10px; }
-  .locked { color: #b00020; font-size: 13px; text-align: center; padding: 14px; border: 1px dashed #e0a0a0; border-radius: 8px; margin-top: 20px; }
-  .trust { margin-top: 20px; padding: 10px 12px; background: #fff7ed; border-left: 4px solid #d97706; border-radius: 6px; font-size: 12px; color: #7c2d12; }
-  a.btn-ghost, a.btn-age { display:block; text-align:center; text-decoration:none; border-radius:8px; box-sizing:border-box; }
-  a.btn-ghost { margin-top: 12px; padding: 12px; font-size: 14px; font-weight: 500; color: #1a7f37; background: #fff; border: 1px solid #1a7f37; }
-  a.btn-age { margin-top: 4px; padding: 14px; font-size: 15px; font-weight: 600; color: #fff; background: #b00020; }
-  .pm-head { font-size: 15px; margin: 0 0 8px; }
-  .pm-group { border: 1px solid #d0d0d0; border-radius: 10px; overflow: hidden; }
-  .pm-row { display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px; cursor: pointer; border-bottom: 1px solid #eee; }
-  .pm-row:last-child { border-bottom: none; }
-  .pm-row:has(input:checked) { background: #f2faf4; box-shadow: inset 3px 0 0 #1a7f37; }
-  .pm-row input { margin-top: 3px; accent-color: #1a7f37; }
-  .pm-text { display: block; }
-  .pm-name { display: block; font-size: 14px; font-weight: 600; }
-  .pm-desc { display: block; font-size: 12px; color: #666; margin-top: 2px; }
-  button.btn-pay { margin-top: 14px; width: 100%; padding: 14px; font-size: 15px; font-weight: 600; color: #fff; background: #1a7f37; border: none; border-radius: 8px; cursor: pointer; }
-  button { display: block; margin-top: 12px; width: 100%; padding: 12px; font-size: 14px; font-weight: 500; color: #1a1a1a; background: #fff; border: 1px solid #d0d0d0; border-radius: 8px; cursor: pointer; box-sizing: border-box; }
-  button:disabled { color: #888; cursor: default; }
-</style>
-</head>
+${pageHead(`Checkout · ${order.id}`)}
 <body>
-  <h1>Checkout</h1>
-  <div class="meta">Order ${escapeHtml(order.id)} · ${order.itemCount ?? order.lines.reduce((n, l) => n + l.quantity, 0)} item(s)</div>
-  <table>
+  <div class="wrap">
+  ${brandHeader({ h1: "Checkout", tagline: "Prove it. Then pay." })}
+  <div class="card summary">
+    <p class="card-title">Order ${escapeHtml(order.id)} · ${itemCount} item(s)</p>
+    <table>
     ${rows}
     ${discountRow}
     <tr class="total"><td>Total</td><td class="num">${formatMoney(displayTotal, order.currency)}</td></tr>
-  </table>
+    </table>
+  </div>
 
+  ${rail}
   ${paid ? "" : gateSections}
   ${paymentSection}
   ${placeScript}
   ${paid ? "" : trustNote(manifest)}
+  </div>
 </body>
 </html>`;
 }
@@ -264,24 +257,26 @@ export function renderRequirements(
 // entry. Links to the entry's OWN approveUrl (route-agnostic). Returns "" for a
 // discount entry that the host renders no approve link for.
 function renderGate(entry: VerificationManifestEntry, n: number, satisfied: boolean): string {
+  // `step-no` is kept (tests + the rail both read off the numbered policy order); the
+  // card chrome and teal accent come from the shared design system.
   const no = `<span class="step-no">${n}.</span>`;
   if (entry.effect === "discount") {
     const pct = entry.discountPct;
     return satisfied
-      ? `<div class="section"><div class="ok">${no} ✓ Loyalty discount applied${pct != null ? ` (${pct}% off)` : ""}</div></div>`
+      ? `<div class="card"><div class="row-ok">${no} ✓ Loyalty discount applied${pct != null ? ` (${pct}% off)` : ""}</div></div>`
       : entry.approveUrl
-        ? `<div class="section"><a class="btn-ghost" href="${escapeHtml(entry.approveUrl)}">${no} 🎟️ Apply loyalty discount${pct != null ? ` (${pct}% off)` : ""}</a></div>`
+        ? `<div class="card"><a class="btn btn-secondary" href="${escapeHtml(entry.approveUrl)}">${no} Apply loyalty discount${pct != null ? ` (${pct}% off)` : ""}</a></div>`
         : "";
   }
   // gate effect (age):
   const age = entry.minAge ?? 21;
   if (satisfied) {
-    return `<div class="section"><div class="ok">${no} ✓ Age verified — ${age}+</div></div>`;
+    return `<div class="card"><div class="row-ok">${no} ✓ Age verified — ${age}+</div></div>`;
   }
   const link = entry.approveUrl
-    ? `<a class="btn-age" href="${escapeHtml(entry.approveUrl)}">Verify age (${age}+)</a>`
+    ? `<a class="btn btn-primary" href="${escapeHtml(entry.approveUrl)}">Verify age (${age}+)</a>`
     : "";
-  return `<div class="section"><div class="warn">${no} 🔒 This order contains age-restricted items. Verify you're ${age} or older to continue.</div>${link}</div>`;
+  return `<div class="card"><div class="row-pending">${no} 🔒 This order contains age-restricted items. Verify you're ${age} or older to continue.</div>${link ? `<div style="margin-top:12px;">${link}</div>` : ""}</div>`;
 }
 
 // The Shopify-style payment-method group (one radio group, one Pay CTA). The methods
@@ -303,13 +298,13 @@ function renderPayment(order: RenderOrder, n: number, methods: PaymentMethod[]):
     })
     .join("\n");
 
-  return `<div class="section">
+  return `<div class="card">
   <h2 class="pm-head">${n}. Payment method</h2>
   <div class="pm-group" role="radiogroup" aria-label="Payment method">
 ${rows}
   </div>
-  <button id="pay" class="btn-pay">${payLabel}</button>
-  <div class="note">You'll confirm the exact amount with your device. Demo — no real charge.</div>
+  <button id="pay" class="btn btn-primary" style="margin-top:14px;">${payLabel}</button>
+  <p class="small" style="text-align:center;margin:10px 0 0;">You'll confirm the exact amount with your device. Demo — no real charge.</p>
 </div>`;
 }
 
@@ -365,9 +360,9 @@ function renderPlaceScript(order: RenderOrder, methods: PaymentMethod[], payment
 // details (when present) carry the public on-chain proof.
 function renderPaid(paid: RenderPaid): string {
   const via = paid.settlement ? " via x402" : paid.method === "passkey" ? " via passkey" : "";
-  const banner = `<div class="ok" style="font-size:16px;">✓ Order paid · ${formatMoney(paid.amount, paid.currency)}${via}</div>`;
+  const banner = `<div class="receipt-banner">✓ Order paid · ${formatMoney(paid.amount, paid.currency)}${via}</div>`;
   const detail = paid.settlement
-    ? `<div class="note" style="text-align:left;">Settled on ${escapeHtml(paid.settlement.network)} · paid from ${escapeHtml(paid.settlement.payer.accountId)} · <a href="${escapeHtml(paid.settlement.hashscanUrl)}" target="_blank" rel="noopener">View on HashScan</a></div>`
-    : `<div class="note" style="text-align:left;">No on-chain settlement for this payment method.</div>`;
+    ? `<p class="small" style="margin:0;">Settled on ${escapeHtml(paid.settlement.network)} · paid from ${escapeHtml(paid.settlement.payer.accountId)} · <a href="${escapeHtml(paid.settlement.hashscanUrl)}" target="_blank" rel="noopener">View on HashScan</a></p>`
+    : `<p class="small" style="margin:0;">No on-chain settlement for this payment method.</p>`;
   return banner + detail;
 }

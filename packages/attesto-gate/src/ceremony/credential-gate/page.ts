@@ -13,6 +13,7 @@
 // states trust_level "presence-only-demo" (CT11 / Principle VII / FR-011): the wire
 // crypto is real; the issuer trust anchor is not — never a real safety control.
 import type { CredentialKind } from "./dcql.js";
+import { pageHead, brandHeader, progressRail, trustFooter } from "../theme.js";
 
 export interface CredentialPageArgs {
   kind: CredentialKind;
@@ -33,8 +34,6 @@ export interface CredentialPageArgs {
   returnUrl?: string;
 }
 
-const TRUST_NOTE = "trust_level: presence-only-demo — a flow demo, not a real safety control (no cryptographic mdoc trust check yet).";
-
 function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
@@ -52,39 +51,38 @@ export function renderCredentialPage(args: CredentialPageArgs): string {
   // The canonical positive claim the instant-demo button presents — it goes
   // through the SAME server-side explicit-positive-claim check as a real wallet.
   const demoClaims = isAge ? { [`age_over_${minimumAge}`]: true } : { membership_number: "DEMO-MEMBER-0001" };
-  const totalLine = args.total != null ? `<p class="amount">Order ${escapeHtml(args.order)} · ${escapeHtml(args.currency ?? "USD")} ${args.total}</p>` : "";
+  const totalLine = args.total != null ? `<p class="small amount">Order ${escapeHtml(args.order)} · ${escapeHtml(args.currency ?? "USD")} ${args.total}</p>` : "";
   const returnUrl = args.returnUrl ?? `/checkout?order=${encodeURIComponent(args.order)}`;
+  // Identity-first tagline + the progress rail with THIS gate marked current. The age
+  // gate is step 0 (Age) of Age · Membership · Pay; membership is the middle step.
+  const tagline = isAge ? "Present a digital ID" : "Present a membership credential";
+  const rail = isAge
+    ? progressRail([{ label: "Age" }, { label: "Membership" }, { label: "Pay" }], 0)
+    : progressRail([{ label: "Age", done: true }, { label: "Membership" }, { label: "Pay" }], 1);
+  // The PAGE-LOCAL extra styles: the calm gate-page chrome (verify log + the success
+  // banner) layered over the shared design system. The verify-progress rows reuse the
+  // shared `.step` styling; only the `#done` banner is page-specific.
+  const extraCss = `
+  .amount { font-variant-numeric: tabular-nums; }
+  #done { display:none; margin-top:16px; background:var(--accent); color:#fff; font-weight:700; padding:16px; border-radius:12px; text-align:center; }
+  #done a { color:#fff; text-decoration:underline; }`;
 
   return `<!doctype html>
 <html lang="en">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>${escapeHtml(title)}</title>
-<style>
-  body { font-family: -apple-system, system-ui, sans-serif; max-width: 560px; margin: 3rem auto; padding: 0 1.25rem; color: #1a1a1a; }
-  h1 { font-size: 1.35rem; margin-bottom: 0.25rem; }
-  p.lede { color: #555; margin-top: 0; line-height: 1.45; }
-  p.amount { font-family: ui-monospace, Menlo, monospace; color: #333; }
-  button { font-size: 1rem; padding: 0.75rem 1.1rem; border-radius: 6px; border: 1px solid #1a7f37; background: #1a7f37; color: #fff; cursor: pointer; width: 100%; margin-top: 0.75rem; }
-  button.secondary { background: #fff; color: #1a7f37; }
-  button:disabled { opacity: 0.5; cursor: not-allowed; }
-  .step { padding: 0.4rem 0; font-family: ui-monospace, Menlo, monospace; font-size: 0.85rem; }
-  .step.ok { color: #0a7f2e; } .step.err { color: #b00020; white-space: pre-wrap; }
-  .notice { margin-top: 1rem; padding: 0.9rem 1rem; background: #fff7ed; border-left: 4px solid #d97706; border-radius: 6px; font-size: 0.9rem; }
-  .trust { margin-top: 1rem; padding: 0.9rem 1rem; background: #fff7ed; border-left: 4px solid #d97706; border-radius: 6px; font-size: 0.85rem; color: #7c2d12; }
-  #done { display:none; margin-top:1.25rem; background:#0a7f2e; color:#fff; font-weight:700; padding:1rem 1.1rem; border-radius:8px; text-align:center; }
-</style>
-</head>
+${pageHead(title, extraCss)}
 <body>
-  <h1>${escapeHtml(title)}</h1>
-  <p class="lede">${escapeHtml(lede)}</p>
-  ${totalLine}
-  <button id="go-dc">${escapeHtml(cta)}</button>
-  <button id="go" class="secondary">${escapeHtml(demoCta)}</button>
-  <div id="log"></div>
+  <div class="wrap">
+  ${brandHeader({ h1: title, tagline })}
+  ${rail}
+  <div class="card">
+    <p class="lede">${escapeHtml(lede)}</p>
+    ${totalLine}
+    <button id="go-dc" class="btn btn-primary">${escapeHtml(cta)}</button>
+    <button id="go" class="btn btn-secondary">${escapeHtml(demoCta)}</button>
+    <div id="log"></div>
+  </div>
   <div id="done">✓ Done — returning to checkout… <a id="back" href="${escapeHtml(returnUrl)}">continue now ›</a></div>
-  <div class="trust">${escapeHtml(TRUST_NOTE)}</div>
+  ${trustFooter()}
   <script type="module">
     const ORDER = ${JSON.stringify(args.order)};
     const CRED = ${JSON.stringify(args.kind)};
@@ -169,6 +167,7 @@ export function renderCredentialPage(args: CredentialPageArgs): string {
       }
     });
   </script>
+  </div>
 </body>
 </html>`;
 }

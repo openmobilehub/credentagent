@@ -110,8 +110,10 @@ describe("renderRequirements — discount, total, honesty", () => {
 
   it("always states the presence-only honesty note (FR-011)", () => {
     const html = renderRequirements(order, manifest, {});
+    // The discreet trust footer keeps the load-bearing presence-only-demo token and is
+    // honest that the issuer trust anchor is not real (the wire crypto is).
     expect(html).toContain("presence-only-demo");
-    expect(html).toContain("not a real safety control");
+    expect(html).toContain("issuer trust anchor is not");
   });
 });
 
