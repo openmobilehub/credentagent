@@ -1,10 +1,17 @@
-// Server-rendered credential-gate page (age / membership). The WORKING button is
-// the presence-only "instant demo" — it POSTs a canonical positive claim for this
-// order's threshold to /attesto/credential/verify (no real wallet round-trip; the
-// mdoc is not cryptographically verified). The OpenID4VP wallet path
-// (navigator.credentials.get) is noted as in-flight. Every surface states
-// trust_level "presence-only-demo" (CT11 / Principle VII) so the page never reads
-// as a real safety control.
+// Server-rendered credential-gate page (age / membership). It now drives the REAL
+// OpenID4VP wallet path: the PRIMARY button calls navigator.credentials.get({digital})
+// synchronously inside the tap (the request is PRE-FETCHED from
+// /attesto/credential/request so no await sits between the click and get() — iOS WebKit
+// drops the transient user activation across an await), then POSTs the wallet result to
+// /attesto/credential/verify in the shape the route's real path reads
+// ({ order, cred, readerContextToken, mdocContextToken, result:{protocol,data} }) — the
+// route dispatches by result.protocol (openid4vp → JWE/nonce-bound; org-iso-mdoc →
+// mdoc DeviceResponse). The SECONDARY "instant demo" button is kept as a fallback: it
+// POSTs a canonical positive claim ({ order, cred, claims }) for this order's threshold
+// (no wallet round-trip; the tested default). On a browser without the Digital
+// Credentials API the page points the buyer at the instant-demo button. Every surface
+// states trust_level "presence-only-demo" (CT11 / Principle VII / FR-011): the wire
+// crypto is real; the issuer trust anchor is not — never a real safety control.
 import type { CredentialKind } from "./dcql.js";
 
 export interface CredentialPageArgs {
@@ -40,7 +47,8 @@ export function renderCredentialPage(args: CredentialPageArgs): string {
   const lede = isAge
     ? `Your cart contains age-restricted items. Present a digital ID so we can confirm you are ${minimumAge} or older. Nothing is stored — only an over-${minimumAge} check.`
     : `Present your membership credential to take ${percent}% off your cart. Optional — your purchase works without it.`;
-  const cta = isAge ? `Verify age (instant demo)` : `Apply membership (instant demo)`;
+  const cta = isAge ? `Verify with my digital ID` : `Present membership credential`;
+  const demoCta = isAge ? `Verify age (instant demo)` : `Apply membership (instant demo)`;
   // The canonical positive claim the instant-demo button presents — it goes
   // through the SAME server-side explicit-positive-claim check as a real wallet.
   const demoClaims = isAge ? { [`age_over_${minimumAge}`]: true } : { membership_id: "DEMO-MEMBER-0001" };
@@ -59,11 +67,12 @@ export function renderCredentialPage(args: CredentialPageArgs): string {
   p.lede { color: #555; margin-top: 0; line-height: 1.45; }
   p.amount { font-family: ui-monospace, Menlo, monospace; color: #333; }
   button { font-size: 1rem; padding: 0.75rem 1.1rem; border-radius: 6px; border: 1px solid #1a7f37; background: #1a7f37; color: #fff; cursor: pointer; width: 100%; margin-top: 0.75rem; }
+  button.secondary { background: #fff; color: #1a7f37; }
   button:disabled { opacity: 0.5; cursor: not-allowed; }
   .step { padding: 0.4rem 0; font-family: ui-monospace, Menlo, monospace; font-size: 0.85rem; }
   .step.ok { color: #0a7f2e; } .step.err { color: #b00020; white-space: pre-wrap; }
+  .notice { margin-top: 1rem; padding: 0.9rem 1rem; background: #fff7ed; border-left: 4px solid #d97706; border-radius: 6px; font-size: 0.9rem; }
   .trust { margin-top: 1rem; padding: 0.9rem 1rem; background: #fff7ed; border-left: 4px solid #d97706; border-radius: 6px; font-size: 0.85rem; color: #7c2d12; }
-  .inflight { margin-top: 0.75rem; font-size: 0.8rem; color: #777; }
   #done { display:none; margin-top:1.25rem; background:#0a7f2e; color:#fff; font-weight:700; padding:1rem 1.1rem; border-radius:8px; text-align:center; }
 </style>
 </head>
@@ -71,8 +80,8 @@ export function renderCredentialPage(args: CredentialPageArgs): string {
   <h1>${escapeHtml(title)}</h1>
   <p class="lede">${escapeHtml(lede)}</p>
   ${totalLine}
-  <button id="go">${escapeHtml(cta)}</button>
-  <p class="inflight">OpenID4VP wallet presentation (navigator.credentials.get) — scaffolded, in-flight.</p>
+  <button id="go-dc">${escapeHtml(cta)}</button>
+  <button id="go" class="secondary">${escapeHtml(demoCta)}</button>
   <div id="log"></div>
   <div id="done">✓ Done — returning to checkout… <a id="back" href="${escapeHtml(returnUrl)}">continue now ›</a></div>
   <div class="trust">${escapeHtml(TRUST_NOTE)}</div>
@@ -82,9 +91,67 @@ export function renderCredentialPage(args: CredentialPageArgs): string {
     const DEMO_CLAIMS = ${JSON.stringify(demoClaims)};
     const RETURN_URL = ${JSON.stringify(returnUrl)};
     const log = document.getElementById("log");
+    const goDc = document.getElementById("go-dc");
     const go = document.getElementById("go");
     const doneEl = document.getElementById("done");
     const step = (t, c = "") => { const d = document.createElement("div"); d.className = "step " + c; d.textContent = t; log.appendChild(d); };
+    function notice(html) { const d = document.createElement("div"); d.className = "notice"; d.innerHTML = html; log.appendChild(d); }
+    function done() {
+      goDc.disabled = true; go.disabled = true;
+      doneEl.style.display = "block";
+      // Return to the checkout hub so the next gate is one tap away (no manual
+      // browser-back). The hub re-reads verification state and shows this gate ✓.
+      setTimeout(() => { window.location.assign(RETURN_URL); }, 650);
+    }
+
+    // Pre-fetch the REAL OpenID4VP + org-iso-mdoc request so navigator.credentials.get()
+    // can be called SYNCHRONOUSLY inside the tap. iOS WebKit drops the transient user
+    // activation across an await, so we must not fetch between the click and get(). We
+    // keep a fresh pre-fetched request ready at all times. location.search carries the
+    // order + cred this gate is scoped to, so /request re-prices THIS order.
+    let reqData = null;
+    function prefetch() {
+      reqData = null;
+      fetch("/attesto/credential/request" + location.search).then((r) => r.json()).then((d) => { reqData = d; }).catch(() => {});
+    }
+
+    if (!navigator.credentials || !navigator.credentials.get) {
+      goDc.disabled = true;
+      notice("This browser doesn't support the Digital Credentials API (needs Chrome 141+/Android or iOS 18+). Use the <strong>instant demo</strong> button.");
+    } else {
+      prefetch();
+    }
+
+    goDc.addEventListener("click", () => {
+      if (!navigator.credentials || !navigator.credentials.get) {
+        notice("This browser doesn't support the Digital Credentials API. Use the instant-demo button.");
+        return;
+      }
+      if (!reqData || !reqData.requests) { notice("Preparing the request — tap again in a second."); prefetch(); return; }
+      goDc.disabled = true;
+      const rd = reqData;
+      step("→ navigator.credentials.get({digital}) — choose your wallet…");
+      // Called synchronously (no await before it) to keep the user activation.
+      navigator.credentials.get({ digital: { requests: rd.requests }, mediation: "required" })
+        .then(async (result) => {
+          let data = result && result.data != null ? result.data : null;
+          if (typeof data === "string") { try { data = JSON.parse(data); } catch (e) {} }
+          step("→ verify (" + ((result && result.protocol) || "?") + ")");
+          const out = await fetch("/attesto/credential/verify", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ order: ORDER, cred: CRED, readerContextToken: rd.readerContextToken, mdocContextToken: rd.mdocContextToken, result: { protocol: (result && result.protocol) || null, data } }),
+          }).then((r) => r.json());
+          if (!out.verified) throw new Error(out.error || "not verified");
+          step("✓ verified (" + out.trust_level + ")", "ok");
+          done();
+        })
+        .catch((err) => {
+          step("✗ " + ((err && err.message) || String(err)), "err");
+          goDc.disabled = false;
+          prefetch(); // fresh request for the next attempt
+        });
+    });
+
     go.addEventListener("click", async () => {
       go.disabled = true;
       try {
@@ -95,10 +162,7 @@ export function renderCredentialPage(args: CredentialPageArgs): string {
         }).then((r) => r.json());
         if (!out.verified) throw new Error(out.error || "not verified");
         step("✓ verified (" + out.trust_level + ")", "ok");
-        doneEl.style.display = "block";
-        // Return to the checkout hub so the next gate is one tap away (no manual
-        // browser-back). The hub re-reads verification state and shows this gate ✓.
-        setTimeout(() => { window.location.assign(RETURN_URL); }, 650);
+        done();
       } catch (err) {
         step("✗ " + (err?.message ?? String(err)), "err");
         go.disabled = false;

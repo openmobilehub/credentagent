@@ -1,11 +1,19 @@
-// Server-rendered dc-payment gate page. The WORKING button is the presence-only
-// "instant demo": it POSTs a canonical disclosed instrument + the catalog-bound
-// amount for this order to /attesto/dc-payment/verify (no real wallet round-trip;
-// the mdoc is not cryptographically verified). The OpenID4VP wallet path
-// (navigator.credentials.get({digital}) — Chrome 141+ caBLE QR) is noted as
-// in-flight. Every surface states trust_level "presence-only-demo" (CT11 /
-// Principle VII) so the page never reads as a real safety control. Self-contained:
-// takes the re-priced amount + lines, not a demo Order type.
+// Server-rendered dc-payment gate page. It now drives the REAL OpenID4VP wallet path:
+// the PRIMARY button calls navigator.credentials.get({digital}) synchronously inside
+// the tap (the signed request is PRE-FETCHED from /attesto/dc-payment/request so no
+// await sits between the click and get() — iOS WebKit drops the transient user
+// activation across an await; Chrome 141+ renders the cross-device caBLE QR), then POSTs
+// the wallet's encrypted vp_token to /attesto/dc-payment/verify in the shape the route's
+// real path reads ({ order, readerContextToken, result:{protocol,data} }) — the route
+// decrypts the JWE, re-checks the device-signed transaction_data_hash against the
+// amount we sealed, runs the four gates, and completes through the shared completeOrder
+// seam. The SECONDARY "instant demo" button is kept as a fallback: it POSTs the
+// canonical disclosed instrument + the catalog-bound amount ({ order, amount, claims })
+// (no wallet round-trip; the tested default). On a browser without the Digital
+// Credentials API the page points the buyer at the instant-demo button. Every surface
+// states trust_level "presence-only-demo" (CT11 / Principle VII / FR-011): the wire
+// crypto is real; the wallet's device/issuer trust anchor is not — never a real safety
+// control. Self-contained: takes the re-priced amount + lines, not a demo Order type.
 
 export interface DcPaymentLine {
   name: string;
@@ -66,11 +74,12 @@ export function renderDcPaymentPage(args: DcPaymentPageArgs): string {
   td { padding: 0.35rem 0; border-bottom: 1px solid #f0f0f0; }
   td.amt { text-align: right; font-variant-numeric: tabular-nums; }
   tr.total td { border-bottom: none; font-weight: 600; padding-top: 0.6rem; }
-  button { font-size: 1rem; padding: 0.75rem 1.1rem; border-radius: 6px; border: 1px solid #1a7f37; background: #1a7f37; color: #fff; cursor: pointer; width: 100%; }
+  button { font-size: 1rem; padding: 0.75rem 1.1rem; border-radius: 6px; border: 1px solid #1a7f37; background: #1a7f37; color: #fff; cursor: pointer; width: 100%; margin-top: 0.75rem; }
+  button.secondary { background: #fff; color: #1a7f37; }
   button:disabled { opacity: 0.5; cursor: not-allowed; }
   .step { padding: 0.4rem 0; font-family: ui-monospace, Menlo, monospace; font-size: 0.85rem; }
   .step.ok { color: #0a7f2e; } .step.err { color: #b00020; white-space: pre-wrap; }
-  .inflight { margin-top: 0.75rem; font-size: 0.8rem; color: #777; }
+  .notice { margin-top: 1rem; padding: 0.9rem 1rem; background: #fff7ed; border-left: 4px solid #d97706; border-radius: 6px; font-size: 0.9rem; }
   .trust { margin-top: 1rem; padding: 0.9rem 1rem; background: #fff7ed; border-left: 4px solid #d97706; border-radius: 6px; font-size: 0.85rem; color: #7c2d12; }
   #receipt { display: none; margin-top: 1.25rem; padding: 1rem 1.1rem; background: #ecfdf3; border-left: 4px solid #0a7f2e; border-radius: 6px; }
   .gate { font-family: ui-monospace, Menlo, monospace; font-size: 0.82rem; padding: 0.15rem 0; }
@@ -79,13 +88,13 @@ export function renderDcPaymentPage(args: DcPaymentPageArgs): string {
 </head>
 <body>
   <h1>Authorize payment · cross-device</h1>
-  <p class="lede">Present a payment credential from your phone wallet. Your wallet signs over this exact amount — nothing is charged (demo).</p>
+  <p class="lede">Present a payment credential from your phone wallet. Chrome shows a QR; scanning it uses the cross-device channel (FIDO caBLE). Your wallet signs over this exact amount — nothing is charged (demo).</p>
   <table>
     ${rows}
     <tr class="total"><td>Total · order ${escapeHtml(order)}</td><td class="amt">${money(total, currency)}</td></tr>
   </table>
-  <button id="go">Authorize ${money(total, currency)} (instant demo)</button>
-  <p class="inflight">OpenID4VP wallet presentation (navigator.credentials.get({digital}) — Chrome 141+ caBLE QR) — scaffolded, in-flight.</p>
+  <button id="go-dc">Authorize ${money(total, currency)} with my wallet</button>
+  <button id="go" class="secondary">Authorize ${money(total, currency)} (instant demo)</button>
   <div id="log"></div>
   <div id="receipt"></div>
   <div class="trust">${escapeHtml(TRUST_NOTE)}</div>
@@ -95,8 +104,59 @@ export function renderDcPaymentPage(args: DcPaymentPageArgs): string {
     const DEMO_CLAIMS = ${JSON.stringify(DEMO_CLAIMS)};
     const RETURN_URL = ${JSON.stringify(returnUrl)};
     const log = document.getElementById("log");
+    const goDc = document.getElementById("go-dc");
     const btn = document.getElementById("go");
     const step = (t, c = "") => { const d = document.createElement("div"); d.className = "step " + c; d.textContent = t; log.appendChild(d); };
+    function notice(html) { const d = document.createElement("div"); d.className = "notice"; d.innerHTML = html; log.appendChild(d); }
+
+    // Pre-fetch the REAL signed OpenID4VP request so navigator.credentials.get() can be
+    // called SYNCHRONOUSLY inside the tap. iOS WebKit drops the transient user
+    // activation across an await, so we must not fetch between the click and get(). We
+    // keep a fresh pre-fetched request ready at all times. location.search carries the
+    // order this gate is scoped to, so /request re-prices THIS order (amount-bound).
+    let reqData = null;
+    function prefetch() {
+      reqData = null;
+      fetch("/attesto/dc-payment/request" + location.search).then((r) => r.json()).then((d) => { reqData = d; }).catch(() => {});
+    }
+
+    if (!("credentials" in navigator) || !window.DigitalCredential) {
+      goDc.disabled = true;
+      notice('This browser does not support <code>navigator.credentials.get({digital})</code> (needs <strong>Chrome 141+</strong>/Android or iOS 18+). Use the <strong>instant demo</strong> button.');
+    } else {
+      prefetch();
+    }
+
+    goDc.addEventListener("click", () => {
+      if (!("credentials" in navigator) || !window.DigitalCredential) {
+        notice('This browser does not support <code>navigator.credentials.get({digital})</code>. Use the instant-demo button.');
+        return;
+      }
+      if (!reqData || !reqData.request) { notice("Preparing the request — tap again in a second."); prefetch(); return; }
+      goDc.disabled = true;
+      const rd = reqData;
+      step("→ navigator.credentials.get({digital}) — Chrome should show a QR…");
+      // Called synchronously (no await before it) to keep the user activation.
+      navigator.credentials.get({ digital: { requests: [{ protocol: "openid4vp-v1-signed", data: { request: rd.request } }] }, mediation: "required" })
+        .then(async (result) => {
+          let data = result && result.data != null ? result.data : null;
+          if (typeof data === "string") { try { data = JSON.parse(data); } catch (e) {} }
+          step("→ verify");
+          const out = await fetch("/attesto/dc-payment/verify", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ order: ORDER, readerContextToken: rd.readerContextToken, result: { protocol: (result && result.protocol) || null, data } }),
+          }).then((r) => r.json());
+          if (!out.mandate) throw new Error(out.error || "authorization failed");
+          step("✓ presentation verified · mandate built (" + out.mandate.trust_level + ")", "ok");
+          renderReceipt(out);
+        })
+        .catch((err) => {
+          step("✗ " + ((err && err.message) || String(err)), "err");
+          goDc.disabled = false;
+          prefetch(); // fresh request for the next attempt
+        });
+    });
+
     btn.addEventListener("click", async () => {
       btn.disabled = true;
       try {
@@ -113,6 +173,7 @@ export function renderDcPaymentPage(args: DcPaymentPageArgs): string {
         btn.disabled = false;
       }
     });
+
     function renderReceipt(out) {
       const el = document.getElementById("receipt");
       const gates = out.gates.map((g) => '<div class="gate ' + (g.pass ? "pass" : "fail") + '">' + (g.pass ? "✓" : "✗") + " " + g.gate + " — " + g.detail + "</div>").join("");
@@ -123,6 +184,7 @@ export function renderDcPaymentPage(args: DcPaymentPageArgs): string {
         '<div style="font-size:0.8rem;color:#666;margin:0.3rem 0 0.6rem;">' + out.mandate.id + "</div>" + gates;
       el.style.display = "block";
       if (out.completed) {
+        goDc.disabled = true;
         btn.textContent = "Authorized ✓";
         // Final gate done — return to the checkout hub, which shows the paid
         // confirmation (and the widget poll picks it up in the chat).
