@@ -56,5 +56,27 @@ name with an identity/consent qualifier ("credential consent for AI agents"), ne
 ## Recommendation
 
 Decide **before** publishing `0.1.0` and before the repo split (both cement the name). Get a professional
-USPTO + EUIPO knockout search; weight the **attesto.dev** same-category collision heavily; sketch alternatives
-now so the choice is deliberate. Tracked as **D0** in `STATUS.md` (gates D5 publish + the repo split).
+USPTO + EUIPO knockout search; weight the **attesto.dev** same-category collision heavily.
+
+**Decision (2026-06-28):** proceed as **Attesto** for now; a rename is a deferred, accepted-cost find-replace.
+The vetted alternatives below are kept as reference IF the rename trigger is ever pulled.
+
+## Alternatives shortlist (reference — generated + cleared 2026-06-28)
+
+Search-signal clearance only (medium confidence — TMview/USPTO were rate-limited; any final pick needs a
+counsel-run TMview/USPTO/EUIPO clearance in classes 9/36/42). A second sweep also surfaced a **third** exact-name
+Attesto collision — **attesto.ai** (verifiable-compliance) — alongside `.dev`/`.com` and the `Attesso` homophone.
+
+| Candidate | Signal | Fit | Top risk |
+| :-- | :-- | :-- | :-- |
+| **Heralda** | contested | Best on-pitch identity metaphor (a herald authenticates before the gate opens); npm + dev TLDs free, no same-space rival | Phonetically echoes **Hedera** — our own settlement rail |
+| **Warrend** | clear | Coined from warrant+ward ("authorized AND defended"); **cleanest clearance of the set** (npm + all 4 domains free) | Reads like a misspelling of "warrant" |
+| **Avowa** | contested | Best pure "consent" fit (from *avow*); npm + GitHub free | Phonetic nearness to **Avoco** (UK identity/age-verification — same crowd); premium `.com` |
+| Pledgewire | clear | "consent on the wire"; fully registrable | "pledge" skews crowdfunding/payments |
+| Proviso / Cedo / Sigl | contested | Decent concepts | Same-space history (Proviso=KYC), security homophone (Cedo→Ceedo), taken npm token (Sigl) |
+| ~~Threshold / Credenza / Vellum / Voucher~~ | **blocked** | — | Funded same-space incumbent owns the name+pitch (Threshold Network / Credenza / Vellum AI / generic coupon word) |
+
+**If switching:** the analysis recommended **Heralda** (if the Hedera echo is tolerable when said aloud next to
+the settlement rail at GDC) → else **Warrend** (maximally safe) → else **Avowa** (if "consent-first" is paramount).
+
+Tracked as resolved **D0** in `STATUS.md` (proceeding as Attesto; this shortlist is the rename fallback).
