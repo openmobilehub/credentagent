@@ -228,6 +228,17 @@ export function renderRequirements(
   const rail = progressRail(steps, steps.findIndex((s) => !s.done));
   const itemCount = order.itemCount ?? order.lines.reduce((n, l) => n + l.quantity, 0);
 
+  // bfcache guard. After authorizing on a gate page (passkey / dc-payment), a buyer
+  // who taps the browser BACK button lands on this checkout restored from the
+  // back/forward cache — a STALE snapshot of the pre-payment page, with its Pay
+  // button still live. Server-side completion is idempotent (a resubmit never
+  // double-charges — completion.ts re-reads the recorded order), but the UI would
+  // wrongly invite a second payment. `pageshow` with `persisted` is the
+  // cross-browser-reliable bfcache signal (Safari kept bfcache despite `no-store`);
+  // on a restore we force a fresh GET so the page reflects current server state
+  // (the paid banner, not the picker).
+  const bfcacheGuard = `<script>window.addEventListener("pageshow",function(e){if(e.persisted)location.reload();});</script>`;
+
   return `<!doctype html>
 <html lang="en">
 ${pageHead(`Checkout · ${order.id}`)}
@@ -248,6 +259,7 @@ ${pageHead(`Checkout · ${order.id}`)}
   ${paymentSection}
   ${placeScript}
   ${paid ? "" : trustNote(manifest)}
+  ${bfcacheGuard}
   </div>
 </body>
 </html>`;

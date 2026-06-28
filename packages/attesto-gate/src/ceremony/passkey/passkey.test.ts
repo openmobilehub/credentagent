@@ -375,6 +375,17 @@ describe("CT11 — page + receipt state presence-only-demo (not a real safety co
     expect(renderPasskeyPage({ order })).toContain("presence-only-demo");
   });
 
+  it("the completed receipt links FORWARD to the checkout hub (no browser-back onto a stale, re-payable checkout)", () => {
+    const order = catalog.createOrder([{ productId: "aurora-headphones", quantity: 1 }], "ORD-RET");
+    const html = renderPasskeyPage({ order });
+    // The return URL is the checkout hub for THIS order, so completion routes the
+    // buyer forward (fresh GET → paid state) rather than back into bfcache.
+    expect(html).toContain("/checkout?order=ORD-RET");
+    expect(html).toContain("return to checkout");
+    // An explicit override is honored (the committed demo can re-home the link).
+    expect(renderPasskeyPage({ order, returnUrl: "/demo/checkout?order=ORD-RET" })).toContain("/demo/checkout?order=ORD-RET");
+  });
+
   it("the verify receipt carries trust_level presence-only-demo", async () => {
     const h = harness();
     h.seed("ORD-P", [{ id: "aurora-headphones", quantity: 1 }]);

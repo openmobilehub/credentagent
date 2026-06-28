@@ -21,9 +21,13 @@ function money(amount: number, currency: string): string {
   return new Intl.NumberFormat("en-US", { style: "currency", currency }).format(amount);
 }
 
-export function renderPasskeyPage(args: { order: CeremonyOrder; crossDevice?: boolean }): string {
+export function renderPasskeyPage(args: { order: CeremonyOrder; crossDevice?: boolean; returnUrl?: string }): string {
   const { order, crossDevice = false } = args;
   const id = escapeHtml(order.id);
+  // Where the completed receipt links back to — the checkout hub, which then renders
+  // the paid state (a forward, fresh GET — so the buyer never browser-backs onto a
+  // stale, re-payable checkout). Defaults to this server's `/checkout?order=<id>`.
+  const returnUrl = args.returnUrl ?? `/checkout?order=${encodeURIComponent(order.id)}`;
   const rows = order.lines
     .map((l) => `<tr><td>${escapeHtml(l.name ?? l.id)} <span style="color:#999;">×${l.quantity}</span></td><td class="amt">${money(l.lineTotal, l.currency ?? order.currency)}</td></tr>`)
     .join("\n");
@@ -104,6 +108,7 @@ export function renderPasskeyPage(args: { order: CeremonyOrder; crossDevice?: bo
     import { startRegistration } from "/attesto/lib/sw/index.js";
     const ORDER_ID = ${JSON.stringify(order.id)};
     const OPTIONS_URL = ${JSON.stringify(optionsUrl)};
+    const RETURN_URL = ${JSON.stringify(returnUrl)};
     const log = document.getElementById("log");
     const bar = document.getElementById("bar");
     const btn = document.getElementById("go");
@@ -151,7 +156,7 @@ export function renderPasskeyPage(args: { order: CeremonyOrder; crossDevice?: bo
           ? '<div class="gate fail">✗ Settlement failed — authorized, not settled: ' + esc(out.settlementError) + "</div>"
           : "";
       const done = out.completed
-        ? "<div style=\\"background:#0a7f2e;color:#fff;font-size:1.1rem;font-weight:700;line-height:1.4;padding:1rem 1.1rem;border-radius:8px;margin-bottom:1rem;text-align:center;\\">✓ Purchase complete<div style=\\"font-size:0.9rem;font-weight:500;margin-top:0.25rem;\\">You can close this page and return to the chat.</div></div>"
+        ? "<div style=\\"background:#0a7f2e;color:#fff;font-size:1.1rem;font-weight:700;line-height:1.4;padding:1rem 1.1rem;border-radius:8px;margin-bottom:1rem;text-align:center;\\">✓ Purchase complete<div style=\\"font-size:0.9rem;font-weight:500;margin-top:0.25rem;\\">Return to the chat, or <a href=\\"" + RETURN_URL + "\\" style=\\"color:#fff;text-decoration:underline;\\">return to checkout ›</a></div></div>"
         : "";
       el.innerHTML = done + gates + settlement;
       el.style.display = "block";

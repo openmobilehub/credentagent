@@ -137,4 +137,19 @@ describe("renderRequirements — paid revisit", () => {
     expect(html).toContain("HashScan");
     expect(html).toContain("0.0.5555");
   });
+
+  // bfcache guard: a buyer who authorizes on a gate page then taps browser-BACK would
+  // otherwise land on this checkout restored from the back/forward cache — the stale
+  // pre-payment snapshot with a live Pay button, inviting a (server-idempotent but
+  // confusing) resubmit. The page reloads itself on a bfcache restore so it always
+  // re-fetches current server state. Present on EVERY render, paid or not.
+  it("emits a pageshow/persisted reload guard so a bfcache-restored checkout can't re-pay", () => {
+    const payable = renderRequirements(order, manifest, { ageVerified: true });
+    expect(payable).toContain('addEventListener("pageshow"');
+    expect(payable).toContain("e.persisted");
+    expect(payable).toContain("location.reload()");
+    // Also present on the paid revisit (defense in depth).
+    const paidHtml = renderRequirements(order, manifest, {}, { paid: { amount: 124, currency: "USD", method: "passkey" } });
+    expect(paidHtml).toContain('addEventListener("pageshow"');
+  });
 });
