@@ -495,6 +495,7 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
     // GATED order has NO such bypass: completion goes through the fail-closed payment
     // gate (the manifest's `authorize` approveUrl → the renderer's single Pay CTA).
     const ungated = requires.length === 0;
+    const orderQ = encodeURIComponent(order.id);
     const payment = ungated
       ? {
           methods: [
@@ -503,7 +504,17 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
           placeOrderPath: "/checkout/place-order",
           orderToken: order.id,
         }
-      : undefined;
+      : // A GATED order: offer the same payment methods the demo does — the headline
+        // passkey rail (authorize on-device; settles on-chain via x402 on Hedera) and
+        // the cross-device wallet rail — both mounted by attesto.mount(), both completing
+        // through the fail-closed gate (no bypass). Without this the renderer falls back
+        // to a single Pay CTA from the manifest and the x402/Hedera passkey option never shows.
+        {
+          methods: [
+            { value: "passkey", name: "Pay with x402 Hedera · Passkey", desc: "Authorize with this device's passkey — payment settles on-chain via the x402 protocol (test network).", href: `/attesto/passkey?order=${orderQ}`, checked: true },
+            { value: "dc-payment", name: "Cross-device wallet", desc: "Scan a QR and approve with your phone's passkey or wallet — also x402 on Hedera.", href: `/attesto/dc-payment?order=${orderQ}` },
+          ],
+        };
 
     res.type("html").send(renderRequirements(order, requires, verification, { ...(payment ? { payment } : {}), paid }));
   });
