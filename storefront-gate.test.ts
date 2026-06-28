@@ -112,7 +112,7 @@ describe("end-to-end ceremony over the mounted /attesto/* routes", () => {
     // (opts THIS order into the 10% discount).
     const ageOut = await request(store.app).post("/attesto/credential/verify").send({ order: orderId, cred: "age", claims: { age_over_21: true } });
     expect(ageOut.body.verified).toBe(true);
-    const memOut = await request(store.app).post("/attesto/credential/verify").send({ order: orderId, cred: "membership", claims: { membership_id: "MEMBER-7" } });
+    const memOut = await request(store.app).post("/attesto/credential/verify").send({ order: orderId, cred: "membership", claims: { membership_number: "MEMBER-7" } });
     expect(memOut.body.verified).toBe(true);
 
     // Authorize payment. The bound amount is the DISCOUNTED total — line sum 124 − 10%
