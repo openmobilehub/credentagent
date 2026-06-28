@@ -88,8 +88,10 @@ export const membership = {
   discount(percent: number): Credential {
     return makeCredential({
       id: "membership",
-      request: dcql({ docType: "org.openwallet.loyalty.1", claims: ["membership_id"] }),
-      verify: (claims) => typeof claims.membership_id === "string" && claims.membership_id.length > 0,
+      // Real, interoperable loyalty doctype a wallet actually holds (Multipaz),
+      // matching the demo — NOT a branded placeholder, or the wallet finds nothing.
+      request: dcql({ docType: "org.multipaz.loyalty.1", claims: ["membership_number", "tier"] }),
+      verify: (claims) => typeof claims.membership_number === "string" && claims.membership_number.length > 0,
       effect: discount({ percent }),
       ui: { label: `${percent}% member discount`, action: "Present your membership" },
       params: { percent },

@@ -211,7 +211,7 @@ describe("CT5 — a verified membership applies the discount once and amounts re
     // Undiscounted baseline.
     expect((await resolveOrder(h.ctx, "ORD-M"))?.total).toBe(199);
 
-    const res = await request(h.app).post("/attesto/credential/verify").send({ order: "ORD-M", cred: "membership", claims: { membership_id: "M-2231" } });
+    const res = await request(h.app).post("/attesto/credential/verify").send({ order: "ORD-M", cred: "membership", claims: { membership_number: "M-2231" } });
     expect(res.body.verified).toBe(true);
     expect((await h.verificationStore.read("ORD-M"))?.loyalty).toMatchObject({ applied: true, membershipNumber: "M-2231" });
 

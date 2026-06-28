@@ -98,7 +98,7 @@ export function evaluateCredential(kind: CredentialKind, claims: Record<string, 
 
   const percent = opts.percent ?? DEFAULT_LOYALTY_DISCOUNT_PCT;
   const verified = membership.discount(percent).verify(claims);
-  const membershipNumber = verified ? String(claims.membership_id) : null;
+  const membershipNumber = verified ? String(claims.membership_number) : null;
   return {
     verified,
     membershipNumber,

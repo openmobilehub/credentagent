@@ -18,8 +18,8 @@ export function mdocDocSpec(kind: CredentialKind, minimumAge = 21): MdocDocSpec 
     };
   }
   return {
-    docType: "org.openwallet.loyalty.1",
-    namespace: "org.openwallet.loyalty.1",
-    elements: ["membership_id", "tier"],
+    docType: "org.multipaz.loyalty.1",
+    namespace: "org.multipaz.loyalty.1",
+    elements: ["membership_number", "tier"],
   };
 }

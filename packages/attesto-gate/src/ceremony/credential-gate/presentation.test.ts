@@ -121,10 +121,10 @@ describe("credential-gate REAL OpenID4VP presentation — age", () => {
 });
 
 describe("credential-gate REAL OpenID4VP presentation — membership", () => {
-  it("decrypts + parses and verifies a disclosed membership_id (real crypto)", async () => {
+  it("decrypts + parses and verifies a disclosed membership_number (real crypto)", async () => {
     const req = await buildCredentialRequest("membership", ORIGIN, SECRET, {});
     const { encJwk } = requestParams(req.request);
-    const response = await walletEncrypt(encJwk, null, { loyalty: deviceResponseB64("org.openwallet.loyalty.1", "membership_id", "M-9087") });
+    const response = await walletEncrypt(encJwk, null, { loyalty: deviceResponseB64("org.multipaz.loyalty.1", "membership_number", "M-9087") });
 
     const out = await verifyCredentialPresentation({
       kind: "membership",

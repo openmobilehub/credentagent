@@ -51,7 +51,7 @@ export function renderCredentialPage(args: CredentialPageArgs): string {
   const demoCta = isAge ? `Verify age (instant demo)` : `Apply membership (instant demo)`;
   // The canonical positive claim the instant-demo button presents — it goes
   // through the SAME server-side explicit-positive-claim check as a real wallet.
-  const demoClaims = isAge ? { [`age_over_${minimumAge}`]: true } : { membership_id: "DEMO-MEMBER-0001" };
+  const demoClaims = isAge ? { [`age_over_${minimumAge}`]: true } : { membership_number: "DEMO-MEMBER-0001" };
   const totalLine = args.total != null ? `<p class="amount">Order ${escapeHtml(args.order)} · ${escapeHtml(args.currency ?? "USD")} ${args.total}</p>` : "";
   const returnUrl = args.returnUrl ?? `/checkout?order=${encodeURIComponent(args.order)}`;
 
