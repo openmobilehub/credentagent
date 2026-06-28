@@ -1,23 +1,25 @@
 # Repo migration — cutoff + runbook (`openmobilehub/attesto`)
 
 The attesto packages move to their own repo. This defines **when** (the cutoff) and **how** (the runbook).
-Decision context: `STATUS.md` (split → after `0.1.0` publish) and the naming call (proceed as Attesto).
+Decision context: `STATUS.md`. **Re-sequenced 2026-06-28 (maintainer):** the migration is now the **next
+priority**, and `0.1.0` is published **FROM the new repo** (together with the dev + reference docs) — not from
+this repo first.
 
 ## The cutoff (when to migrate)
 
-**Primary trigger — migrate when BOTH are true:**
-1. **003 tail merged** — the demo is a thin consumer (consumes the packages; `payment-gate/` retired), so
-   the packages are self-contained and the move is mechanical, not a refactor. (`specs/003-…/tail-implementation-plan.md`)
-2. **`0.1.0` published to npm** — the demo then depends on the published `@openmobilehub/attesto-*` (`^0.1.x`),
-   so lifting `packages/` out of this repo doesn't break the demo's build.
+**The trigger is now MET:** the **003 cutover is done** — the demo is a thin consumer (consumes the packages
+via the workspace; `payment-gate/` ceremony + the old demo impl retired; build + suite green). The packages
+are self-contained, so the move is mechanical, not a refactor. **→ Migrate next.**
 
-**Backstop date — _proposed, confirm in `STATUS.md`_:** if the dedicated repo is wanted as the public *front
-door* for the GDC talk, do the migration **no later than ~1 week before GDC (≈ 2026-08-25)** regardless of the
-triggers — publishing from this repo first is fine; the public repo can be created at/just before launch.
-If the repo is _not_ needed as a pre-talk front door, just fire on the primary trigger (no date pressure).
+**Publish from the new repo:** `0.1.0` is published from `openmobilehub/attesto` (gate then storefront) once
+the repo + its CI + the dev/reference docs are in place — NOT from this repo. After it publishes, this repo's
+demo flips its dependency from the workspace packages to the published `@openmobilehub/attesto-*` (`^0.1.x`).
 
-**Do NOT migrate before both triggers** — moving mid-extraction reintroduces the cross-repo publish/link loop
-the monorepo avoids during the 003 tail.
+**Optional backstop date — _confirm in `STATUS.md`_:** if the dedicated repo is wanted as the public *front
+door* for the GDC talk, stand it up by **~1 week before GDC (≈ 2026-08-25)**.
+
+**Sequence:** cutover ✅ → **migrate (packages + docs → new repo)** → **publish `0.1.0` from new repo** →
+flip this repo's demo to the published dep.
 
 ## What moves vs stays
 
