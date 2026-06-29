@@ -84,6 +84,10 @@ For a deployment, pass your public origin: `new Attesto({ walletOrigin: "https:/
   WebAuthn / OpenID4VP origin-bound with replay protection).
 - **[CONTRIBUTING.md](./CONTRIBUTING.md)** — DCO sign-off (`git commit -s`), the
   security-bypass testing bar, and the module conventions.
+- **[docs/deployment.md](./docs/deployment.md)** — running it for real (serverless stores,
+  the stable signing key, the settle seam) + a troubleshooting table.
+- **[ROADMAP.md](./ROADMAP.md)** — what binds cryptographically today (Mode A) vs. what's
+  next (Mode B page-less gating, issuer-verified trust).
 
 ## Honest status
 
