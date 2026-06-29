@@ -3,14 +3,18 @@ name: publish
 # Publishes both packages to npm when a GitHub Release is published.
 # Order is LOAD-BEARING: @openmobilehub/attesto-gate first, then attesto-storefront
 # (the storefront depends on the gate via ^0.1.0). Requires the NPM_TOKEN secret with
-# publish rights to the @openmobilehub scope. id-token: write enables npm provenance.
+# publish rights to the @openmobilehub scope.
+#
+# NOTE: npm provenance is intentionally OFF. npm only supports `--provenance` when publishing
+# from a PUBLIC source repo, and this repo is currently INTERNAL (provenance would fail). When
+# the repo goes public, re-add `--provenance` to both publish steps and restore
+# `id-token: write` under permissions below.
 on:
   release:
     types: [published]
 
 permissions:
   contents: read
-  id-token: write
 
 jobs:
   publish:
@@ -26,10 +30,10 @@ jobs:
       - run: npm run build
       - run: npm test
       - name: Publish @openmobilehub/attesto-gate
-        run: npm publish -w @openmobilehub/attesto-gate --access public --provenance
+        run: npm publish -w @openmobilehub/attesto-gate --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - name: Publish @openmobilehub/attesto-storefront
-        run: npm publish -w @openmobilehub/attesto-storefront --access public --provenance
+        run: npm publish -w @openmobilehub/attesto-storefront --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
