@@ -38,6 +38,15 @@ export { completeOrder } from "./ceremony/completion.js";
 export { issueCartMandate, verifyCartMandate, DEFAULT_CART_MANDATE_TTL_MS } from "./ceremony/cartMandate.js";
 export type { CartMandate, CartMandateLine, CartMandateRefusal, CartMandateVerdict, IssueCartMandateArgs } from "./ceremony/cartMandate.js";
 
+// ── Cart ↔ Payment reconciliation — signed cart + signed payment agree on amount ──
+// When BOTH a Cart Mandate and a Payment Mandate ride along, `completeOrder`
+// reconciles them at the shared seam: same order, consistent currency, and the
+// cart's sealed total == the catalog-re-derived total == the Payment Mandate's bound
+// amount. One amount binding across every payment path (invariant 3); refuses on any
+// mismatch. Exposed for hosts that reconcile outside the bundled completion seam.
+export { reconcileCartPayment } from "./ceremony/reconciliation.js";
+export type { PaymentBinding, ReconcileRefusal, ReconcileVerdict } from "./ceremony/reconciliation.js";
+
 // ── Ceremony presentation (the ONE shared three-gate checkout page) ─────────
 // Both the committed demo and @openmobilehub/attesto-storefront render their
 // checkout page through `renderRequirements(order, manifest, verification)` — one

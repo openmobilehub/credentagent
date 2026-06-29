@@ -107,9 +107,10 @@ export interface CompletionResult {
   settlementError?: string;
   /** Why a non-completion happened — a failed ceremony ("gates"), a tampered/replayed/
    *  expired Cart Mandate ("cart-mandate"), a tampered token re-priced against the
-   *  catalog ("reprice"), or an age-restricted order with no proven per-order age
-   *  claim ("age"). */
-  reason?: "gates" | "cart-mandate" | "reprice" | "age";
+   *  catalog ("reprice"), a signed Cart Mandate and signed Payment Mandate that
+   *  disagree on order/amount/currency ("reconcile"), or an age-restricted order with
+   *  no proven per-order age claim ("age"). */
+  reason?: "gates" | "cart-mandate" | "reprice" | "reconcile" | "age";
 }
 
 /**

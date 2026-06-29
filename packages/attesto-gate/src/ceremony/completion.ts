@@ -7,7 +7,8 @@
 // settle means authorized-but-not-completed (no record, cart intact — FR-013).
 import type { VerificationStore } from "../types.js";
 import type { CartItemRef, CeremonyCatalog, CompletionInput, CompletionResult, GateOutcome } from "./types.js";
-import { verifyCartMandate } from "./cartMandate.js";
+import { verifyCartMandate, type CartMandate } from "./cartMandate.js";
+import { reconcileCartPayment } from "./reconciliation.js";
 
 // One on-chain (demo-mode) settlement backing a completed order. Kept structural
 // so the demo's richer SettlementRecord is assignable without the package taking
@@ -78,10 +79,13 @@ export async function completeOrder(input: CompletionInput, ctx: CompletionConte
   // or expired cart is refused here with an explicit reason. The catalog STILL re-derives
   // the price below; the signature proves the server issued the cart, not the price
   // (invariant 2). A valid-signature-but-wrong-price mandate therefore still fails the
-  // re-price check — the mandate is defense-in-depth, never a substitute for it.
+  // re-price check — the mandate is defense-in-depth, never a substitute for it. The
+  // verified mandate is reconciled against the Payment Mandate's binding AFTER re-pricing.
+  let cartMandate: CartMandate | undefined;
   if (input.cartMandate && ctx.signingKey) {
     const verdict = verifyCartMandate(input.cartMandate, input.order.id, ctx.signingKey);
     if (!verdict.ok) return { completed: false, reason: "cart-mandate" };
+    cartMandate = verdict.mandate;
   }
 
   // Invariant 2: never trust the order token — re-price the lines against the
@@ -94,6 +98,23 @@ export async function completeOrder(input: CompletionInput, ctx: CompletionConte
   const items: CartItemRef[] = input.order.lines.map((l) => ({ productId: l.id, quantity: l.quantity }));
   const repriced = ctx.catalog.createOrder(items, input.order.id, { loyaltyApplied });
   if (repriced.total !== input.order.total) return { completed: false, reason: "reprice" };
+
+  // Invariant 3: when a signed Cart Mandate AND a signed Payment Mandate are both
+  // present, the two envelopes must tell ONE story before completing — same order,
+  // consistent currency, and the cart's sealed total == the catalog-RE-DERIVED total
+  // == the Payment Mandate's bound amount (`input.amount`, projected from
+  // `mandate.payment` by every rail). This binds the cart's seal to the payment's
+  // signature across ALL paths: a cart sealed for X paired with a payment for Y≠X, a
+  // currency or order mismatch, or a discount one path blesses and another refuses is
+  // refused here, never silently under-charged. Re-priced (not the token) per invariant 2.
+  if (cartMandate) {
+    const agree = reconcileCartPayment(
+      cartMandate,
+      { amount: input.amount, currency: input.currency, orderId: input.order.id },
+      repriced.total,
+    );
+    if (!agree.ok) return { completed: false, reason: "reconcile" };
+  }
 
   // Invariant 1: enforce the age gate on EVERY completion path. The age restriction
   // is re-derived from the catalog-priced lines (never the token); an age-restricted
