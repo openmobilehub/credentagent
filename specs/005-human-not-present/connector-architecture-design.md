@@ -218,10 +218,12 @@ get_intent(intentId)              → { status: "pending"|"active"|"declined"|"e
                                       bounds, remaining, history }        // planning view, no blob
 list_intents({status})            → [ { intentId, bounds, remaining, expiresAt }, … ]
                                     // rediscovery: scheduled runs need no memory
-request_draw(intentId,
-             {merchant, cart,
-              amount})            → { draw: "<opaque self-contained token>" }   // the doll, embedded intent
+request_draw(intentId, offer)     → { draw: "<opaque self-contained token>" }   // the doll, embedded intent
                                   | typed refusal (§9)
+                                  // AMENDED per the DX council (finding #1): the draw is signed over a
+                                  // priced OFFER (incl. the PSP's pspTransactionId) obtained from the
+                                  // merchant's checkout_delegated_open tool first — the full six-call
+                                  // sequence + schemas: redemption-choreography-draft.md
 revoke_intent(intentId)           → { status: "revoked" }   // agent-safe: only ever reduces authority
 ```
 
