@@ -160,8 +160,12 @@ module.exports = async (req, res) => {
   // DCR (RFC 7591) — stateless: the client_id IS the signed registration
   if (path === "/register" && req.method === "POST") {
     const body = (await readBody(req)) || {};
-    const ru = Array.isArray(body.redirect_uris) ? body.redirect_uris.filter((u) => /^https:\/\//.test(u)) : [];
-    if (!ru.length) return json(res, 400, { error: "invalid_client_metadata", error_description: "https redirect_uris required" });
+    // https for hosted clients (claude.ai) + http loopback for CLI clients (Claude Code's
+    // localhost callback server) — the standard native-app OAuth pattern (RFC 8252 §7.3).
+    const ru = Array.isArray(body.redirect_uris)
+      ? body.redirect_uris.filter((u) => /^https:\/\//.test(u) || /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?\//.test(u))
+      : [];
+    if (!ru.length) return json(res, 400, { error: "invalid_client_metadata", error_description: "https or localhost-loopback redirect_uris required" });
     const client_id = sign({ t: "client", ru, iat: now() });
     console.log(`[spike] DCR register redirect_uris=${ru.join(",")}`);
     return json(res, 201, {
