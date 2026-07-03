@@ -144,10 +144,32 @@ on both Chrome desktop and Android).
 | **On-device client works: TestApp issued from the local bank, end-to-end** | Blue TestApp → "Provision a Document from an Issuer" → `http://localhost:8100/bank_of_utopia` → PAR → authorize (persona page served by the **local** registry, personas incl. Pivo Miller with a payment record) → token 200 → **`POST /bank_of_utopia/credential` → 200 (1.1 MB)**. "Pivo's Debit Card" (mDoc, `payment_sca_mdoc`) provisioned, hardware-backed. |
 | **The hosted issuance 500 does NOT reproduce locally** | Same code (fresh clone), same flow, clean seed → issuance succeeds. The upstream bug (`NoSuchElementException: List is empty`) is **hosted-deployment-specific** (data/config drift), not a code bug — key input for the filed bug report. |
 | **CredMan first-registered quirk reconfirmed — now consequential** | Local UPay ceremony ran twice; both times the **red (dev) TestApp** answered with Erika's self-issued card and the verifier (rightly) refused it — while trust-chain-valid "Pivo's Debit Card" sat in the blue TestApp. The wrong-wallet-wins behavior observed in Run 3 is not cosmetic: it silently routes a payment ceremony to an untrusted credential. Upstream-reportable UX finding. |
-| Green settlement | **Pending one correct card pick + fingerprint** — stack, card, and ceremony all verified up to the picker. |
+| **Green settlement — ACHIEVED** | **`POST /upay/process_response → 200`**, `transaction_data_hash` verified, **`registry/rpc/payment/commit → 200`** (posted to the Bank of Utopia ledger). **"Payment Successful — Paid 21.00 to Utopia Brewery Owner, Transaction ID LIb144uDCQM7x3y8."** Evidence: [`spike-evidence/5-green-settlement.png`](./spike-evidence/5-green-settlement.png), card [`5-pivo-card-local-issued.png`](./spike-evidence/5-pivo-card-local-issued.png). |
 
-Local quirk noted: the local UPay page renders payee as a dropdown fed by `accounts.json` (hosted
-page is free-text); the real form value lives in `input#account`.
+**The first green settlement — what it took.** The verifier's issuer-trust check (which correctly
+refused every untrusted card for two days) **accepted** the locally-issued card once the presentation
+was unambiguously Pivo's local-bank mdoc. The confounder was credential selection, not trust: on a
+phone with several wallets holding same-doctype payment cards (`org.multipaz.payment.sca.1`), CredMan
+kept routing the ceremony to an untrusted self-signed card (red TestApp's Erika, then a stray
+SD-JWT). The fix was to reduce the phone to exactly one *matching* credential:
+1. Red TestApp documents cleared (removed its self-signed Erika card).
+2. UPay's request is **`mso_mdoc`-only** (`org.multipaz.payment.sca.1`, claims `issuer_name` /
+   `payment_instrument_id` / `expiry_date` / `holder_name`) — so a stray **SD-JWT** payment card
+   (accidentally provisioned from the *hosted* issuer — incidental finding: **hosted issuance works
+   again; retest the upstream 500**) does not match and can coexist harmlessly.
+3. Pivo's card re-provisioned from the **local** bank as **mdoc** (`MdocCredential`,
+   `mdoc_no_user_auth` — issuance `POST /bank_of_utopia/credential → 200`). Its document-signer chain
+   validates to the local registry's `CREDENTIAL_SIGNING` root that UPay loaded at startup.
+
+Then the ceremony had exactly one eligible credential → it settled. **This closes the whole design
+loop end-to-end on infrastructure we control**: OID4VCI issuance → hardware-backed mdoc → DC API
+presentment → OpenID4VP v1 → issuer-trust verification → TS12 transaction-data-hash check → ledger
+commit. The presence-only refusal that fenced Runs 2–4 was, as designed, the *only* thing between
+wire-correct and settled — supplying a trusted issuer flips it green with no other change.
+
+Local quirks noted: the local UPay page renders payee as a dropdown fed by `accounts.json` (hosted
+page is free-text; real value in `input#account`); the CredMan wrong-wallet-wins behavior is
+security-relevant (silently routes a payment to an untrusted credential) — upstream-reportable.
 
 ### Verdict + next actions (2026-07-02, post Run 2)
 
