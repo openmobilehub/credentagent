@@ -104,6 +104,19 @@ Now reproduced across two devices, three wallet builds (W22/W27/W27.1), and mult
 conclusively server-side. **Troubleshooting handed off to the Multipaz repo session**
 (`~/tools/git/multipaz/TROUBLESHOOT-ISSUANCE-500.md`), since a fix belongs upstream, not here.
 
+## Readout — RUN 4, 2026-07-02 night (cross-device QR: desktop Chrome 149 → Pixel 9)
+
+Question #5 answered. Ceremony fired from a **desktop** Chrome (149, macOS, fresh profile — DC API
+present by default: `typeof DigitalCredential === 'function'`) on the hosted UPay page via CDP with
+user gesture; Chrome showed the cross-device QR dialog; maintainer scanned it with the Pixel 9;
+the phone presented Erika's payment card over the hybrid transport; the response returned to the
+**desktop** page, and the UPay backend decrypted + parsed the mdoc before refusing at the same
+point as same-device: `invalid_request: Payment card is not from a trusted issuer`.
+
+| # | Question | Result |
+| :-- | :-- | :-- |
+| 5 | Cross-device QR with published artifacts | **YES — full loop works.** Desktop QR → phone scan → CredMan/wallet consent + biometric on phone → presentation travels back to the desktop origin → verifier parses it. Issuer-trust refusal is the expected endpoint (TestApp IACA), not a transport failure. **This is exactly the shape the claude.ai approve page needs** — the §5 design's cross-device leg is de-risked on stock, published software. |
+
 ### Verdict + next actions (2026-07-02, post Run 2)
 
 1. **The §12.1/12.1b questions are answered without self-hosting**: ceremony mechanics work
@@ -115,7 +128,7 @@ conclusively server-side. **Troubleshooting handed off to the Multipaz repo sess
 3. **Upstream bug report stays the lead item** of the Multipaz conversation, now with two bugs and
    one confirmed rendering gap (Ask 1).
 4. Open observations for a human-eyes run (secure surface): consent-sheet look, biometric prompt,
-   unknown-verifier warning; plus #5 cross-device QR and #6 brewery beat.
+   unknown-verifier warning; plus ~~#5 cross-device QR~~ (answered in Run 4) and #6 brewery beat.
 
 ## What the answers decide
 
