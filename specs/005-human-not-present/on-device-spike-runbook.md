@@ -104,6 +104,15 @@ Now reproduced across two devices, three wallet builds (W22/W27/W27.1), and mult
 conclusively server-side. **Troubleshooting handed off to the Multipaz repo session**
 (`~/tools/git/multipaz/TROUBLESHOOT-ISSUANCE-500.md`), since a fix belongs upstream, not here.
 
+**Retest 2026-07-03 — still broken, now localized.** Re-ran the exact filed flow on Wallet W27.1
+(Add to wallet → Utopia Payment Card → authorize → Phileas): **500 reproduces verbatim**
+(`NoSuchElementException: List is empty`), wallet stays empty. The hosted persona list has changed
+(deployment redeployed) but the bug persists → real fault, not stale data. **Discriminator:** the
+same hosted issuer *did* issue a **SD-JWT** payment card the same day via the TestApp's direct
+"Provision from Issuer" path — so the issuer's core issuance works; the fault is isolated to the
+**mDoc payment** path (`payment_sca_mdoc` / `org.multipaz.payment.sca.1`) and/or the
+**wallet-server-mediated** flow. Details + the cheap disambiguating test in the handoff doc.
+
 ## Readout — RUN 4, 2026-07-02 night (cross-device QR: desktop Chrome 149 → Pixel 9)
 
 Question #5 answered. Ceremony fired from a **desktop** Chrome (149, macOS, fresh profile — DC API
