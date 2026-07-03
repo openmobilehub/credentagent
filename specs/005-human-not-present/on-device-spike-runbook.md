@@ -97,6 +97,13 @@ warning exists at TWO layers (Chrome origin + wallet). Question #3 is answered; 
 screenshots; #4 reproduced including the biometric gate. Incidental: the CredMan selector chose the
 red (dev) TestApp variant's credential over the blue install — first-registered wins silently.
 
+**Issuance retry (same night):** fresh published Wallet `2026.W27.1-22-git-af0e4a1` on the Pixel 9.
+Got further than Run 1 — the `issuer.multipaz.org/records/authorize` page loads and the persona flow
+runs — but issuance still fails at completion with the same "Something went wrong" (server-side 500).
+Now reproduced across two devices, three wallet builds (W22/W27/W27.1), and multiple record types →
+conclusively server-side. **Troubleshooting handed off to the Multipaz repo session**
+(`~/tools/git/multipaz/TROUBLESHOOT-ISSUANCE-500.md`), since a fix belongs upstream, not here.
+
 ### Verdict + next actions (2026-07-02, post Run 2)
 
 1. **The §12.1/12.1b questions are answered without self-hosting**: ceremony mechanics work
