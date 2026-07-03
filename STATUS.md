@@ -1,7 +1,7 @@
 # Project Status — AttestoMCP
 
 _Single source of truth for what's done, what's next, and what's waiting on you._
-_Updated **2026-07-05** · `main` · CI green._
+_Updated **2026-07-02** · `005-human-not-present` · CI green · 189 tests pass._
 
 > **How this file works.** Read it at the start of every working session and update it at the end. It is
 > decisions-first: "Decisions for you" (each a checkbox + recommendation), then In flight / next, a rolling
@@ -28,10 +28,14 @@ _Updated **2026-07-05** · `main` · CI green._
       "Attesto"). Vetted coined shortlist: **Heralda / Warrend / Avowa**. Suggested path: confirm the acceptable
       descriptive pattern with counsel (e.g. "Attesto — a consent gate for MCP agents"), then pick and do the
       known-size find-replace (~171 sites, same job as #8/#30).
-- [ ] **005 sequencing fork.** Ship merchant-side v0.1 (server-HMAC grants) first as the smallest
-      increment, or re-scope 005 to the wallet-custody connector architecture directly? Recommendation:
-      decide after the on-device spike (`specs/005-human-not-present/connector-architecture-design.md`
-      §10/§12). Note: 005 builds on 004, which builds after publish — sequence against the demo timeline.
+- [ ] **005 sequencing fork — the spike input is now IN (2026-07-02).** Ship merchant-side v0.1
+      (server-HMAC grants) first, or re-scope 005 to the wallet-custody connector architecture directly?
+      The on-device spike answered all six opens (`specs/005-human-not-present/on-device-spike-runbook.md`,
+      Runs 1–4): ceremony mechanics work end-to-end on published artifacts **including the cross-device QR
+      leg the approve page needs**; consent renders displayName-only (approve-page mitigation stands);
+      verifier-side issuer trust is real. **Recommendation: wallet-custody is buildable** — the only infra
+      gap is hosted issuance (bug filed upstream by the maintainer 2026-07-02; self-hosted Utopia stack
+      with our IACA is the proven fallback). Note: 005 builds on 004, which builds after publish.
 - [ ] **Confirm the 005 Group-A decisions** (D1–D3, still *tentative* per the 2026-07-01 discussion) + the
       Decision-13 constitution amendment — both gate `/speckit-plan` → `/speckit-implement` for 005.
 
@@ -45,12 +49,6 @@ _Updated **2026-07-05** · `main` · CI green._
   `AttestoMcp` / `attestoMcpManifest` imports to `AttestoMCP` / `attestoMCPManifest` (tracked in that repo,
   [#26](https://github.com/openmobilehub/attestomcp/issues/26)).
 - **Cart Mandate (004)** — spec ready (`specs/004-cart-mandate/spec.md`); build after publish.
-- **Storefront persistence (005)** — [#27](https://github.com/openmobilehub/attestomcp/issues/27) (epic #29).
-  Full spec-kit set in `specs/005-storefront-persistence/`. `createStorefront({ storage: redisStorage(…) })`
-  implemented on the working tree: builds all four stores over Upstash Redis (optional peer dep, lazy-loaded),
-  in-memory stays the zero-config default, explicit per-slot injection still wins, per-order keying + namespace
-  isolation, fail-closed. Storefront suite green (+12 tests). **Pending:** commit (DCO) + PR; demo slim-down
-  (scope A) tracked in `mcp-apps-shopping-demo`.
 - **HNP (005)** — big design day 2026-07-01 (branch `005-human-not-present`, pushed; no PR yet): the
   **connector-architecture design** (wallet-custody over MCP: stock Multipaz Wallet seals the Intent
   Mandate, a new wallet server signs bounded draws, a UPay-style verifier settles, Claude orchestrates
@@ -65,6 +63,17 @@ _Updated **2026-07-05** · `main` · CI green._
   choreography was undefined), the **redemption choreography draft** answering it
   (`redemption-choreography-draft.md` — six-call sequence, pspTransactionId rename, enforcer/retryable
   refusals), the AP2+TS12 **bounds schema draft**, and a **talk outline draft**.
+- **HNP §12.1 on-device spike — COMPLETE (2026-07-02, Runs 1–4 in the runbook).** All six opens
+  answered on published artifacts: hosted issuance broken (500, **bug filed upstream by the
+  maintainer**; reproduced across 2 devices × 3 wallet builds); consent stack captured with
+  screenshots (5 layers, none show amount/payee — `spike-evidence/`); same-device AND cross-device
+  (desktop QR → phone) ceremonies work end-to-end; brewery combined age+payment: one DCQL, two
+  credential_sets, minimal disclosure (`age_over_18` only), transaction data bound to the payment
+  credential alone. Everything terminates at the expected issuer-trust refusal (TestApp IACA).
+  **Next session: self-hosted Utopia stack** (`/tmp/multipaz-utopia` docker; UPay trust manager takes
+  IACA roots from a configured CA URL — `organizations/upay/backend/.../Main.kt:49`) with the TestApp
+  IACA trusted → first **green settlement** without waiting for the upstream fix. Troubleshooting
+  handoff for the issuance bug lives at `~/tools/git/multipaz/TROUBLESHOOT-ISSUANCE-500.md`.
 - **HNP §12.2 headless-auth spike — LIVE (2026-07-02).** `spike/headless-auth/` deployed to
   `https://headless-auth-coral.vercel.app/mcp`; connector added to claude.ai and verified server-side
   (DCR → consent → token gen=1 → heartbeat 200 in the Vercel logs; claude.ai registered two DCR clients,
