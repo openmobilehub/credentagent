@@ -27,15 +27,14 @@ _Updated **2026-07-02** · `005-human-not-present` · CI green · 189 tests pass
       forward `docs/naming-counsel-brief.md` (drafted 2026-07-03, ready to send) to LF counsel for a USPTO+EUIPO
       knockout in classes 9/36/42.** Revisit next week. Blocks `NPM_TOKEN` / publish `0.2.0` (nothing cemented:
       `0.2.0` unpublished, GDC not public). Execution when a name clears = known-size find-replace (~171 sites).
-- [ ] **005 sequencing fork — the spike input is now IN (2026-07-02).** Ship merchant-side v0.1
-      (server-HMAC grants) first, or re-scope 005 to the wallet-custody connector architecture directly?
-      The on-device spike answered all six opens (`specs/005-human-not-present/on-device-spike-runbook.md`,
-      Runs 1–5): ceremony mechanics work end-to-end on published artifacts **including the cross-device QR
-      leg the approve page needs**; consent renders displayName-only (approve-page mitigation stands);
-      verifier-side issuer trust is real — **and now proven green**: Run 5 settled a real payment on a
-      self-hosted Utopia stack with a locally-issued card. **Recommendation: wallet-custody is buildable
-      and the happy path is de-risked** — the only remaining new backend is our wallet server. Note: 005
-      builds on 004, which builds after publish.
+- [ ] **005 sequencing fork — decision memo ready to ratify (2026-07-03).** Ship merchant-side v0.1
+      (server-HMAC) first, or re-scope 005 to wallet-custody directly? Full analysis +
+      recommendation in [`sequencing-fork-memo.md`](specs/005-human-not-present/sequencing-fork-memo.md).
+      **Recommendation: Option B (wallet-custody directly), seams-first** — the spike (Runs 1–5, incl. a
+      green settlement) retired Option A's de-risking rationale, so A now only ships a merchant-side minting
+      rail the wallet model obsoletes. Build the shared gate seams first (envelope, completeOrder branch,
+      revocation store, typed refusals), then the wallet server (the one new backend). Not urgent to
+      *execute* (005 builds on 004 → publish → rename, deferred a week), but ratifying unblocks the 005 plan.
 - [ ] **Confirm the 005 Group-A decisions** (D1–D3, still *tentative* per the 2026-07-01 discussion) + the
       Decision-13 constitution amendment — both gate `/speckit-plan` → `/speckit-implement` for 005.
 
