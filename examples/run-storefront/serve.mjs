@@ -14,7 +14,7 @@
 // passkey / dc-payment ceremony in a browser WITHOUT a phone wallet.
 import express from "express";
 import { createStorefront } from "@openmobilehub/attestomcp-storefront/server";
-import { AttestoMCP, required, age } from "@openmobilehub/attestomcp-gate";
+import { AttestoMCP, required, optional, age, membership } from "@openmobilehub/attestomcp-gate";
 
 const PORT = Number(process.env.PORT) || 3005;
 // STATELESS=1 → the checkout link carries the signed cart mandate (?order=…&cart=…), no
@@ -23,13 +23,15 @@ const STATELESS = process.env.STATELESS === "1" || process.env.STATELESS === "tr
 const base = `http://localhost:${PORT}`;
 const store = createStorefront({ baseUrl: base, statelessOrders: STATELESS });
 
-// Wire the gate exactly as the quickstart does: an age-21 gate on any alcohol line.
+// Wire the gate as the quickstart does: a required age-21 gate on any alcohol line, plus
+// an OPTIONAL 10% membership discount (present a loyalty credential → discount applies).
 // mount() reads statelessOrders (+ the owned signingKey) off app.locals.attestomcp.
 const attestomcp = new AttestoMCP();
 attestomcp.mount(store.app);
 store.gate((order) =>
   attestomcp.requirements(order, [
     required(age.over(21).when((o) => (o.lines ?? []).some((l) => (l.minimumAge ?? 0) >= 21))),
+    optional(membership.discount(10)),
   ]),
 );
 
