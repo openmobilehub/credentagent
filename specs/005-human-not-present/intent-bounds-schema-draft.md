@@ -98,3 +98,17 @@ the honesty labels. Any post-signature edit to any field changes the hash and or
    form for hashing (proposal: integer minor units in the bounds doc; convert at the TS12 boundary).
 3. Whether `stepUpOver`/`mayPresent`/honesty labels go into the AP2 "additional fields" proposal or stay
    AttestoMCP extensions initially (proposal: offer them; ship as extensions regardless).
+
+## Validated by a runnable spike (2026-07-04)
+
+[`spike/intent-mandate/`](../../spike/intent-mandate/) prototypes this schema + the deterministic draw
+gates (content-addressed `intentId`, real ES256 delegate signatures, the full typed-refusal list) — 13
+passing tests. It confirms the model is implementable and total, and surfaced three things for this doc:
+
+- **`over-cap` never fires alone.** Because `stepUpOver ≤ maxAmount`, any over-cap draw also trips
+  `step-up-required` (and `over-total` when `maxAmount == totalAmount`). The gates correctly accumulate;
+  UX should lead with the enforcer refusal. *(Relates to nothing above — a new observation.)*
+- **Amount units (open-Q #2) must be decided before the build** — the gate arithmetic is unit-agnostic
+  but the canonical hash isn't; pick minor units in the bounds doc + convert at the TS12 boundary.
+- **`skus` scope is modeled but not yet gated** — the draw carries a merchant, not a line-item GTIN.
+  Add a `skus` gate once the draw model gains line items.
