@@ -124,6 +124,7 @@ export const registerCredentialGate: RailRegistrar = (app: CeremonyApp, ctx: Cer
         total: order.total,
         currency: order.currency,
         percent: percentFor(order),
+        cart: typeof req.query.cart === "string" ? req.query.cart : undefined,
       }),
     );
   });

@@ -32,6 +32,9 @@ export interface CredentialPageArgs {
    * Defaults to this server's `/checkout?order=<id>`.
    */
   returnUrl?: string;
+  /** statelessOrders: the base64url cart mandate to carry back to `/checkout` so the
+   *  store-less hub can re-resolve this order. Appended to the default returnUrl. */
+  cart?: string;
 }
 
 function escapeHtml(s: string): string {
@@ -52,7 +55,7 @@ export function renderCredentialPage(args: CredentialPageArgs): string {
   // through the SAME server-side explicit-positive-claim check as a real wallet.
   const demoClaims = isAge ? { [`age_over_${minimumAge}`]: true } : { membership_number: "DEMO-MEMBER-0001" };
   const totalLine = args.total != null ? `<p class="small amount">Order ${escapeHtml(args.order)} · ${escapeHtml(args.currency ?? "USD")} ${args.total}</p>` : "";
-  const returnUrl = args.returnUrl ?? `/checkout?order=${encodeURIComponent(args.order)}`;
+  const returnUrl = args.returnUrl ?? `/checkout?order=${encodeURIComponent(args.order)}${args.cart ? `&cart=${args.cart}` : ""}`;
   // Identity-first tagline + the progress rail with THIS gate marked current. The age
   // gate is step 0 (Age) of Age · Membership · Pay; membership is the middle step.
   const tagline = isAge ? "Present a digital ID" : "Present a membership credential";

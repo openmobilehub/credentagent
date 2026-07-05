@@ -471,3 +471,54 @@ describe("statelessOrders — the cart mandate is the order transport (FR-007)",
     expect(res.status).toBe(404); // verifyCartMandate refuses the edited cart → resolveCreated null
   });
 });
+
+// Full checkout walk in BOTH custody modes — the regression Diego hit: after the age
+// gate, the "return to checkout" link must carry the cart under statelessOrders, or the
+// store-less hub 404s ("Unknown order"). Walks checkout → age gate → back-to-checkout →
+// dc-payment → completed, and asserts the return hop RESOLVES in both modes.
+describe.each([
+  ["stateful", false],
+  ["stateless", true],
+])("full checkout walk — %s (age gate → back to checkout → pay)", (_mode, stateless) => {
+  const DC_CLAIMS = { issuer_name: "Demo Bank", payment_instrument_id: "pi-77AABBCC", holder_name: "Demo Buyer", expiry_date: "2032-09-01" };
+  const build = (): Storefront => {
+    const store = createStorefront({ statelessOrders: stateless, baseUrl: "http://shop.test" });
+    const a = new AttestoMCP();
+    a.mount(store.app);
+    store.gate((order) => a.requirements(order, [required(age.over(21).when((o) => o.lines.some((l) => (l.minimumAge ?? 0) >= 21)))]));
+    return store;
+  };
+
+  it("walks checkout → age → return-to-checkout (resolves, not 'Unknown order') → dc-payment → completed", async () => {
+    const store = build();
+    const sc = (await (await connect(store)).callTool({ name: "checkout", arguments: { items: [{ productId: "oak-whiskey", quantity: 1 }] } })).structuredContent as any;
+    const orderId: string = sc.orderId;
+    const cart = new URL(sc.checkoutUrl).searchParams.get("cart");
+    // the link carries the cart iff stateless
+    expect(!!cart).toBe(stateless);
+
+    // the checkout hub resolves the order
+    const hubUrl = new URL(sc.checkoutUrl);
+    expect((await request(store.app).get(hubUrl.pathname + hubUrl.search)).status).toBe(200);
+
+    // the age gate page — its returnUrl must carry the cart under statelessOrders
+    const ageUrl = new URL(sc.requires.find((r: any) => String(r.approveUrl).includes("cred=age")).approveUrl);
+    const agePage = await request(store.app).get(ageUrl.pathname + ageUrl.search);
+    expect(agePage.status).toBe(200);
+    const returnUrl: string = JSON.parse(agePage.text.match(/const RETURN_URL = ("(?:[^"\\]|\\.)*")/)![1]);
+    expect(returnUrl.includes("cart=")).toBe(stateless);
+
+    // prove age (instant demo)
+    const verified = await request(store.app).post("/attestomcp/credential/verify").send({ order: orderId, cred: "age", cart, claims: { age_over_21: true } });
+    expect(verified.body.verified).toBe(true);
+
+    // THE REGRESSION: returning to checkout must resolve the order (was 404 statelessly)
+    const back = await request(store.app).get(returnUrl);
+    expect(back.status).toBe(200);
+    expect(back.text).not.toContain("Unknown order");
+
+    // pay → complete through the shared seam (age already proven above)
+    const done = await request(store.app).post("/attestomcp/dc-payment/verify").send({ order: orderId, cart, amount: 124, claims: DC_CLAIMS });
+    expect(done.body.completed).toBe(true);
+  });
+});

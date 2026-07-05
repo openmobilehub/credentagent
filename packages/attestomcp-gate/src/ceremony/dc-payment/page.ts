@@ -34,6 +34,8 @@ export interface DcPaymentPageArgs {
   /** Where to send the buyer after payment — the checkout hub, which then shows the
    *  paid confirmation. Defaults to this server's `/checkout?order=<id>`. */
   returnUrl?: string;
+  /** statelessOrders: base64url cart mandate carried back to the store-less `/checkout`. */
+  cart?: string;
 }
 
 // The canonical disclosed instrument the instant-demo button presents — it goes
@@ -52,7 +54,7 @@ function money(amount: number, currency: string): string {
 
 export function renderDcPaymentPage(args: DcPaymentPageArgs): string {
   const { order, total, currency, lines } = args;
-  const returnUrl = args.returnUrl ?? `/checkout?order=${encodeURIComponent(order)}`;
+  const returnUrl = args.returnUrl ?? `/checkout?order=${encodeURIComponent(order)}${args.cart ? `&cart=${args.cart}` : ""}`;
   // The shared order summary card (line items + bold Total) — same chrome as the hub.
   const summary = orderSummaryCard({
     lines: lines.map((l) => ({ name: l.name, quantity: l.quantity, lineTotal: l.lineTotal, currency: l.currency })),
