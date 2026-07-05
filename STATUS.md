@@ -1,7 +1,7 @@
 # Project Status — AttestoMCP
 
 _Single source of truth for what's done, what's next, and what's waiting on you._
-_Updated **2026-07-01** · `main` · CI green · 189 tests pass._
+_Updated **2026-07-05** · `main` · CI green._
 
 > **How this file works.** Read it at the start of every working session and update it at the end. It is
 > decisions-first: "Decisions for you" (each a checkbox + recommendation), then In flight / next, a rolling
@@ -30,6 +30,12 @@ _Updated **2026-07-01** · `main` · CI green · 189 tests pass._
   `AttestoMcp` / `attestoMcpManifest` imports to `AttestoMCP` / `attestoMCPManifest` (tracked in that repo,
   [#26](https://github.com/openmobilehub/attestomcp/issues/26)).
 - **Cart Mandate (004)** — spec ready (`specs/004-cart-mandate/spec.md`); build after publish.
+- **Storefront persistence (005)** — [#27](https://github.com/openmobilehub/attestomcp/issues/27) (epic #29).
+  Full spec-kit set in `specs/005-storefront-persistence/`. `createStorefront({ storage: redisStorage(…) })`
+  implemented on the working tree: builds all four stores over Upstash Redis (optional peer dep, lazy-loaded),
+  in-memory stays the zero-config default, explicit per-slot injection still wins, per-order keying + namespace
+  isolation, fail-closed. Storefront suite green (+12 tests). **Pending:** commit (DCO) + PR; demo slim-down
+  (scope A) tracked in `mcp-apps-shopping-demo`.
 
 ---
 

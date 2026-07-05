@@ -61,6 +61,35 @@ false. Without `store.gate(...)` the storefront is ungated: a plain checkout lin
 > directly — no mapping. The gate's amount is **re-derived server-side from this catalog**, never
 > trusted from the order token (Security invariant 2).
 
+## Production persistence — one option, no adapters
+
+`createStorefront()` defaults to **in-memory** stores — perfect for local dev and the quickstart
+above. A real deployment runs on **multiple instances** (serverless / Vercel), where a cart added on
+one instance is invisible to the checkout that lands on another, so production needs **shared
+persistence**. Pass a `storage` provider and all four stores (cart, created-order, completed-order,
+verification) are backed by it — no hand-written adapters:
+
+```ts
+import { createStorefront } from "@openmobilehub/attestomcp-storefront/server";
+import { redisStorage } from "@openmobilehub/attestomcp-storefront/redis";
+
+const store = createStorefront({
+  storage: redisStorage({
+    url: process.env.KV_REST_API_URL!,
+    token: process.env.KV_REST_API_TOKEN!,
+    namespace: "my-shop",            // isolates keys if multiple shops share one Redis
+  }),
+});
+```
+
+- **In-memory stays the zero-config default** — omit `storage` and nothing changes.
+- **Escape hatch:** an explicit `cartStore` / `orderStore` / `createdOrderStore` / `verificationStore`
+  still wins over the provider for that slot (bring any custom backend).
+- **Lean by default:** `@upstash/redis` is an **optional peer dependency**, loaded lazily only on the
+  `{ url, token }` path — in-memory users never install it.
+- Order and verification state is **keyed per order id** (never process-global — Security invariant 4);
+  the store persists state only and is **not** a trust anchor.
+
 ## The three execution contexts
 
 `createStorefront()` is built around the split the gate enforces — conflating these is forbidden

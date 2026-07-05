@@ -7,9 +7,31 @@ import { describe, it, expect } from "vitest";
 import request from "supertest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { readFileSync } from "node:fs";
 import { createStorefront, originFromRequest, type Storefront } from "./server.js";
-import { AttestoMCP, age, membership, payment, required, optional } from "@openmobilehub/attestomcp-gate";
+import { redisStorage, type RedisLike } from "./redis.js";
+import { MemoryOrderStore } from "./state.js";
+import { AttestoMCP, age, membership, payment, required, optional, MemoryVerificationStore } from "@openmobilehub/attestomcp-gate";
 import type { Request } from "express";
+
+// A Map-backed RedisLike fake so a `redisStorage(...)` provider can be exercised through
+// createStorefront without a live Redis.
+function fakeRedis(): RedisLike & { store: Map<string, unknown> } {
+  const store = new Map<string, unknown>();
+  return {
+    store,
+    async get<T = unknown>(key: string): Promise<T | null> {
+      return store.has(key) ? (store.get(key) as T) : null;
+    },
+    async set(key: string, value: unknown): Promise<unknown> {
+      store.set(key, JSON.parse(JSON.stringify(value)));
+      return "OK";
+    },
+    async del(key: string): Promise<unknown> {
+      return store.delete(key) ? 1 : 0;
+    },
+  };
+}
 
 const mockReq = (headers: Record<string, string>, protocol = "http"): Request =>
   ({ headers, protocol } as unknown as Request);
@@ -210,5 +232,80 @@ describe("CT6 — cart state is per storefront instance (no bleed)", () => {
     await a.callTool({ name: "add-to-cart", arguments: { items: [{ productId: "oak-whiskey", quantity: 2 }] } });
     const bCart = (await b.callTool({ name: "get-cart", arguments: {} })).structuredContent as any;
     expect(bCart.cart.itemCount).toBe(0); // a's add did not leak into b
+  });
+});
+
+describe("storage provider — per-slot resolution (US2/US3 · FR-002, FR-006)", () => {
+  it("no storage and no explicit store ⇒ in-memory default (FR-002 / CT-1)", () => {
+    const provider = redisStorage({ client: fakeRedis() });
+    const plain = createStorefront();
+    const withProvider = createStorefront({ storage: provider });
+    // When a provider is given, its store is used…
+    expect(withProvider.app.locals.attestomcp.verificationStore).toBe(provider.verificationStore);
+    // …but the zero-config default is a fresh in-memory store, NOT the provider's.
+    expect(plain.app.locals.attestomcp.verificationStore).not.toBe(provider.verificationStore);
+  });
+
+  it("an explicit store overrides the provider for its slot (FR-006 / CT-3)", () => {
+    const provider = redisStorage({ client: fakeRedis() });
+    const explicit = new MemoryVerificationStore();
+    const store = createStorefront({ storage: provider, verificationStore: explicit });
+    expect(store.app.locals.attestomcp.verificationStore).toBe(explicit);
+    expect(store.app.locals.attestomcp.verificationStore).not.toBe(provider.verificationStore);
+  });
+
+  it("override is per-slot: an injected completed-order store gets the write; the provider's does not", async () => {
+    const providerClient = fakeRedis();
+    const provider = redisStorage({ client: providerClient, namespace: "prov" });
+    const explicitOrders = new MemoryOrderStore<{ orderId: string }>();
+    const store = createStorefront({ storage: provider, orderStore: explicitOrders });
+
+    // an un-overridden slot still comes from the provider
+    expect(store.app.locals.attestomcp.verificationStore).toBe(provider.verificationStore);
+
+    // drive an ungated completion; the explicit completed-order store must receive the write
+    const c = await connect(store);
+    const orderId = ((await c.callTool({ name: "checkout", arguments: { items: [{ productId: "drift-mouse", quantity: 1 }] } })).structuredContent as any).orderId;
+    await request(store.app).post("/checkout/place-order").type("form").send({ order: orderId }).expect(200);
+
+    expect(await explicitOrders.read(orderId)).toBeTruthy(); // explicit store got the completion
+    expect(providerClient.store.has(`prov:order:completed:${orderId}`)).toBe(false); // provider's completed store untouched
+  });
+});
+
+describe("in-memory default stays lean (US2 · FR-008)", () => {
+  it("createStorefront() builds and serves with no storage option", async () => {
+    const names = (await (await connect(createStorefront())).listTools()).tools.map((t) => t.name);
+    expect(names.length).toBe(9); // the nine tools — the zero-config path is intact
+  });
+
+  it("the ./server module does not statically import @upstash/redis", () => {
+    // Guard: the persistent dep must stay OFF the default path — it is only reachable via
+    // the separate ./redis subpath (loaded lazily there). If someone adds a static import
+    // to server.ts, the lean in-memory install regresses and this fails.
+    const src = readFileSync(new URL("./server.ts", import.meta.url), "utf-8");
+    expect(src.includes("@upstash/redis")).toBe(false);
+  });
+});
+
+describe("storage errors do not fall back to in-memory (Polish · FR-012)", () => {
+  it("a provider whose backend is down keeps its store (no silent memory fallback)", async () => {
+    const throwing: RedisLike = {
+      async get() {
+        throw new Error("backend down");
+      },
+      async set() {
+        throw new Error("backend down");
+      },
+      async del() {
+        throw new Error("backend down");
+      },
+    };
+    const provider = redisStorage({ client: throwing });
+    const store = createStorefront({ storage: provider });
+    // The resolved store IS the provider's (not a MemoryVerificationStore), so ops reject
+    // rather than silently succeeding against process-local memory.
+    expect(store.app.locals.attestomcp.verificationStore).toBe(provider.verificationStore);
+    await expect(store.app.locals.attestomcp.verificationStore.read("ORD-1")).rejects.toThrow(/backend down/);
   });
 });

@@ -23,6 +23,10 @@
     "./server": {
       "types": "./dist/server.d.ts",
       "default": "./dist/server.js"
+    },
+    "./redis": {
+      "types": "./dist/redis.d.ts",
+      "default": "./dist/redis.js"
     }
   },
   "main": "./dist/index.js",
@@ -37,7 +41,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "vite build --config vite.config.ui.ts && tsc -p tsconfig.json",
+    "build": "vite build --config vite.config.ui.ts && tsc -p tsconfig.json && tsc -p tsconfig.test.json",
     "test": "vitest run"
   },
   "dependencies": {
@@ -47,9 +51,18 @@
     "express": "^5.1.0",
     "zod": "^4.1.13"
   },
+  "peerDependencies": {
+    "@upstash/redis": "^1.34.0"
+  },
+  "peerDependenciesMeta": {
+    "@upstash/redis": {
+      "optional": true
+    }
+  },
   "devDependencies": {
     "@types/react": "^19.2.2",
     "@types/react-dom": "^19.2.2",
+    "@upstash/redis": "^1.34.0",
     "@vitejs/plugin-react": "^4.3.4",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",

@@ -37,6 +37,9 @@ import type { CartItemInput, Order, PricedCart, Product, Review } from "./index.
 import { appToolMeta } from "./tool-meta.js";
 import { MemoryCartStore, MemoryOrderStore } from "./state.js";
 import type { CartStore, OrderStore } from "./state.js";
+// Re-export the store contracts so a consumer can type an explicit store (the escape
+// hatch) or a custom `StorageProvider` without reaching into an internal module.
+export type { CartStore, OrderStore } from "./state.js";
 // Composition with @openmobilehub/attestomcp-gate (Context 2): the storefront pre-binds
 // the gate's shared `completeOrder` over ITS OWN stores + catalog and publishes the
 // ceremony seams on `app.locals.attestomcp`, so `new AttestoMCP().mount(store.app)` wires
@@ -64,6 +67,20 @@ import {
 /** Given a priced order, return the `requires` manifest (or `undefined` = ungated). */
 export type GateResolver = (order: Order) => unknown[] | undefined;
 
+/**
+ * A persistence provider that supplies all four stores at once (e.g. `redisStorage(...)`
+ * from `@openmobilehub/attestomcp-storefront/redis`). Passed as `StorefrontOptions.storage`
+ * so a production deployment gets shared, cross-instance state with one option instead of
+ * hand-written adapters. An explicit per-slot store (`cartStore`, `orderStore`, …) still
+ * takes precedence over the provider's store for that slot (the custom-backend escape hatch).
+ */
+export interface StorageProvider {
+  cartStore: CartStore;
+  createdOrderStore: OrderStore<Order>;
+  orderStore: OrderStore<CompletedOrderRecord>;
+  verificationStore: VerificationStore;
+}
+
 export interface StorefrontOptions {
   /** Products to sell. Defaults to the package's `SAMPLE_CATALOG`. */
   catalog?: Product[];
@@ -90,6 +107,13 @@ export interface StorefrontOptions {
    * wires the rails against the SAME state (Security invariant 4).
    */
   verificationStore?: VerificationStore;
+  /**
+   * A persistence provider (e.g. `redisStorage({ url, token, namespace })`) that supplies
+   * all four stores at once. Optional — omit for the in-memory default. An explicit store
+   * above (`cartStore` / `orderStore` / `createdOrderStore` / `verificationStore`) takes
+   * precedence over the provider's store for that slot.
+   */
+  storage?: StorageProvider;
   /**
    * Stable HMAC key for the ceremony's challenge nonce (e.g. `process.env.GATE_SECRET`).
    * Required so an options→verify hop survives an instance split on serverless. When
@@ -206,14 +230,20 @@ function homeRequires(requires: unknown[], base: string): unknown[] {
 export function createStorefront(opts: StorefrontOptions = {}): Storefront {
   const catalog = opts.catalog ?? SAMPLE_CATALOG;
   const reviews = opts.reviews;
-  const cartStore: CartStore = opts.cartStore ?? new MemoryCartStore();
-  const orderStore: OrderStore<CompletedOrderRecord> = opts.orderStore ?? new MemoryOrderStore<CompletedOrderRecord>();
+  // Per-slot store resolution: an explicit store wins, else the `storage` provider's
+  // store for that slot (e.g. `redisStorage(...)`), else the in-memory default. Keeping
+  // the in-memory fallback last means zero-config stays unchanged (no `storage` → memory).
+  const cartStore: CartStore = opts.cartStore ?? opts.storage?.cartStore ?? new MemoryCartStore();
+  const orderStore: OrderStore<CompletedOrderRecord> =
+    opts.orderStore ?? opts.storage?.orderStore ?? new MemoryOrderStore<CompletedOrderRecord>();
   // Created-but-not-completed orders, for the checkout page + place-order. A store
   // (not a process Map) so it can be shared across serverless instances.
-  const createdOrderStore: OrderStore<Order> = opts.createdOrderStore ?? new MemoryOrderStore<Order>();
+  const createdOrderStore: OrderStore<Order> =
+    opts.createdOrderStore ?? opts.storage?.createdOrderStore ?? new MemoryOrderStore<Order>();
   // Per-order verification state shared with the mounted ceremony (the rails write
   // it; the completion seam below reads it back to re-price + enforce the age gate).
-  const verificationStore: VerificationStore = opts.verificationStore ?? new MemoryVerificationStore();
+  const verificationStore: VerificationStore =
+    opts.verificationStore ?? opts.storage?.verificationStore ?? new MemoryVerificationStore();
   let resolveGate: GateResolver | undefined;
   let baseUrl = opts.baseUrl?.replace(/\/+$/, "") ?? "";
 

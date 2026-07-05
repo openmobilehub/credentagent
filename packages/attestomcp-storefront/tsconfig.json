@@ -13,5 +13,5 @@
     "noUnusedParameters": true,
     "verbatimModuleSyntax": true
   },
-  "include": ["src/index.ts", "src/server.ts", "src/tool-meta.ts", "src/state.ts", "src/generated-images.ts"]
+  "include": ["src/index.ts", "src/server.ts", "src/redis.ts", "src/tool-meta.ts", "src/state.ts", "src/generated-images.ts"]
 }
