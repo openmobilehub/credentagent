@@ -21,7 +21,10 @@ const PORT = Number(process.env.PORT) || 3005;
 // order store. Default (unset) → STATEFUL: the store holds the order, link is ?order=id.
 const STATELESS = process.env.STATELESS === "1" || process.env.STATELESS === "true";
 const base = `http://localhost:${PORT}`;
-const store = createStorefront({ baseUrl: base, statelessOrders: STATELESS });
+// allowEphemeralKey: this is a single-process dev server, so a per-process signing key is
+// fine. A multi-instance deploy MUST pass a stable { signingKey } instead (statelessOrders
+// throws without one otherwise — a mandate must verify across instances).
+const store = createStorefront({ baseUrl: base, statelessOrders: STATELESS, allowEphemeralKey: true });
 
 // Wire the gate as the quickstart does: a required age-21 gate on any alcohol line, plus
 // an OPTIONAL 10% membership discount (present a loyalty credential → discount applies).

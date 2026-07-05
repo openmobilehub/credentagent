@@ -430,6 +430,7 @@ describe("statelessOrders — the cart mandate is the order transport (FR-007)",
   const makeStateless = (): Storefront => {
     const store = createStorefront({
       statelessOrders: true,
+      allowEphemeralKey: true, // single-process test; a real multi-instance deploy passes a stable signingKey
       baseUrl: "http://shop.test",
       createdOrderStore: {
         read: () => { throw new Error("createdOrderStore.read must NOT happen under statelessOrders"); },
@@ -482,7 +483,7 @@ describe.each([
 ])("full checkout walk — %s (age gate → back to checkout → pay)", (_mode, stateless) => {
   const DC_CLAIMS = { issuer_name: "Demo Bank", payment_instrument_id: "pi-77AABBCC", holder_name: "Demo Buyer", expiry_date: "2032-09-01" };
   const build = (): Storefront => {
-    const store = createStorefront({ statelessOrders: stateless, baseUrl: "http://shop.test" });
+    const store = createStorefront({ statelessOrders: stateless, allowEphemeralKey: true, baseUrl: "http://shop.test" });
     const a = new AttestoMCP();
     a.mount(store.app);
     store.gate((order) => a.requirements(order, [required(age.over(21).when((o) => o.lines.some((l) => (l.minimumAge ?? 0) >= 21)))]));
@@ -528,7 +529,7 @@ describe.each([
 // path only shows when resolveGate returns [] — here headphones under an alcohol-only gate.)
 describe("statelessOrders — ungated instant-demo place-order carries the cart", () => {
   const buildUngated = (): Storefront => {
-    const store = createStorefront({ statelessOrders: true, baseUrl: "http://shop.test" });
+    const store = createStorefront({ statelessOrders: true, allowEphemeralKey: true, baseUrl: "http://shop.test" });
     const a = new AttestoMCP();
     a.mount(store.app);
     // Only gate alcohol → headphones are UNGATED → the instant-demo place-order button shows.
@@ -554,5 +555,23 @@ describe("statelessOrders — ungated instant-demo place-order carries the cart"
     // recorded ⇒ order-status reports completed (was impossible without the cart)
     const status = await request(store.app).get(`/checkout/order-status?orderId=${sc.orderId}`);
     expect(status.body.completed).toBe(true);
+  });
+});
+
+// statelessOrders needs a STABLE signing key (its whole point is surviving an instance
+// split — a per-process random key would make a mandate minted on instance A fail on B).
+// Fail fast unless a signingKey is given or allowEphemeralKey is explicit (dev/tests).
+describe("statelessOrders — requires a stable signingKey (fail fast)", () => {
+  it("throws when statelessOrders is on with no signingKey and no allowEphemeralKey", () => {
+    expect(() => createStorefront({ statelessOrders: true })).toThrow(/statelessOrders requires a stable/);
+  });
+  it("accepts a configured signingKey (the multi-instance-correct path)", () => {
+    expect(() => createStorefront({ statelessOrders: true, signingKey: "stable-secret" })).not.toThrow();
+  });
+  it("accepts an explicit allowEphemeralKey (single-process dev / tests)", () => {
+    expect(() => createStorefront({ statelessOrders: true, allowEphemeralKey: true })).not.toThrow();
+  });
+  it("stateful (default) never requires a key", () => {
+    expect(() => createStorefront({})).not.toThrow();
   });
 });

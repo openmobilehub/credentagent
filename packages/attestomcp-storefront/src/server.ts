@@ -291,7 +291,20 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
   // statelessOrders (gate FR-007): the signed Cart Mandate is the created-order transport.
   // The storefront must OWN a concrete signing key (not the gate's ephemeral one) so the
   // mandate the checkout tool issues is the one the gate rails verify.
+  //
+  // That key MUST be STABLE across instances — statelessOrders exists to survive an
+  // instance split, and a per-process random key would make a mandate minted on instance A
+  // fail to verify on instance B (defeating the whole feature). So fail fast unless the host
+  // provides a `signingKey`, OR explicitly opts into an ephemeral per-process key
+  // (single-process dev / tests) — mirroring the gate's `allowEphemeralKey` escape hatch.
   const statelessOrders = opts.statelessOrders ?? false;
+  if (statelessOrders && !opts.signingKey && !opts.allowEphemeralKey) {
+    throw new Error(
+      "[attestomcp-storefront] statelessOrders requires a stable `signingKey` so a cart mandate minted on " +
+        "one instance verifies on another. Pass { signingKey } (e.g. process.env.GATE_SECRET), or " +
+        "{ allowEphemeralKey: true } for a single-process dev server / tests.",
+    );
+  }
   const signingKey = opts.signingKey ?? (statelessOrders ? randomBytes(32).toString("hex") : undefined);
 
   // Issue + base64url-encode a Cart Mandate for a priced order (the checkout link's `cart`).
