@@ -47,18 +47,18 @@ _Updated **2026-07-02** · `005-human-not-present` · CI green · 189 tests pass
   on `@openmobilehub/attestomcp-*` from the workspace to the published `^0.2.x`, and renames its own
   `AttestoMcp` / `attestoMcpManifest` imports to `AttestoMCP` / `attestoMCPManifest` (tracked in that repo,
   [#26](https://github.com/openmobilehub/attestomcp/issues/26)).
-- **Cart Mandate (004) — CORE ALREADY BUILT (discovered 2026-07-03; STATUS was stale).** `ceremony/cartMandate.ts`
-  (issue/verify, typed refusals, `alg`/expiry/trust fencing), `completion.ts` wiring (verify → re-price →
-  reconcile), and `reconciliation.ts` all exist, committed, and **tested green**. **FR-007 (`statelessOrders`)
-  now implemented too** (2026-07-03, `42d7abb`): opt-in `resolveOrder` reconstruction from a verified Cart
-  Mandate with no store read; 9 new tests incl. SC-003 two-instance resolve→complete + 4 bypass tests proven
-  red when the control is removed. **All 9 FRs satisfied, and the rails now thread it end-to-end** (`a995da4`):
-  every rail decodes the mandate (`?cart` base64url on GET, `cartMandate` in the verify body on POST) via a
-  shared `decodeCartMandateParam`; payment rails forward it to `completeOrder`. Proven by 2 dc-payment
-  supertest integration tests (full stateless checkout against a throwing order store). **171 gate tests green;
-  build clean.** DX documented in `docs/reference/api.md`. **Remaining DX polish (not blocking):** the approve
-  link doesn't yet auto-embed the mandate under `statelessOrders` (host wires the client today) — planned
-  ergonomic follow-up. Corrects the sequencing memo's "004 builds after publish" (rename only gates publish).
+- **Cart Mandate (004) `statelessOrders` — COMPLETE, in [PR #32](https://github.com/openmobilehub/attestomcp/pull/32)
+  (2026-07-04).** The 004 core was already on `main`; this session finished FR-007 end-to-end: the created order
+  rides in the signed Cart Mandate on the link (`?order=<id>&cart=<b64>`) instead of a created-order store, and
+  the gate rails + rail page JS + the storefront `/checkout` page + place-order + every approve link + the
+  gate returnUrl + the passkey device-toggle + the ungated instant-demo place-order all reconstruct + **verify**
+  it (fail-closed). Storefront `createStorefront({ statelessOrders })`; the harness has a `STATELESS` env toggle
+  (run stateful **and** stateless side by side). **202 tests green** (172 gate + 30 storefront), incl. bypass
+  tests + a both-modes full-checkout-walk, all verified red when their control is removed. Honest scope:
+  drops the *created-order* store only (verification + completion state stay server-side — "stateless cart
+  transport, not a stateless server"). Runnable demos in `examples/{stateless-orders,run-storefront}/`.
+  **Remaining DX polish (noted in the PR):** none blocking. PR #32 was cleanly split off `main`; **PR #31 stays
+  the 005 docs port** (restored after an accidental push — see `git-branch-hygiene` memory).
 - **HNP (005)** — big design day 2026-07-01 (branch `005-human-not-present`, pushed; no PR yet): the
   **connector-architecture design** (wallet-custody over MCP: stock Multipaz Wallet seals the Intent
   Mandate, a new wallet server signs bounded draws, a UPay-style verifier settles, Claude orchestrates
