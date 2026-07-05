@@ -43,7 +43,10 @@ export function renderPasskeyPage(args: { order: CeremonyOrder; crossDevice?: bo
   // skips local Touch ID and shows the QR for a phone (caBLE). The toggle link flips
   // the mode by adding/removing the xdev param on the same gate URL.
   const optionsUrl = crossDevice ? "/attestomcp/passkey/options?xdev=1" : "/attestomcp/passkey/options";
-  const toggleHref = crossDevice ? `/attestomcp/passkey?order=${encodeURIComponent(order.id)}` : `/attestomcp/passkey?order=${encodeURIComponent(order.id)}&xdev=1`;
+  // statelessOrders: keep the cart mandate on the same-device ⇄ cross-device toggle so the
+  // store-less server can still resolve THIS order after switching.
+  const cartQ = args.cart ? `&cart=${args.cart}` : "";
+  const toggleHref = crossDevice ? `/attestomcp/passkey?order=${encodeURIComponent(order.id)}${cartQ}` : `/attestomcp/passkey?order=${encodeURIComponent(order.id)}&xdev=1${cartQ}`;
   const toggleText = crossDevice ? "← Use this device instead" : "Use my phone instead (scan a QR) →";
 
   // Page-local chrome over the shared design system: the verify-progress rows reuse
