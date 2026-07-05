@@ -432,6 +432,73 @@ import type {
 
 ---
 
+## Cart Mandate (`ap2.CartMandate`)
+
+A **signed, tamper-evident envelope over the cart** — the signed sibling of the AP2
+`PaymentMandate`. It proves *this server issued this cart*, so a cart that travels with a
+request can be checked before it's trusted. **Additive and fail-closed**, and it does **not**
+change the price authority: the catalog still re-prices (invariant 2); the mandate is a fast
+integrity pre-check + defense-in-depth, never a substitute for re-derivation.
+
+```ts
+import { issueCartMandate, verifyCartMandate, DEFAULT_CART_MANDATE_TTL_MS } from "@openmobilehub/attestomcp-gate";
+import type { CartMandate, CartMandateLine, CartMandateVerdict, CartMandateRefusal, IssueCartMandateArgs } from "@openmobilehub/attestomcp-gate";
+```
+
+| Symbol | Purpose |
+| :-- | :-- |
+| `issueCartMandate(args, secret)` | Sign a server-priced cart → `CartMandate`. `args`: `{ orderId, lines, currency, total, id?, ttlMs?, now? }`. |
+| `verifyCartMandate(mandate, orderId, secret, now?)` | Verify → `CartMandateVerdict` (`{ ok, mandate }` / `{ ok:false, reason }`). Checks, in order: shape, **HMAC signature** (constant-time), **order-id binding**, **expiry**. Never throws. |
+| `DEFAULT_CART_MANDATE_TTL_MS` | Default validity window (15 min). |
+| `CartMandateRefusal` | `"malformed" \| "signature" \| "order-id" \| "expired"` — a slow buyer sees `expired`, a tampered/forged cart sees `signature` (distinct reasons). |
+
+**Honesty (`trust_level: "presence-only-demo"`).** v0.1 signs with the **server's** HMAC key
+(the same sealed-HMAC primitive as the challenge nonce). That proves the server issued the cart,
+**not that the user authorized it**. A user/agent-signed cart mandate + issuer trust is the v0.2
+line; the `alg` field (`"HS256"`) reserves room for an ES256 / key-bound variant without changing
+the contract.
+
+**In `completeOrder`.** When the completion input carries a `cartMandate` **and** the context has a
+`signingKey`, completion verifies it (signature + order-id + expiry) **before** re-pricing, then —
+if a Payment Mandate is also present — reconciles `cart total == re-priced total == bound amount`
+across every payment path. Failures surface as `{ completed:false, reason:"cart-mandate" }`
+(tamper/replay/expiry) or `"reconcile"` (cart and payment disagree).
+
+### `statelessOrders` (mount seam option, default off)
+
+When `true`, a **verified** cart mandate becomes the created-order **transport**: `resolveOrder`
+reconstructs the order's line items from the mandate with **no `orderStore` read**, so a checkout
+survives an instance split with no shared store (serverless / multi-instance). It stays fail-closed
+(a forged / tampered / replayed / expired mandate resolves nothing) and the catalog **still
+re-prices** — the mandate carries the *items*, never the *price*.
+
+**Wire contract.** Every rail (`passkey`, `dc-payment`, `credential`) accepts the mandate the same way:
+
+- **GET** routes (page / request) — a **base64url-JSON** `cart` query param:
+  `…/attestomcp/dc-payment?order=<id>&cart=<base64url(JSON)>`.
+- **POST** verify — a `cartMandate` JSON field in the body: `{ "order": "<id>", "cartMandate": { … } }`.
+  The payment rails also forward it to `completeOrder`, which **re-verifies + reconciles** it.
+
+The gate decodes it trust-free (a missing/garbage value falls through to the store path);
+`verifyCartMandate` is the real gate. **Follow-up DX:** the approve link the gate emits does not yet
+auto-embed the mandate under `statelessOrders` — the host wires the client to carry it today; embedding
+it in the approve URL (so the client threads it transparently) is the planned ergonomic improvement.
+Note a signed cart in a **GET URL** is long, and very large carts can approach URL-length limits — POST
+paths are unaffected.
+
+> **Trade-off — reference vs. payload.** With `statelessOrders: false` (default) the client/agent
+> carries only the **order id** (a *reference*); the line items stay server-side in the store. With
+> it `true`, the client carries the **whole signed cart** — product ids, quantities, and the sealed
+> prices — on the wire, back and forth. You gain instance-independence; you pay by putting cart
+> contents on the wire through the agent/orchestrator. The mandate is HMAC-signed so it is
+> **tamper-evident**, but it is **not encrypted** — whoever holds it can read the cart — and a large
+> cart means a larger token. Prefer it **off** when you can keep server-side state (so the agent
+> holds only a reference); turn it **on** when you can't. Design discussion:
+> [`specs/004-cart-mandate/spec.md`](../../specs/004-cart-mandate/spec.md) (FR-007) and the 005
+> connector design.
+
+---
+
 ## `@openmobilehub/attestomcp-storefront`
 
 The storefront core — a runnable MCP shopping server (nine tools + the widget bundle +

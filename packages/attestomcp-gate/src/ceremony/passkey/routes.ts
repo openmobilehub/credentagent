@@ -24,7 +24,9 @@ import { createRequire } from "node:module";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { resolveOrder, type CeremonyApp, type CeremonyContext, type RailRegistrar } from "../mount.js";
+import { decodeCartMandateParam } from "../cartMandate.js";
 import type { RequestLike } from "../origin.js";
+import type { CompletionInput } from "../types.js";
 import { buildPasskeyMandate, buildBindingFields, runGates } from "../mandate.js";
 import { buildRegistrationOptions, verifyPasskeyAssertion } from "./verify.js";
 import { renderPasskeyPage } from "./page.js";
@@ -132,7 +134,7 @@ export const registerPasskeyGate: RailRegistrar = (app: CeremonyApp, ctx: Ceremo
 
   // GET the authorize page — re-priced order, presence-only honesty banner.
   get("/attestomcp/passkey", async (req, res) => {
-    const order = await resolveOrder(ctx, typeof req.query.order === "string" ? req.query.order : undefined);
+    const order = await resolveOrder(ctx, typeof req.query.order === "string" ? req.query.order : undefined, { cartMandate: decodeCartMandateParam(req.query.cart) });
     if (!order) { res.status(404).type("html").send("<!doctype html><h1>Order not found</h1>"); return; }
     try {
       res.status(200).type("html").send(renderPasskeyPage({ order, crossDevice: isCrossDevice(req.query.xdev) }));
@@ -156,7 +158,8 @@ export const registerPasskeyGate: RailRegistrar = (app: CeremonyApp, ctx: Ceremo
   // the SHARED completeOrder seam (re-price + age gate + idempotent record).
   post("/attestomcp/passkey/verify", async (req, res) => {
     const body = await readJsonBody(req);
-    const order = await resolveOrder(ctx, typeof body.order === "string" ? body.order : undefined);
+    const cartMandate = (body as { cartMandate?: unknown }).cartMandate ?? decodeCartMandateParam((body as { cart?: unknown }).cart);
+    const order = await resolveOrder(ctx, typeof body.order === "string" ? body.order : undefined, { cartMandate });
     if (!order) { res.status(400).json({ completed: false, error: "missing or invalid order" }); return; }
     try {
       const origin = originOf(ctx, req);
@@ -176,6 +179,7 @@ export const registerPasskeyGate: RailRegistrar = (app: CeremonyApp, ctx: Ceremo
         method: "passkey",
         instrument: { issuer: mandate.payment.instrument, maskedAccount: mandate.payment.instrumentReference, holder: null },
         gates: gates.map((g) => ({ gate: g.gate, pass: g.pass, detail: g.detail })),
+        ...(cartMandate !== undefined ? { cartMandate: cartMandate as CompletionInput["cartMandate"] } : {}),
       });
       res.json({
         mandate,

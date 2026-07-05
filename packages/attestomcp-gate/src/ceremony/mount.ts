@@ -18,6 +18,7 @@ import type {
   CompletionSeam,
   SettlementSeam,
 } from "./types.js";
+import { verifyCartMandate } from "./cartMandate.js";
 import { registerCredentialGate } from "./credential-gate/routes.js";
 import { registerPasskeyGate } from "./passkey/routes.js";
 import { registerDcPaymentGate } from "./dc-payment/routes.js";
@@ -53,6 +54,11 @@ export interface CeremonySeams {
   /** Dev-only: allow an ephemeral per-process signing key. NEVER inferred —
    *  mount() does not guess "serverless". */
   allowEphemeralKey?: boolean;
+  /** Opt-in (default false): treat a VERIFIED Cart Mandate as the created-order
+   *  transport, so `resolveOrder` reconstructs the order from it with no
+   *  `orderStore` read (FR-007 / US3). Off ⇒ the store stays the source of truth
+   *  and the mandate is an additive integrity envelope only. */
+  statelessOrders?: boolean;
 }
 
 /** The resolved context each rail receives (every required seam present). */
@@ -64,6 +70,10 @@ export interface CeremonyContext {
   signingKey: string;
   origin: (req: RequestLike) => Origin;
   settlement?: SettlementSeam;
+  /** FR-007: when true, `resolveOrder` may reconstruct from a verified Cart Mandate
+   *  with no store read (absent/false — store is the source of truth). `mountCeremony`
+   *  always sets it; optional here so a hand-built context literal need not. */
+  statelessOrders?: boolean;
 }
 
 /** A rail attaches its routes to the host app given the resolved context. */
@@ -91,6 +101,7 @@ export function mountCeremony(app: CeremonyApp, options: Partial<CeremonySeams> 
   const settlement = options.settlement ?? locals.settlement;
   const origin = options.origin ?? locals.origin ?? deriveOrigin;
   const allowEphemeralKey = options.allowEphemeralKey ?? locals.allowEphemeralKey ?? false;
+  const statelessOrders = options.statelessOrders ?? locals.statelessOrders ?? false;
   let signingKey = options.signingKey ?? locals.signingKey;
 
   // Fail fast (CT2) — a load-bearing seam must never silently default. (`origin`
@@ -127,6 +138,7 @@ export function mountCeremony(app: CeremonyApp, options: Partial<CeremonySeams> 
     completion: completion as CompletionSeam,
     signingKey,
     origin,
+    statelessOrders,
     ...(settlement ? { settlement } : {}),
   };
 
@@ -140,13 +152,41 @@ export function mountCeremony(app: CeremonyApp, options: Partial<CeremonySeams> 
 }
 
 /**
- * Shared order resolution + re-pricing (T003a). Resolve a created order by id
- * from the injected store, then RE-PRICE it from the catalog — the displayed and
- * bound amounts come from the catalog, never the id/token (CT3, invariants 2/3).
- * A tampered or unknown id resolves to `null` (the rail refuses).
+ * Shared order resolution + re-pricing (T003a). Resolve a created order by id,
+ * then RE-PRICE it from the catalog — the displayed and bound amounts come from
+ * the catalog, never the id/token (CT3, invariants 2/3). A tampered or unknown id
+ * resolves to `null` (the rail refuses).
+ *
+ * FR-007 (opt-in `statelessOrders`): when the host has no shared order store, a
+ * VERIFIED Cart Mandate carried on the request is the order transport — pass it as
+ * `opts.cartMandate` and the created order is reconstructed from it with NO store
+ * read, so a created order survives an instance split (US3). It stays fail-closed:
+ * a forged / tampered / replayed (wrong-order) / expired mandate does not resolve
+ * an order, and the catalog STILL reprices (the mandate carries the items, never
+ * the price — invariant 2). Off (default), the store is the source of truth and any
+ * mandate is an additive integrity envelope checked at completion, not a transport.
  */
-export async function resolveOrder(ctx: CeremonyContext, orderId: string | undefined | null): Promise<CeremonyOrder | null> {
+export async function resolveOrder(
+  ctx: CeremonyContext,
+  orderId: string | undefined | null,
+  opts?: { cartMandate?: unknown },
+): Promise<CeremonyOrder | null> {
   if (!orderId) return null;
+
+  // Stateless transport (opt-in): reconstruct from the verified mandate, no store read.
+  if (ctx.statelessOrders && opts?.cartMandate !== undefined) {
+    const verdict = verifyCartMandate(opts.cartMandate, orderId, ctx.signingKey);
+    if (!verdict.ok) return null;
+    const verification = await ctx.verificationStore.read(orderId);
+    const loyaltyApplied = !!(verification as { loyalty?: { applied?: boolean } } | undefined)?.loyalty?.applied;
+    return ctx.catalog.createOrder(
+      verdict.mandate.lines.map((l) => ({ productId: l.id, quantity: l.quantity })),
+      orderId,
+      { loyaltyApplied },
+    );
+  }
+
+  // Default: the store is the source of truth.
   const stored = await ctx.orderStore.read(orderId);
   if (!stored || stored.id !== orderId || !Array.isArray(stored.lines)) return null;
   // A loyalty discount is applied only when THIS order's verification opts in

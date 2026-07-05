@@ -22,6 +22,7 @@
 //     re-checked against what we sealed, and the parsed mdoc drives the gates. The
 //     wire crypto is REAL; the issuer trust anchor is not (presence-only-demo).
 import { resolveOrder, type CeremonyApp, type CeremonyContext, type RailRegistrar } from "../mount.js";
+import { decodeCartMandateParam } from "../cartMandate.js";
 import type { RequestLike } from "../origin.js";
 import type { CompletionInput } from "../types.js";
 import { buildDcPaymentRequest } from "./request.js";
@@ -79,7 +80,7 @@ export const registerDcPaymentGate: RailRegistrar = (app: CeremonyApp, ctx: Cere
 
   // GET the gate page — re-priced order, presence-only honesty banner.
   get("/attestomcp/dc-payment", async (req, res) => {
-    const order = await resolveOrder(ctx, typeof req.query.order === "string" ? req.query.order : undefined);
+    const order = await resolveOrder(ctx, typeof req.query.order === "string" ? req.query.order : undefined, { cartMandate: decodeCartMandateParam(req.query.cart) });
     if (!order) { res.status(404).type("html").send("<!doctype html><h1>Order not found</h1>"); return; }
     res.status(200).type("html").send(
       renderDcPaymentPage({
@@ -95,7 +96,7 @@ export const registerDcPaymentGate: RailRegistrar = (app: CeremonyApp, ctx: Cere
   // amount-bound transaction_data, with the reader context (ECDH key + bound
   // transaction_data) sealed for /verify.
   get("/attestomcp/dc-payment/request", async (req, res) => {
-    const order = await resolveOrder(ctx, typeof req.query.order === "string" ? req.query.order : undefined);
+    const order = await resolveOrder(ctx, typeof req.query.order === "string" ? req.query.order : undefined, { cartMandate: decodeCartMandateParam(req.query.cart) });
     if (!order) { res.status(404).json({ error: "order not found" }); return; }
     try {
       res.json(await buildDcPaymentRequest(order, originOf(ctx, req), ctx.signingKey));
@@ -110,7 +111,12 @@ export const registerDcPaymentGate: RailRegistrar = (app: CeremonyApp, ctx: Cere
   // (FR-008, CT8).
   post("/attestomcp/dc-payment/verify", async (req, res) => {
     const body = await readJsonBody(req);
-    const order = await resolveOrder(ctx, typeof body.order === "string" ? body.order : undefined);
+    // statelessOrders: the mandate rides in the body — as a `cartMandate` object or a
+    // base64url `cart` string (what the page JS forwards from its URL). resolveOrder
+    // verifies it, and it's handed to completion so the shared seam re-verifies +
+    // reconciles it (invariant 3).
+    const cartMandate = (body as { cartMandate?: unknown }).cartMandate ?? decodeCartMandateParam((body as { cart?: unknown }).cart);
+    const order = await resolveOrder(ctx, typeof body.order === "string" ? body.order : undefined, { cartMandate });
     if (!order) { res.status(400).json({ completed: false, error: "missing or invalid order" }); return; }
 
     const origin = originOf(ctx, req);
@@ -150,6 +156,7 @@ export const registerDcPaymentGate: RailRegistrar = (app: CeremonyApp, ctx: Cere
       method: "dc-payment",
       instrument: mandate.payment.instrument,
       gates,
+      ...(cartMandate !== undefined ? { cartMandate: cartMandate as CompletionInput["cartMandate"] } : {}),
     };
     const result = await ctx.completion(input);
     // Forward the on-chain settlement (when configured + succeeded) AND the

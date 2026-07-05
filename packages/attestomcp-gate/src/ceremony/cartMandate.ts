@@ -92,6 +92,21 @@ export function issueCartMandate(args: IssueCartMandateArgs, secret: string): Ca
   return { ...base, signature: sign(canonical(base), secret) };
 }
 
+/**
+ * Decode a Cart Mandate carried on a GET request's `cart` query param as base64url
+ * JSON — the `statelessOrders` transport (FR-007). Returns `undefined` for a
+ * missing/garbage value; `verifyCartMandate` is the real gate, so decoding is
+ * trust-free (a bad value just falls through to the store path / fails closed).
+ */
+export function decodeCartMandateParam(v: unknown): unknown {
+  if (typeof v !== "string" || v.length === 0) return undefined;
+  try {
+    return JSON.parse(Buffer.from(v, "base64url").toString("utf8"));
+  } catch {
+    return undefined;
+  }
+}
+
 export type CartMandateRefusal = "malformed" | "signature" | "order-id" | "expired";
 
 export type CartMandateVerdict = { ok: true; mandate: CartMandate } | { ok: false; reason: CartMandateRefusal };

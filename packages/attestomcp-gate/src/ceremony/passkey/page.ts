@@ -74,6 +74,9 @@ ${pageHead(`Authorize payment · ${order.id}`, extraCss)}
   <script type="module">
     import { startRegistration } from "/attestomcp/lib/sw/index.js";
     const ORDER_ID = ${JSON.stringify(order.id)};
+    // statelessOrders: forward the signed cart mandate (?cart=… in this page's URL) so a
+    // store-less server can reconstruct THIS order on verify.
+    const CART = new URLSearchParams(location.search).get("cart");
     const OPTIONS_URL = ${JSON.stringify(optionsUrl)};
     const RETURN_URL = ${JSON.stringify(returnUrl)};
     const DONE_BANNER = ${JSON.stringify(completionHandoffBanner(returnUrl))};
@@ -94,7 +97,7 @@ ${pageHead(`Authorize payment · ${order.id}`, extraCss)}
         const out = await fetch("/attestomcp/passkey/verify", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ response, challengeToken, order: ORDER_ID }),
+          body: JSON.stringify({ response, challengeToken, order: ORDER_ID, cart: CART }),
         }).then((r) => r.json()).finally(() => settling.classList.remove("on"));
         if (!out.mandate) throw new Error(out.error || "authorization failed");
         step("✓ authorized · mandate built (" + out.trust_level + ")", "ok");

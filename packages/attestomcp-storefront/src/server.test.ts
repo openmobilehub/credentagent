@@ -422,3 +422,52 @@ describe("per-session carts over HTTP (issue #34 · Security Invariant #4)", () 
     await new Promise<void>((resolve) => httpServer.close(() => resolve()));
   });
 });
+
+// statelessOrders (gate FR-007): the checkout link carries the signed Cart Mandate
+// instead of a createdOrderStore write; the page reconstructs + verifies it. The store
+// here THROWS on read, so any passing test also proves no created-order store read.
+describe("statelessOrders — the cart mandate is the order transport (FR-007)", () => {
+  const makeStateless = (): Storefront => {
+    const store = createStorefront({
+      statelessOrders: true,
+      baseUrl: "http://shop.test",
+      createdOrderStore: {
+        read: () => { throw new Error("createdOrderStore.read must NOT happen under statelessOrders"); },
+        write: async () => { throw new Error("createdOrderStore.write must NOT happen under statelessOrders"); },
+      },
+    });
+    const attestomcp = new AttestoMCP();
+    attestomcp.mount(store.app);
+    store.gate((order) => attestomcp.requirements(order, [required(age.over(21).when((o) => o.lines.some((l) => (l.minimumAge ?? 0) >= 21)))]));
+    return store;
+  };
+  const checkoutUrl = async (store: Storefront): Promise<URL> => {
+    const sc = (await (await connect(store)).callTool({ name: "checkout", arguments: { items: [{ productId: "oak-whiskey", quantity: 1 }] } })).structuredContent as any;
+    return new URL(sc.checkoutUrl);
+  };
+
+  it("checkout returns a link (and approve links) carrying the signed cart mandate", async () => {
+    const store = makeStateless();
+    const sc = (await (await connect(store)).callTool({ name: "checkout", arguments: { items: [{ productId: "oak-whiskey", quantity: 1 }] } })).structuredContent as any;
+    expect(sc.checkoutUrl).toMatch(/[?&]cart=[A-Za-z0-9_-]+/);
+    expect(sc.requires?.[0]?.approveUrl).toMatch(/[?&]cart=[A-Za-z0-9_-]+/); // the age gate link too
+  });
+
+  it("GET /checkout renders from the mandate with NO created-order store read", async () => {
+    const store = makeStateless();
+    const url = await checkoutUrl(store);
+    const res = await request(store.app).get(url.pathname + url.search);
+    expect(res.status).toBe(200); // reconstructed from ?cart; the throwing store was never read
+  });
+
+  it("BYPASS: a tampered cart mandate resolves nothing (fails closed → 404)", async () => {
+    const store = makeStateless();
+    const url = await checkoutUrl(store);
+    // Keep valid JSON + valid lines but break the signature (edit the sealed cart).
+    const m = JSON.parse(Buffer.from(url.searchParams.get("cart")!, "base64url").toString("utf8"));
+    m.lines = [{ id: "oak-whiskey", quantity: 99, unitPrice: 124, lineTotal: 12276 }];
+    url.searchParams.set("cart", Buffer.from(JSON.stringify(m)).toString("base64url"));
+    const res = await request(store.app).get(url.pathname + "?" + url.searchParams.toString());
+    expect(res.status).toBe(404); // verifyCartMandate refuses the edited cart → resolveCreated null
+  });
+});

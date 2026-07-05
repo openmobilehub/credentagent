@@ -129,6 +129,23 @@ opt-in optimization on top of US1/US2 and must not be required for correctness.
 - The AP2 `CartMandate` shape can mirror the existing `PaymentMandate` structure closely enough to reuse
   the mandate module's conventions.
 
+## Design note — reference vs. payload (FR-007)
+
+`statelessOrders` is a deliberate **custody trade-off**, not just a storage tweak:
+
+- **Off (default) — the client holds a *reference*.** Only the **order id** travels; the line items
+  live server-side in the `createdOrderStore`. The agent/orchestrator carries an opaque handle, sees
+  no cart contents, and the token stays tiny.
+- **On — the client holds the *payload*.** The **whole signed cart** (product ids, quantities, sealed
+  prices) travels on the wire, back and forth, and is reconstructed from the mandate on each instance.
+  It is HMAC-signed so it is **tamper-evident**, but it is **not encrypted** — anything the token passes
+  through (the agent, a hosted orchestrator) can *read* the cart — and a large cart means a larger token.
+
+You buy **instance-independence** (a checkout survives serverless bouncing with no shared store) and pay
+in **content-on-the-wire + token size**. Enable it only when server-side order state genuinely can't be
+shared; otherwise prefer off so the agent holds a reference, never the payload — the same
+"delegate a reference, not the content" stance the 005 connector design takes for the agent.
+
 ## Out of Scope (v0.2+)
 
 - A **user/agent-signed** Cart Mandate (the true AP2 user-authorization semantic) and

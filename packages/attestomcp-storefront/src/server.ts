@@ -22,6 +22,7 @@ import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js
 import type { CallToolResult, ReadResourceResult } from "@modelcontextprotocol/sdk/types.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { registerAppTool, registerAppResource, RESOURCE_MIME_TYPE } from "@modelcontextprotocol/ext-apps/server";
+import { randomBytes } from "node:crypto";
 import express from "express";
 import type { Express, Request, Response } from "express";
 import { z } from "zod";
@@ -54,6 +55,9 @@ export type { CartStore, OrderStore } from "./state.js";
 // (`./index.js`) does not.
 import {
   completeOrder,
+  issueCartMandate,
+  verifyCartMandate,
+  decodeCartMandateParam,
   renderRequirements,
   MemoryVerificationStore,
   type CartItemRef,
@@ -135,6 +139,15 @@ export interface StorefrontOptions {
   signingKey?: string;
   /** Allow a per-process ephemeral signing key (default: true unless `signingKey` is set). */
   allowEphemeralKey?: boolean;
+  /**
+   * Opt-in (default false): carry the created order in a signed Cart Mandate on the
+   * checkout link (`?order=<id>&cart=<base64url>`) instead of a `createdOrderStore`
+   * write, so a checkout survives an instance split with no shared created-order store
+   * (gate FR-007). Forces a concrete `signingKey` (generated if none) so the mandate the
+   * checkout tool issues is the one the gate rails verify. Verification + completion
+   * state still use their stores.
+   */
+  statelessOrders?: boolean;
   /**
    * Optional demo-mode settlement seam (e.g. on-chain). Throwing GATES completion:
    * a configured-but-failed settle records nothing and leaves the cart intact.
@@ -230,13 +243,16 @@ function homeApproveUrl(approveUrl: string, base: string): string {
   return approveUrl;
 }
 
-// Re-home every `/attestomcp/*` approveUrl in a `requires` manifest onto `base`.
-function homeRequires(requires: unknown[], base: string): unknown[] {
+// Re-home every `/attestomcp/*` approveUrl in a `requires` manifest onto `base`, and
+// (statelessOrders) append the `cart` param so each gate rail page can reconstruct the
+// order from the signed mandate rather than a store read.
+function homeRequires(requires: unknown[], base: string, cart?: string | null): unknown[] {
   return requires.map((e) => {
     const entry = e as { approveUrl?: unknown };
-    return typeof entry.approveUrl === "string"
-      ? { ...entry, approveUrl: homeApproveUrl(entry.approveUrl, base) }
-      : e;
+    if (typeof entry.approveUrl !== "string") return e;
+    let approveUrl = homeApproveUrl(entry.approveUrl, base);
+    if (cart) approveUrl += `${approveUrl.includes("?") ? "&" : "?"}cart=${cart}`;
+    return { ...entry, approveUrl };
   });
 }
 
@@ -271,6 +287,34 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
     opts.verificationStore ?? opts.storage?.verificationStore ?? new MemoryVerificationStore();
   let resolveGate: GateResolver | undefined;
   let baseUrl = opts.baseUrl?.replace(/\/+$/, "") ?? "";
+
+  // statelessOrders (gate FR-007): the signed Cart Mandate is the created-order transport.
+  // The storefront must OWN a concrete signing key (not the gate's ephemeral one) so the
+  // mandate the checkout tool issues is the one the gate rails verify.
+  const statelessOrders = opts.statelessOrders ?? false;
+  const signingKey = opts.signingKey ?? (statelessOrders ? randomBytes(32).toString("hex") : undefined);
+
+  // Issue + base64url-encode a Cart Mandate for a priced order (the checkout link's `cart`).
+  const cartParamFor = (order: Order): string => {
+    const mandate = issueCartMandate(
+      { orderId: order.id, lines: order.lines.map((l) => ({ id: l.id, quantity: l.quantity, unitPrice: l.unitPrice, lineTotal: l.lineTotal })), currency: order.currency, total: order.total },
+      signingKey as string,
+    );
+    return Buffer.from(JSON.stringify(mandate)).toString("base64url");
+  };
+  const withCart = (url: string, cart?: string | null): string =>
+    cart ? `${url}${url.includes("?") ? "&" : "?"}cart=${cart}` : url;
+
+  // Resolve a created order by id: from a VERIFIED cart mandate (statelessOrders, no store
+  // read) or the createdOrderStore. Fails closed — a forged/tampered/expired mandate → null.
+  const resolveCreated = async (orderId: string, cartRaw?: unknown): Promise<Order | null> => {
+    if (statelessOrders && cartRaw !== undefined) {
+      const verdict = verifyCartMandate(decodeCartMandateParam(cartRaw), orderId, signingKey as string);
+      if (!verdict.ok) return null;
+      return createOrder(verdict.mandate.lines.map((l) => ({ productId: l.id, quantity: l.quantity })), orderId, catalog);
+    }
+    return (await createdOrderStore.read(orderId)) ?? null;
+  };
 
   const BUNDLE_VERSION = bundleVersion();
   const RESOURCE_URI = `ui://product-picker/mcp-app-${BUNDLE_VERSION}.html`;
@@ -332,9 +376,11 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
     catalog: ceremonyCatalog,
     completion,
     // signingKey survives an instance split; default to an ephemeral per-process key
-    // for a single-process dev server / tests when none is configured.
-    ...(opts.signingKey ? { signingKey: opts.signingKey } : {}),
-    allowEphemeralKey: opts.allowEphemeralKey ?? !opts.signingKey,
+    // for a single-process dev server / tests when none is configured (but statelessOrders
+    // forces a concrete, storefront-owned key so it can sign the mandate).
+    ...(signingKey ? { signingKey } : {}),
+    allowEphemeralKey: opts.allowEphemeralKey ?? !signingKey,
+    statelessOrders,
   };
 
   // ── cart logic (per-session over the catalog source + the cart store) ─────
@@ -459,13 +505,16 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
         // Random id (not a per-instance counter): two serverless instances must
         // not both mint "ORD-1" for different carts.
         const order = createOrder(entries, `ORD-${Math.random().toString(36).slice(2, 8)}`, catalog);
-        await createdOrderStore.write(order.id, order);
+        // statelessOrders: carry the order in a signed Cart Mandate on the link instead of
+        // a store write — the checkout page + gate rails reconstruct + verify it (FR-007).
+        const cart = statelessOrders ? cartParamFor(order) : null;
+        if (!statelessOrders) await createdOrderStore.write(order.id, order);
         orderSessions.set(order.id, sessionId); // so completion clears THIS session's cart
-        const checkoutUrl = `${baseUrl}/checkout?order=${order.id}`;
+        const checkoutUrl = withCart(`${baseUrl}/checkout?order=${order.id}`, cart);
         // ← where AttestoMCP mounts on. Re-home any /attestomcp/* approve link onto this
-        // server's origin, so the gate links share the checkout link's base.
+        // server's origin (and propagate the cart param), so the gate links share the base.
         const rawRequires = resolveGate?.(order);
-        const requires = rawRequires ? homeRequires(rawRequires, baseUrl) : undefined;
+        const requires = rawRequires ? homeRequires(rawRequires, baseUrl, cart) : undefined;
         const priced = priceFrom(new Map(entries.map((e) => [e.productId, e.quantity])));
         // Cart-bearing structuredContent (FR-014): a fresh ChatGPT widget instance
         // hydrates the real cart instead of an empty one.
@@ -569,7 +618,10 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
   // origin, in policy order, payment last); it does NOT run the ceremony — completion
   // happens on the mounted /attestomcp/* rails, which enforce the gates fail-closed.
   app.get("/checkout", async (req: Request, res: Response) => {
-    const created = await createdOrderStore.read(String(req.query.order ?? ""));
+    // statelessOrders: reconstruct + VERIFY the order from the `cart` mandate (no store
+    // read); else read the createdOrderStore. `cart` is propagated onto the gate links below.
+    const cartRaw = typeof req.query.cart === "string" ? req.query.cart : undefined;
+    const created = await resolveCreated(String(req.query.order ?? ""), cartRaw);
     if (!created) return res.status(404).type("html").send("<h1>Unknown order</h1>");
 
     // Read THIS order's verification (per order id — never global; Security
@@ -593,7 +645,7 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
     // carries its OWN approveUrl — the renderer is route-agnostic). Resolve against
     // the created order (the policy reads line ids + minimumAge — the re-priced
     // `order` carries the same lines; the discounted total shows via `order` below).
-    const requires = homeRequires(resolveGate?.(created) ?? [], baseUrl) as VerificationManifestEntry[];
+    const requires = homeRequires(resolveGate?.(created) ?? [], baseUrl, statelessOrders ? cartRaw : null) as VerificationManifestEntry[];
     const verification: RenderVerification = { ageVerified, loyaltyApplied };
     const paid = done ? { amount: done.amount, currency: done.currency, method: done.method } : null;
 
@@ -619,15 +671,16 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
         // to a single Pay CTA from the manifest and the x402/Hedera passkey option never shows.
         {
           methods: [
-            { value: "passkey", name: "Pay with x402 Hedera · Passkey", desc: "Authorize with this device's passkey — payment settles on-chain via the x402 protocol (test network).", href: `/attestomcp/passkey?order=${orderQ}`, checked: true },
-            { value: "dc-payment", name: "Cross-device wallet", desc: "Scan a QR and approve with your phone's passkey or wallet — also x402 on Hedera.", href: `/attestomcp/dc-payment?order=${orderQ}` },
+            { value: "passkey", name: "Pay with x402 Hedera · Passkey", desc: "Authorize with this device's passkey — payment settles on-chain via the x402 protocol (test network).", href: withCart(`/attestomcp/passkey?order=${orderQ}`, statelessOrders ? cartRaw : null), checked: true },
+            { value: "dc-payment", name: "Cross-device wallet", desc: "Scan a QR and approve with your phone's passkey or wallet — also x402 on Hedera.", href: withCart(`/attestomcp/dc-payment?order=${orderQ}`, statelessOrders ? cartRaw : null) },
           ],
         };
 
     res.type("html").send(renderRequirements(order, requires, verification, { ...(payment ? { payment } : {}), paid }));
   });
   app.post("/checkout/place-order", async (req: Request, res: Response) => {
-    const order = await createdOrderStore.read(String(req.body?.order ?? ""));
+    // statelessOrders: reconstruct + verify from the body's `cart` mandate; else the store.
+    const order = await resolveCreated(String(req.body?.order ?? ""), req.body?.cart);
     if (order) {
       // Security invariant 1 — enforce gates on EVERY completion path, not just the
       // rendered page. This instant-demo path completes WITHOUT a device ceremony, so

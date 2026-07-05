@@ -29,6 +29,7 @@
 // unverified age-restricted order — lives in the shared `completeOrder` seam
 // (completion.ts), so every payment rail honors it.
 import { resolveOrder, type CeremonyApp, type CeremonyContext, type RailRegistrar } from "../mount.js";
+import { decodeCartMandateParam } from "../cartMandate.js";
 import type { RequestLike } from "../origin.js";
 import { buildCredentialRequest } from "./request.js";
 import { evaluateCredential, requiredAgeForOrder, verifyCredentialPresentation, type CredentialKind, type CredGateResult } from "./verify.js";
@@ -113,7 +114,7 @@ export const registerCredentialGate: RailRegistrar = (app: CeremonyApp, ctx: Cer
   get("/attestomcp/credential", async (req, res) => {
     const kind = parseKind(req.query.cred);
     if (!kind) { res.status(404).type("html").send("<!doctype html><h1>Unknown credential</h1>"); return; }
-    const order = await resolveOrder(ctx, typeof req.query.order === "string" ? req.query.order : undefined);
+    const order = await resolveOrder(ctx, typeof req.query.order === "string" ? req.query.order : undefined, { cartMandate: decodeCartMandateParam(req.query.cart) });
     if (!order) { res.status(404).type("html").send("<!doctype html><h1>Order not found</h1>"); return; }
     res.status(200).type("html").send(
       renderCredentialPage({
@@ -132,7 +133,7 @@ export const registerCredentialGate: RailRegistrar = (app: CeremonyApp, ctx: Cer
   get("/attestomcp/credential/request", async (req, res) => {
     const kind = parseKind(req.query.cred);
     if (!kind) { res.status(404).json({ error: "unknown credential" }); return; }
-    const order = await resolveOrder(ctx, typeof req.query.order === "string" ? req.query.order : undefined);
+    const order = await resolveOrder(ctx, typeof req.query.order === "string" ? req.query.order : undefined, { cartMandate: decodeCartMandateParam(req.query.cart) });
     if (!order) { res.status(404).json({ error: "order not found" }); return; }
     try {
       const minimumAge = kind === "age" ? requiredAgeForOrder(order) ?? 21 : undefined;
@@ -168,7 +169,7 @@ export const registerCredentialGate: RailRegistrar = (app: CeremonyApp, ctx: Cer
     const body = await readJsonBody(req);
     const kind = parseKind(body.cred);
     if (!kind) { res.status(404).json({ verified: false, error: "unknown credential" }); return; }
-    const order = await resolveOrder(ctx, typeof body.order === "string" ? body.order : undefined);
+    const order = await resolveOrder(ctx, typeof body.order === "string" ? body.order : undefined, { cartMandate: (body as { cartMandate?: unknown }).cartMandate ?? decodeCartMandateParam((body as { cart?: unknown }).cart) });
     if (!order) { res.status(400).json({ verified: false, error: "missing or invalid order" }); return; }
 
     const minimumAge = kind === "age" ? requiredAgeForOrder(order) ?? 21 : undefined;

@@ -21,6 +21,7 @@ import express, { type Express } from "express";
 import request from "supertest";
 import { mountCeremony, resolveOrder, type CeremonyContext, type CeremonySeams } from "../mount.js";
 import { completeOrder, type CompletedRecord, type CompletionContext } from "../completion.js";
+import { issueCartMandate } from "../cartMandate.js";
 import { MemoryVerificationStore } from "../../store.js";
 import { buildDcMandate, runDcGates } from "./verify.js";
 import { buildDcPaymentRequest } from "./request.js";
@@ -330,5 +331,89 @@ describe("runDcGates — re-derives the binding; no trusted `verified` flag", ()
     const mandate = buildDcMandate({ order, origin: localhost, claims: DEMO_CLAIMS, presentedAmount: order.total });
     const gate = runDcGates(mandate, { rpID: "evil.example", origin: "https://evil.example" }).find((g) => g.gate === "Amount binding");
     expect(gate?.pass).toBe(false); // payee bound to the issuing origin, not the attacker's
+  });
+});
+
+// ── statelessOrders — end-to-end over the wire (FR-007), no shared order store ──
+// The signed cart mandate is the transport: a checkout completes on an instance
+// whose orderStore is EMPTY (serverless / instance split). The store here THROWS
+// on read, so any test that passes also proves no store read happened.
+
+function statelessHarness(): Harness {
+  const verificationStore = new MemoryVerificationStore();
+  const orders = new Map<string, CeremonyOrder>(); // never seeded
+  const records = new Map<string, CompletedRecord>();
+  let cartClears = 0;
+  let writes = 0;
+  const completionCtx: CompletionContext = {
+    catalog,
+    verificationStore,
+    records: { read: async (id) => records.get(id), write: async (rec) => void (records.set(rec.orderId, rec), writes++) },
+    cart: { clear: async () => void cartClears++ },
+    signingKey: "stable-test-secret", // completeOrder verifies + reconciles the cart mandate
+  };
+  const seams: CeremonySeams = {
+    verificationStore,
+    orderStore: { read: async () => { throw new Error("orderStore must NOT be read under statelessOrders"); } },
+    catalog,
+    completion: (input) => completeOrder(input, completionCtx),
+    signingKey: "stable-test-secret",
+    statelessOrders: true,
+  };
+  const app = express();
+  const ctx = mountCeremony(app as never, seams);
+  const seed = (): void => { throw new Error("stateless harness does not seed the store"); };
+  return { app, ctx, verificationStore, orders, records, seed, cartClears: () => cartClears, writes: () => writes };
+}
+
+const cartParam = (mandate: unknown): string => Buffer.from(JSON.stringify(mandate)).toString("base64url");
+
+describe("statelessOrders — end-to-end through the dc-payment rail (empty order store)", () => {
+  it("renders the page + completes a checkout reconstructed from the signed cart mandate alone", async () => {
+    const h = statelessHarness();
+    const mandate = issueCartMandate(
+      { orderId: "ORD-S1", lines: [{ id: "aurora-headphones", quantity: 1, unitPrice: 199, lineTotal: 199 }], currency: "USD", total: 199 },
+      "stable-test-secret",
+    );
+
+    // GET the gate page — order reconstructed from ?cart, no store read.
+    const page = await request(h.app).get(`/attestomcp/dc-payment?order=ORD-S1&cart=${cartParam(mandate)}`);
+    expect(page.status).toBe(200);
+    expect(page.text).toContain("199");
+
+    // POST verify with the mandate in the body → completes via the shared seam.
+    const res = await request(h.app)
+      .post("/attestomcp/dc-payment/verify")
+      .send({ order: "ORD-S1", cartMandate: mandate, claims: DEMO_CLAIMS });
+    expect(res.status).toBe(200);
+    expect(res.body.completed).toBe(true);
+    expect(h.records.get("ORD-S1")?.amount).toBe(199);
+  });
+
+  it("verify accepts the base64url `cart` string the page JS forwards (not just a cartMandate object)", async () => {
+    const h = statelessHarness();
+    const mandate = issueCartMandate(
+      { orderId: "ORD-S1b", lines: [{ id: "aurora-headphones", quantity: 1, unitPrice: 199, lineTotal: 199 }], currency: "USD", total: 199 },
+      "stable-test-secret",
+    );
+    // This is exactly what the dc-payment page posts: `cart` = base64url(JSON(mandate)).
+    const res = await request(h.app)
+      .post("/attestomcp/dc-payment/verify")
+      .send({ order: "ORD-S1b", cart: cartParam(mandate), claims: DEMO_CLAIMS });
+    expect(res.status).toBe(200);
+    expect(res.body.completed).toBe(true);
+  });
+
+  it("BYPASS: a tampered cart mandate resolves/completes nothing (fails closed over the wire)", async () => {
+    const h = statelessHarness();
+    const mandate = issueCartMandate(
+      { orderId: "ORD-S2", lines: [{ id: "aurora-headphones", quantity: 1, unitPrice: 199, lineTotal: 199 }], currency: "USD", total: 199 },
+      "stable-test-secret",
+    );
+    const tampered = { ...mandate, lines: [{ id: "aurora-headphones", quantity: 10, unitPrice: 199, lineTotal: 1990 }] };
+    const res = await request(h.app)
+      .post("/attestomcp/dc-payment/verify")
+      .send({ order: "ORD-S2", cartMandate: tampered, claims: DEMO_CLAIMS });
+    expect(res.body.completed).not.toBe(true);
   });
 });

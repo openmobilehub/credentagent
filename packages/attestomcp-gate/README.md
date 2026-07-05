@@ -155,6 +155,10 @@ dcql({ docType, claims })  ·  gate()  ·  discount({ percent?, amount? })  ·  
 // Stores + host-side composition seam
 MemoryVerificationStore  ·  completeOrder(input, ctx)
 
+// Cart Mandate (ap2.CartMandate) — signed, tamper-evident cart integrity; the
+// signingKey-gated check in completeOrder + the opt-in `statelessOrders` transport
+issueCartMandate(args, secret)  ·  verifyCartMandate(mandate, orderId, secret)  ·  DEFAULT_CART_MANDATE_TTL_MS
+
 // Retained Mode-B / roadmap blocking primitive
 gated()  ·  buildVerificationRequired()  ·  isVerificationRequired()  ·  envelopeInstruction()
 ageDcql()  ·  ENVELOPE_VERSION  ·  ENVELOPE_SENTINEL

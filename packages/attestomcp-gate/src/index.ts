@@ -35,7 +35,7 @@ export { completeOrder } from "./ceremony/completion.js";
 // HMAC key; `verifyCartMandate` (and `completeOrder`, when given a `cartMandate` +
 // `signingKey`) refuses a tampered / replayed / expired cart BEFORE re-pricing. The
 // catalog stays the price authority (invariant 2); trust_level is presence-only-demo.
-export { issueCartMandate, verifyCartMandate, DEFAULT_CART_MANDATE_TTL_MS } from "./ceremony/cartMandate.js";
+export { issueCartMandate, verifyCartMandate, decodeCartMandateParam, DEFAULT_CART_MANDATE_TTL_MS } from "./ceremony/cartMandate.js";
 export type { CartMandate, CartMandateLine, CartMandateRefusal, CartMandateVerdict, IssueCartMandateArgs } from "./ceremony/cartMandate.js";
 
 // ── Cart ↔ Payment reconciliation — signed cart + signed payment agree on amount ──

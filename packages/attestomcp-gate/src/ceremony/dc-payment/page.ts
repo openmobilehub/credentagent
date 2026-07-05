@@ -87,6 +87,9 @@ ${pageHead(`Authorize payment (cross-device) · ${order}`, extraCss)}
   ${trustFooter()}
   <script type="module">
     const ORDER = ${JSON.stringify(order)};
+    // statelessOrders: the signed cart mandate rides in the page URL (?cart=…); forward
+    // it on every verify POST so a store-less server can reconstruct THIS order.
+    const CART = new URLSearchParams(location.search).get("cart");
     const AMOUNT = ${JSON.stringify(total)};
     const DEMO_CLAIMS = ${JSON.stringify(DEMO_CLAIMS)};
     const RETURN_URL = ${JSON.stringify(returnUrl)};
@@ -137,7 +140,7 @@ ${pageHead(`Authorize payment (cross-device) · ${order}`, extraCss)}
           settling.classList.add("on");
           const out = await fetch("/attestomcp/dc-payment/verify", {
             method: "POST", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ order: ORDER, readerContextToken: rd.readerContextToken, result: { protocol: (result && result.protocol) || null, data } }),
+            body: JSON.stringify({ order: ORDER, cart: CART, readerContextToken: rd.readerContextToken, result: { protocol: (result && result.protocol) || null, data } }),
           }).then((r) => r.json()).finally(() => settling.classList.remove("on"));
           if (!out.mandate) throw new Error(out.error || "authorization failed");
           step("✓ presentation verified · mandate built (" + out.mandate.trust_level + ")", "ok");
@@ -159,7 +162,7 @@ ${pageHead(`Authorize payment (cross-device) · ${order}`, extraCss)}
         settling.classList.add("on");
         const out = await fetch("/attestomcp/dc-payment/verify", {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ order: ORDER, amount: AMOUNT, claims: DEMO_CLAIMS }),
+          body: JSON.stringify({ order: ORDER, cart: CART, amount: AMOUNT, claims: DEMO_CLAIMS }),
         }).then((r) => r.json()).finally(() => settling.classList.remove("on"));
         if (!out.mandate) throw new Error(out.error || "authorization failed");
         step("✓ presentation verified · mandate built (" + out.mandate.trust_level + ")", "ok");

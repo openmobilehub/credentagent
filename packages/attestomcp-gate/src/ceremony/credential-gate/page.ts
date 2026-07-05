@@ -86,6 +86,9 @@ ${pageHead(title, extraCss)}
   <script type="module">
     const ORDER = ${JSON.stringify(args.order)};
     const CRED = ${JSON.stringify(args.kind)};
+    // statelessOrders: forward the signed cart mandate (?cart=… in this page's URL) so a
+    // store-less server can reconstruct THIS order on verify.
+    const CART = new URLSearchParams(location.search).get("cart");
     const DEMO_CLAIMS = ${JSON.stringify(demoClaims)};
     const RETURN_URL = ${JSON.stringify(returnUrl)};
     const log = document.getElementById("log");
@@ -137,7 +140,7 @@ ${pageHead(title, extraCss)}
           step("→ verify (" + ((result && result.protocol) || "?") + ")");
           const out = await fetch("/attestomcp/credential/verify", {
             method: "POST", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ order: ORDER, cred: CRED, readerContextToken: rd.readerContextToken, mdocContextToken: rd.mdocContextToken, result: { protocol: (result && result.protocol) || null, data } }),
+            body: JSON.stringify({ order: ORDER, cart: CART, cred: CRED, readerContextToken: rd.readerContextToken, mdocContextToken: rd.mdocContextToken, result: { protocol: (result && result.protocol) || null, data } }),
           }).then((r) => r.json());
           if (!out.verified) throw new Error(out.error || "not verified");
           step("✓ verified (" + out.trust_level + ")", "ok");
@@ -156,7 +159,7 @@ ${pageHead(title, extraCss)}
         step("→ verify (presence-only)");
         const out = await fetch("/attestomcp/credential/verify", {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ order: ORDER, cred: CRED, claims: DEMO_CLAIMS }),
+          body: JSON.stringify({ order: ORDER, cart: CART, cred: CRED, claims: DEMO_CLAIMS }),
         }).then((r) => r.json());
         if (!out.verified) throw new Error(out.error || "not verified");
         step("✓ verified (" + out.trust_level + ")", "ok");
