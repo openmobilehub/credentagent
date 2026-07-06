@@ -1,7 +1,7 @@
 # Project Status — AttestoMCP
 
 _Single source of truth for what's done, what's next, and what's waiting on you._
-_Updated **2026-07-02** · `005-human-not-present` · CI green · 189 tests pass._
+_Updated **2026-07-06** · `005-human-not-present` (docs PR #31, rebased onto #32) · CI green · 228 tests pass._
 
 > **How this file works.** Read it at the start of every working session and update it at the end. It is
 > decisions-first: "Decisions for you" (each a checkbox + recommendation), then In flight / next, a rolling
@@ -57,8 +57,14 @@ _Updated **2026-07-02** · `005-human-not-present` · CI green · 189 tests pass
   tests + a both-modes full-checkout-walk, all verified red when their control is removed. Honest scope:
   drops the *created-order* store only (verification + completion state stay server-side — "stateless cart
   transport, not a stateless server"). Runnable demos in `examples/{stateless-orders,run-storefront}/`.
-  **Remaining DX polish (noted in the PR):** none blocking. PR #32 was cleanly split off `main`; **PR #31 stays
-  the 005 docs port** (restored after an accidental push — see `git-branch-hygiene` memory).
+  **Remaining DX polish (noted in the PR):** none blocking. PR #32 was cleanly split off `main`; **PR #31 is
+  now the 005 docs port, rebased onto #32** (2026-07-06) so it carries **zero code diff** — the duplicate 004
+  commits dropped by patch-id, leaving only the docs/specs/spike history. Both PRs are non-conflicting; #32
+  merges first, then #31 auto-retargets to `main` (see `git-branch-hygiene` memory).
+- **Storefront persistence (005) — MERGED to `main`** ([#33](https://github.com/openmobilehub/attestomcp/pull/33),
+  [#27](https://github.com/openmobilehub/attestomcp/issues/27)/epic #29). `createStorefront({ storage: redisStorage(…) })`:
+  four stores over Upstash Redis (optional peer dep, lazy-loaded), in-memory stays the zero-config default,
+  per-slot injection wins, namespace isolation, fail-closed. `main` merged into #32 cleanly for this.
 - **HNP (005)** — big design day 2026-07-01 (branch `005-human-not-present`, pushed; no PR yet): the
   **connector-architecture design** (wallet-custody over MCP: stock Multipaz Wallet seals the Intent
   Mandate, a new wallet server signs bounded draws, a UPay-style verifier settles, Claude orchestrates
