@@ -45,9 +45,9 @@ describe("redisStorage — cross-instance round-trip (US1 / FR-004)", () => {
     const a = redisStorage({ client, namespace: "shop" });
     const b = redisStorage({ client, namespace: "shop" }); // a distinct "instance"
 
-    // cart
-    await a.cartStore.write(new Map([["oak-whiskey", 2]]));
-    expect(await b.cartStore.read()).toEqual(new Map([["oak-whiskey", 2]]));
+    // cart (keyed per session)
+    await a.cartStore.write("sess-1", new Map([["oak-whiskey", 2]]));
+    expect(await b.cartStore.read("sess-1")).toEqual(new Map([["oak-whiskey", 2]]));
 
     // created order
     await a.createdOrderStore.write("ORD-1", sampleOrder);
@@ -69,7 +69,7 @@ describe("redisStorage — cross-instance round-trip (US1 / FR-004)", () => {
 
   it("returns each store's empty shape for a missing key", async () => {
     const s = redisStorage({ client: fakeRedis() });
-    expect(await s.cartStore.read()).toEqual(new Map());
+    expect(await s.cartStore.read("sess-1")).toEqual(new Map());
     expect(await s.createdOrderStore.read("nope")).toBeNull();
     expect(await s.orderStore.read("nope")).toBeNull();
     expect(await s.verificationStore.read("nope")).toBeUndefined();
@@ -115,13 +115,26 @@ describe("redisStorage — configuration + missing-dependency errors (US2 / CT-6
       },
     });
     // Lazy: no throw at construction — only when a real op runs.
-    await expect(s.cartStore.read()).rejects.toThrow(/@upstash\/redis/);
+    await expect(s.cartStore.read("sess-1")).rejects.toThrow(/@upstash\/redis/);
   });
 
   it("needs no @upstash/redis on the injected-client path", async () => {
     // A `client` never triggers the loader, so this resolves with no dependency involved.
     const s = redisStorage({ client: fakeRedis() });
-    await expect(s.cartStore.read()).resolves.toEqual(new Map());
+    await expect(s.cartStore.read("sess-1")).resolves.toEqual(new Map());
+  });
+});
+
+describe("redisStorage — cart is keyed per session (issue #34 / Security Invariant #4)", () => {
+  it("one session's cart never leaks into another session", async () => {
+    const s = redisStorage({ client: fakeRedis(), namespace: "shop" });
+
+    await s.cartStore.write("sess-A", new Map([["oak-whiskey", 2]]));
+
+    // Same session reads it back…
+    expect(await s.cartStore.read("sess-A")).toEqual(new Map([["oak-whiskey", 2]]));
+    // …a different session is empty. Fails if the cart key drops the `:${sessionId}` segment.
+    expect(await s.cartStore.read("sess-B")).toEqual(new Map());
   });
 });
 
@@ -131,12 +144,12 @@ describe("redisStorage — namespace isolation (US4 / FR-007, CT-8)", () => {
     const a = redisStorage({ client, namespace: "shop-a" });
     const b = redisStorage({ client, namespace: "shop-b" });
 
-    await a.cartStore.write(new Map([["oak-whiskey", 1]]));
+    await a.cartStore.write("sess-1", new Map([["oak-whiskey", 1]]));
     await a.createdOrderStore.write("ORD-1", sampleOrder);
     await a.verificationStore.write("ORD-1", { ageVerified: true });
 
     // b (a different tenant) sees none of a's writes.
-    expect(await b.cartStore.read()).toEqual(new Map());
+    expect(await b.cartStore.read("sess-1")).toEqual(new Map());
     expect(await b.createdOrderStore.read("ORD-1")).toBeNull();
     expect(await b.verificationStore.read("ORD-1")).toBeUndefined();
 
@@ -176,7 +189,7 @@ describe("redisStorage — fail-closed on backend error (Polish / FR-012, CT-11)
 
   it("propagates a backend error instead of swallowing it or falling back", async () => {
     const s = redisStorage({ client: throwingRedis() });
-    await expect(s.cartStore.read()).rejects.toThrow(/backend down/);
+    await expect(s.cartStore.read("sess-1")).rejects.toThrow(/backend down/);
     await expect(s.verificationStore.write("ORD-1", { ageVerified: true })).rejects.toThrow(/backend down/);
   });
 });

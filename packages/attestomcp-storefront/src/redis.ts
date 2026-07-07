@@ -51,16 +51,21 @@ function joinKey(...parts: string[]): string {
 }
 
 class RedisCartStore implements CartStore {
-  private readonly key: string;
-  constructor(private readonly redis: RedisLike, namespace: string) {
-    this.key = joinKey(namespace, "cart");
+  // Keyed per session (`${namespace}:cart:${sessionId}`) so concurrent buyers on one
+  // provider get independent carts (Security invariant 4).
+  constructor(
+    private readonly redis: RedisLike,
+    private readonly namespace: string,
+  ) {}
+  private keyFor(sessionId: string): string {
+    return joinKey(this.namespace, "cart", sessionId);
   }
-  async read(): Promise<Map<string, number>> {
-    const obj = (await this.redis.get<Record<string, number>>(this.key)) ?? {};
+  async read(sessionId: string): Promise<Map<string, number>> {
+    const obj = (await this.redis.get<Record<string, number>>(this.keyFor(sessionId))) ?? {};
     return new Map(Object.entries(obj));
   }
-  async write(cart: Map<string, number>): Promise<void> {
-    await this.redis.set(this.key, Object.fromEntries(cart));
+  async write(sessionId: string, cart: Map<string, number>): Promise<void> {
+    await this.redis.set(this.keyFor(sessionId), Object.fromEntries(cart));
   }
 }
 

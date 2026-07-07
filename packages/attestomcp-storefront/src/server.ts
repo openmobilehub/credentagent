@@ -14,12 +14,13 @@
 
 import { readFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
 import type { CallToolResult, ReadResourceResult } from "@modelcontextprotocol/sdk/types.js";
+import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { registerAppTool, registerAppResource, RESOURCE_MIME_TYPE } from "@modelcontextprotocol/ext-apps/server";
 import express from "express";
 import type { Express, Request, Response } from "express";
@@ -253,6 +254,11 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
   // store for that slot (e.g. `redisStorage(...)`), else the in-memory default. Keeping
   // the in-memory fallback last means zero-config stays unchanged (no `storage` → memory).
   const cartStore: CartStore = opts.cartStore ?? opts.storage?.cartStore ?? new MemoryCartStore();
+  // orderId → sessionId, recorded at checkout so the completion path (browser / place-order,
+  // which has no MCP session) can clear the RIGHT session's cart. In-memory, so on
+  // multi-instance serverless it shares the stateful-session limitation (needs sticky
+  // sessions); elsewhere it's best-effort and the cart simply isn't cleared.
+  const orderSessions = new Map<string, string>();
   const orderStore: OrderStore<CompletedOrderRecord> =
     opts.orderStore ?? opts.storage?.orderStore ?? new MemoryOrderStore<CompletedOrderRecord>();
   // Created-but-not-completed orders, for the checkout page + place-order. A store
@@ -317,7 +323,7 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
         read: async (orderId: string) => ((await orderStore.read(orderId)) ?? undefined) as CompletedRecord | undefined,
         write: async (record: CompletedRecord) => { await orderStore.write(record.orderId, record); },
       },
-      cart: { clear: async () => { await cartStore.write(new Map()); } },
+      cart: { clear: async () => { const sid = orderSessions.get(input.order.id); if (sid) await cartStore.write(sid, new Map()); } },
       ...(opts.settle ? { settle: opts.settle } : {}),
     });
   app.locals.attestomcp = {
@@ -331,40 +337,45 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
     allowEphemeralKey: opts.allowEphemeralKey ?? !opts.signingKey,
   };
 
-  // ── cart logic (closure over the catalog source + the cart store) ─────────
-  // `priceFrom` reads the warm snapshot synchronously; every async entry below first
-  // `await source.load()` so the snapshot is fresh regardless of transport — the HTTP
-  // `/mcp` route is already primed by the middleware, but `mcpServer()` over a raw
+  // ── cart logic (per-session over the catalog source + the cart store) ─────
+  // Each MCP session gets its own working cart: `sessionId` is the MCP session
+  // (extra.sessionId); a fallback key covers non-session transports (e.g. the in-memory
+  // transport used in tests) so single-connection flows work.
+  // `priceFrom` reads the warm catalog snapshot synchronously; every async entry below
+  // first `await source.load()` so the snapshot is fresh regardless of transport — the
+  // HTTP `/mcp` route is already primed by the middleware, but `mcpServer()` over a raw
   // transport (e.g. stdio) is not, so the tool handlers warm the catalog themselves.
+  const DEFAULT_SESSION = "default";
+  const sessionOf = (extra: { sessionId?: string }): string => extra.sessionId ?? DEFAULT_SESSION;
   const priceFrom = (cart: Map<string, number>): PricedCart =>
     priceCart([...cart.entries()].map(([productId, quantity]) => ({ productId, quantity })), source.current());
-  const readPriced = async (): Promise<PricedCart> => {
+  const readPriced = async (sessionId: string): Promise<PricedCart> => {
     await source.load();
-    return priceFrom(await cartStore.read());
+    return priceFrom(await cartStore.read(sessionId));
   };
-  const addToCart = async (items: CartItemInput[]): Promise<PricedCart> => {
+  const addToCart = async (sessionId: string, items: CartItemInput[]): Promise<PricedCart> => {
     await source.load();
-    const cart = await cartStore.read();
+    const cart = await cartStore.read(sessionId);
     for (const { productId, quantity } of items) {
       if (quantity <= 0) continue;
       cart.set(productId, (cart.get(productId) ?? 0) + quantity);
     }
-    await cartStore.write(cart);
+    await cartStore.write(sessionId, cart);
     return priceFrom(cart);
   };
-  const setQuantity = async (productId: string, quantity: number): Promise<PricedCart> => {
+  const setQuantity = async (sessionId: string, productId: string, quantity: number): Promise<PricedCart> => {
     await source.load();
-    const cart = await cartStore.read();
+    const cart = await cartStore.read(sessionId);
     if (quantity <= 0) cart.delete(productId);
     else cart.set(productId, quantity);
-    await cartStore.write(cart);
+    await cartStore.write(sessionId, cart);
     return priceFrom(cart);
   };
-  const removeFromCart = async (productId: string): Promise<PricedCart> => {
+  const removeFromCart = async (sessionId: string, productId: string): Promise<PricedCart> => {
     await source.load();
-    const cart = await cartStore.read();
+    const cart = await cartStore.read(sessionId);
     cart.delete(productId);
-    await cartStore.write(cart);
+    await cartStore.write(sessionId, cart);
     return priceFrom(cart);
   };
   // Cart-bearing result, emitted three ways so either host reads it: structuredContent
@@ -392,10 +403,10 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
         annotations: { readOnlyHint: true },
         _meta: UI_META,
       },
-      async (): Promise<CallToolResult> => {
+      async (_args, extra): Promise<CallToolResult> => {
         await source.load();
         const catalog = source.current();
-        const priced = await readPriced();
+        const priced = await readPriced(sessionOf(extra));
         return {
           content: [
             {
@@ -415,39 +426,41 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
       server,
       "add-to-cart",
       { title: "Add to Cart", description: "Add products to the cart by id (quantities add on top).", inputSchema: { items: z.array(z.object({ productId: z.string(), quantity: z.number().int().min(1) })) }, annotations: { readOnlyHint: false }, _meta: UI_META },
-      async ({ items }): Promise<CallToolResult> => cartResult(await addToCart(items)),
+      async ({ items }, extra): Promise<CallToolResult> => cartResult(await addToCart(sessionOf(extra), items)),
     );
     registerAppTool(
       server,
       "set-quantity",
       { title: "Set Quantity", description: "Set the exact quantity of a product by id (0 removes).", inputSchema: { productId: z.string(), quantity: z.number().int().min(0) }, annotations: { readOnlyHint: false }, _meta: UI_META },
-      async ({ productId, quantity }): Promise<CallToolResult> => cartResult(await setQuantity(productId, quantity)),
+      async ({ productId, quantity }, extra): Promise<CallToolResult> => cartResult(await setQuantity(sessionOf(extra), productId, quantity)),
     );
     registerAppTool(
       server,
       "remove-from-cart",
       { title: "Remove from Cart", description: "Remove a product from the cart by id.", inputSchema: { productId: z.string() }, annotations: { readOnlyHint: false }, _meta: UI_META },
-      async ({ productId }): Promise<CallToolResult> => cartResult(await removeFromCart(productId)),
+      async ({ productId }, extra): Promise<CallToolResult> => cartResult(await removeFromCart(sessionOf(extra), productId)),
     );
     registerAppTool(
       server,
       "get-cart",
       { title: "Get Cart", description: "Return the current cart: line items, quantities, total.", inputSchema: {}, annotations: { readOnlyHint: true }, _meta: UI_META },
-      async (): Promise<CallToolResult> => cartResult(await readPriced()),
+      async (_args, extra): Promise<CallToolResult> => cartResult(await readPriced(sessionOf(extra))),
     );
     registerAppTool(
       server,
       "checkout",
       { title: "Checkout", description: "Snapshot the cart into an order and return a checkout link; if gated, also a `requires` manifest of what the buyer must prove on the page.", inputSchema: { items: z.array(z.object({ productId: z.string(), quantity: z.number().int().positive() })).optional() }, annotations: { readOnlyHint: false }, _meta: UI_META },
-      async ({ items }): Promise<CallToolResult> => {
+      async ({ items }, extra): Promise<CallToolResult> => {
         await source.load();
         const catalog = source.current();
-        const entries = items?.length ? items : [...(await cartStore.read()).entries()].map(([productId, quantity]) => ({ productId, quantity }));
+        const sessionId = sessionOf(extra);
+        const entries = items?.length ? items : [...(await cartStore.read(sessionId)).entries()].map(([productId, quantity]) => ({ productId, quantity }));
         if (entries.length === 0) return { content: [{ type: "text", text: "The cart is empty — add items before checking out." }], isError: true };
         // Random id (not a per-instance counter): two serverless instances must
         // not both mint "ORD-1" for different carts.
         const order = createOrder(entries, `ORD-${Math.random().toString(36).slice(2, 8)}`, catalog);
         await createdOrderStore.write(order.id, order);
+        orderSessions.set(order.id, sessionId); // so completion clears THIS session's cart
         const checkoutUrl = `${baseUrl}/checkout?order=${order.id}`;
         // ← where AttestoMCP mounts on. Re-home any /attestomcp/* approve link onto this
         // server's origin, so the gate links share the checkout link's base.
@@ -515,17 +528,35 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
     return server;
   }
 
-  // MCP over streamable HTTP (stateless per request), mirroring the reference server.
+  // MCP over streamable HTTP, STATEFUL: the server issues an mcp-session-id on
+  // `initialize` and reuses that session's transport for its later requests, so each
+  // client gets a stable session id (→ its own cart, keyed by session in the tool
+  // handlers). NOTE: the transport map is per-instance memory — multi-instance serverless
+  // needs sticky sessions (session affinity) for per-session carts to hold.
+  const transports = new Map<string, StreamableHTTPServerTransport>();
   app.all("/mcp", async (req: Request, res: Response) => {
     // Self-derive the public origin from the first request so checkout URLs are
     // absolute behind any proxy (Vercel, a tunnel) with zero config — without it,
     // `${baseUrl}/checkout` would be relative and the widget's `new URL()` throws.
     if (!baseUrl) baseUrl = originFromRequest(req);
-    const server = buildServer();
-    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-    res.on("close", () => { transport.close().catch(() => {}); server.close().catch(() => {}); });
+    const sid = req.headers["mcp-session-id"] as string | undefined;
+    let transport = sid ? transports.get(sid) : undefined;
+    if (!transport) {
+      // A new session must arrive as an `initialize` with no session id; anything else
+      // (unknown id, or a non-init without a session) is rejected.
+      if (sid || !isInitializeRequest(req.body)) {
+        res.status(400).json({ jsonrpc: "2.0", error: { code: -32000, message: "No valid session" }, id: null });
+        return;
+      }
+      const created = new StreamableHTTPServerTransport({
+        sessionIdGenerator: () => randomUUID(),
+        onsessioninitialized: (id) => { transports.set(id, created); },
+      });
+      created.onclose = () => { if (created.sessionId) transports.delete(created.sessionId); };
+      await buildServer().connect(created);
+      transport = created;
+    }
     try {
-      await server.connect(transport);
       await transport.handleRequest(req, res, req.body);
     } catch {
       if (!res.headersSent) res.status(500).json({ jsonrpc: "2.0", error: { code: -32603, message: "error" }, id: null });
@@ -611,7 +642,8 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
         return;
       }
       await orderStore.write(order.id, { orderId: order.id, amount: order.total, currency: order.currency, method: "demo", completedAt: new Date().toISOString() });
-      await cartStore.write(new Map()); // completion empties the cart
+      const sid = orderSessions.get(order.id); // completion empties THIS session's cart
+      if (sid) await cartStore.write(sid, new Map());
     }
     res.type("html").send(`<!doctype html><meta charset="utf-8"><body style="font-family:system-ui;max-width:32rem;margin:3rem auto"><h1>✓ Order placed (demo)</h1><p>You can close this tab — the storefront will update.</p></body>`);
   });

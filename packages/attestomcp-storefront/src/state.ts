@@ -3,19 +3,20 @@
 // serverless deployment). Keys are per session / per order — never process-global
 // beyond this in-process default (Security invariant 4).
 
-/** The working cart: productId → quantity. */
+/** The working cart, keyed per session (productId → quantity). Each MCP session gets its
+ *  own cart, so concurrent buyers never share one (Security invariant 4). */
 export interface CartStore {
-  read(): Promise<Map<string, number>>;
-  write(cart: Map<string, number>): Promise<void>;
+  read(sessionId: string): Promise<Map<string, number>>;
+  write(sessionId: string, cart: Map<string, number>): Promise<void>;
 }
 
 export class MemoryCartStore implements CartStore {
-  private cart = new Map<string, number>();
-  async read(): Promise<Map<string, number>> {
-    return new Map(this.cart);
+  private carts = new Map<string, Map<string, number>>();
+  async read(sessionId: string): Promise<Map<string, number>> {
+    return new Map(this.carts.get(sessionId) ?? []);
   }
-  async write(cart: Map<string, number>): Promise<void> {
-    this.cart = new Map(cart);
+  async write(sessionId: string, cart: Map<string, number>): Promise<void> {
+    this.carts.set(sessionId, new Map(cart));
   }
 }
 

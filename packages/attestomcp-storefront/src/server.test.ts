@@ -7,6 +7,8 @@ import { describe, it, expect } from "vitest";
 import request from "supertest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import type { AddressInfo } from "node:net";
 import { readFileSync } from "node:fs";
 import { createStorefront, originFromRequest, type Storefront } from "./server.js";
 import { redisStorage, type RedisLike } from "./redis.js";
@@ -387,5 +389,36 @@ describe("storage errors do not fall back to in-memory (Polish · FR-012)", () =
     // rather than silently succeeding against process-local memory.
     expect(store.app.locals.attestomcp.verificationStore).toBe(provider.verificationStore);
     await expect(store.app.locals.attestomcp.verificationStore.read("ORD-1")).rejects.toThrow(/backend down/);
+  });
+});
+
+// Per-session carts (issue #34): drive TWO real MCP clients over one HTTP server — each
+// establishes its own session (mcp-session-id) — and assert their carts don't bleed.
+describe("per-session carts over HTTP (issue #34 · Security Invariant #4)", () => {
+  it("two MCP sessions on one server get independent carts", async () => {
+    const store = createStorefront();
+    const httpServer = store.app.listen(0);
+    await new Promise<void>((resolve) => httpServer.on("listening", () => resolve()));
+    const port = (httpServer.address() as AddressInfo).port;
+    const url = new URL(`http://localhost:${port}/mcp`);
+
+    const a = new Client({ name: "shopper-a", version: "1.0.0" });
+    const b = new Client({ name: "shopper-b", version: "1.0.0" });
+    await a.connect(new StreamableHTTPClientTransport(url));
+    await b.connect(new StreamableHTTPClientTransport(url));
+
+    // Shopper A adds whiskey to A's cart…
+    await a.callTool({ name: "add-to-cart", arguments: { items: [{ productId: "oak-whiskey", quantity: 2 }] } });
+
+    const bCart = (await b.callTool({ name: "get-cart", arguments: {} })).structuredContent as any;
+    const aCart = (await a.callTool({ name: "get-cart", arguments: {} })).structuredContent as any;
+    // …B's cart is independent (empty) — fails if the cart isn't keyed by session —
+    // and A still sees its own 2.
+    expect(bCart.cart.itemCount).toBe(0);
+    expect(aCart.cart.itemCount).toBe(2);
+
+    await a.close();
+    await b.close();
+    await new Promise<void>((resolve) => httpServer.close(() => resolve()));
   });
 });
