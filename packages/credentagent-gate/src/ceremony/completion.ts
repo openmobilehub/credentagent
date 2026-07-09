@@ -9,6 +9,9 @@ import type { VerificationStore } from "../types.js";
 import type { CartItemRef, CeremonyCatalog, CompletionInput, CompletionResult, GateOutcome } from "./types.js";
 import { verifyCartMandate, type CartMandate } from "./cartMandate.js";
 import { reconcileCartPayment } from "./reconciliation.js";
+import { checkDraw, type DrawVerifier } from "./mandate.js";
+import type { RevocationStore } from "./revocation.js";
+import { refusal, type Refusal } from "./refusals.js";
 
 // One on-chain (demo-mode) settlement backing a completed order. Kept structural
 // so the demo's richer SettlementRecord is assignable without the package taking
@@ -33,6 +36,9 @@ export interface CompletedRecord {
   gates: GateOutcome[];
   completedAt: string;
   settlement?: SettlementRecordLike;
+  /** The authorizing Intent Mandate id, when this order completed via a delegated draw
+   *  (005) — the audit link from an unattended completion back to its grant. */
+  delegationId?: string;
 }
 
 export interface CompletedOrderStore {
@@ -57,6 +63,14 @@ export interface CompletionContext {
    *  `cartMandate`, completion verifies it (signature + order-id binding + expiry)
    *  before re-pricing. Absent ⇒ the cart-mandate check is skipped (additive). */
   signingKey?: string;
+  /** Optional revocation + committed-draw store (005). REQUIRED when the input carries a
+   *  `draw`: its absence is fail-closed (a draw without a store to check it is refused).
+   *  Consulted fail-closed (a throwing read refuses) and holds the atomic single-use consume. */
+  revocation?: RevocationStore;
+  /** Optional signer-agnostic draw verifier (defaults to ES256/P-256). */
+  verifyDraw?: DrawVerifier;
+  /** Injectable clock for the draw window check (testability). */
+  now?: () => number;
 }
 
 export async function completeOrder(input: CompletionInput, ctx: CompletionContext): Promise<CompletionResult> {
@@ -123,6 +137,76 @@ export async function completeOrder(input: CompletionInput, ctx: CompletionConte
   // is the shared-completion-seam half of CT9; the demo's place-order + MCP
   // order-completion-tool halves are wired in T014.
   const ageRestricted = repriced.lines.some((l) => typeof l.minimumAge === "number" && l.minimumAge > 0);
+
+  // ── HNP delegated-draw branch (005 FR-006): additive + fail-closed. Only taken when a
+  // draw is present; every HP path above/below is byte-unchanged. The gate re-runs the FULL
+  // bounds check here at the seam — never trusting an upstream rail verify (invariant 1) — so
+  // a producer reaching completeOrder DIRECTLY with a draw is still fully checked. On success
+  // it writes a delegationId (the audit link) and SUPPRESSES real settlement.
+  if (input.draw) {
+    const { intent, draw } = input.draw;
+    const store = ctx.revocation;
+    // Fail-closed: a draw with no store to check it against cannot complete.
+    if (!store) return { completed: false, reason: "draw", refusals: [refusal("revocation-unavailable")] };
+
+    // Age is NON-DELEGABLE: an age-restricted cart ALWAYS steps up to a live ceremony and
+    // never completes from a grant, regardless of any snapshot (invariant 5, spec FR-013).
+    if (ageRestricted) return { completed: false, reason: "draw", refusals: [refusal("step-up", { cause: "age-restricted" })] };
+
+    // Revocation + prior draws — fail-closed if the store errors (never fail-open).
+    let revoked: boolean;
+    let priorDraws;
+    try {
+      revoked = await store.isRevoked(intent.intentId, intent.subject);
+      priorDraws = await store.priorDraws(intent.intentId);
+    } catch {
+      return { completed: false, reason: "draw", refusals: [refusal("revocation-unavailable")] };
+    }
+    if (revoked) return { completed: false, reason: "draw", refusals: [refusal("revoked", { intentId: intent.intentId })] };
+
+    // The deterministic bounds gates (signature/cap/window/scope/replay/step-up/…).
+    const verdict = await checkDraw(intent, draw, {
+      now: ctx.now ? ctx.now() : undefined,
+      priorDraws,
+      verify: ctx.verifyDraw,
+    });
+    if (!verdict.ok) return { completed: false, reason: "draw", refusals: verdict.refusals };
+
+    // Invariants 2+3: the draw's amount must equal the catalog-RE-DERIVED total — the grant
+    // never carries an authoritative price, and the bound payment can't drift from ground truth.
+    if (draw.amount !== repriced.total) {
+      return { completed: false, reason: "draw", refusals: [refusal("over-cap", { pricedAt: repriced.total, amount: draw.amount })] };
+    }
+
+    // Atomic single-use consume — keyed per intent (NOT per order: completeOrder's own
+    // idempotency is order-keyed, so two concurrent redemptions minting two order ids would
+    // both pass without this). Exactly one of N racing draws with one pspTransactionId wins.
+    let committed: boolean;
+    try {
+      committed = await store.commitDraw(intent.intentId, { amount: draw.amount, pspTransactionId: draw.pspTransactionId });
+    } catch {
+      return { completed: false, reason: "draw", refusals: [refusal("revocation-unavailable")] };
+    }
+    if (!committed) return { completed: false, reason: "draw", refusals: [refusal("consumed", { pspTransactionId: draw.pspTransactionId })] };
+
+    // The draw is authorized. Record it with the delegationId audit link and SUPPRESS real
+    // settlement (the honesty control — a demo-fenced draw never moves real value, spec FR-014).
+    await ctx.records.write({
+      orderId: input.order.id,
+      mandateId: input.mandateId,
+      amount: draw.amount,
+      currency: input.currency,
+      method: input.method,
+      instrument: input.instrument,
+      gates: input.gates,
+      completedAt: new Date().toISOString(),
+      delegationId: intent.intentId,
+    } as Parameters<typeof ctx.records.write>[0]);
+    if (ctx.cart) await ctx.cart.clear();
+    await ctx.verificationStore.clear(input.order.id);
+    return { completed: true, delegationId: intent.intentId };
+  }
+
   if (ageRestricted && (verification as { ageVerified?: boolean } | undefined)?.ageVerified !== true) {
     return { completed: false, reason: "age" };
   }

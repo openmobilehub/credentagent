@@ -46,8 +46,9 @@ function harness(opts: { settle?: CompletionContext["settle"] } = {}): Harness {
     ...(opts.settle ? { settle: opts.settle } : {}),
   };
   const input: Harness["input"] = (items, over = {}) => {
-    const order = catalog.createOrder(items, over.order?.id ?? "ORD-1", {});
-    return { order, mandateId: "m", amount: order.total, currency: "USD", method: "test", gates: [{ gate: "g", pass: true, detail: "" }], ...over };
+    const { order: overOrder, ...rest } = over;
+    const order = catalog.createOrder(items, overOrder?.id ?? "ORD-1", {});
+    return { order, mandateId: "m", amount: order.total, currency: "USD", method: "test", gates: [{ gate: "g", pass: true, detail: "" }], ...rest };
   };
   return { ctx, records, store, cleared, input };
 }
@@ -121,5 +122,145 @@ describe("completeOrder — core controls (direct seam tests)", () => {
     expect(res.settlement?.txId).toBe("0.0.1@1");
     expect(h.records.get("ORD-1")?.settlement?.txId).toBe("0.0.1@1");
     expect(h.cleared.count).toBe(1);
+  });
+});
+
+// ── HNP delegated-draw branch (005 FR-006/009) — bypass tests, each control-dependent.
+import { MemoryRevocationStore } from "./revocation.js";
+import { sealIntent, signDraw, generateDelegate, type IntentBounds, type Draw } from "./mandate.js";
+
+async function drawFixture(over: Partial<IntentBounds> = {}) {
+  const { privateKey, delegate } = await generateDelegate();
+  const intent = await sealIntent({
+    type: "credentagent.IntentBounds/v0",
+    merchants: ["utopia-marketplace"],
+    currency: "USD",
+    maxAmount: 120,
+    totalAmount: 120,
+    stepUpOver: 500,
+    delegate,
+    mayPresent: [],
+    presence: "delegated",
+    trust_level: "issuer-verified (demo PKI)",
+    ...over,
+  });
+  const mkDraw = (amount: number, pspTransactionId = "tx_1") =>
+    signDraw(
+      { type: "credentagent.Draw/v0", intentId: intent.intentId, paymentMandateId: "d", merchant: "utopia-marketplace", amount, currency: "USD", pspTransactionId },
+      privateKey,
+    );
+  return { intent, mkDraw, privateKey, delegate };
+}
+
+describe("completeOrder — HNP delegated-draw branch (bypass tests)", () => {
+  it("in-bounds draw completes: delegationId written, settle NOT called", async () => {
+    const settle = vi.fn(async () => ({ network: "demo", txId: "x", status: "ok" }) as SettlementRecordLike);
+    const h = harness({ settle });
+    const rev = new MemoryRevocationStore();
+    const { intent, mkDraw } = await drawFixture();
+    const draw = await mkDraw(20); // 2 widgets @ 10
+    const res = await completeOrder(h.input([{ productId: "widget", quantity: 2 }], { amount: 20, draw: { intent, draw } }), { ...h.ctx, revocation: rev });
+    expect(res.completed).toBe(true);
+    expect(res.delegationId).toBe(intent.intentId);
+    expect(h.records.get("ORD-1")?.delegationId).toBe(intent.intentId);
+    expect(settle).not.toHaveBeenCalled(); // ← settlement suppression is the control (FR-014)
+  });
+
+  it("BYPASS: an over-cap draw submitted DIRECTLY to completeOrder is refused, nothing recorded", async () => {
+    const h = harness();
+    const rev = new MemoryRevocationStore();
+    const { intent, mkDraw } = await drawFixture({ maxAmount: 15 });
+    const draw = await mkDraw(20);
+    const res = await completeOrder(h.input([{ productId: "widget", quantity: 2 }], { amount: 20, draw: { intent, draw } }), { ...h.ctx, revocation: rev });
+    expect(res.completed).toBe(false);
+    expect(res.reason).toBe("draw");
+    expect(res.refusals?.some((r) => r.code === "over-cap")).toBe(true);
+    expect(h.records.size).toBe(0);
+  });
+
+  it("BYPASS: a tampered-signature draw is refused", async () => {
+    const h = harness();
+    const rev = new MemoryRevocationStore();
+    const { intent, mkDraw } = await drawFixture();
+    const draw = { ...(await mkDraw(20)), amount: 5 } as Draw; // edit after signing
+    const res = await completeOrder(h.input([{ productId: "widget", quantity: 2 }], { amount: 20, draw: { intent, draw } }), { ...h.ctx, revocation: rev });
+    expect(res.completed).toBe(false);
+    expect(res.refusals?.some((r) => r.code === "signature")).toBe(true);
+  });
+
+  it("BYPASS: a revoked grant is refused (revocation is the control)", async () => {
+    const h = harness();
+    const rev = new MemoryRevocationStore();
+    const { intent, mkDraw } = await drawFixture();
+    rev.revoke(intent.intentId);
+    const res = await completeOrder(h.input([{ productId: "widget", quantity: 2 }], { amount: 20, draw: { intent, draw: await mkDraw(20) } }), { ...h.ctx, revocation: rev });
+    expect(res.completed).toBe(false);
+    expect(res.refusals?.[0]?.code).toBe("revoked");
+  });
+
+  it("TOCTOU: revocation landing before the seam's own check still refuses", async () => {
+    const h = harness();
+    const rev = new MemoryRevocationStore();
+    const { intent, mkDraw } = await drawFixture();
+    const draw = await mkDraw(20);
+    // Simulate a revoke that lands between an upstream rail-verify and completeOrder: the
+    // seam re-checks isRevoked itself, so it refuses regardless of any prior pass.
+    rev.revoke(intent.intentId);
+    const res = await completeOrder(h.input([{ productId: "widget", quantity: 2 }], { amount: 20, draw: { intent, draw } }), { ...h.ctx, revocation: rev });
+    expect(res.completed).toBe(false);
+    expect(res.refusals?.[0]?.code).toBe("revoked");
+  });
+
+  it("FAIL-CLOSED: an unreachable revocation store refuses (never fail-open)", async () => {
+    const h = harness();
+    const throwing = { isRevoked: () => { throw new Error("down"); }, revoke() {}, revokeSubject() {}, priorDraws() { return []; }, commitDraw() { return true; } };
+    const { intent, mkDraw } = await drawFixture();
+    const res = await completeOrder(h.input([{ productId: "widget", quantity: 2 }], { amount: 20, draw: { intent, draw: await mkDraw(20) } }), { ...h.ctx, revocation: throwing });
+    expect(res.completed).toBe(false);
+    expect(res.refusals?.[0]?.code).toBe("revocation-unavailable");
+  });
+
+  it("FAIL-CLOSED: a draw with no revocation store configured is refused", async () => {
+    const h = harness();
+    const { intent, mkDraw } = await drawFixture();
+    const res = await completeOrder(h.input([{ productId: "widget", quantity: 2 }], { amount: 20, draw: { intent, draw: await mkDraw(20) } }), h.ctx);
+    expect(res.completed).toBe(false);
+    expect(res.refusals?.[0]?.code).toBe("revocation-unavailable");
+  });
+
+  it("ATOMIC single-use: two draws (one pspTransactionId, two order ids) ⇒ exactly one completes", async () => {
+    const h = harness();
+    const rev = new MemoryRevocationStore();
+    const { intent, mkDraw } = await drawFixture();
+    const a = await completeOrder(h.input([{ productId: "widget", quantity: 2 }], { amount: 20, order: { id: "ORD-A" } as CompletionInput["order"], draw: { intent, draw: await mkDraw(20, "tx_same") } }), { ...h.ctx, revocation: rev });
+    const b = await completeOrder(h.input([{ productId: "widget", quantity: 2 }], { amount: 20, order: { id: "ORD-B" } as CompletionInput["order"], draw: { intent, draw: await mkDraw(20, "tx_same") } }), { ...h.ctx, revocation: rev });
+    expect([a.completed, b.completed].filter(Boolean)).toHaveLength(1);
+    const loser = a.completed ? b : a;
+    // Two layers defend single-use: run sequentially, checkDraw's replay guard catches the
+    // reused pspTransactionId (priorDraws now holds the winner) BEFORE commitDraw; a true
+    // concurrent race that clears checkDraw is then stopped by the atomic commitDraw
+    // ("consumed"). Either refusal proves single-use held.
+    expect(["replay", "consumed"]).toContain(loser.refusals?.[0]?.code);
+  });
+
+  it("AGE NON-DELEGABLE: an age-restricted cart via a draw is refused step-up even with ageVerified set", async () => {
+    const h = harness();
+    const rev = new MemoryRevocationStore();
+    h.store.write("ORD-1", { ageVerified: true } as never); // even WITH a snapshot…
+    const { intent, mkDraw } = await drawFixture({ maxAmount: 100 });
+    const draw = await mkDraw(20); // 1 wine @ 20
+    const res = await completeOrder(h.input([{ productId: "wine", quantity: 1 }], { amount: 20, draw: { intent, draw } }), { ...h.ctx, revocation: rev });
+    expect(res.completed).toBe(false);
+    expect(res.refusals?.[0]?.code).toBe("step-up"); // …a grant NEVER completes an age gate
+  });
+
+  it("BYPASS: draw.amount ≠ catalog re-priced total is refused (grant never carries the price)", async () => {
+    const h = harness();
+    const rev = new MemoryRevocationStore();
+    const { intent, mkDraw } = await drawFixture();
+    const draw = await mkDraw(10); // signs amount 10, but 2 widgets re-price to 20
+    const res = await completeOrder(h.input([{ productId: "widget", quantity: 2 }], { amount: 10, draw: { intent, draw } }), { ...h.ctx, revocation: rev });
+    expect(res.completed).toBe(false);
+    expect(res.reason).toBe("draw");
   });
 });
