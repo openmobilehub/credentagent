@@ -1,5 +1,13 @@
 <!--
 Sync Impact Report
+- Version change: 1.0.0 → 1.1.0 (2026-07-10) — DX-gate amendment
+- Bump rationale: MINOR — materially expanded guidance on Principle I (Stripe-grade API): the example is
+  the acceptance test for ergonomics ("fix the API, not the example"), and the DX rubric
+  (docs/reference/architecture-principles.md) is now a BINDING review lens at the Security-Requirements tier.
+  No principle removed or redefined. Reconciliation note: a CONCURRENT branch (005-hnp-seams, PR #41) also
+  bumps 1.0.0 → 1.1.0 for the HNP Principles-II/III/VII amendment. Whichever merges second must renumber to
+  1.2.0 and fold both sync-impact entries — the two amendments are independent and additive.
+- ── prior entry ──
 - Version change: (unratified template) → 1.0.0
 - Bump rationale: initial ratification of the CredentAgent SDK constitution.
 - Principles: initial set — I. Stripe-grade, MCP-idiomatic API · II. The three execution contexts are
@@ -32,6 +40,13 @@ calls. Examples MUST show the MCP `inputSchema` inline so a handler's destructur
 every value's origin MUST be visible on the page — NO injected-callback grab-bags, hidden config
 variables, or mystery handler parameters. Rationale: a developer reads it once and understands it; the
 benchmark is `stripe-node`.
+
+**The example IS the acceptance test for the API's ergonomics:** write it first, from the caller's side, and
+if it needs a plumbing block (assembling stores/context, calling a low-level primitive by hand), fix the API —
+NOT the example (the `DelegatedGate` facade exists for exactly this reason). The concrete, binding review
+rubric — exemplars, the 12-principle checklist, and honest open gaps — lives in
+`docs/reference/architecture-principles.md`. It MUST be applied in every Constitution Check and PR review; a
+DX regression is **blocking, at the same tier as the Security Requirements**.
 
 ### II. The three execution contexts are sacred
 Every example and design decision MUST respect the split (spec §0): (1) the MCP tool handler runs ONCE when
@@ -111,4 +126,4 @@ Versioning (semantic): **MAJOR** — backward-incompatible principle removal or 
 new principle/section or materially expanded guidance; **PATCH** — clarifications and wording. Runtime
 guidance for agents lives in `CLAUDE.md` and `specs/001-attesto-sdk/spec.md`.
 
-**Version**: 1.0.0 | **Ratified**: 2026-06-25 | **Last Amended**: 2026-06-25
+**Version**: 1.1.0 | **Ratified**: 2026-06-25 | **Last Amended**: 2026-07-10

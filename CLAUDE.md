@@ -109,6 +109,29 @@ Honesty is load-bearing and carried in the **types** (`trust_level`), not just p
   integration step (Multipaz / `@auth0/mdl`), not new cryptography. Don't ship docs or
   copy that imply it's already here.
 
+## Developer experience — Stripe-grade (DO NOT regress)
+
+DX is load-bearing here, at the **same tier as the security invariants** — the product's thesis is
+that a consent layer can be a *pleasure* to integrate (Principle I; the benchmark is `stripe-node`).
+The full rubric — exemplars, 12 principles, a review checklist, and honest open gaps —
+lives in **`docs/reference/architecture-principles.md`**. It is a **required review lens, not
+aspirational prose:** a PR that regresses a principle is a request-changes, same as a broken invariant,
+and the automated review checks it.
+
+The one rule that catches most regressions:
+
+- **The example IS the DX test.** Write the caller-side example FIRST. If it needs a plumbing block —
+  assembling stores, a context, calling a low-level primitive by hand — the **API** failed; fix the API,
+  never dress up the example. (`DelegatedGate` exists because its example was ugly — see the worked
+  ugly→elegant case in the rubric, Principle 12.)
+
+Quick gate for any new/changed public API (full list in the rubric):
+
+- **Configure once, then declarative calls;** a zero-config default that just runs.
+- **Result is typed plain data** (`{ ok, reason, … }`) — never a callback grab-bag; one error door.
+- **Consistent** with sibling shapes/verbs; **names state the important thing they do** (`spend`, not `show`).
+- **Every value's origin visible; no hidden magic;** additive change with safe defaults.
+
 ## Testing expectations
 
 - Each package's `vitest` suite is the source of truth for its own behavior. Tests must
@@ -142,8 +165,9 @@ PRs get both automated and human review:
 
 - **Same-repo PRs** — an automated Claude review (`anthropics/claude-code-action`) runs
   on every non-draft PR opened from a branch in this repo, grounded in this file's
-  invariants. `claude-review` is a **required status check**: a same-repo PR can't merge
-  until it's green.
+  invariants **and the DX rubric** (`docs/reference/architecture-principles.md`) — it checks
+  Stripe-grade ergonomics (the example-is-the-test rule, above) alongside the security invariants.
+  `claude-review` is a **required status check**: a same-repo PR can't merge until it's green.
 - **Fork / external-contributor PRs** — the automated job is **skipped** (fork runs can't
   read the `CLAUDE_CODE_OAUTH_TOKEN` secret), so it never blocks you. A skipped required
   check counts as passing. Those PRs are reviewed by one of:

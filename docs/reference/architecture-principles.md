@@ -5,11 +5,12 @@
 > gate. Two properties above all: **user-friendly** (easy to reach a correct result) and
 > **extensible** (grow it without forking it).
 >
-> **How to use this doc.** It is a **review rubric**, not prose to admire. When we design or review,
-> we check work against these principles; a PR that regresses one is a discussion. It is also a
-> **living doc** — the maintainer edits it to encode taste; Claude mirrors its essence into memory so
-> it persists across sessions. Where the codebase already embodies a principle, it's cited (learn from
-> ourselves); where it doesn't yet, it's in **Open gaps** at the end (the rubric with teeth).
+> **How to use this doc.** It is a **binding review rubric**, not prose to admire — `CLAUDE.md` elevates it
+> to a required review lens at the same tier as the security invariants: a PR that regresses a principle is a
+> **request-changes**, and the automated PR review checks it. When we design or review, we grade work against
+> these principles. It is also a **living doc** — the maintainer edits it to encode taste; Claude mirrors its
+> essence into memory so it persists across sessions. Where the codebase already embodies a principle, it's
+> cited (learn from ourselves); where it doesn't yet, it's in **Open gaps** at the end (the rubric with teeth).
 
 ## The exemplars (what we steal from)
 
@@ -128,9 +129,47 @@ global state or inferred behavior the developer can't predict.
 - **Push further:** if behavior changes based on something the developer didn't set, make it settable
   and documented.
 
+### 12. The example IS the DX test — write it first, fix the API not the example
+The quickstart/example is not decoration; it is the **acceptance test for the API's ergonomics**. Write it
+BEFORE (or alongside) the API, from the *caller's* point of view. If the example needs a block of plumbing —
+wiring stores, assembling a context, calling a low-level primitive by hand — the **API** has failed its DX
+contract. Fix the API. Never dress up the example.
+- **Exemplar:** Stripe's docs are the spec; `stripe.charges.create({...})` is two lines because the client
+  absorbs the ceremony. The quickstart is sacred.
+- **Here (a worked ugly → elegant):** the 005 delegated-draw example first exposed the raw seams — the caller
+  hand-built a catalog, three stores, and a 7-field `completeOrder` call (~60 lines of plumbing before the
+  point). That ugliness was the **signal** that the flow lacked a Stripe-grade surface. The fix was *not* a
+  nicer example — it was `DelegatedGate`, a configure-once facade over the seams:
+
+  ```js
+  // BEFORE — the example must assemble the machine (the API leaked its seams)
+  const catalog = { createOrder(items, id) { /* …build lines + total… */ } };
+  const gate = { catalog, revocation: new MemoryRevocationStore(),
+                 verificationStore: /* stub */, records: /* Map wiring */ };
+  const { privateKey, delegate } = await generateDelegate();
+  const mandate = await sealIntent({ /* 10 fields */ });
+  const draw    = await signDraw({ /* 7 fields */ }, privateKey);
+  await completeOrder({ order, mandateId, amount, currency, method, gates: [], draw: { intent, draw } }, gate);
+
+  // AFTER — the ceremony lives in the library; the example is the story
+  const gate  = new DelegatedGate({ catalog: { coffee: 18, wine: { price: 20, minAge: 21 } } });
+  const grant = await gate.preApprove({ merchant: "blue-bottle", perOrder: 30, total: 100 });
+  await grant.spend({ paymentId: "c1", item: "coffee" });   // → { ok, amount, remaining, reason }
+  await grant.revoke();
+  ```
+
+  The example dropped ~104 → ~36 lines, and the ease moved *into the package* (tested), not into example
+  scaffolding. **The example got shorter because the API got better** — the whole point.
+- **Push further:** a public API ships with an example, and the example is reviewed *as part of the API*. If a
+  reviewer must read plumbing before the intent, request changes on the API, not the example. And names in the
+  example must state the important thing they do (`spend`, not `show`).
+
 ## The review checklist (the teeth)
 
 For any new API or change, ask:
+
+- [ ] **The example is the test.** Written first, from the caller's side — does it read top-to-bottom with NO
+      plumbing block before the point? If it needs wiring, fix the API. (→ P12)
 
 - [ ] **Five-minute test.** Can a newcomer reach a correct result by copying a short snippet? Did we add
       a *required* argument to an existing call? (→ P1)
