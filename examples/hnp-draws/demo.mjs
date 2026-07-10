@@ -6,20 +6,25 @@
 //
 // A demo — no real money moves. Run:  node examples/hnp-draws/demo.mjs
 
-// ── THE WHOLE POINT — reads like plain English (plumbing is below) ────────────
+// ── THE SHOP — what your agent can buy, and the gate's price for each ──────────
+const BLUE_BOTTLE = "blue-bottle.example", STARBUCKS = "starbucks.example";
+const PRICE = { coffee: 18, wine: 20 }; // dollars; the GATE sets these, not the agent
+const MIN_AGE = { wine: 21 };           // wine is 21+
+
+// ── THE STORY — reads top-to-bottom like plain English (machinery is below) ───
 async function story() {
   // Pre-approve once, in plain words. Then go to sleep. 😴
   const agent = await preApprove("Reorder coffee from Blue Bottle — up to $30 an order.", {
     store: BLUE_BOTTLE, perOrder: 30, perMonth: 100,
   });
 
-  // Your agent shops on its own; the gate re-checks each purchase. (Prices come from the
-  // catalog — the agent gives a quantity, never an amount.)
-  await agent.buy({ charge: "c1", item: "coffee" });                   // ✅  within your rules
-  await agent.buy({ charge: "c1", item: "coffee" });                   // ⛔  reused charge — the same payment, twice
-  await agent.buy({ charge: "c2", item: "coffee", quantity: 3 });      // ⛔  3 coffees — over your $30 cap (the gate prices it)
+  // Your agent shops on its own — it names an item + quantity; the gate prices it and
+  // re-checks it against your limits. (Prices are the SHOP's, defined just above.)
+  await agent.buy({ charge: "c1", item: "coffee" });                   // ✅  $18 — within your $30 cap
+  await agent.buy({ charge: "c1", item: "coffee" });                   // ⛔  reused charge id — the same payment, twice
+  await agent.buy({ charge: "c2", item: "coffee", quantity: 3 });      // ⛔  3 × $18 = $54 — over your $30 cap
   await agent.buy({ charge: "c3", item: "coffee", store: STARBUCKS }); // ⛔  a store you never approved
-  await agent.buy({ charge: "c4", item: "wine" });                     // ⛔  age-restricted
+  await agent.buy({ charge: "c4", item: "wine" });                     // ⛔  wine is 21+ — age is never delegable
   agent.revoke();                                                      // change your mind, from your phone
   await agent.buy({ charge: "c5", item: "coffee" });                   // ⛔  the grant is dead
 }
@@ -27,8 +32,6 @@ async function story() {
 // ── PLUMBING — the real API, wired once. Skip on a first read ─────────────────
 import { sealIntent, generateDelegate, signDraw, completeOrder, MemoryRevocationStore } from "@openmobilehub/credentagent-gate";
 
-const BLUE_BOTTLE = "blue-bottle.example", STARBUCKS = "starbucks.example";
-const PRICE = { coffee: 18, wine: 20 }, MIN_AGE = { wine: 21 };
 const REASON = {
   replay: "the same payment, twice",
   "over-cap": "over your per-order cap",
