@@ -4,5 +4,9 @@
     "noEmit": true,
     "declaration": false
   },
-  "include": ["src/types.test-d.ts"]
+  "include": [
+    "src/types.test-d.ts",
+    "src/ceremony/intent/mint.test.ts",
+    "src/ceremony/intent/redeem.test.ts"
+  ]
 }

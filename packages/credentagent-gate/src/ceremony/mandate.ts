@@ -10,6 +10,7 @@
 // safety control.
 import { createHash, randomUUID } from "node:crypto";
 import type { CeremonyOrder } from "./types.js";
+import type { Presence, TrustLevel } from "../types.js";
 import type { Origin } from "./origin.js";
 
 function round2(n: number): number {
@@ -232,9 +233,12 @@ export interface IntentBounds {
   delegate: DelegateJwk;
   /** Credentials the agent MAY present under this grant. Age is NEVER delegable → never listed. */
   mayPresent?: string[];
-  /** Honesty axes (constitution VII v1.1.0): when consent happened / how strongly bound. */
-  presence: "delegated" | "delegated-demo";
-  trust_level: string;
+  /** Honesty axes (constitution VII v1.1.0): when consent happened / how strongly
+   *  bound. Carried in the TYPES, not just prose (CLAUDE.md honesty invariant) — a
+   *  consumer switches exhaustively and the compiler flags a new rung. An intent is
+   *  always delegated, so `presence` narrows to the two delegated rungs. */
+  presence: Extract<Presence, "delegated" | "delegated-demo">;
+  trust_level: TrustLevel;
   subject?: string;
 }
 

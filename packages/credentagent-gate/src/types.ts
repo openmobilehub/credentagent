@@ -30,7 +30,23 @@ export interface DcqlQuery {
  * manifest and the envelope both carry this so the limitation is stated in the
  * type, not buried in prose: it's a flow demo, not a real safety control yet.
  */
-export type TrustLevel = "presence-only-demo" | "issuer-verified";
+export type TrustLevel =
+  // v0.1 presentation rails: real wire crypto, no issuer/device trust anchor.
+  | "presence-only-demo"
+  // v0.1 delegated rail (005 HNP): the grant is server-composed + server-signed;
+  // a bearer instrument the agent holds. Not user-signed, not issuer-verified.
+  | "server-issued-demo"
+  // v0.3 line: an issuer/device trust anchor is verified.
+  | "issuer-verified";
+
+/**
+ * The presence axis (constitution VII): WHEN the user consented relative to the
+ * action. `live` = human present at action time; `delegated` = pre-authorized and
+ * drawn against while away (HNP); `delegated-demo` = delegated, honesty-fenced to
+ * demo (server-signed grant, no user/issuer signature yet). Orthogonal to
+ * `TrustLevel` (how strongly the artifact is bound) — an honest gate names both.
+ */
+export type Presence = "live" | "delegated" | "delegated-demo";
 
 // ── Effects (tagged data the resolver interprets — never a handler in v0.1) ──
 

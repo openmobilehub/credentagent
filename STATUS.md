@@ -1,7 +1,7 @@
 # Project Status — CredentAgent
 
 _Single source of truth for what's done, what's next, and what's waiting on you._
-_Updated **2026-07-10** · rename shipped · 0.2.0 published · 005 seams + `DelegatedGate` facade (#41, awaiting merge) · DX gate merged (#43) · constitution 1.2.0 · 288 tests pass._
+_Updated **2026-07-10** · rename shipped · 0.2.0 published · 005 seams + `DelegatedGate` facade (#41, awaiting merge) · **005 intent-rail CORE built (draft [#44](https://github.com/openmobilehub/credentagent/pull/44), stacked on #41)** · DX crispness punch-list + vision doc landed · DX gate merged (#43) · constitution 1.2.0 · gate 224 tests (incl. 11 intent-rail bypass)._
 
 > **How this file works.** Read it at the start of every working session and update it at the end. It is
 > decisions-first: "Decisions for you" (each a checkbox + recommendation), then In flight / next, a rolling
@@ -11,12 +11,21 @@ _Updated **2026-07-10** · rename shipped · 0.2.0 published · 005 seams + `Del
 
 ## ⏳ Decisions for you
 
-- [ ] **Send the updated naming-counsel-brief (CredentAgent) to LF counsel for the USPTO+EUIPO knockout
-      (classes 9/36/42).** The maintainer waived the publish-behind-knockout gate on 2026-07-08 (packages are
-      live as `@openmobilehub/credentagent-*`), so the knockout is now a **retroactive risk check** — advisory
-      flags from `docs/naming-clearance.md` (generic "-Agent" suffix, cred- neighbors: Credant/CredenTek) still
-      deserve the professional search. Fresh scoped packages were unpublishable-within-72h if it had surprised
-      us; that window is the accepted risk.
+- [ ] **Review draft [PR #44](https://github.com/openmobilehub/credentagent/pull/44) — the intent-rail core**
+      (stacked on #41; merge #41 first). Built + independently reviewed overnight: `mint`/`redeem` over the
+      shared completion seam, 11 bypass tests, honesty-in-types tightening, all MUST-FIX review items resolved.
+      **Three items were deliberately deferred to you, not shipped unattended:** (a) `routes.ts`/`page.ts` —
+      the HTTP wiring returns the delegate key `K_s` to the agent (key custody over HTTP, Option A); (b) the
+      **#1 idempotency footgun** — `paymentId` is documented as an idempotency key but does the *opposite*
+      (a safe retry of a committed draw refuses → teaches agents toward a double-charge); (c) the `IntentStore`
+      seam the rail needs to persist bounds. Full roadmap: `specs/005-…/dx-crispness-punchlist.md` (16 ranked).
+- [ ] **Send the naming-counsel-brief to LF counsel for the USPTO+EUIPO knockout (classes 9/36/42) —
+      RECONCILE FIRST.** The brief now carries a ⚠️ **stale banner**: its shortlist predates the CredentAgent
+      decision, and CredentAgent was *benched* in `docs/naming-clearance.md` (cleanest exact clearance, weak
+      mark) but *chosen* in practice. Decide before sending: request the knockout on **CredentAgent as primary**
+      (carrying its flags — generic "-Agent" suffix, cred- neighbors Credant/CredenTek, says credential-not-
+      consent), with the old shortlist as fallbacks. The publish-behind-knockout gate was already waived
+      2026-07-08 (packages live), so this is a retroactive risk check. **Nothing sent.**
 - [ ] **Add the `CLAUDE_CODE_OAUTH_TOKEN` secret** + a `claude-code-review.yml` workflow if you want the
       automated PR review (the org-managed review also covers it).
 - [ ] **Approve + merge [PR #41](https://github.com/openmobilehub/credentagent/pull/41)** — 005 seams +
@@ -28,11 +37,15 @@ _Updated **2026-07-10** · rename shipped · 0.2.0 published · 005 seams + `Del
 
 ## 🔨 In flight / next
 
-- **005 NEXT INCREMENT (after #41 merges): the HTTP intent rail → the wallet server.** The seams + facade
-  land in #41; the next pieces turn them into the live "delegate on your phone → agent buys while you sleep"
-  demo: a `ceremony/intent/` rail (mirroring the `dcql`/`request`/`verify`/`page`/`routes` split), then the
-  wallet server (`credentagent-wallet`, Kotlin/JVM — the one new backend, likely a sibling repo). Wants a
-  short `/speckit-plan` pass. Both were explicitly out of #41's scope.
+- **005 intent rail — CORE built (draft [#44](https://github.com/openmobilehub/credentagent/pull/44)); NEXT: routes/page → wallet server.**
+  The `ceremony/intent/` rail's testable core (`mint`/`redeem` over the shared completion seam, 11 bypass
+  tests, revocation seam) is built + reviewed on `005-intent-rail`. The design (`intent-rail-design.md`)
+  resolves the one open question — **key custody over HTTP = Option A** (agent holds `K_s`, signs draws, POSTs
+  signed draws; gate re-checks). Remaining, deferred for review: `routes.ts`/`page.ts` (the HTTP projection +
+  the delegate page), the `IntentStore` seam (#9 — persist minted bounds; also unblocks the FR-010 active-grants
+  listing), and the #1 idempotency-echo before it ships. Then the wallet server (`credentagent-wallet`,
+  Kotlin/JVM — the one new backend, likely a sibling repo) moves `K_s` behind the user's biometric (the v0.2
+  trust-anchor step). Design + tasks + punch-list all in `specs/005-…`.
 - **AP2 v2 alignment — captured as [#39](https://github.com/openmobilehub/credentagent/issues/39) +
   [#40](https://github.com/openmobilehub/credentagent/issues/40)** (2026-07-08), prompted by AP2-team feedback
   (Yanhe Chen, Google, Discord 2026-06-02: v1-shaped mandate, unsigned amount, unverified issuer/deviceAuth).
@@ -118,6 +131,7 @@ _Updated **2026-07-10** · rename shipped · 0.2.0 published · 005 seams + `Del
 
 | What | Where |
 | :-- | :-- |
+| **005 intent-rail core + DX crispness audit + vision (overnight autonomous batch)** — `mint`/`redeem` over the shared completion seam (11 bypass tests, honesty-in-types tightening, all reviewed pre-commit); a 5-agent DX audit of the delegated surface → a 16-item ranked punch-list (`dx-crispness-punchlist.md`); `docs/vision.md`. Merges nothing; deferred the key-custody-over-HTTP wiring + the #1 idempotency fix for maintainer review. | [draft #44](https://github.com/openmobilehub/credentagent/pull/44) |
 | **DX rubric is now a BINDING review gate + constitution 1.2.0** — `architecture-principles.md` gains Principle 12 ("the example IS the DX test") + the `DelegatedGate` golden before/after; CLAUDE.md DX section at the security-invariant tier; automated review checks it. Folds with the HNP amendment (II/III/VII) into constitution v1.2.0. | [#43](https://github.com/openmobilehub/credentagent/pull/43) |
 | **005 ratified + first increment built** — Group-A D1–D3 + sequencing **Option B** + Decision-13 (constitution amendment) all ratified 2026-07-08; the shared gate seams (`checkDraw`, `RevocationStore`, `completeOrder` draw branch, typed refusals) + the Stripe-grade **`DelegatedGate`** facade + a 36-line example, **288 tests** | [PR #41](https://github.com/openmobilehub/credentagent/pull/41) (awaiting merge) |
 | **HNP §12 spikes COMPLETE** — on-device (Runs 1–5, incl. a green settlement) + headless-auth (PASS: claude.ai routines carry the unattended leg; two setup gates found) | `specs/005-…` |

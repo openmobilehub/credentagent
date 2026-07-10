@@ -19,6 +19,7 @@ import type {
   SettlementSeam,
 } from "./types.js";
 import { verifyCartMandate } from "./cartMandate.js";
+import { MemoryRevocationStore, type RevocationStore } from "./revocation.js";
 import { registerCredentialGate } from "./credential-gate/routes.js";
 import { registerPasskeyGate } from "./passkey/routes.js";
 import { registerDcPaymentGate } from "./dc-payment/routes.js";
@@ -59,6 +60,11 @@ export interface CeremonySeams {
    *  `orderStore` read (FR-007 / US3). Off ⇒ the store stays the source of truth
    *  and the mandate is an additive integrity envelope only. */
   statelessOrders?: boolean;
+  /** Revocation + single-use ledger for the intent rail (005). Defaults to an
+   *  in-memory store behind the same single-process fence as `signingKey` — a real
+   *  multi-instance deploy MUST inject a shared CAS store (Redis SETNX/Lua) so the
+   *  single-use consume is atomic across instances. */
+  revocation?: RevocationStore;
 }
 
 /** The resolved context each rail receives (every required seam present). */
@@ -70,6 +76,11 @@ export interface CeremonyContext {
   signingKey: string;
   origin: (req: RequestLike) => Origin;
   settlement?: SettlementSeam;
+  /** The revocation + single-use ledger the intent rail consults (005). `mountCeremony`
+   *  always populates it (default `MemoryRevocationStore`), so a mounted rail can rely on
+   *  it; optional here — like `statelessOrders` — so a hand-built context literal need not
+   *  set it, and the completion path already treats an absent store as fail-closed. */
+  revocation?: RevocationStore;
   /** FR-007: when true, `resolveOrder` may reconstruct from a verified Cart Mandate
    *  with no store read (absent/false — store is the source of truth). `mountCeremony`
    *  always sets it; optional here so a hand-built context literal need not. */
@@ -102,6 +113,11 @@ export function mountCeremony(app: CeremonyApp, options: Partial<CeremonySeams> 
   const origin = options.origin ?? locals.origin ?? deriveOrigin;
   const allowEphemeralKey = options.allowEphemeralKey ?? locals.allowEphemeralKey ?? false;
   const statelessOrders = options.statelessOrders ?? locals.statelessOrders ?? false;
+  // Revocation ledger: injected, or an in-memory default for a single-process dev server.
+  // A multi-instance deploy MUST inject a shared CAS store (the memory default's consume is
+  // atomic only within one process). No fail-fast — the intent rail is opt-in, and a missing
+  // store degrades safely to "nothing revoked yet, single-use enforced in-process".
+  const revocation = options.revocation ?? locals.revocation ?? new MemoryRevocationStore();
   let signingKey = options.signingKey ?? locals.signingKey;
 
   // Fail fast (CT2) — a load-bearing seam must never silently default. (`origin`
@@ -139,6 +155,7 @@ export function mountCeremony(app: CeremonyApp, options: Partial<CeremonySeams> 
     signingKey,
     origin,
     statelessOrders,
+    revocation,
     ...(settlement ? { settlement } : {}),
   };
 

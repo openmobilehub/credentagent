@@ -41,6 +41,8 @@
     "src/ceremony/dc-payment/request.ts",
     "src/ceremony/dc-payment/verify.ts",
     "src/ceremony/dc-payment/page.ts",
-    "src/ceremony/dc-payment/routes.ts"
+    "src/ceremony/dc-payment/routes.ts",
+    "src/ceremony/intent/mint.ts",
+    "src/ceremony/intent/redeem.ts"
   ]
 }

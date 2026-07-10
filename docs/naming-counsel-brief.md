@@ -1,5 +1,23 @@
 # Trademark knockout-search request — project rename (DRAFT for LF counsel)
 
+> ⚠️ **STALE — reconcile before sending (maintainer decision).** Since this brief was
+> drafted, the project **adopted `CredentAgent` as its working name** — the code, the npm
+> packages (`@openmobilehub/credentagent-*`), and all docs are already renamed to it. The
+> finalist shortlist below (Consentinel / Attorn / Creance / Assentio / Poder) **predates
+> that decision** and does not include CredentAgent.
+>
+> The tension counsel must be told about: `naming-clearance.md` **benched** CredentAgent —
+> it had the *cleanest exact clearance* of any candidate (npm + `.com/.dev/.io` all free,
+> zero exact hits) but is *weak as a mark* — so choosing it was a deliberate call for
+> instant comprehension over distinctiveness. If you send this, the honest ask is a
+> knockout on **CredentAgent as the primary mark, carrying its known flags**: (1) the
+> generic **"-Agent" suffix** adds no distinctiveness and names the agent, not the consent
+> layer; (2) the **crowded "cred-" root** — Credant Technologies (Dell-acquired data
+> security, a homophone), CredenTek ("Agentic AI" services, same field), two Credent IT
+> firms, Credence adjacency; (3) it says *credential*, not *consent* (the identity half,
+> not the authorization differentiator). Keep the five below as **fallbacks if CredentAgent
+> knocks out.** **Decision needed before this goes to counsel — do not send as-is.**
+
 **Draft to forward to LF trademark counsel (Daniel Scales / OWF).** Distilled from
 `docs/naming-clearance.md` (the working research log — signals only, nine web/npm sweeps + a
 naming council). This asks counsel for the one thing the sweeps cannot provide: a professional

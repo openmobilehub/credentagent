@@ -31,7 +31,7 @@ async function fixture() {
     delegate,
     mayPresent: ["membership:acme-loyalty"],
     presence: "delegated",
-    trust_level: "issuer-verified (demo PKI)",
+    trust_level: "server-issued-demo",
   });
   const draw = await signDraw(
     {

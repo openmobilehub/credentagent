@@ -141,7 +141,7 @@ async function drawFixture(over: Partial<IntentBounds> = {}) {
     delegate,
     mayPresent: [],
     presence: "delegated",
-    trust_level: "issuer-verified (demo PKI)",
+    trust_level: "server-issued-demo",
     ...over,
   });
   const mkDraw = (amount: number, pspTransactionId = "tx_1") =>
