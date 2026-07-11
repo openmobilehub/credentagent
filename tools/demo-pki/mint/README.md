@@ -1,9 +1,14 @@
 # Minting the demo credential set
 
-`DemoCredentialMintTest.kt` mints the four demo credentials as `.mpzpass` files
-that a real Multipaz Wallet can hold, each **signed by the OpenSSL demo Document
-Signer** produced by `../gen-pki.sh` (not a fresh self-signed key). It
-generalizes the reference `ProfessionalLicenseMintTest.kt` recipe.
+The two Kotlin generators that produce the demo `.mpzpass` set and the trust lists —
+`DemoCredentialMintTest` and `DemoTrustListTest` — live **canonically in Multipaz**
+(they must compile against the `multipaz` module): [`openmobilehub/multipaz`](https://github.com/openmobilehub/multipaz),
+branch **`credentagent/demo-mpzpass-fixtures`** (until merged to that fork's `main`), at
+`multipaz/src/jvmTest/kotlin/org/multipaz/mpzpass/`. This directory keeps only the
+verifier (`inspect_mpzpass.py`) and this pointer — there is no `.kt` copy to keep in sync.
+
+Each credential is **signed by the OpenSSL demo Document Signer** produced by
+`../gen-pki.sh` (not a fresh self-signed key), so it chains to the demo IACA.
 
 ## What it produces (into `../out/`)
 
@@ -20,48 +25,40 @@ issuer-signed instrument claims. That is the correct shape.
 
 ## How to run
 
-This test must compile against the `multipaz` module, so it runs from inside the
-Multipaz repo, not from this repo:
+The generators read this PKI directory via the **`DEMO_PKI` env var** (no hardcoded
+path) and **skip** when it is unset (so they are green in Multipaz CI). From a Multipaz
+checkout on the fixtures branch:
 
-1. Run `../gen-pki.sh` first (it writes `../keys/ds-key.pem` + `../certs/*`).
-2. Copy this file into the Multipaz jvmTest source set:
+1. Run `../gen-pki.sh` first (writes `../keys/*` + `../certs/*`).
+2. **Mint the credentials** — point `DEMO_PKI` at this dir (the parent of `mint/`):
+   ```bash
+   cd ~/tools/git/multipaz
+   DEMO_PKI=/path/to/credentagent/tools/demo-pki ./gradlew :multipaz:jvmTest \
+     --tests "org.multipaz.mpzpass.DemoCredentialMintTest" --rerun-tasks --no-daemon
    ```
-   cp DemoCredentialMintTest.kt \
-     ~/tools/git/multipaz/multipaz/src/jvmTest/kotlin/org/multipaz/mpzpass/
-   ```
-3. Run it:
-   ```
-   cd ~/tools/git/multipaz && ./gradlew :multipaz:jvmTest \
-     --tests "org.multipaz.mpzpass.DemoCredentialMintTest" --rerun-tasks
+3. **Build the trust lists** (VICAL + RICAL) — same PKI, **after** mint:
+   ```bash
+   DEMO_PKI=/path/to/credentagent/tools/demo-pki ./gradlew :multipaz:jvmTest \
+     --tests "org.multipaz.mpzpass.DemoTrustListTest" --rerun-tasks --no-daemon
    ```
 
-The absolute paths to this repo's `certs/`, `keys/`, `cardart/`, and `out/` are
-hard-coded at the top of the test (`DEMO_PKI`); edit them if the checkout moves.
+`--no-daemon` ensures the forked test JVM inherits `DEMO_PKI` (a reused gradle daemon
+may carry a stale environment). `DemoTrustListTest` wraps the **same IACA** that signed
+the credentials, so run it after mint and do **not** re-run `gen-pki.sh` in between
+(that mints new keys and orphans the lists).
 
 ## Verifying the output
 
-`tools/demo-pki/mint/inspect_mpzpass.py` (or the inline snippet in
-`MORNING-BRIEF.md`) decompresses a `.mpzpass` (top level is
+`inspect_mpzpass.py` decompresses a `.mpzpass` (top level is
 `["MpzPass", raw-deflate(cbor)]`) and prints the disclosed claims and the DS/IACA
-certificate subjects. Every credential's `x5chain` should show
-`Utopia Demo Document Signer` chaining to `Utopia Demo IACA`.
+certificate subjects:
 
-**Unverified:** the `.mpzpass` files have NOT been imported into a real wallet.
-That is Diego's device step (#51).
-
-## Trust lists (VICAL / RICAL)
-
-`DemoTrustListTest.kt` builds `../out/utopia.vical` (wraps the demo IACA as a
-trusted issuer for the four doctypes) and `../out/utopia.rical` (wraps the demo
-reader cert as a trusted verifier), both COSE_Sign1-signed by the demo trust-list
-signer. Place it in the same jvmTest dir and run:
-
-```
-cd ~/tools/git/multipaz && ./gradlew :multipaz:jvmTest \
-  --tests "org.multipaz.mpzpass.DemoTrustListTest" --rerun-tasks
+```bash
+python3 inspect_mpzpass.py ../out/mdl.mpzpass
 ```
 
-The test round-trip-parses both lists with signature verification on. It wraps
-the **same IACA** that signed the credentials, so run it AFTER mint and do NOT
-re-run `gen-pki.sh` in between (that would mint new keys and orphan the lists).
+Every credential's `x5chain` should show `Utopia Demo Document Signer` chaining to
+`Utopia Demo IACA`.
 
+**Unverified:** these `.mpzpass` files have NOT been imported into a real wallet —
+that is the device step (#51).

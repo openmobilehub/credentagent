@@ -18,7 +18,7 @@ a stable, reusable PKI you control. This is the concrete
 | `gen-pki.sh`, `openssl.cnf` | Generate the ISO 18013-5 PKI (issuer + reader + trust-list signer) |
 | `keys/` | **Private keys** — gitignored, chmod 700, never leave this machine |
 | `certs/` | Public certs (committed) |
-| `mint/` | Kotlin jvmTests that mint the `.mpzpass` set and build the VICAL/RICAL — see [`mint/README.md`](mint/README.md) |
+| `mint/` | `inspect_mpzpass.py` + pointer; the mint/trust **generators live in Multipaz** (see [`mint/README.md`](mint/README.md)) |
 | `cardart/` | `make_cards.py` — the card images embedded at mint |
 | `out/` | Built deliverables: the `.mpzpass` set + `utopia.vical` / `utopia.rical` |
 | `site/` | The Vercel download page (`build_site.py`) — see step 4 |
@@ -97,25 +97,29 @@ note that changing it also forces a re-mint).
 ## 2. Mint the credential set
 
 Produces the four `.mpzpass` into `out/`, signed by this PKI's Document Signer.
-Full instructions (which Multipaz checkout, the gradle command) in
-[`mint/README.md`](mint/README.md). In short:
+The generators live **in Multipaz** ([`openmobilehub/multipaz`](https://github.com/openmobilehub/multipaz),
+branch `credentagent/demo-mpzpass-fixtures`, until merged) — they compile against the
+`multipaz` module and read this PKI via the `DEMO_PKI` env var (no copying, no
+hardcoded path). Full detail in [`mint/README.md`](mint/README.md). In short:
 
 ```bash
-cp mint/DemoCredentialMintTest.kt ~/tools/git/multipaz/multipaz/src/jvmTest/kotlin/org/multipaz/mpzpass/
-cd ~/tools/git/multipaz && ./gradlew :multipaz:jvmTest \
-  --tests "org.multipaz.mpzpass.DemoCredentialMintTest" --rerun-tasks
+cd ~/tools/git/multipaz          # on the credentagent/demo-mpzpass-fixtures branch
+DEMO_PKI=/path/to/credentagent/tools/demo-pki ./gradlew :multipaz:jvmTest \
+  --tests "org.multipaz.mpzpass.DemoCredentialMintTest" --rerun-tasks --no-daemon
 ```
+
+`--no-daemon` ensures the forked test JVM inherits `DEMO_PKI` (a reused daemon may
+carry a stale environment).
 
 ## 3. Build the trust lists (VICAL + RICAL)
 
-Same harness, the sibling test — wraps the IACA in a signed **VICAL** and the
-reader cert in a signed **RICAL**, both signed by the trust-list signer, into
-`out/utopia.vical` / `out/utopia.rical`:
+The sibling generator wraps the IACA in a signed **VICAL** and the reader cert in a
+signed **RICAL**, both signed by the trust-list signer, into `out/utopia.vical` /
+`out/utopia.rical`:
 
 ```bash
-cp mint/DemoTrustListTest.kt ~/tools/git/multipaz/multipaz/src/jvmTest/kotlin/org/multipaz/mpzpass/
-cd ~/tools/git/multipaz && ./gradlew :multipaz:jvmTest \
-  --tests "org.multipaz.mpzpass.DemoTrustListTest" --rerun-tasks
+DEMO_PKI=/path/to/credentagent/tools/demo-pki ./gradlew :multipaz:jvmTest \
+  --tests "org.multipaz.mpzpass.DemoTrustListTest" --rerun-tasks --no-daemon
 ```
 
 ## 4. Build + deploy the download site
