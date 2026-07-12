@@ -89,19 +89,25 @@ build.
 - [X] T011 [US3] Add the fail-fast check to the smoke or a tiny assert step: `VERCEL=1 node
       server.mjs` without `GATE_SECRET` exits non-zero with the actionable message (US3.3) —
       wire it into `npm run smoke` so CI covers it.
-- [ ] T012 [US3] **Maintainer-gated**: create Vercel project `credentagent-demo` (root
+- [X] T012 [US3] **Maintainer-gated**: create Vercel project `credentagent-demo` (root
       `examples/quickstart`, `GATE_SECRET` set), then `SMOKE_URL=https://credentagent-demo.vercel.app
       npm run smoke` → a–e green including tamper-on-stateless (FR-009 steps 1–2; quickstart.md
       rung-1 order is binding).
 
 **Checkpoint**: hosted demo of record live and smoke-verified.
 
+> **As executed (2026-07-12)**: instead of a separate `credentagent-demo` Vercel project, the quickstart
+> was promoted to production on the existing `mcp-apps` project — so `mcp-apps-nine.vercel.app` serves it
+> directly (T013's re-point collapsed into the promote; prod smoke green on the alias). Open item: claim
+> `credentagent-demo.vercel.app` as a second alias on this project so the README's canonical URL resolves,
+> or update the READMEs to the nine URL.
+
 ## Phase 6: User Story 4 — Partner links keep working (P2)
 
 **Goal**: cutover with zero broken partner-held URLs.
 **Independent test**: legacy alias serves the new deployment; old repo archived + readable.
 
-- [ ] T013 [US4] **Maintainer-gated**: re-point the `mcp-apps-nine.vercel.app` alias to the
+- [X] T013 [US4] **Maintainer-gated**: re-point the `mcp-apps-nine.vercel.app` alias to the
       `credentagent-demo` deployment; rerun `SMOKE_URL=https://mcp-apps-nine.vercel.app npm run
       smoke` (SC-005; FR-009 step 3 — only after T012 green).
 - [ ] T014 [US4] Open the banner PR in `openmobilehub/mcp-apps-shopping-demo`: README banner
