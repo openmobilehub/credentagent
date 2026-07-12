@@ -182,3 +182,9 @@ PRs get both automated and human review:
   an admin merge.
 
 Apache-2.0 · part of [Open Mobile Hub](https://openmobilehub.org) (Linux Foundation).
+
+<!-- SPECKIT START -->
+For additional context about the technologies to be used, project structure, and validation
+commands for the active feature, read the current plan at
+`specs/007-quickstart-ladder/plan.md`.
+<!-- SPECKIT END -->
