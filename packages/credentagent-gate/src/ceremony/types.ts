@@ -35,6 +35,9 @@ export interface CeremonyOrderLine {
    *  so the completion-time custom-gate sweep sees the SAME inputs as the manifest
    *  resolver (007 — a field the sweep can't see is a fail-OPEN bug). */
   requiresRx?: boolean;
+  /** Any custom catalog attribute preserved through re-pricing (see `OrderLine`), so the
+   *  completion sweep's `appliesTo` sees the SAME arbitrary fields the manifest resolver did. */
+  [attribute: string]: unknown;
 }
 
 export interface CeremonyOrder {

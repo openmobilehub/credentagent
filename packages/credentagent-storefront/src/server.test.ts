@@ -352,6 +352,65 @@ describe("GET /checkout — a custom gate() completes end-to-end (007)", () => {
   });
 });
 
+describe("GET /checkout — a custom gate keys on an ARBITRARY catalog field (finding 2, deeper)", () => {
+  // `region` is NOT one of the fields the storefront predefines (id/name/price/currency/
+  // category/minimumAge/requiresRx). Before generic forwarding, priceCart dropped it, so this
+  // gate never applied and the restricted bottle checked out unproven — a fail-OPEN for any
+  // bespoke attribute. priceCart must forward arbitrary catalog fields onto the priced line so
+  // the SAME field is visible to the manifest resolver AND the completion sweep.
+  const REGION_CATALOG = [
+    { id: "eu-only-bottle", name: "EU-Only Reserve", price: 90, currency: "USD", image: "", category: "Beverages", description: "Region-restricted.", region: "EU" },
+  ];
+  const euResidency = defineCredential({
+    id: "eu_residency",
+    request: dcql({ docType: "org.example.residency.1", claims: ["resident_eu"] }),
+    verify: (c) => c.resident_eu === true,
+    effect: gate(),
+    appliesTo: (order) => order.lines.some((l) => l.region === "EU"),
+    ui: { label: "EU residency", action: "Verify your residency" },
+  });
+  function regionStore(): Storefront {
+    const store = createStorefront({ catalog: REGION_CATALOG });
+    const credentagent = new CredentAgent();
+    credentagent.mount(store.app);
+    store.gate((order) => credentagent.requirements(order, [required(euResidency), required(payment.in("usd"))]));
+    return store;
+  }
+  const checkoutId = async (c: Client, productId: string): Promise<string> =>
+    ((await c.callTool({ name: "checkout", arguments: { items: [{ productId, quantity: 1 }] } })).structuredContent as any).orderId;
+
+  it("the hub surfaces the region gate — priceCart forwarded the arbitrary `region` field", async () => {
+    const store = regionStore();
+    const orderId = await checkoutId(await connect(store), "eu-only-bottle");
+    const res = await request(store.app).get(`/checkout?order=${orderId}`);
+    expect(res.status).toBe(200);
+    expect(res.text).toContain("EU residency"); // FAILS if `region` is dropped (gate never applies)
+    expect(res.text).toContain("cred=eu_residency");
+    expect(res.text).toContain("Payment is locked");
+  });
+
+  it("BYPASS: the region-restricted order POSTed straight to place-order is refused (invariant 1)", async () => {
+    // The fail-open guard: without forwarding `region`, the completion sweep can't see the gate
+    // applies and the unproven order settles. This must 403 and record nothing.
+    const store = regionStore();
+    const orderId = await checkoutId(await connect(store), "eu-only-bottle");
+    await request(store.app).post("/checkout/place-order").type("form").send({ order: orderId }).expect(403);
+    const status = await request(store.app).get(`/checkout/order-status?orderId=${orderId}`);
+    expect(status.body.completed).toBe(false);
+  });
+
+  it("proving EU residency unlocks payment and the order completes end-to-end", async () => {
+    const store = regionStore();
+    const orderId = await checkoutId(await connect(store), "eu-only-bottle");
+    await request(store.app).post("/credentagent/credential/verify").send({ order: orderId, cred: "eu_residency", claims: { resident_eu: true } });
+    const pay = await request(store.app).post("/credentagent/dc-payment/verify").send({
+      order: orderId,
+      claims: { payment_instrument_id: "acct_demo_1", expiry_date: "2031-12-31", masked_account_reference: "•••• 4242", issuer_name: "Demo Bank", holder_name: "T" },
+    });
+    expect(pay.body.completed).toBe(true);
+  });
+});
+
 describe("dynamic catalog source (spec 006) — createStorefront({ catalog: firestoreCatalog(...) })", () => {
   const DOCS = [
     { id: "oak-whiskey", data: { name: "Oak Reserve", price: 124, currency: "USD", category: "Beverages", minimumAge: 21 } },

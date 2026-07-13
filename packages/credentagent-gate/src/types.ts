@@ -58,6 +58,10 @@ export interface OrderLine {
   category?: string;
   /** Example custom flag a `prescription` `appliesTo` reads. */
   requiresRx?: boolean;
+  /** Any catalog attribute a custom `defineCredential` `appliesTo` keys on (a host that
+   *  forwards arbitrary product fields onto the line — e.g. the storefront's `priceCart` —
+   *  makes them readable here). Typed `unknown`; the predicate narrows it. */
+  [attribute: string]: unknown;
 }
 
 export interface GateOrder {

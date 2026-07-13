@@ -62,6 +62,23 @@ describe("priceCart", () => {
     const c = priceCart([{ productId: "amoxicillin", quantity: 1 }], rxCatalog);
     expect(c.lines[0].requiresRx).toBe(true);
   });
+
+  // finding 2 (deeper): forward ANY custom catalog attribute, not just the predefined ones,
+  // so a custom `defineCredential` `appliesTo` can key on any product field. Without generic
+  // forwarding, a bespoke attribute (`region`, `licenseTier`) is dropped and its gate never
+  // applies — the same fail-open class as requiresRx, for arbitrary fields.
+  it("forwards ANY custom catalog attribute onto the priced line (finding 2, deeper)", () => {
+    const customCatalog: Product[] = [
+      { id: "vintage", name: "Vintage Bottle", price: 90, currency: "USD", image: "", category: "Beverages", description: "x", region: "EU", licenseTier: "gold" },
+    ];
+    const c = priceCart([{ productId: "vintage", quantity: 1 }], customCatalog);
+    expect(c.lines[0].region).toBe("EU");
+    expect(c.lines[0].licenseTier).toBe("gold");
+    // display/pricing fields are NOT forwarded raw — `price` becomes `unitPrice`.
+    expect(c.lines[0].price).toBeUndefined();
+    expect(c.lines[0].image).toBeUndefined();
+    expect(c.lines[0].unitPrice).toBe(90);
+  });
 });
 
 describe("requiredAgeForLines", () => {

@@ -33,6 +33,10 @@ export interface Product {
   minimumAge?: number;
   /** Requires a prescription to purchase — a custom `appliesTo` flag (e.g. the prescription gate). */
   requiresRx?: boolean;
+  /** Any additional catalog attribute a custom `defineCredential` `appliesTo` keys on
+   *  (e.g. `region`, `licenseTier`). Forwarded verbatim onto the priced line by `priceCart`,
+   *  so a custom gate can key on ANY product field — not just the ones we predefine. */
+  [attribute: string]: unknown;
 }
 
 export interface CartItemInput {
@@ -58,6 +62,9 @@ export interface PricedCartLine {
   /** Prescription flag, re-derived onto the line so a custom `appliesTo` (e.g. the prescription
    *  gate) sees the SAME field at manifest time and at the completion sweep — else it fails open. */
   requiresRx?: boolean;
+  /** Any custom catalog attribute forwarded from the product (see `Product`), so a custom
+   *  gate's `appliesTo` can key on ANY product field, consistently at manifest + completion. */
+  [attribute: string]: unknown;
 }
 
 export interface PricedCart {
@@ -112,17 +119,18 @@ export function priceCart(items: CartItemInput[], catalog: Product[], opts: Pric
     }
     if (quantity <= 0) continue;
     if (product.minimumAge != null) hasAgeRestricted = true;
+    // Forward EVERY catalog attribute the product carries beyond the display/pricing
+    // fields (category, minimumAge, requiresRx, AND any custom attribute) onto the priced
+    // line, so a custom `defineCredential` `appliesTo` can key on ANY product field — and
+    // sees it identically at manifest time and at the completion sweep (never fail-open).
+    // `image`/`description`/`price` are display/pricing; `price` is re-derived as `unitPrice`.
+    const { image, description, price, ...attrs } = product;
+    void image; void description;
     lines.push({
-      id: product.id,
-      name: product.name,
-      unitPrice: product.price,
-      currency: product.currency,
+      ...attrs, // id, name, currency, category, minimumAge, requiresRx + any custom attribute
+      unitPrice: price,
       quantity,
-      lineTotal: round2(product.price * quantity),
-      // Re-derived onto the line so a priced Order is gate-ready (inv #2).
-      ...(product.minimumAge != null ? { minimumAge: product.minimumAge } : {}),
-      category: product.category,
-      ...(product.requiresRx ? { requiresRx: true } : {}),
+      lineTotal: round2(price * quantity),
     });
   }
   const itemCount = lines.reduce((sum, l) => sum + l.quantity, 0);
