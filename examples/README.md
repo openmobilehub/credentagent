@@ -1,6 +1,6 @@
 # CredentAgent examples
 
-## [`quickstart/`](./quickstart/) — start here: the 5-minute ladder
+## [`quickstart/`](./quickstart/) — start here: try it, run it, own it (~5 min)
 
 The standalone quickstart: try the **hosted demo** (paste one URL into Claude / ChatGPT /
 Goose), run it locally against the **published** packages (`npm i && npm start` — no monorepo

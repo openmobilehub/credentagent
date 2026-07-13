@@ -39,7 +39,7 @@ flow.
 
 **Zero setup — try it now:** paste `https://credentagent-demo.vercel.app/mcp` into Claude /
 ChatGPT / Goose as a remote connector and ask it to sell you the whiskey — the age gate fires.
-Then take the [5-minute quickstart ladder](./examples/quickstart/) (run it locally → deploy
+Then take the [5-minute quickstart](./examples/quickstart/) (run it locally → deploy
 your own with one click).
 
 A credential-gated agentic storefront in ≤ 10 lines. `createStorefront()` publishes the
