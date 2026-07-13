@@ -2,14 +2,16 @@
   "name": "credentagent-quickstart",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "start": "node server.mjs",
     "smoke": "node smoke.mjs"
   },
   "dependencies": {
     "@openmobilehub/credentagent-gate": "^0.2.0",
-    "@openmobilehub/credentagent-storefront": "^0.2.0",
+    "@openmobilehub/credentagent-storefront": "^0.2.1",
     "@upstash/redis": "^1.34.0"
   },
   "devDependencies": {
