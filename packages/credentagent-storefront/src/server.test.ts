@@ -158,6 +158,38 @@ describe("checkout completion round-trip — the HTTP form post the widget poll 
   });
 });
 
+// Multi-instance serverless (e.g. Vercel) has no session affinity: a request can land on
+// a different instance than the one that served its `initialize`. Two independent
+// createStorefront apps model two instances (separate in-memory session maps). Establish
+// the MCP session on app A, then replay the follow-up on app B carrying A's session id.
+const initReq = { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } } };
+const listReq = { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} };
+const MCP_HEADERS = { "content-type": "application/json", accept: "application/json, text/event-stream" };
+
+describe("serverless session survival — a follow-up on another instance", () => {
+  it("stateful (default) rejects the cross-instance follow-up with 'No valid session'", async () => {
+    const a = createStorefront({ signingKey: "k" });
+    const b = createStorefront({ signingKey: "k" });
+    const init = await request(a.app).post("/mcp").set(MCP_HEADERS).send(initReq);
+    const sid = init.headers["mcp-session-id"];
+    expect(sid).toBeTruthy(); // stateful mode issues a session id
+    const followUp = await request(b.app).post("/mcp").set({ ...MCP_HEADERS, "mcp-session-id": sid }).send(listReq);
+    // Reproduces the production symptom: the widget's follow-up tool call is refused.
+    expect(followUp.body?.error?.message).toBe("No valid session");
+  });
+
+  it("statelessMcp handles the cross-instance follow-up (no session, so nothing to lose)", async () => {
+    const a = createStorefront({ signingKey: "k", statelessMcp: true });
+    const b = createStorefront({ signingKey: "k", statelessMcp: true });
+    const init = await request(a.app).post("/mcp").set(MCP_HEADERS).send(initReq);
+    expect(init.headers["mcp-session-id"]).toBeUndefined(); // stateless issues none
+    // A "follow-up" on instance B is just an independent request; it succeeds.
+    const list = await request(b.app).post("/mcp").set(MCP_HEADERS).send(listReq);
+    expect(list.status).toBe(200);
+    expect(list.text).not.toContain("No valid session");
+  });
+});
+
 // The unified three-gate checkout page (T030): the storefront renders the SAME
 // renderRequirements() page as the committed demo. Drives the real GET /checkout
 // over supertest; the manifest's approveUrls home onto this server's mounted routes.

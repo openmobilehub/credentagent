@@ -149,6 +149,17 @@ export interface StorefrontOptions {
    */
   statelessOrders?: boolean;
   /**
+   * Opt-in (default false): serve `/mcp` with a **stateless** Streamable-HTTP transport —
+   * a fresh transport per request, no `Mcp-Session-Id`, nothing kept in per-instance memory.
+   * Multi-instance serverless (e.g. Vercel) has no session affinity, so the default stateful
+   * transport (a per-instance session map) rejects a follow-up request that lands on another
+   * instance with `No valid session`. Enable this on such deploys. Trade-off: no per-session
+   * server cart — tools that need the cart must receive it explicitly (the widget's checkout
+   * passes its on-screen `items`), and `extra.sessionId` is absent so cart tools fall back to
+   * a shared key. Pair with `statelessOrders` for a fully instance-independent checkout.
+   */
+  statelessMcp?: boolean;
+  /**
    * Optional demo-mode settlement seam (e.g. on-chain). Throwing GATES completion:
    * a configured-but-failed settle records nothing and leaves the cart intact.
    */
@@ -298,6 +309,7 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
   // provides a `signingKey`, OR explicitly opts into an ephemeral per-process key
   // (single-process dev / tests) — mirroring the gate's `allowEphemeralKey` escape hatch.
   const statelessOrders = opts.statelessOrders ?? false;
+  const statelessMcp = opts.statelessMcp ?? false;
   if (statelessOrders && !opts.signingKey && !opts.allowEphemeralKey) {
     throw new Error(
       "[credentagent-storefront] statelessOrders requires a stable `signingKey` so a cart mandate minted on " +
@@ -601,6 +613,22 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
     // absolute behind any proxy (Vercel, a tunnel) with zero config — without it,
     // `${baseUrl}/checkout` would be relative and the widget's `new URL()` throws.
     if (!baseUrl) baseUrl = originFromRequest(req);
+
+    // Stateless mode (multi-instance serverless): a fresh transport + server per request,
+    // no session id, nothing in per-instance memory — so a request never depends on having
+    // hit the same instance as its `initialize`. See `statelessMcp`.
+    if (statelessMcp) {
+      const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+      res.on("close", () => { void transport.close(); });
+      try {
+        await buildServer().connect(transport);
+        await transport.handleRequest(req, res, req.body);
+      } catch {
+        if (!res.headersSent) res.status(500).json({ jsonrpc: "2.0", error: { code: -32603, message: "error" }, id: null });
+      }
+      return;
+    }
+
     const sid = req.headers["mcp-session-id"] as string | undefined;
     let transport = sid ? transports.get(sid) : undefined;
     if (!transport) {

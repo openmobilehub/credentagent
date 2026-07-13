@@ -16,6 +16,7 @@ const origin = process.env.VERCEL_PROJECT_PRODUCTION_URL; // set by Vercel at ru
 const store = createStorefront({
   signingKey: process.env.GATE_SECRET,
   statelessOrders: deployed, // the signed cart mandate carries the order between instances
+  statelessMcp: deployed, // no per-instance MCP session — survives Vercel's instance split
   storage: kv.url && kv.token ? redisStorage(kv) : undefined,
   baseUrl: origin && `https://${origin}`,
 });
