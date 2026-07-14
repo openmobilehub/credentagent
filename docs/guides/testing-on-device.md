@@ -46,24 +46,33 @@ badge.
 
 ## 3. Run a ceremony
 
-1. Start the gate locally (the storefront with `mount()` — e.g. `node examples/storefront.mjs`).
-2. Reverse-tunnel its port so the phone sees it as `localhost` (this is why the demo
-   reader cert's SAN is `localhost`; `localhost` is also a secure context, so the DC-API
-   works over plain `http`):
+1. Start the demo gate (from the `feat/demo-pki` checkout — it has the #51 reader-identity
+   wiring and the demo certs). It mounts the gate with the demo `readerIdentity`
+   (`certs/reader-cert.pem`, SAN=`localhost`) and one demo order (`ORD-DEMO`):
 
    ```bash
-   adb reverse tcp:<PORT> tcp:<PORT>    # <PORT> = your server's port (3005 in the quickstart, 3007 in the x402 example)
+   (cd packages/credentagent-gate && npm run build)   # once — builds dist/
+   node tools/demo-pki/run-gate.mjs                    # gate on :3007, prints the URLs
    ```
-3. On the phone open `http://localhost:<PORT>/mcp`-driven checkout link (or the checkout
-   URL your host surfaces), and drive the gates: prove the credential → pay.
+2. Reverse-tunnel the port so the phone sees it as `localhost` (this is why the demo reader
+   cert's SAN is `localhost`; `localhost` is also a secure context, so the DC-API works over
+   plain `http`):
 
-**Pass criteria:** the picker offers the right card, the order completes, and — for the
-issuer side — **no red "untrusted issuer" warning** appears.
+   ```bash
+   adb reverse tcp:3007 tcp:3007
+   ```
+3. On the phone, open one of the URLs the gate printed and drive the ceremony:
+   - **Age gate** — `http://localhost:3007/credentagent/credential?cred=age&order=ORD-DEMO` (presents the mDL)
+   - **Payment gate** — `http://localhost:3007/credentagent/dc-payment?order=ORD-DEMO` (presents the payment credential)
 
-> **Verifier warning is expected for now.** The gate still self-signs its reader cert, so
-> the "unknown verifier" warning won't clear until the gate presents the demo reader
-> identity ([#51](https://github.com/openmobilehub/credentagent/issues/51)). Issuer trust
-> (the card itself) does clear today via the VICAL.
+**Pass criteria:** the picker offers the right card, the order completes, and **no red trust
+warnings** appear — issuer (via the imported **VICAL**) *and* verifier (via the imported
+**RICAL** matched against the reader identity the gate now presents, #51).
+
+> **The verifier side needs the gate to present the reader identity.** `run-gate.mjs` does
+> this (it configures `readerIdentity`), so the "unknown verifier" warning should clear. A
+> gate started WITHOUT a configured `readerIdentity` still self-signs per request, and that
+> warning would persist ([#51](https://github.com/openmobilehub/credentagent/issues/51)).
 
 ## Troubleshooting
 
