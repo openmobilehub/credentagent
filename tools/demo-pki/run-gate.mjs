@@ -7,7 +7,7 @@
 //   node tools/demo-pki/run-gate.mjs                    # gate on :3007
 //   adb reverse tcp:3007 tcp:3007                       # phone → localhost:3007
 // then open a printed URL on the phone and run the ceremony.
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import express from "express";
@@ -17,11 +17,18 @@ const REPO = join(HERE, "..", "..");
 const PORT = Number(process.env.PORT ?? 3007);
 const { CredentAgent } = await import(join(REPO, "packages/credentagent-gate/dist/index.js"));
 
-// The demo reader identity — the cert utopia.rical vouches for (SAN = localhost).
-const readerIdentity = {
-  key: readFileSync(join(HERE, "keys/reader-key.pem"), "utf8"),
-  cert: readFileSync(join(HERE, "certs/reader-cert.pem"), "utf8"),
-};
+// The demo reader identity is OPTIONAL. If the demo PKI has been generated
+// (keys/reader-key.pem + certs/reader-cert.pem, from ./gen-pki.sh), present it so a
+// wallet holding utopia.rical trusts the verifier. If it's absent — e.g. a fresh
+// clone — run WITHOUT it: the gate self-signs a reader cert per request, the ceremony
+// still works, the wallet just shows the verifier as untrusted (red). Zero-config:
+// `node run-gate.mjs` works on a fresh checkout; the PKI is a trust upgrade, not a
+// prerequisite.
+const keyPath = join(HERE, "keys/reader-key.pem");
+const certPath = join(HERE, "certs/reader-cert.pem");
+const readerIdentity = existsSync(keyPath) && existsSync(certPath)
+  ? { key: readFileSync(keyPath, "utf8"), cert: readFileSync(certPath, "utf8") }
+  : undefined;
 
 // One age-restricted demo product, so BOTH the age gate and payment apply.
 const PRODUCTS = { "cinema-ticket": { price: 15, minimumAge: 21 } };
@@ -43,7 +50,7 @@ const orderStore = { read: async (id) => ({ id, lines: [{ id: "cinema-ticket", q
 const completion = async () => ({ completed: true });
 
 const app = express();
-const credentagent = new CredentAgent({ walletOrigin: `http://localhost:${PORT}`, readerIdentity });
+const credentagent = new CredentAgent({ walletOrigin: `http://localhost:${PORT}`, ...(readerIdentity ? { readerIdentity } : {}) });
 credentagent.mount(app, { orderStore, catalog, completion, signingKey: "demo-gate-secret" });
 
 app.get("/", (_req, res) =>
@@ -58,7 +65,9 @@ app.get("/", (_req, res) =>
 app.listen(PORT, () => {
   const b = `http://localhost:${PORT}`;
   console.log(`\nCredentAgent demo gate → ${b}`);
-  console.log(`  reader identity : tools/demo-pki/certs/reader-cert.pem  (SAN=localhost, on utopia.rical)`);
+  console.log(readerIdentity
+    ? `  reader identity : certs/reader-cert.pem  (SAN=localhost, on utopia.rical → verifier shows TRUSTED)`
+    : `  reader identity : none — self-signed per request. Ceremony still works; wallet shows the\n                    verifier as UNTRUSTED (red). Run ./gen-pki.sh + import utopia.rical to fix.`);
   console.log(`  order           : ORD-DEMO  (1× Cinema ticket, age 21+)\n`);
   console.log(`On the phone (after \`adb reverse tcp:${PORT} tcp:${PORT}\`), open one of:`);
   console.log(`  Age gate    : ${b}/credentagent/credential?cred=age&order=ORD-DEMO`);

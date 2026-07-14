@@ -13,6 +13,12 @@ cards land trusted — the concrete `presence-only-demo → issuer-verified (dem
 > self-generated issuer, not a real ecosystem anchor. Never present a passing gate as a
 > real safety or payment control.
 
+> **This whole page is optional.** The demo runs **without any of it** — a fresh clone
+> (`node tools/demo-pki/run-gate.mjs`, no PKI, no VICAL/RICAL import) completes the
+> ceremony end-to-end; the wallet just shows red **"untrusted issuer / unknown verifier"**
+> badges. Everything below is the upgrade that *removes* those warnings. Nothing here is a
+> prerequisite to running the demo — it's frustration-free by default, trusted by choice.
+
 ## Two paths — pick one
 
 - **Consumer** — you just want credentials in your wallet to test a flow. **Download
