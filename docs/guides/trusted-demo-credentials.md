@@ -22,8 +22,8 @@ cards land trusted — the concrete `presence-only-demo → issuer-verified (dem
 
 ## Consumer path — download
 
-The demo credentials + trust lists are served from a static page
-(currently **https://site-rouge-xi-80.vercel.app** — the demo host may change):
+The demo credentials + trust lists are served from a static page at
+**https://credentagent.vercel.app** :
 
 1. Open that page **on the phone**.
 2. **Import the trust lists first** — the issuer list (**VICAL**) and reader list
