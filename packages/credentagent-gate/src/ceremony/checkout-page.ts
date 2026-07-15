@@ -183,14 +183,16 @@ export function renderRequirements(
   const gateEntries = manifest.filter((e) => e.effect !== "authorize");
   const paymentEntry = manifest.find((e) => e.effect === "authorize");
 
-  // A REQUIRED gate that isn't yet satisfied blocks payment. Age is the demo's
-  // blocking gate; a discount never blocks (it's an opt-in saving).
+  // A REQUIRED gate that isn't yet satisfied blocks payment; a discount never blocks
+  // (it's an opt-in saving). Keep the pending blockers so the lock copy can NAME them —
+  // the blocker isn't always "age": any required gate, built-in or custom, blocks.
   const isSatisfied = (e: VerificationManifestEntry): boolean => {
     if (e.effect === "gate" && e.credential === "age") return ageVerified;
     if (e.effect === "discount") return loyaltyApplied;
     return false;
   };
-  const blocked = gateEntries.some((e) => e.required && e.effect === "gate" && !isSatisfied(e));
+  const blockingGates = gateEntries.filter((e) => e.required && e.effect === "gate" && !isSatisfied(e));
+  const blocked = blockingGates.length > 0;
 
   // ── order summary ────────────────────────────────────────────────────────
   // A paid revisit arrives after completion CLEARED this order's verification, so a
@@ -234,11 +236,13 @@ export function renderRequirements(
   const paymentNumber = gateEntries.length + 1;
   const paidSection = paid ? renderPaid(paid) : "";
   // Calm, muted lock — never alarming. Keeps the literal "Payment is locked" the flow
-  // tests pin, framed as a gentle "unlocks after age verification" message.
+  // tests pin, and NAMES the pending required gate(s) so the copy stays honest when the
+  // blocker isn't age — a custom required gate names itself, not "age verification".
+  const blockingLabel = blockingGates.map((e) => e.label ?? e.credential).join(", ");
   const paymentSection = paid
     ? `<div class="card section">${paidSection}</div>`
     : blocked
-      ? `<div class="lock">🔒 Payment is locked · unlocks after age verification</div>`
+      ? `<div class="lock">🔒 Payment is locked · unlocks after ${escapeHtml(blockingLabel)}</div>`
       : renderPayment(order, paymentNumber, methods);
   const placeScript = paid || blocked ? "" : renderPlaceScript(order, methods, opts.payment);
 

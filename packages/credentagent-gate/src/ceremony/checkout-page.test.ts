@@ -105,6 +105,20 @@ describe("renderRequirements — payment lock (presentation only)", () => {
     expect(html).toContain("Pay $124.00");
   });
 
+  it("names the pending required gate in the lock — not a hardcoded 'age' (#46)", () => {
+    // age satisfied, but a REQUIRED custom gate is still pending → the lock must name
+    // THAT gate, not "age verification". (Fails with the old hardcoded copy.)
+    const withRequiredCustom: VerificationManifestEntry[] = [
+      manifest[0], // age (required)
+      { credential: "delivery-signature", required: true, effect: "gate", enforcedAt: "checkout", trust_level: "presence-only-demo", label: "Delivery signature", action: "Confirm signature", approveUrl: "/x" },
+      manifest[2], // payment
+    ];
+    const html = renderRequirements(order, withRequiredCustom, { ageVerified: true }, { payment });
+    expect(html).toContain("Payment is locked");
+    expect(html).toContain("unlocks after Delivery signature"); // names the real blocker
+    expect(html).not.toContain("unlocks after age verification"); // not the hardcoded built-in
+  });
+
   it("a discount gate never blocks payment (only required gate effects do)", () => {
     // No age gate at all → a non-alcohol cart with only membership + payment.
     const noAge = manifest.filter((e) => e.credential !== "age");
