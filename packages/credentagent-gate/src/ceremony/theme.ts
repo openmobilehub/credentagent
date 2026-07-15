@@ -319,6 +319,35 @@ export function progressRail(steps: RailStep[], currentIndex: number): string {
   return `<div class="rail" role="list" aria-label="Progress">${dots}</div>`;
 }
 
+/**
+ * Order-derived progress rail for the ceremony gate pages (payment / credential). Includes
+ * ONLY the gates the ORDER actually has — Age when the cart is age-restricted, Membership
+ * when a discount is in play, Pay when there's an amount — plus the CURRENT gate, which is
+ * always shown even if the order can't imply it (a custom credential id). A step shows ✓
+ * only when ACTUALLY satisfied (age from the verification record, membership from an applied
+ * discount), never merely because it precedes the current step — so a payment page can't
+ * claim "Age ✓" the buyer never presented. Mirrors the hub's stepper inputs without needing
+ * the policy manifest, which the rails don't carry.
+ */
+export function checkoutRail(
+  order: { lines: { minimumAge?: number }[]; discount: number; total: number },
+  current: string, // "age" | "membership" | "pay" | a custom credential id
+  opts: { ageVerified?: boolean; currentLabel?: string } = {},
+): string {
+  const isBuiltin = current === "age" || current === "membership" || current === "pay";
+  const gates = [
+    { key: "age", label: "Age", applies: order.lines.some((l) => typeof l.minimumAge === "number" && l.minimumAge > 0), done: opts.ageVerified === true },
+    { key: "membership", label: "Membership", applies: order.discount > 0, done: order.discount > 0 },
+    // A custom gate isn't implied by the order — surface it only while it's the current step.
+    ...(isBuiltin ? [] : [{ key: current, label: opts.currentLabel ?? current, applies: false, done: false }]),
+    { key: "pay", label: "Pay", applies: order.total > 0, done: false },
+  ];
+  const steps = gates.filter((g) => g.applies || g.key === current);
+  const currentIndex = steps.findIndex((g) => g.key === current);
+  // The current step is highlighted (ring), never ticked — even if otherwise "done".
+  return progressRail(steps.map((g) => ({ label: g.label, done: g.done && g.key !== current })), currentIndex);
+}
+
 // ── Trust footer ────────────────────────────────────────────────────────────
 
 /**

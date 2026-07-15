@@ -39,6 +39,7 @@ import { verifyMdocPresentation } from "./mdoc-verify.js";
 import { buildMdocRequestParts, sealMdocContext } from "../mdoc/mdoc-iso.js";
 import { mdocDocSpec, mdocDocSpecsFromDcql } from "./doc-spec.js";
 import { renderCredentialPage } from "./page.js";
+import { checkoutRail } from "../theme.js";
 
 // Minimal structural request/response shapes — the real Express req/res satisfy
 // them, so the package never imports express.
@@ -155,6 +156,10 @@ export const registerCredentialGate: RailRegistrar = (app: CeremonyApp, ctx: Cer
     const order = await resolveOrder(ctx, typeof req.query.order === "string" ? req.query.order : undefined, { cartMandate: decodeCartMandateParam(req.query.cart) });
     if (!order) { res.status(404).type("html").send("<!doctype html><h1>Order not found</h1>"); return; }
     const cart = typeof req.query.cart === "string" ? req.query.cart : undefined;
+    // Order-derived stepper with THIS gate current — only the gates the order actually has,
+    // Age ✓ only when truly verified (from the store), never a hardcoded Age · Membership · Pay.
+    const verified = (await ctx.verificationStore.read(order.id)) ?? {};
+    const ageVerified = verified.ageVerified === true;
     if (resolved.credential) {
       // Custom credential (007): render from its own ui + a demo claim derived from its request.
       res.status(200).type("html").send(
@@ -167,6 +172,7 @@ export const registerCredentialGate: RailRegistrar = (app: CeremonyApp, ctx: Cer
           action: resolved.credential.ui.action,
           demoClaims: demoClaimsFor(resolved.credential),
           cart,
+          rail: checkoutRail(order, resolved.credential.id, { ageVerified, currentLabel: resolved.credential.ui.label }),
         }),
       );
       return;
@@ -180,6 +186,7 @@ export const registerCredentialGate: RailRegistrar = (app: CeremonyApp, ctx: Cer
         currency: order.currency,
         percent: percentFor(order),
         cart,
+        rail: checkoutRail(order, resolved.kind, { ageVerified }),
       }),
     );
   });

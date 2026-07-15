@@ -12,7 +12,7 @@
 // Credentials API the page points the buyer at the instant-demo button. Every surface
 // states trust_level "presence-only-demo" (CT11 / Principle VII / FR-011): the wire
 // crypto is real; the issuer trust anchor is not — never a real safety control.
-import { pageHead, brandHeader, progressRail, trustFooter } from "../theme.js";
+import { pageHead, brandHeader, trustFooter } from "../theme.js";
 
 export interface CredentialPageArgs {
   /** `"age"` / `"membership"` (built-ins) OR a custom credential id (007). */
@@ -43,6 +43,9 @@ export interface CredentialPageArgs {
   /** statelessOrders: the base64url cart mandate to carry back to `/checkout` so the
    *  store-less hub can re-resolve this order. Appended to the default returnUrl. */
   cart?: string;
+  /** The order-derived progress rail HTML (from `checkoutRail`), built by the route which
+   *  holds the full re-priced order. Absent ⇒ no rail (never a hardcoded one). */
+  rail?: string;
 }
 
 function escapeHtml(s: string): string {
@@ -77,15 +80,11 @@ export function renderCredentialPage(args: CredentialPageArgs): string {
       : (args.demoClaims ?? {});
   const totalLine = args.total != null ? `<p class="small amount">Order ${escapeHtml(args.order)} · ${escapeHtml(args.currency ?? "USD")} ${args.total}</p>` : "";
   const returnUrl = args.returnUrl ?? `/checkout?order=${encodeURIComponent(args.order)}${args.cart ? `&cart=${args.cart}` : ""}`;
-  // Identity-first tagline + the progress rail with THIS gate marked current. The age
-  // gate is step 0 (Age) of Age · Membership · Pay; membership is the middle step; a
-  // custom gate shows a two-step [<label> · Pay] rail.
+  // Identity-first tagline + the order-derived progress rail (built by the route via
+  // checkoutRail) with THIS gate marked current. It lists only the gates the order
+  // actually has — never a hardcoded Age · Membership · Pay. Absent ⇒ no rail.
   const tagline = isAge ? "Present a digital ID" : isMembership ? "Present a membership credential" : `Present your ${customLabel.toLowerCase()}`;
-  const rail = isAge
-    ? progressRail([{ label: "Age" }, { label: "Membership" }, { label: "Pay" }], 0)
-    : isMembership
-      ? progressRail([{ label: "Age", done: true }, { label: "Membership" }, { label: "Pay" }], 1)
-      : progressRail([{ label: customLabel }, { label: "Pay" }], 0);
+  const rail = args.rail ?? "";
   void isCustom;
   // The PAGE-LOCAL extra styles: the calm gate-page chrome (verify log + the success
   // banner) layered over the shared design system. The verify-progress rows reuse the

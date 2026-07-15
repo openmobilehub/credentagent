@@ -15,7 +15,7 @@
 // crypto is real; the wallet's device/issuer trust anchor is not — never a real safety
 // control. Self-contained: takes the re-priced amount + lines, not a demo Order type.
 
-import { pageHead, brandHeader, progressRail, orderSummaryCard, trustFooter, settlingBar, completionHandoffBanner } from "../theme.js";
+import { pageHead, brandHeader, orderSummaryCard, trustFooter, settlingBar, completionHandoffBanner } from "../theme.js";
 
 export interface DcPaymentLine {
   name: string;
@@ -36,6 +36,9 @@ export interface DcPaymentPageArgs {
   returnUrl?: string;
   /** statelessOrders: base64url cart mandate carried back to the store-less `/checkout`. */
   cart?: string;
+  /** The order-derived progress rail HTML (from `checkoutRail`), built by the route which
+   *  holds the full re-priced order. Absent ⇒ no rail (never a hardcoded one). */
+  rail?: string;
 }
 
 // The canonical disclosed instrument the instant-demo button presents — it goes
@@ -62,8 +65,9 @@ export function renderDcPaymentPage(args: DcPaymentPageArgs): string {
     currency,
     caption: `Order ${order}`,
   });
-  // The progress rail with Pay as the current (final) step; the upstream gates are done.
-  const rail = progressRail([{ label: "Age", done: true }, { label: "Membership", done: true }, { label: "Pay" }], 2);
+  // The order-derived progress rail (built by the route via checkoutRail) with Pay current;
+  // it lists only the gates THIS order actually has — never a hardcoded Age ✓ · Membership ✓.
+  const rail = args.rail ?? "";
   // Page-local chrome layered over the shared design system: the verify-progress rows
   // reuse `.step`; the receipt gate rows + the success card are page-specific.
   const extraCss = `
