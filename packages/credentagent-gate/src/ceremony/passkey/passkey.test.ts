@@ -454,3 +454,36 @@ describe("serves @simplewebauthn/browser ESM same-origin at /credentagent/lib/sw
     expect(res.status).not.toBe(200);
   });
 });
+
+// ── #46 — the passkey PAYMENT rail is order-derived, never a hardcoded Age ✓ · Membership ✓ ──
+// The passkey page shipped the same phantom-gate rail the dc-payment fix removed; this is
+// the sibling that PR #62's review caught. Same bypass shape: fails against the old literal.
+function passkeyRailLabels(html: string): string[] {
+  return [...html.matchAll(/rail-label">([^<]+)</g)].map((m) => m[1]);
+}
+function passkeyAgeStepDone(html: string): boolean {
+  const m = html.match(/rail-step ([a-z]*)"><div class="rail-dot">([^<]+)<\/div><div class="rail-label">Age</);
+  return !!m && m[1] === "done" && m[2] === "✓";
+}
+
+describe("#46 — passkey rail reflects the order (no phantom gates / phantom ticks)", () => {
+  it("a non-age, non-discounted order shows ONLY Pay — no phantom Age/Membership steps", async () => {
+    const h = harness();
+    h.seed("ORD-NOAGE", [{ id: "aurora-headphones", quantity: 1 }]); // unrestricted, no discount
+    const res = await request(h.app).get("/credentagent/passkey").query({ order: "ORD-NOAGE" });
+    expect(passkeyRailLabels(res.text)).toEqual(["Pay"]);
+    expect(res.text).not.toContain('rail-label">Age');
+    expect(res.text).not.toContain('rail-label">Membership');
+  });
+
+  it("an age-restricted order shows Age PENDING until it is actually verified (no phantom ✓)", async () => {
+    const h = harness();
+    h.seed("ORD-AGE", [{ id: "oak-whiskey", quantity: 1 }]); // 21+
+    const pending = await request(h.app).get("/credentagent/passkey").query({ order: "ORD-AGE" });
+    expect(passkeyRailLabels(pending.text)).toEqual(["Age", "Pay"]);
+    expect(passkeyAgeStepDone(pending.text)).toBe(false);
+    await h.verificationStore.write("ORD-AGE", { ageVerified: true });
+    const done = await request(h.app).get("/credentagent/passkey").query({ order: "ORD-AGE" });
+    expect(passkeyAgeStepDone(done.text)).toBe(true);
+  });
+});

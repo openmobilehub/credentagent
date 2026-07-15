@@ -417,3 +417,41 @@ describe("statelessOrders — end-to-end through the dc-payment rail (empty orde
     expect(res.body.completed).not.toBe(true);
   });
 });
+
+// ── #46 — the progress rail is ORDER-derived, never a hardcoded Age ✓ · Membership ✓ ──
+// The dc-payment page used to build progressRail([Age done, Membership done, Pay]) for
+// EVERY order, so a payment page claimed the buyer had passed an Age and Membership gate
+// they may never have had. The rail is now derived from the re-priced order (which gates
+// it actually has) with Age ✓ only when truly recorded. These fail against the old code.
+function railLabels(html: string): string[] {
+  return [...html.matchAll(/rail-label">([^<]+)</g)].map((m) => m[1]);
+}
+function ageStepDone(html: string): boolean {
+  const m = html.match(/rail-step ([a-z]*)"><div class="rail-dot">([^<]+)<\/div><div class="rail-label">Age</);
+  return !!m && m[1] === "done" && m[2] === "✓";
+}
+
+describe("#46 — dc-payment rail reflects the order (no phantom gates / phantom ticks)", () => {
+  it("a non-age, non-discounted order shows ONLY Pay — no phantom Age/Membership steps", async () => {
+    const h = harness();
+    h.seed("ORD-NOAGE", [{ id: "aurora-headphones", quantity: 1 }]); // unrestricted, no discount
+    const res = await request(h.app).get("/credentagent/dc-payment?order=ORD-NOAGE");
+    // The old hardcoded rail always rendered Age · Membership · Pay.
+    expect(railLabels(res.text)).toEqual(["Pay"]);
+    expect(res.text).not.toContain('rail-label">Age');
+    expect(res.text).not.toContain('rail-label">Membership');
+  });
+
+  it("an age-restricted order shows Age PENDING until it is actually verified (no phantom ✓)", async () => {
+    const h = harness();
+    h.seed("ORD-AGE", [{ id: "oak-whiskey", quantity: 1 }]); // 21+
+    // age NOT recorded → Age step present but NOT ticked (old code marked it done:true always).
+    const pending = await request(h.app).get("/credentagent/dc-payment?order=ORD-AGE");
+    expect(railLabels(pending.text)).toEqual(["Age", "Pay"]);
+    expect(ageStepDone(pending.text)).toBe(false);
+    // record the age verification → the Age step flips to ✓.
+    await h.verificationStore.write("ORD-AGE", { ageVerified: true });
+    const done = await request(h.app).get("/credentagent/dc-payment?order=ORD-AGE");
+    expect(ageStepDone(done.text)).toBe(true);
+  });
+});

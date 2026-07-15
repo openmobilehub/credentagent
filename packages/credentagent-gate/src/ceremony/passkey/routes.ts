@@ -30,6 +30,7 @@ import type { CompletionInput } from "../types.js";
 import { buildPasskeyMandate, buildBindingFields, runGates } from "../mandate.js";
 import { buildRegistrationOptions, verifyPasskeyAssertion } from "./verify.js";
 import { renderPasskeyPage } from "./page.js";
+import { checkoutRail } from "../theme.js";
 
 // Minimal structural request/response shapes — the real Express req/res satisfy
 // them, so the package never imports express.
@@ -136,8 +137,12 @@ export const registerPasskeyGate: RailRegistrar = (app: CeremonyApp, ctx: Ceremo
   get("/credentagent/passkey", async (req, res) => {
     const order = await resolveOrder(ctx, typeof req.query.order === "string" ? req.query.order : undefined, { cartMandate: decodeCartMandateParam(req.query.cart) });
     if (!order) { res.status(404).type("html").send("<!doctype html><h1>Order not found</h1>"); return; }
+    // Order-derived stepper with Pay current: reflects only the gates THIS order has, and
+    // shows Age ✓ only when it was ACTUALLY verified (read from the store) — never hardcoded.
+    const verified = (await ctx.verificationStore.read(order.id)) ?? {};
+    const rail = checkoutRail(order, "pay", { ageVerified: verified.ageVerified === true });
     try {
-      res.status(200).type("html").send(renderPasskeyPage({ order, crossDevice: isCrossDevice(req.query.xdev), cart: typeof req.query.cart === "string" ? req.query.cart : undefined }));
+      res.status(200).type("html").send(renderPasskeyPage({ order, crossDevice: isCrossDevice(req.query.xdev), cart: typeof req.query.cart === "string" ? req.query.cart : undefined, rail }));
     } catch {
       // A hand-edited order can carry a bad currency that throws in Intl; never 500.
       res.status(404).type("html").send("<!doctype html><h1>Order not found</h1>");

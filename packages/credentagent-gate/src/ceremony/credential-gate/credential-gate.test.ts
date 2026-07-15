@@ -297,3 +297,27 @@ describe("CT11 — page / request descriptor / receipt all state presence-only-d
     expect(res.body.trust_level).toBe("presence-only-demo");
   });
 });
+
+// ── #46 — the credential-gate rail is order-derived, no phantom Age on the membership page ──
+// The deleted membership branch hardcoded { label: "Age", done: true }; the age branch
+// hardcoded a Membership step. The rail now derives from the order. Fails against the old code.
+function credRailLabels(html: string): string[] {
+  return [...html.matchAll(/rail-label">([^<]+)</g)].map((m) => m[1]);
+}
+
+describe("#46 — credential-gate rail reflects the order (no phantom steps)", () => {
+  it("the MEMBERSHIP gate page on a non-age order shows Membership · Pay — no hardcoded Age ✓", async () => {
+    const h = harness();
+    h.seed("ORD-NOAGE", [{ id: "aurora-headphones", quantity: 1 }]); // no age line, no discount
+    const res = await request(h.app).get("/credentagent/credential").query({ order: "ORD-NOAGE", cred: "membership" });
+    expect(credRailLabels(res.text)).toEqual(["Membership", "Pay"]);
+    expect(res.text).not.toContain('rail-label">Age'); // old membership branch showed Age done:true
+  });
+
+  it("the AGE gate page on an age order shows Age · Pay — no hardcoded Membership step", async () => {
+    const h = harness();
+    h.seed("ORD-AGE", [{ id: "oak-whiskey", quantity: 1 }]); // 21+, no discount
+    const res = await request(h.app).get("/credentagent/credential").query({ order: "ORD-AGE", cred: "age" });
+    expect(credRailLabels(res.text)).toEqual(["Age", "Pay"]); // old age branch showed Age·Membership·Pay
+  });
+});
