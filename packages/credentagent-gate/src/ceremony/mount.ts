@@ -9,7 +9,7 @@
 // The package stays dependency-free: `CeremonyApp` is a minimal structural type
 // (no `express` import) carrying just `locals` + the route methods a rail needs.
 import { randomBytes } from "node:crypto";
-import type { ReaderIdentity, VerificationStore } from "../types.js";
+import type { ReaderIdentity, VerificationManifestEntry, VerificationStore } from "../types.js";
 import { deriveOrigin, type Origin, type RequestLike } from "./origin.js";
 import type {
   CeremonyCatalog,
@@ -63,6 +63,10 @@ export interface CeremonySeams {
    *  the wallet's "unknown verifier" warning). Absent ⇒ per-request self-signed
    *  reader (presence-only). Normally set once on `new CredentAgent({ readerIdentity })`. */
   readerIdentity?: ReaderIdentity;
+  /** Resolve the full policy manifest for an order (the host's `store.gate` resolver).
+   *  Lets the ceremony rail pages render the SAME manifest-driven stepper as the checkout
+   *  hub, so they never diverge. Absent ⇒ rails fall back to the order-derived stepper. */
+  resolveGate?: (order: CeremonyOrder) => VerificationManifestEntry[];
 }
 
 /** The resolved context each rail receives (every required seam present). */
@@ -80,6 +84,8 @@ export interface CeremonyContext {
   statelessOrders?: boolean;
   /** Stable reader identity the rails present (absent ⇒ per-request self-signed). */
   readerIdentity?: ReaderIdentity;
+  /** Resolve the policy manifest for an order — feeds the rails' manifest-driven stepper. */
+  resolveGate?: (order: CeremonyOrder) => VerificationManifestEntry[];
 }
 
 /** A rail attaches its routes to the host app given the resolved context. */
@@ -109,6 +115,7 @@ export function mountCeremony(app: CeremonyApp, options: Partial<CeremonySeams> 
   const allowEphemeralKey = options.allowEphemeralKey ?? locals.allowEphemeralKey ?? false;
   const statelessOrders = options.statelessOrders ?? locals.statelessOrders ?? false;
   const readerIdentity = options.readerIdentity ?? locals.readerIdentity;
+  const resolveGate = options.resolveGate ?? locals.resolveGate;
   let signingKey = options.signingKey ?? locals.signingKey;
 
   // Fail fast (CT2) — a load-bearing seam must never silently default. (`origin`
@@ -148,6 +155,7 @@ export function mountCeremony(app: CeremonyApp, options: Partial<CeremonySeams> 
     statelessOrders,
     ...(settlement ? { settlement } : {}),
     ...(readerIdentity ? { readerIdentity } : {}),
+    ...(resolveGate ? { resolveGate } : {}),
   };
 
   // Re-expose the resolved seams on app.locals so the storefront's gate routes

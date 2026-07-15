@@ -19,7 +19,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { createStorefront } from "@openmobilehub/credentagent-storefront/server";
 import { createOrder, SAMPLE_CATALOG } from "@openmobilehub/credentagent-storefront";
-import { CredentAgent, age, membership, payment, required, optional, defineCredential, dcql, gate } from "@openmobilehub/credentagent-gate";
+import { CredentAgent, age, membership, payment, required, optional } from "@openmobilehub/credentagent-gate";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT ?? 3007);
@@ -49,26 +49,10 @@ const store = createStorefront({ createdOrderStore, baseUrl: BASE, signingKey: "
 const credentagent = new CredentAgent({ walletOrigin: BASE, ...(readerIdentity ? { readerIdentity } : {}) });
 credentagent.mount(store.app);
 
-// A CUSTOM gate (defineCredential) — a showcase that any credential drops into the same
-// policy and renders on the checkout page with its OWN label/action (the manifest is
-// dynamic and the renderer honors ui.label/ui.action). It's `optional` here because
-// completing its ceremony is still roadmap (the generic credential rail, #42) — so it
-// displays truthfully without blocking payment.
-const liquorLicense = defineCredential({
-  id: "liquor-license",
-  request: dcql({ docType: "org.example.liquor.license.1", claims: ["license_active"] }),
-  verify: (c) => c.license_active === true,
-  effect: gate(),
-  appliesTo: (o) => o.lines.some((l) => l.minimumAge != null), // alcohol carts only
-  ui: { label: "Liquor license", action: "Verify license" },
-});
-
-// The policy: age 21+ on age-restricted lines, the custom liquor-license gate (display
-// showcase), optional membership discount, payment last.
+// The policy: age 21+ on age-restricted lines, optional membership discount, payment last.
 store.gate((order) =>
   credentagent.requirements(order, [
     required(age.over(21).when((o) => o.lines.some((l) => l.minimumAge != null))),
-    optional(liquorLicense),
     optional(membership.discount(10)),
     required(payment.in("usd")),
   ]),

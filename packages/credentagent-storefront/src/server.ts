@@ -388,6 +388,10 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
     verificationStore,
     catalog: ceremonyCatalog,
     completion,
+    // The policy resolver (set by store.gate, possibly after this) — a closure so the
+    // ceremony rail pages render the SAME manifest-driven stepper as the checkout hub.
+    // Returns [] until store.gate is called (then the rails fall back to order-derived).
+    resolveGate: (order: Order) => resolveGate?.(order) ?? [],
     // signingKey survives an instance split; default to an ephemeral per-process key
     // for a single-process dev server / tests when none is configured (but statelessOrders
     // forces a concrete, storefront-owned key so it can sign the mandate).

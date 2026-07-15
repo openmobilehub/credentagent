@@ -9,7 +9,7 @@
 // render unchanged through the same code.
 
 import { describe, it, expect } from "vitest";
-import { renderRequirements, type RenderOrder, type PaymentOptions } from "./checkout-page.js";
+import { renderRequirements, renderManifestRail, type RenderOrder, type PaymentOptions } from "./checkout-page.js";
 import type { VerificationManifestEntry } from "../types.js";
 
 const order: RenderOrder = {
@@ -169,5 +169,29 @@ describe("renderRequirements — paid revisit", () => {
     // Also present on the paid revisit (defense in depth).
     const paidHtml = renderRequirements(order, manifest, {}, { paid: { amount: 124, currency: "USD", method: "passkey" } });
     expect(paidHtml).toContain('addEventListener("pageshow"');
+  });
+});
+
+describe("renderManifestRail — one shared, manifest-driven stepper (hub + ceremony rails)", () => {
+  const m: VerificationManifestEntry[] = [
+    { credential: "age", required: true, effect: "gate", enforcedAt: "checkout", trust_level: "presence-only-demo", label: "Age 21+" },
+    { credential: "liquor-license", required: false, effect: "gate", enforcedAt: "checkout", trust_level: "presence-only-demo", label: "Liquor license", action: "Verify license" },
+    { credential: "membership", required: false, effect: "discount", enforcedAt: "checkout", trust_level: "presence-only-demo", label: "10% off", discountPct: 10 },
+    { credential: "payment", required: true, effect: "authorize", enforcedAt: "checkout", trust_level: "presence-only-demo", label: "Pay" },
+  ];
+  const labels = (html: string): string[] => [...html.matchAll(/rail-label">([^<]+)</g)].map((x) => x[1]);
+
+  it("lists EVERY policy gate — custom + membership included — payment trailing", () => {
+    expect(labels(renderManifestRail(m, "pay", {}))).toEqual(["Age", "Liquor license", "Membership", "Pay"]);
+  });
+
+  it("the rail page (current='pay') and the hub (no current) build the SAME steps — no divergence", () => {
+    // This is the fix: the ceremony rails no longer derive a different stepper from the order.
+    expect(labels(renderManifestRail(m, "pay", { ageVerified: true }))).toEqual(labels(renderManifestRail(m, undefined, { ageVerified: true })));
+  });
+
+  it("highlights the current step by credential key", () => {
+    const html = renderManifestRail(m, "age", { ageVerified: false });
+    expect(html).toContain('class="rail-step current"'); // the Age step is current
   });
 });

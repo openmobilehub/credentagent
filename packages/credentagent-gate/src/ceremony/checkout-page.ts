@@ -121,24 +121,41 @@ function trustNote(entries: VerificationManifestEntry[]): string {
   return trustFooter();
 }
 
-// Map the manifest to the progress rail with live status — ONE step per gate the manifest
-// actually carries (so a custom gate appears too, not just Age/Membership), payment always
-// the trailing step. Age/membership keep their short labels; any other gate uses its own
-// `ui.label`. A gate the manifest doesn't carry simply doesn't appear.
+// Build the progress-rail steps from the MANIFEST — ONE step per gate the manifest carries
+// (so a custom gate appears too, not just Age/Membership), payment always the trailing step.
+// Age/membership keep their short labels; any other gate uses its own `ui.label`. Each step
+// is tagged with its credential key so a caller can highlight the "current" one.
 function railSteps(
-  gateEntries: VerificationManifestEntry[],
+  manifest: VerificationManifestEntry[],
   ageVerified: boolean,
   loyaltyApplied: boolean,
   paid: boolean,
-): RailStep[] {
-  const steps: RailStep[] = [];
-  for (const e of gateEntries) {
-    if (e.effect === "discount") steps.push({ label: "Membership", done: loyaltyApplied || paid });
-    else if (e.effect === "gate" && e.credential === "age") steps.push({ label: "Age", done: ageVerified || paid });
-    else if (e.effect === "gate") steps.push({ label: e.label, done: paid }); // custom gate — its own label
+): (RailStep & { key: string })[] {
+  const steps: (RailStep & { key: string })[] = [];
+  for (const e of manifest) {
+    if (e.effect === "authorize") continue;
+    if (e.effect === "discount") steps.push({ key: e.credential, label: "Membership", done: loyaltyApplied || paid });
+    else if (e.effect === "gate" && e.credential === "age") steps.push({ key: "age", label: "Age", done: ageVerified || paid });
+    else if (e.effect === "gate") steps.push({ key: e.credential, label: e.label, done: paid }); // custom gate — its own label
   }
-  steps.push({ label: "Pay", done: paid });
+  steps.push({ key: "pay", label: "Pay", done: paid });
   return steps;
+}
+
+// The progress-rail HTML from the MANIFEST (the single source of truth for the policy) —
+// shared by the checkout hub AND the ceremony rail pages so their steppers NEVER diverge.
+// `current` highlights a step by credential key ("age", "pay", a custom id); absent ⇒ the
+// first not-done step is current (the hub's behavior).
+export function renderManifestRail(
+  manifest: VerificationManifestEntry[],
+  current: string | undefined,
+  verification: { ageVerified?: boolean; loyaltyApplied?: boolean } = {},
+  paid = false,
+): string {
+  const steps = railSteps(manifest, !!verification.ageVerified, !!verification.loyaltyApplied, paid);
+  const byCurrent = current ? steps.findIndex((s) => s.key === current) : -1;
+  const currentIndex = byCurrent >= 0 ? byCurrent : steps.findIndex((s) => !s.done);
+  return progressRail(steps.map((s) => ({ label: s.label, done: s.done })), currentIndex);
 }
 
 // ── The page ──────────────────────────────────────────────────────────────────
@@ -225,9 +242,9 @@ export function renderRequirements(
       : renderPayment(order, paymentNumber, methods);
   const placeScript = paid || blocked ? "" : renderPlaceScript(order, methods, opts.payment);
 
-  // Progress rail mirrors the live gate status; current = first not-done step.
-  const steps = railSteps(gateEntries, ageVerified, loyaltyApplied, !!paid);
-  const rail = progressRail(steps, steps.findIndex((s) => !s.done));
+  // Progress rail mirrors the live gate status; current = first not-done step. Uses the
+  // SAME manifest-driven builder the ceremony rail pages use, so the steppers never diverge.
+  const rail = renderManifestRail(manifest, undefined, { ageVerified, loyaltyApplied }, !!paid);
   const itemCount = order.itemCount ?? order.lines.reduce((n, l) => n + l.quantity, 0);
 
   // bfcache guard. After authorizing on a gate page (passkey / dc-payment), a buyer
