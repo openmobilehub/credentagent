@@ -102,6 +102,10 @@ const DESIGN_CSS = `
   .btn-primary:active { transform: translateY(1px); }
   .btn-secondary { background: transparent; color: var(--accent); border-color: var(--hairline); }
   .btn-secondary:hover { border-color: var(--accent); }
+  /* De-emphasized but INTENTIONAL — for OPTIONAL gates (e.g. a loyalty discount): a soft
+     teal-tint fill, not a bare outline, so it reads as "optional action", not "broken". */
+  .btn-optional { background: #f0fdfa; color: var(--accent); border-color: #99f6e4; }
+  .btn-optional:hover { background: #ccfbf1; border-color: var(--accent); }
   .btn-danger { background: var(--accent); color: #fff; border-color: var(--accent); }
   .btn + .btn { margin-top: 10px; }
   .btn:disabled { opacity: .55; cursor: default; }

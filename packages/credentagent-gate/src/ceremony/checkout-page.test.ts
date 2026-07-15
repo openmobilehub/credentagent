@@ -72,7 +72,8 @@ describe("renderRequirements — numbered gates + live status", () => {
     ];
     const html = renderRequirements(order, withCustom, { ageVerified: false });
     expect(html).toContain("Verify license"); // the custom gate's OWN action verb
-    expect(html).toContain("Liquor license required to continue."); // its own copy, not age's
+    expect(html).toContain("Liquor license — optional."); // its own copy (optional here), not age's
+    expect(html).toContain("btn-optional"); // optional gate → de-emphasized button style, not solid
     expect(html).toContain('rail-label">Liquor license'); // and a stepper step for it
     // The bug rendered the custom gate as a SECOND age gate — assert exactly one age button.
     expect((html.match(/Verify age/g) ?? []).length).toBe(1);

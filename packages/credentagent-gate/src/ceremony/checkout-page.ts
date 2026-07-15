@@ -291,12 +291,15 @@ function renderGate(entry: VerificationManifestEntry, n: number, satisfied: bool
   // `step-no` is kept (tests + the rail both read off the numbered policy order); the
   // card chrome and teal accent come from the shared design system.
   const no = `<span class="step-no">${n}.</span>`;
+  // Required gates are prominent (solid teal); OPTIONAL gates + discounts are de-emphasized
+  // (soft teal-tint) so the button style tells the truth about whether you MUST pass it.
+  const btnClass = entry.required ? "btn-primary" : "btn-optional";
   if (entry.effect === "discount") {
     const pct = entry.discountPct;
     return satisfied
       ? `<div class="card"><div class="row-ok">${no} ✓ Loyalty discount applied${pct != null ? ` (${pct}% off)` : ""}</div></div>`
       : entry.approveUrl
-        ? `<div class="card"><a class="btn btn-secondary" href="${escapeHtml(entry.approveUrl)}">${no} Apply loyalty discount${pct != null ? ` (${pct}% off)` : ""}</a></div>`
+        ? `<div class="card"><a class="btn btn-optional" href="${escapeHtml(entry.approveUrl)}">${no} Apply loyalty discount${pct != null ? ` (${pct}% off)` : ""}</a></div>`
         : "";
   }
   // gate effect — age keeps its rich, specific copy; ANY other gate uses its OWN
@@ -307,7 +310,7 @@ function renderGate(entry: VerificationManifestEntry, n: number, satisfied: bool
       return `<div class="card"><div class="row-ok">${no} ✓ Age verified — ${age}+</div></div>`;
     }
     const link = entry.approveUrl
-      ? `<a class="btn btn-primary" href="${escapeHtml(entry.approveUrl)}">Verify age (${age}+)</a>`
+      ? `<a class="btn ${btnClass}" href="${escapeHtml(entry.approveUrl)}">Verify age (${age}+)</a>`
       : "";
     return `<div class="card"><div class="row-pending">${no} 🔒 This order contains age-restricted items. Verify you're ${age} or older to continue.</div>${link ? `<div style="margin-top:12px;">${link}</div>` : ""}</div>`;
   }
@@ -317,9 +320,12 @@ function renderGate(entry: VerificationManifestEntry, n: number, satisfied: bool
     return `<div class="card"><div class="row-ok">${no} ✓ ${escapeHtml(label)} verified</div></div>`;
   }
   const link = entry.approveUrl
-    ? `<a class="btn btn-primary" href="${escapeHtml(entry.approveUrl)}">${escapeHtml(action)}</a>`
+    ? `<a class="btn ${btnClass}" href="${escapeHtml(entry.approveUrl)}">${escapeHtml(action)}</a>`
     : "";
-  return `<div class="card"><div class="row-pending">${no} 🔒 ${escapeHtml(label)} required to continue.</div>${link ? `<div style="margin-top:12px;">${link}</div>` : ""}</div>`;
+  const lead = entry.required
+    ? `🔒 ${escapeHtml(label)} required to continue.`
+    : `${escapeHtml(label)} — optional.`;
+  return `<div class="card"><div class="row-pending">${no} ${lead}</div>${link ? `<div style="margin-top:12px;">${link}</div>` : ""}</div>`;
 }
 
 // The Shopify-style payment-method group (one radio group, one Pay CTA). The methods
