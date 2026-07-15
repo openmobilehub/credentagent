@@ -47,20 +47,53 @@ const catalog = {
   },
 };
 const orderStore = { read: async (id) => ({ id, lines: [{ id: "cinema-ticket", quantity: 1 }] }) };
-const completion = async () => ({ completed: true });
+const completed = new Set(); // order ids that finished payment, so /checkout can show "done"
+const completion = async (input) => { if (input?.order?.id) completed.add(input.order.id); return { completed: true }; };
 
 const app = express();
 const credentagent = new CredentAgent({ walletOrigin: `http://localhost:${PORT}`, ...(readerIdentity ? { readerIdentity } : {}) });
 credentagent.mount(app, { orderStore, catalog, completion, signingKey: "demo-gate-secret" });
 
-app.get("/", (_req, res) =>
-  res.type("html").send(
-    `<!doctype html><meta name=viewport content="width=device-width,initial-scale=1">` +
-    `<h1>CredentAgent demo gate</h1><ul>` +
-    `<li><a href="/credentagent/credential?cred=age&order=ORD-DEMO">Age gate (mDL)</a></li>` +
-    `<li><a href="/credentagent/dc-payment?order=ORD-DEMO">Payment gate (payment credential)</a></li></ul>`,
-  ),
-);
+// Checkout hub — sequences the gates (age → pay → done) so ONE link walks the whole
+// flow. This is what the gate pages return to (their default returnUrl is
+// /checkout?order=<id>). NOTE: the hub is run-gate's own demo glue, NOT part of the
+// gate library — the gate mounts /credentagent/*; a real host (the storefront) owns
+// its own checkout. It reads age-verified from CredentAgent's per-order store and
+// "paid" from the completion seam above.
+app.get("/checkout", async (req, res) => {
+  const orderId = typeof req.query.order === "string" ? req.query.order : "ORD-DEMO";
+  const stored = await orderStore.read(orderId);
+  const order = catalog.createOrder(stored.lines.map((l) => ({ productId: l.id, quantity: l.quantity })), orderId);
+  const ageRestricted = order.lines.some((l) => typeof l.minimumAge === "number" && l.minimumAge > 0);
+  const ageDone = (((await credentagent.store.read(orderId)) || {}).ageVerified) === true;
+  const paid = completed.has(orderId);
+  const q = `order=${encodeURIComponent(orderId)}`;
+  const next =
+    ageRestricted && !ageDone ? { label: "Verify age (21+) →", href: `/credentagent/credential?cred=age&${q}` }
+    : !paid ? { label: `Authorize $${order.total} →`, href: `/credentagent/dc-payment?${q}` }
+    : null;
+  const tick = (d) => (d ? "✅" : "⬜️");
+  const rows = [
+    ...(ageRestricted ? [`${tick(ageDone)} Verify age (21+)`] : []),
+    `${tick(paid)} Pay $${order.total}`,
+  ].map((r) => `<li>${r}</li>`).join("");
+  res.type("html").send(`<!doctype html><meta name=viewport content="width=device-width,initial-scale=1">
+<style>body{font:16px/1.55 -apple-system,system-ui,sans-serif;max-width:560px;margin:44px auto;padding:0 20px;color:#0f172a}
+h1{font-size:22px;margin:0 0 4px}.muted{color:#64748b}
+.card{border:1px solid #e2e8f0;border-radius:14px;padding:22px;box-shadow:0 1px 3px rgba(15,23,42,.08)}
+ul{list-style:none;padding:0;font-size:18px;margin:0}li{margin:10px 0}
+a.btn{display:block;text-align:center;background:#0d9488;color:#fff;font-weight:700;text-decoration:none;padding:14px;border-radius:10px;margin-top:18px}
+.done{background:#ecfdf5;border:1px solid #34d399;color:#047857;font-weight:700;text-align:center;padding:16px;border-radius:12px;margin-top:18px}</style>
+<h1>Checkout — ${orderId}</h1>
+<p class="muted">Cinema ticket ×1 · $${order.total}${ageRestricted ? " · age-restricted (21+)" : ""}</p>
+<div class="card">
+  <ul>${rows}</ul>
+  ${next ? `<a class="btn" href="${next.href}">${next.label}</a>` : `<div class="done">✓ Order complete — every gate satisfied</div>`}
+</div>
+<p class="muted" style="font-size:13px;margin-top:14px">🔒 presence-only-demo. Red "untrusted" warnings on the wallet are expected unless you've imported the VICAL/RICAL — the flow still completes.</p>`);
+});
+
+app.get("/", (_req, res) => res.redirect("/checkout?order=ORD-DEMO"));
 
 app.listen(PORT, () => {
   const b = `http://localhost:${PORT}`;
@@ -69,9 +102,8 @@ app.listen(PORT, () => {
     ? `  reader identity : certs/reader-cert.pem  (SAN=localhost, on utopia.rical → verifier shows TRUSTED)`
     : `  reader identity : none — self-signed per request. Ceremony still works; wallet shows the\n                    verifier as UNTRUSTED (red). Run ./gen-pki.sh + import utopia.rical to fix.`);
   console.log(`  order           : ORD-DEMO  (1× Cinema ticket, age 21+)\n`);
-  console.log(`On the phone (after \`adb reverse tcp:${PORT} tcp:${PORT}\`), open one of:`);
-  console.log(`  Age gate    : ${b}/credentagent/credential?cred=age&order=ORD-DEMO`);
-  console.log(`  Payment gate: ${b}/credentagent/dc-payment?order=ORD-DEMO`);
-  console.log(`  (or the index: ${b}/ )\n`);
+  console.log(`Full checkout flow (age → pay → done) — one link:`);
+  console.log(`  ${b}/checkout?order=ORD-DEMO`);
+  console.log(`  (on the phone: \`adb reverse tcp:${PORT} tcp:${PORT}\` first, then open it there)\n`);
   console.log(`Ctrl-C to stop.`);
 });
