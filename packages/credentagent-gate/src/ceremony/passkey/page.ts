@@ -13,13 +13,13 @@
 // → resolveOrder), so the amount shown and bound comes from the catalog, never the
 // order id/token (invariant 2).
 import type { CeremonyOrder } from "../types.js";
-import { pageHead, brandHeader, progressRail, orderSummaryCard, trustFooter, settlingBar, completionHandoffBanner } from "../theme.js";
+import { pageHead, brandHeader, orderSummaryCard, trustFooter, settlingBar, completionHandoffBanner } from "../theme.js";
 
 function money(amount: number, currency: string): string {
   return new Intl.NumberFormat("en-US", { style: "currency", currency }).format(amount);
 }
 
-export function renderPasskeyPage(args: { order: CeremonyOrder; crossDevice?: boolean; returnUrl?: string; cart?: string }): string {
+export function renderPasskeyPage(args: { order: CeremonyOrder; crossDevice?: boolean; returnUrl?: string; cart?: string; rail?: string }): string {
   const { order, crossDevice = false } = args;
   // Where the completed receipt links back to — the checkout hub, which then renders
   // the paid state (a forward, fresh GET — so the buyer never browser-backs onto a
@@ -36,7 +36,9 @@ export function renderPasskeyPage(args: { order: CeremonyOrder; crossDevice?: bo
     caption: `Order ${order.id}`,
   });
   // Pay is the current (final) step; the upstream gates are done by the time payment runs.
-  const rail = progressRail([{ label: "Age", done: true }, { label: "Membership", done: true }, { label: "Pay" }], 2);
+  // The order-derived progress rail (built by the route via checkoutRail) with Pay current;
+  // it lists only the gates THIS order actually has — never a hardcoded Age ✓ · Membership ✓.
+  const rail = args.rail ?? "";
   const tagline = crossDevice ? "Approve on your phone (scan a QR)" : "Authorize with this device";
 
   // crossDevice pins the registration to a roaming authenticator, so the browser
