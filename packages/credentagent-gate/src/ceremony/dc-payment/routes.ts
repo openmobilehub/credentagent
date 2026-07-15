@@ -83,9 +83,10 @@ export const registerDcPaymentGate: RailRegistrar = (app: CeremonyApp, ctx: Cere
   get("/credentagent/dc-payment", async (req, res) => {
     const order = await resolveOrder(ctx, typeof req.query.order === "string" ? req.query.order : undefined, { cartMandate: decodeCartMandateParam(req.query.cart) });
     if (!order) { res.status(404).type("html").send("<!doctype html><h1>Order not found</h1>"); return; }
+    const ageVerified = (await ctx.verificationStore.read(order.id))?.ageVerified === true;
     res.status(200).type("html").send(
       renderDcPaymentPage({
-        rail: checkoutRail(order, "pay"),
+        rail: checkoutRail(order, "pay", { age: ageVerified }),
         order: order.id,
         total: order.total,
         currency: order.currency,

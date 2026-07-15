@@ -321,25 +321,30 @@ export function progressRail(steps: RailStep[], currentIndex: number): string {
 
 /**
  * The checkout progress rail for THIS order — includes ONLY the gates that actually
- * apply: age when the cart is age-restricted, membership when a discount is in play,
- * pay when there's an amount. `current` is highlighted and prior steps show ✓. Derived
- * from the re-priced order (invariant 2), so the rail can't promise a step the order
- * doesn't have — e.g. a membership-less order shows no Membership step. The `current`
- * gate is always included even if its `applies` check is false (you're on its page).
+ * apply (age when the cart is age-restricted, membership when a discount is in play,
+ * pay when there's an amount), derived from the re-priced order (invariant 2), so it
+ * can't promise a step the order doesn't have.
+ *
+ * A step shows ✓ only when that gate is ACTUALLY satisfied — age from the verification
+ * record (`done.age`), membership from an applied discount — NEVER merely because it
+ * sits before the current step. So landing straight on the pay page with age unverified
+ * shows Age as pending, not done. The `current` gate is highlighted (not ticked) and is
+ * always included even if its `applies`/`done` checks are false (you're on its page).
  */
 export function checkoutRail(
   order: { lines: { minimumAge?: number }[]; discount: number; total: number },
   current: "age" | "membership" | "pay",
+  done: { age?: boolean } = {},
 ): string {
-  const gates: { key: "age" | "membership" | "pay"; label: string; applies: boolean }[] = [
-    { key: "age", label: "Age", applies: order.lines.some((l) => typeof l.minimumAge === "number" && l.minimumAge > 0) },
-    { key: "membership", label: "Membership", applies: order.discount > 0 },
-    { key: "pay", label: "Pay", applies: order.total > 0 },
+  const gates: { key: "age" | "membership" | "pay"; label: string; applies: boolean; done: boolean }[] = [
+    { key: "age", label: "Age", applies: order.lines.some((l) => typeof l.minimumAge === "number" && l.minimumAge > 0), done: done.age === true },
+    { key: "membership", label: "Membership", applies: order.discount > 0, done: order.discount > 0 },
+    { key: "pay", label: "Pay", applies: order.total > 0, done: false },
   ];
   const steps = gates.filter((g) => g.applies || g.key === current);
   const currentIndex = steps.findIndex((g) => g.key === current);
   return progressRail(
-    steps.map((g, i) => ({ label: g.label, done: currentIndex >= 0 && i < currentIndex })),
+    steps.map((g) => ({ label: g.label, done: g.done && g.key !== current })),
     currentIndex,
   );
 }

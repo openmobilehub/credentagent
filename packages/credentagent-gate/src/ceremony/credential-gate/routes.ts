@@ -117,10 +117,11 @@ export const registerCredentialGate: RailRegistrar = (app: CeremonyApp, ctx: Cer
     if (!kind) { res.status(404).type("html").send("<!doctype html><h1>Unknown credential</h1>"); return; }
     const order = await resolveOrder(ctx, typeof req.query.order === "string" ? req.query.order : undefined, { cartMandate: decodeCartMandateParam(req.query.cart) });
     if (!order) { res.status(404).type("html").send("<!doctype html><h1>Order not found</h1>"); return; }
+    const ageVerified = (await ctx.verificationStore.read(order.id))?.ageVerified === true;
     res.status(200).type("html").send(
       renderCredentialPage({
         kind,
-        rail: checkoutRail(order, kind === "age" ? "age" : "membership"),
+        rail: checkoutRail(order, kind === "age" ? "age" : "membership", { age: ageVerified }),
         order: order.id,
         minimumAge: requiredAgeForOrder(order) ?? undefined,
         total: order.total,

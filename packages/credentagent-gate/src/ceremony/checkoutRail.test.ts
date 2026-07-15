@@ -18,12 +18,20 @@ describe("checkoutRail reflects the order's actual gates (#46)", () => {
     expect(hasStep(html, "Membership")).toBe(false); // no phantom step
   });
 
-  it("on the payment page, Age is done and Pay is current (still no Membership)", () => {
-    const html = checkoutRail(ageOnly, "pay");
+  it("on the payment page with age VERIFIED, Age shows done and Pay is current", () => {
+    const html = checkoutRail(ageOnly, "pay", { age: true });
     expect(hasStep(html, "Age")).toBe(true);
     expect(hasStep(html, "Membership")).toBe(false);
-    expect(html).toContain("✓"); // the upstream Age step shows done
+    expect(html).toContain("✓"); // Age ticked because it was ACTUALLY verified
     expect(html).toContain('class="rail-step current"'); // Pay highlighted
+  });
+
+  it("on the payment page with age NOT verified, Age is pending — no phantom ✓", () => {
+    // Landing straight on the pay URL without verifying age must NOT tick Age just
+    // because it sits before Pay (the bug caught by direct navigation).
+    const html = checkoutRail(ageOnly, "pay");
+    expect(hasStep(html, "Age")).toBe(true);
+    expect(html).not.toContain("✓");
   });
 
   it("includes Membership only when a discount is actually applied", () => {
