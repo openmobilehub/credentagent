@@ -96,6 +96,7 @@ export function buildPasskeyMandate(args: {
     cart: order,
     payment: {
       instrument: "stripe_test",
+      // eslint-disable-next-line no-restricted-properties -- cosmetic mock display id, not security randomness
       instrumentReference: "pi_3Mock" + Math.random().toString(36).slice(2, 10).toUpperCase(),
       network: "card",
       amount: binding.amount,
