@@ -155,7 +155,9 @@ Quick gate for any new/changed public API (full list in the rubric):
 
 ## Code review
 
-PRs get both automated and human review:
+PRs get both automated and human review. **`REVIEW.md` (repo root) is the checklist both
+run** — the automated review's prompt grounds itself there; apply it when reviewing and
+anticipate it when authoring:
 
 > **Maintainers: push your feature branch to this repo — don't fork.** The automatic
 > Claude review only runs on **same-repo** PRs (GitHub withholds secrets from fork-PR

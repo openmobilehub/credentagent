@@ -19,7 +19,7 @@ Use it to see the packages in action; contribute library changes here.
 
 ## Dev setup
 
-You need **Node ≥ 20** (CI pins Node 20; both packages declare `engines.node >= 20`).
+You need **Node ≥ 20** (CI runs Node 22; both packages declare `engines.node >= 20`).
 
 ```bash
 npm install        # installs the workspace + dev deps (use `npm ci` for a clean, lockfile-exact install)
@@ -34,6 +34,7 @@ Useful per-task commands:
 | `npm run build` | Build both workspaces (`build --workspaces --if-present`) → typecheck → build the server. |
 | `npm run test` | Run every test once (`vitest run`). |
 | `npm run typecheck` | `tsc --noEmit` — types only, no emit. |
+| `npm run lint` | The invariant-encoding lint rules (`eslint.config.js`) — the mechanically-checkable slice of `SECURITY-INVARIANTS.md`. |
 
 You can also build or test a single package from its directory (each workspace exposes its own
 `build` and `test` scripts), but **`npm run build` and `npm run test` from the repo root must both
@@ -46,7 +47,10 @@ This is an OpenWallet Foundation / openmobilehub repo, so it enforces the
 `Signed-off-by:` line** asserting you have the right to contribute the change under the project's
 license (Apache-2.0).
 
-Sign off as you commit:
+**This is automated for you:** `npm install` activates the committed
+`scripts/git-hooks/prepare-commit-msg` hook (via `core.hooksPath`), which appends the
+`Signed-off-by:` trailer from your git identity to any commit that lacks one. You can
+still sign off explicitly — the hook never duplicates an existing trailer:
 
 ```bash
 git commit -s -m "your message"
@@ -77,7 +81,9 @@ you push to a branch here, you get that review for free.
 
 ## Code review
 
-PRs get both automated and human review.
+PRs get both automated and human review. The checklist both run is
+[`REVIEW.md`](REVIEW.md) (repo root) — read it before opening a PR to know exactly what
+your diff will be held against.
 
 ### Automated Claude review
 
@@ -157,6 +163,7 @@ turns up something off, fix it or flag it.
 ## Checklist before you open a PR
 
 - [ ] `npm run build` passes (both packages build, typecheck, server builds).
+- [ ] `npm run lint` passes — a new `eslint-disable` needs a one-line justification.
 - [ ] `npm run test` passes, and new tests cover the security-critical / bypass paths.
 - [ ] For any UI/flow change: you drove the real UI end-to-end and confirmed **every screen tells the truth** — not just that the happy path completes (no stale/locked page for a paid order, no step or label claiming something that didn't happen).
 - [ ] Every commit is signed off (`git commit -s`); the DCO check will be green.

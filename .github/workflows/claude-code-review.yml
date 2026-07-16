@@ -3,21 +3,12 @@ name: Claude Code Review
 on:
   pull_request:
     types: [opened, synchronize, ready_for_review, reopened]
-    # Optional: Only run on specific file changes
-    # paths:
-    #   - "src/**/*.ts"
-    #   - "src/**/*.tsx"
-    #   - "src/**/*.js"
-    #   - "src/**/*.jsx"
 
 jobs:
   claude-review:
-    # Optional: Filter by PR author
-    # if: |
-    #   github.event.pull_request.user.login == 'external-contributor' ||
-    #   github.event.pull_request.user.login == 'new-developer' ||
-    #   github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR'
-
+    # Draft PRs are skipped to save cost (CONTRIBUTING.md) — mark ready-for-review
+    # to trigger the run. This is a required status check on same-repo PRs.
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -31,6 +22,19 @@ jobs:
         with:
           fetch-depth: 1
 
+      # A PR must not weaken its own required review: fail if this workflow file
+      # differs from main (an intentional change needs an admin merge — CLAUDE.md).
+      # This guards against accidental or unnoticed edits; a same-repo PR could
+      # still remove this step, which is why human review of workflow diffs and
+      # branch protection remain the backstop.
+      - name: Refuse a PR that edits this workflow
+        run: |
+          git fetch --depth=1 origin main
+          if ! git diff --quiet origin/main -- .github/workflows/claude-code-review.yml; then
+            echo "::error file=.github/workflows/claude-code-review.yml::This PR edits the review workflow; it must match main (admin merge required)."
+            exit 1
+          fi
+
       - name: Run Claude Code Review
         id: claude-review
         uses: anthropics/claude-code-action@v1
@@ -38,7 +42,13 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
           plugins: 'code-review@claude-code-plugins'
-          prompt: '/code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }}'
-          # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
-          # or https://code.claude.com/docs/en/cli-reference for available options
+          prompt: |
+            /code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }}
 
+            Ground the review in REVIEW.md at the repo root and follow its output
+            contract. Apply its diff-trigger table against SECURITY-INVARIANTS.md,
+            the delete-the-control bypass-test rule, the DX rubric
+            (docs/reference/architecture-principles.md), and the honesty fencing.
+            A violated security invariant, a missing bypass test for a changed
+            control, a DX-rubric regression, or an overclaim of trust_level is
+            request-changes.

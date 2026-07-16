@@ -6,19 +6,26 @@
   "description": "CredentAgent — the consent layer for AI agents (@openmobilehub/credentagent-* packages)",
   "license": "Apache-2.0",
   "homepage": "https://github.com/openmobilehub/credentagent",
-  "repository": { "type": "git", "url": "https://github.com/openmobilehub/credentagent.git" },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openmobilehub/credentagent.git"
+  },
   "workspaces": [
     "packages/*"
   ],
   "scripts": {
+    "prepare": "git config core.hooksPath scripts/git-hooks 2>/dev/null || true",
     "build": "npm run build --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "eslint .",
     "test": "vitest run"
   },
   "devDependencies": {
     "@types/express": "^5.0.0",
     "@types/node": "^22.10.0",
     "@types/supertest": "^7.2.0",
+    "@typescript-eslint/parser": "^8.64.0",
+    "eslint": "^10.7.0",
     "supertest": "^7.2.2",
     "typescript": "^5.9.3",
     "vitest": "^2.1.0"

@@ -31,7 +31,7 @@ Both are at `0.2.0`, Apache-2.0, ESM, ship their own types, and declare `publish
 2. Then publish **`@openmobilehub/credentagent-storefront@0.2.0`**.
 
 ```bash
-npm run build:packages                                   # build both dist/
+npm run build                                            # build both workspaces' dist/
 npm publish -w @openmobilehub/credentagent-gate --access public
 npm publish -w @openmobilehub/credentagent-storefront --access public
 ```
