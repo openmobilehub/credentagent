@@ -241,12 +241,17 @@ export async function completeOrder(input: CompletionInput, ctx: CompletionConte
     // `over-total` = would breach the cumulative cap at commit time.
     let commit: import("./revocation.js").CommitResult;
     try {
-      commit = await store.commitDraw(intent.intentId, { amount: draw.amount, pspTransactionId: draw.pspTransactionId }, { totalAmount: intent.totalAmount });
+      commit = await store.commitDraw(intent.intentId, { amount: draw.amount, pspTransactionId: draw.pspTransactionId }, { totalAmount: intent.totalAmount, subject: intent.subject });
     } catch {
       return { completed: false, reason: "draw", refusals: [refusal("revocation-unavailable")] };
     }
     if (!commit.ok) {
-      const detail = commit.reason === "consumed" ? { pspTransactionId: draw.pspTransactionId } : { total: intent.totalAmount };
+      // commitDraw is the atomic authority — a revoke that landed after the pre-check above
+      // is caught here (`revoked`), closing the check-then-act TOCTOU on the kill-switch.
+      const detail =
+        commit.reason === "consumed" ? { pspTransactionId: draw.pspTransactionId }
+        : commit.reason === "revoked" ? { intentId: intent.intentId }
+        : { total: intent.totalAmount };
       return { completed: false, reason: "draw", refusals: [refusal(commit.reason, detail)] };
     }
 

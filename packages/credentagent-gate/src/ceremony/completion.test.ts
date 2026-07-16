@@ -398,3 +398,28 @@ describe("completeOrder — draw path hardening (PR #41 review)", () => {
     expect(replay.delegationId).toBe(intent.intentId); // dropped on the echo before the fix
   });
 });
+
+// ── TOCTOU (PR #41 review): a revoke landing AFTER the seam's fast isRevoked pre-check (during
+// checkDraw's async crypto) must still be caught at the atomic commitDraw — else it completes. ─
+describe("completeOrder — draw TOCTOU: revoke mid-completion is caught atomically", () => {
+  it("BYPASS: a grant revoked after the pre-check is refused at commit, not completed in-flight", async () => {
+    const h = harness();
+    const { intent, mkDraw } = await drawFixture();
+    const draw = await mkDraw(20);
+    const real = new MemoryRevocationStore();
+    real.revoke(intent.intentId); // the grant IS revoked...
+    // ...but the seam's upfront isRevoked read RACES and misses it (the revoke landed during
+    // checkDraw's await). Delegate everything to the real store EXCEPT isRevoked → false.
+    const racing = {
+      isRevoked: async () => false,
+      revoke: (id: string) => real.revoke(id),
+      revokeSubject: (s: string) => real.revokeSubject(s),
+      priorDraws: (id: string) => real.priorDraws(id),
+      commitDraw: (id: string, d: Parameters<typeof real.commitDraw>[1], o: Parameters<typeof real.commitDraw>[2]) => real.commitDraw(id, d, o),
+    };
+    const res = await completeOrder(h.input([{ productId: "widget", quantity: 2 }], { amount: 20, draw: { intent, draw } }), { ...h.ctx, revocation: racing });
+    expect(res.completed).toBe(false); // completes in-flight if commitDraw doesn't re-check revocation
+    expect(res.refusals?.[0]?.code).toBe("revoked");
+    expect(h.records.size).toBe(0);
+  });
+});

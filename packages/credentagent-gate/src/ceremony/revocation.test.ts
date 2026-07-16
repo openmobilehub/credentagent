@@ -43,3 +43,17 @@ describe("MemoryRevocationStore", () => {
     expect(s.commitDraw("int_1", { amount: 15, pspTransactionId: "c" }, { totalAmount: 40 })).toEqual({ ok: true });
   });
 });
+
+// ── Atomic revocation at the consume (PR #41 review — TOCTOU fix) ──────────────────────────
+describe("MemoryRevocationStore — commitDraw is the atomic revocation point", () => {
+  it("BYPASS: commitDraw refuses a revoked grant (kill-switch decided at the consume, not only the pre-check)", () => {
+    const s = new MemoryRevocationStore();
+    s.revoke("int_1");
+    expect(s.commitDraw("int_1", { amount: 10, pspTransactionId: "tx" }, { totalAmount: 100 })).toEqual({ ok: false, reason: "revoked" });
+  });
+  it("commitDraw refuses a subject-revoked grant (kill-switch by subject)", () => {
+    const s = new MemoryRevocationStore();
+    s.revokeSubject("acct-42");
+    expect(s.commitDraw("int_1", { amount: 10, pspTransactionId: "tx" }, { totalAmount: 100, subject: "acct-42" })).toEqual({ ok: false, reason: "revoked" });
+  });
+});
