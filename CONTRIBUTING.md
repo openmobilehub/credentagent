@@ -47,7 +47,10 @@ This is an OpenWallet Foundation / openmobilehub repo, so it enforces the
 `Signed-off-by:` line** asserting you have the right to contribute the change under the project's
 license (Apache-2.0).
 
-Sign off as you commit:
+**This is automated for you:** `npm install` activates the committed
+`scripts/git-hooks/prepare-commit-msg` hook (via `core.hooksPath`), which appends the
+`Signed-off-by:` trailer from your git identity to any commit that lacks one. You can
+still sign off explicitly — the hook never duplicates an existing trailer:
 
 ```bash
 git commit -s -m "your message"

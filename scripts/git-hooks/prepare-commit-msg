@@ -1,0 +1,14 @@
+#!/bin/sh
+# Auto-append the DCO Signed-off-by trailer (CONTRIBUTING.md) when it is missing,
+# using your git identity — the DCO check blocks any unsigned commit, so this
+# turns a whole class of blocked PRs into a no-op. Activated by `npm install`
+# (the root "prepare" script sets core.hooksPath to scripts/git-hooks).
+# Idempotent: `git commit -s` / `git rebase --signoff` output is left untouched;
+# a commit already signed by someone else still gains YOUR sign-off (DCO).
+NAME=$(git config user.name)
+EMAIL=$(git config user.email)
+if [ -z "$NAME" ] || [ -z "$EMAIL" ]; then
+  exit 0
+fi
+git interpret-trailers --if-exists addIfDifferent \
+  --trailer "Signed-off-by: $NAME <$EMAIL>" --in-place "$1"
