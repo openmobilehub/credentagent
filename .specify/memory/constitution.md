@@ -1,28 +1,26 @@
 <!--
 Sync Impact Report
-- Version change: 1.0.0 → 1.1.0 (2026-07-10) — DX-gate amendment
-- Bump rationale: MINOR — materially expanded guidance on Principle I (Stripe-grade API): the example is
-  the acceptance test for ergonomics ("fix the API, not the example"), and the DX rubric
-  (docs/reference/architecture-principles.md) is now a BINDING review lens at the Security-Requirements tier.
-  No principle removed or redefined. Reconciliation note: a CONCURRENT branch (005-hnp-seams, PR #41) also
-  bumps 1.0.0 → 1.1.0 for the HNP Principles-II/III/VII amendment. Whichever merges second must renumber to
-  1.2.0 and fold both sync-impact entries — the two amendments are independent and additive.
+- Version change: 1.1.0 → 1.2.0 (2026-07-10) — folds two independent, additive MINOR amendments developed
+  concurrently off 1.0.0 (the reconciliation both branches anticipated): the HNP amendment (via PR #41) and
+  the DX-gate amendment (via PR #43). No principle removed or redefined; every pre-existing rule holds.
+- HNP amendment (Principles II, III, VII — 005 Decision 13, ratified 2026-07-08): II (Context 1 may VERIFY a
+  pre-existing delegation grant; redeeming is not a ceremony) · III (HNP consolidation = one delegate ceremony
+  + full server-side gate chain on every redemption) · VII (orthogonal `presence` axis; `trust_level` gains
+  `server-issued-demo`, weaker than `presence-only-demo`; `enforcedAt` gains `"intent"`). Added: Terminology &
+  Retained-Primitive Rulings (envelope vs grant; Mode-B gated() retained).
+- DX-gate amendment (Principle I, ratified 2026-07-10): the example IS the acceptance test for ergonomics
+  ("fix the API, not the example"); the DX rubric (docs/reference/architecture-principles.md) is a BINDING
+  review lens at the Security-Requirements tier.
 - ── prior entry ──
-- Version change: (unratified template) → 1.0.0
-- Bump rationale: initial ratification of the CredentAgent SDK constitution.
-- Principles: initial set — I. Stripe-grade, MCP-idiomatic API · II. The three execution contexts are
-  sacred · III. Consolidated checkout flow · IV. One ordered, conditional policy array · V. Extensible to
-  any credential · VI. structuredContent is data, not policy · VII. Honesty in the types; prefer simplicity
-- Added sections: Security Requirements; Development Workflow & Quality Gates; Governance
-- Removed sections: none
+- Version change: (unratified template) → 1.0.0 — initial ratification (Principles I–VII; Security
+  Requirements; Development Workflow & Quality Gates; Governance).
 - Templates checked for alignment:
-    ✅ .specify/memory/constitution.md (filled from template)
-    ⚠ .specify/templates/plan-template.md — its "Constitution Check" gate is generic; first /speckit-plan
-       MUST instantiate it against Principles I–VII + Security Requirements (no edit needed now)
-    ✅ .specify/templates/spec-template.md — no change required (spec-grounding already practiced; see
-       specs/001-attesto-sdk/spec.md)
-    ⚠ .specify/templates/tasks-template.md — ensure generated tasks include security-bypass tests
-       (Security Requirements) and DCO sign-off (Workflow); enforce at /speckit-tasks time
+    ✅ plan-template.md — Constitution Check instantiated per-plan; 005's plan already reflects the
+       amended II/III/VII rows
+    ✅ spec-template.md — no change required
+    ⚠ tasks-template.md — generated tasks MUST include security-bypass tests + DCO (unchanged obligation)
+    ⚠ CLAUDE.md — honesty-fencing section gains the presence axis AT 005 IMPLEMENTATION TIME (the axis
+       does not exist in code until then)
 - Deferred TODOs: none
 -->
 
@@ -51,14 +49,22 @@ DX regression is **blocking, at the same tier as the Security Requirements**.
 ### II. The three execution contexts are sacred
 Every example and design decision MUST respect the split (spec §0): (1) the MCP tool handler runs ONCE when
 checkout is requested and only mints the link + reports requirements — there is no phone in the loop, so it
-MUST NOT perform a credential ceremony; (2) the checkout page/phone is where the gates actually run; (3) a
-poll reports completion. Conflating these contexts is the documented root cause of confusion and is
-forbidden.
+MUST NOT perform a credential ceremony. It MAY, however, **verify a pre-existing delegation grant** minted
+in an earlier, separate live ceremony: redeeming a grant is verification of consent already given, not a
+new ceremony, and MUST run entirely server-side against the full gate chain. (2) the checkout page/phone is
+where ceremonies actually run — including the **delegate ceremony** that mints a grant; (3) a poll reports
+completion. Conflating these contexts is the documented root cause of confusion and is forbidden.
 
 ### III. Consolidated checkout flow
 Checkout MUST be one handoff: the buyer opens the link once and completes all verifications and payment in
 a single browser session. The agent orchestrates URLs and polls; it MUST NOT perform the ceremony. A
 blocking-tool mode (for page-less tools) is roadmap, not v0.1.
+
+These rules govern **human-present** flows. A human-not-present redemption has, by definition, no browser
+session and no live buyer; its consolidation invariant is instead: **one delegate ceremony** (itself a
+single consolidated handoff, per this principle) authorizes a bounded set of later redemptions, and **every
+redemption runs the full server-side gate chain on every completion path** (Security Requirements). The
+agent still only orchestrates and polls; it MUST NOT hold or perform authorization itself.
 
 ### IV. One ordered, conditional policy array
 Gates MUST be expressed as a single ordered array: array position is run order, payment MUST settle last,
@@ -80,10 +86,17 @@ a flat data manifest (`[{ credential, required, effect, label, minAge? }]`). Fun
 wire; `requirements()` is the code→data boundary.
 
 ### VII. Honesty in the types; prefer simplicity
-Status MUST be carried in types, not prose: `enforcedAt: "tool" | "checkout"` and
-`trust_level: "presence-only-demo" | "issuer-verified"`. v0.1 is presence-only (disclosure + nonce
-binding, NOT issuer/device signatures) and MUST be fenced as a demonstration, never sold as a real safety
-control. Prefer simplicity — defer complexity (e.g. real mdoc-verifier integration) rather than overbuild.
+Status MUST be carried in types, not prose: `enforcedAt: "tool" | "checkout" | "intent"`, an orthogonal
+**`presence`** axis (`"live" | "delegated-demo" | "delegated"`) carrying *when consent happened*, and
+`trust_level` (`"presence-only-demo" | "server-issued-demo" | "issuer-verified"`) carrying *how strongly
+the authorization is bound* — the live-ceremony/nonce connotation lives on the presence axis, not in
+`trust_level`. `"server-issued-demo"` is WEAKER than `"presence-only-demo"`: it proves issuance only, not
+user authorization. Every `presence: "delegated-demo"` surface MUST carry a non-empty `disclaimer`, MUST
+NOT expose any `authorizedByUser`-style field, and MUST NOT settle real value. A real HNP control requires
+`presence: "delegated"` AND `trust_level: "issuer-verified"`. v0.1 human-present rails remain
+presence-only (disclosure + nonce binding, NOT issuer/device signatures) and MUST be fenced as a
+demonstration, never sold as a real safety control. Prefer simplicity — defer complexity (e.g. real
+mdoc-verifier integration) rather than overbuild.
 
 ## Security Requirements
 
@@ -104,6 +117,15 @@ Load-bearing controls; a change that breaks one is blocking even in demo code (m
 
 Until cryptographic mdoc trust verification (issuer/device signatures) lands, any gate relying on it MUST
 be fenced behind a demo-only mode and MUST NOT be presented as a real safety control.
+
+## Terminology & Retained-Primitive Rulings
+
+- **"envelope"** refers ONLY to the Mode-B `verification_required` wire envelope (`envelope.ts`). A
+  standing HNP authorization is a **grant** (typed `ap2.IntentMandate`); the merchant's standing
+  delegation config is the **delegation policy**. The phrase "spending envelope" MUST NOT be used.
+- **Mode-B `gated()`** and the wire envelope are **retained unchanged** as the page-less blocking
+  primitive, decoupled from HNP. Async step-up (an HNP redeem answering with a blocking envelope) remains
+  roadmap — explicitly out of 005's scope.
 
 ## Development Workflow & Quality Gates
 
@@ -126,4 +148,4 @@ Versioning (semantic): **MAJOR** — backward-incompatible principle removal or 
 new principle/section or materially expanded guidance; **PATCH** — clarifications and wording. Runtime
 guidance for agents lives in `CLAUDE.md` and `specs/001-attesto-sdk/spec.md`.
 
-**Version**: 1.1.0 | **Ratified**: 2026-06-25 | **Last Amended**: 2026-07-10
+**Version**: 1.2.0 | **Ratified**: 2026-06-25 | **Last Amended**: 2026-07-10

@@ -184,3 +184,237 @@ export function runGates(mandate: PasskeyMandate, opts: { loyaltyDiscountPct?: n
 
   return results;
 }
+
+// ────────────────────────────────────────────────────────────────────────────
+// HNP seams (005, Option B): the Intent Mandate BOUNDS model + the deterministic
+// draw gates — productized from spike/intent-mandate/ (13 tests ported alongside).
+// The user's ceremony seals BOUNDS (caps / window / scope / delegate key); each
+// DRAW (a per-purchase Payment Mandate) is checked in-bounds server-side on every
+// completion path. Honesty: the wire crypto here is REAL (ES256 over the canonical
+// draw; content-addressed intentId over SHA-256) — what the demo fakes is the PKI
+// and the money, never the bounds enforcement, which is deterministic and total.
+import { webcrypto } from "node:crypto";
+import { refusal, type Refusal } from "./refusals.js";
+
+const subtle = webcrypto.subtle;
+type CryptoKey = webcrypto.CryptoKey;
+const utf8 = new TextEncoder();
+const b64url = (buf: ArrayBuffer | Uint8Array): string => Buffer.from(buf as Uint8Array).toString("base64url");
+
+/** The delegate key K_s — the ONLY key that may sign draws — as a public JWK. */
+export interface DelegateJwk {
+  kty: "EC";
+  crv: "P-256";
+  x: string;
+  y: string;
+}
+
+/** The user-sealed Intent Mandate bounds (intent-bounds-schema-draft.md: AP2 intent
+ *  fields + EUDI SCA TS12 `PaymentTransaction` amounts). Content-addressed: `intentId`
+ *  transitively commits to every other field, delegate key and honesty labels included. */
+export interface IntentBounds {
+  type: "credentagent.IntentBounds/v0";
+  intentId: string;
+  /** The human-readable mandate the user actually approved (AP2 natural-language field). */
+  naturalLanguageDescription?: string;
+  /** Merchant allowlist; absent/empty ⇒ any suitable merchant (multi-merchant is native under B). */
+  merchants?: string[];
+  /** SKU/GTIN scope allowlist (checked by the wallet/rail; the seam checks merchants). */
+  skus?: string[];
+  currency: string;
+  /** Per-draw cap (TS12 max_amount) — an absolute ceiling, tolerance 0. */
+  maxAmount: number;
+  /** Cumulative cap (TS12 total_amount) across all committed draws. */
+  totalAmount: number;
+  /** Presence-required threshold: a draw above it needs a fresh human tap (step-up ≤ cap). */
+  stepUpOver?: number;
+  intentExpiry?: string;
+  notBefore?: string;
+  delegate: DelegateJwk;
+  /** Credentials the agent MAY present under this grant. Age is NEVER delegable → never listed. */
+  mayPresent?: string[];
+  /** Honesty axes (constitution VII v1.1.0): when consent happened / how strongly bound. */
+  presence: "delegated" | "delegated-demo";
+  trust_level: string;
+  subject?: string;
+}
+
+/** One draw — the per-purchase spend against an intent, signed by the delegate key. */
+export interface Draw {
+  type: "credentagent.Draw/v0";
+  intentId: string;
+  paymentMandateId: string;
+  merchant: string;
+  amount: number;
+  currency: string;
+  /** The PSP-issued settlement transaction id — single-use per intent (replay guard). */
+  pspTransactionId: string;
+  presentments?: string[];
+  /** b64url ES256 signature by the delegate key over the canonical draw (sans this field). */
+  signature?: string;
+}
+
+/** A committed (already-drawn) spend, as the RevocationStore records it. */
+export interface CommittedDraw {
+  amount: number;
+  pspTransactionId: string;
+}
+
+/** Canonical JSON (stable, recursive key sort) — the exact bytes hashed + signed. Any
+ *  edit to any field changes these bytes, so a signature/hash covers the whole document. */
+export function canonical(value: unknown): string {
+  // `undefined` is not JSON: as an object value JSON.stringify DROPS the key; in an array it
+  // becomes null. Match that here so seal-time and check-time bytes agree across a JSON
+  // round-trip — an optional bound left undefined (`subject`/`description`/`presentments`)
+  // must not change the hash after transport, else a legitimate grant refuses itself
+  // (bounds-tampered / signature) the moment it is stored, logged, or sent over the wire.
+  if (value === undefined) return "null";
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return "[" + value.map(canonical).join(",") + "]";
+  const obj = value as Record<string, unknown>;
+  const keys = Object.keys(obj).sort().filter((k) => obj[k] !== undefined);
+  return "{" + keys.map((k) => JSON.stringify(k) + ":" + canonical(obj[k])).join(",") + "}";
+}
+
+/** intentId = "int_" + b64url(SHA-256(canonical(bounds \ intentId))) — no circularity,
+ *  and it transitively commits to EVERY other field. */
+export async function contentAddressId(bounds: object): Promise<string> {
+  const { intentId: _omit, ...rest } = bounds as Record<string, unknown>;
+  const digest = await subtle.digest("SHA-256", utf8.encode(canonical(rest)));
+  return "int_" + b64url(digest);
+}
+
+export async function sealIntent(boundsWithoutId: Omit<IntentBounds, "intentId">): Promise<IntentBounds> {
+  return { ...boundsWithoutId, intentId: await contentAddressId(boundsWithoutId) } as IntentBounds;
+}
+
+/** Generate a delegate keypair K_s (ES256 / P-256). The bounds carry the PUBLIC JWK. */
+export async function generateDelegate(): Promise<{ privateKey: CryptoKey; delegate: DelegateJwk }> {
+  // extractable=false: the PRIVATE key K_s (the grant's sole spending authority) is only ever
+  // used in-process for subtle.sign and never needs to leave — the public JWK still exports
+  // (WebCrypto public keys are always extractable). Removes a needless path for the raw
+  // signing key to leak via an accidental export/serialize.
+  const pair = await subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, false, ["sign", "verify"]);
+  const jwk = await subtle.exportKey("jwk", pair.publicKey);
+  return { privateKey: pair.privateKey, delegate: { kty: "EC", crv: "P-256", x: jwk.x!, y: jwk.y! } };
+}
+
+/** Sign a draw with the delegate key over its canonical form (any prior signature stripped). */
+export async function signDraw(draw: Draw, privateKey: CryptoKey): Promise<Draw> {
+  const { signature: _omit, ...unsigned } = draw;
+  const sig = await subtle.sign({ name: "ECDSA", hash: "SHA-256" }, privateKey, utf8.encode(canonical(unsigned)));
+  return { ...(unsigned as Draw), signature: b64url(sig) };
+}
+
+/** Signer-agnostic verification seam: the default verifies ES256/P-256 (the wallet
+ *  server's K_s — the Option-B target); hosts may inject e.g. an HMAC verifier. */
+export type DrawVerifier = (draw: Draw, delegate: DelegateJwk) => Promise<boolean>;
+
+export const verifyDrawEs256: DrawVerifier = async (draw, delegate) => {
+  try {
+    const { signature, ...unsigned } = draw;
+    if (typeof signature !== "string") return false;
+    const key = await subtle.importKey(
+      "jwk",
+      { ...delegate, ext: true },
+      { name: "ECDSA", namedCurve: "P-256" },
+      true,
+      ["verify"],
+    );
+    return await subtle.verify(
+      { name: "ECDSA", hash: "SHA-256" },
+      key,
+      Buffer.from(signature, "base64url"),
+      utf8.encode(canonical(unsigned)),
+    );
+  } catch {
+    return false;
+  }
+};
+
+export interface CheckDrawContext {
+  now?: number;
+  priorDraws?: CommittedDraw[];
+  verify?: DrawVerifier;
+}
+
+export interface DrawVerdict {
+  ok: boolean;
+  refusals: Refusal[];
+}
+
+/** THE DETERMINISTIC GATES: is this draw in-bounds? Pure and total — injected `now` /
+ *  `priorDraws`, never throws, accumulates typed refusals (no first-fail) so the surface
+ *  can act on the full picture. This is defense-in-depth's inner ring: the completion
+ *  seam re-runs it server-side on EVERY path (invariant 1). */
+export async function checkDraw(intent: IntentBounds, draw: Draw, ctx: CheckDrawContext = {}): Promise<DrawVerdict> {
+  const now = ctx.now ?? Date.now();
+  const priorDraws = ctx.priorDraws ?? [];
+  const verify = ctx.verify ?? verifyDrawEs256;
+  const refusals: Refusal[] = [];
+
+  // 0. INTEGRITY: the intent's own fields must hash to its intentId. Content-addressing is
+  // the whole trust root — without recomputing it here, `intentId` is a bare string label,
+  // and a caller could keep a victim's id while swapping `delegate` / `maxAmount` / `merchants`
+  // and signing the draw with the substituted key (every check below would then run against
+  // bounds the user never approved). Recompute and refuse on mismatch.
+  if ((await contentAddressId(intent)) !== intent.intentId) refusals.push(refusal("bounds-tampered"));
+
+  // 1. binds to THIS intent
+  if (draw.intentId !== intent.intentId) refusals.push(refusal("intent-mismatch"));
+
+  // 2. signed by the delegate key named in the (content-addressed, integrity-checked) bounds
+  if (!(await verify(draw, intent.delegate))) refusals.push(refusal("signature"));
+
+  // 3. currency
+  if (draw.currency !== intent.currency)
+    refusals.push(refusal("currency-mismatch", { expected: intent.currency, got: draw.currency }));
+
+  // 3.5. amount DOMAIN — the caps below are `>` comparisons that FAIL OPEN on a non-finite or
+  // non-positive amount: `NaN > cap` is false (a NaN draw clears every ceiling AND, once
+  // committed, makes the cumulative `spent` NaN → the total cap is disabled forever), and a
+  // negative draw slips every ceiling then REFUNDS cumulative headroom. A "pure and total"
+  // gate must validate the domain of the value it bounds before comparing it. Refuse here so
+  // the `>`-checks below only ever see a finite, positive amount.
+  if (!Number.isFinite(draw.amount) || draw.amount <= 0)
+    refusals.push(refusal("invalid-amount", { amount: draw.amount }));
+
+  // 4. per-draw cap (TS12 max_amount) — absolute ceiling
+  if (draw.amount > intent.maxAmount) refusals.push(refusal("over-cap", { cap: intent.maxAmount, amount: draw.amount }));
+
+  // 5. cumulative cap (TS12 total_amount) — committed draws + this one
+  const spent = priorDraws.reduce((s, d) => s + d.amount, 0);
+  if (spent + draw.amount > intent.totalAmount)
+    refusals.push(refusal("over-total", { total: intent.totalAmount, wouldBe: spent + draw.amount }));
+
+  // 6. window (notBefore ≤ now ≤ intentExpiry). FAIL-CLOSED on an unparseable bound: a typo'd
+  // date must not silently disable the window — `Date.parse` returns NaN, and `now > NaN` is
+  // false, so an un-parseable expiry would leave the grant valid forever. Treat NaN as refused.
+  if (intent.notBefore) {
+    const notBefore = Date.parse(intent.notBefore);
+    if (Number.isNaN(notBefore) || now < notBefore) refusals.push(refusal("not-yet-valid", { notBefore: intent.notBefore }));
+  }
+  if (intent.intentExpiry) {
+    const expiry = Date.parse(intent.intentExpiry);
+    if (Number.isNaN(expiry) || now > expiry) refusals.push(refusal("expired", { intentExpiry: intent.intentExpiry }));
+  }
+
+  // 7. scope — merchant allowlist (absent/empty ⇒ any suitable merchant)
+  if (Array.isArray(intent.merchants) && intent.merchants.length > 0 && !intent.merchants.includes(draw.merchant))
+    refusals.push(refusal("out-of-scope", { merchant: draw.merchant }));
+
+  // 8. replay — the PSP transaction id is single-use per intent
+  if (priorDraws.some((d) => d.pspTransactionId === draw.pspTransactionId))
+    refusals.push(refusal("replay", { pspTransactionId: draw.pspTransactionId }));
+
+  // 9. presentments ⊆ mayPresent. Age is NEVER delegable → never in mayPresent (invariant 5).
+  for (const p of draw.presentments ?? []) {
+    if (!(intent.mayPresent ?? []).includes(p)) refusals.push(refusal("unpermitted-presentment", { presentment: p }));
+  }
+
+  // 10. step-up: over the presence-required threshold ⇒ a fresh human tap resumes it.
+  if (typeof intent.stepUpOver === "number" && draw.amount > intent.stepUpOver)
+    refusals.push(refusal("step-up", { threshold: intent.stepUpOver }));
+
+  return { ok: refusals.length === 0, refusals };
+}

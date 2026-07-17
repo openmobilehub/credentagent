@@ -1,8 +1,8 @@
-# DRAFT — Constitution amendment for HNP (Decision 13)
+# Constitution amendment for HNP (Decision 13) — APPLIED 1.1.0 (2026-07-08)
 
-**Status**: proposal only — the constitution itself is untouched. Ratifying = maintainer applies these
-edits to `.specify/memory/constitution.md` with the version bump. Required before `/speckit-implement`
-of 005 (spec.md, Dependencies).
+**Status**: APPLIED to `.specify/memory/constitution.md` as v1.1.0 on 2026-07-08 (maintainer ratified
+Decision 13 alongside Group-A/Option-B; this file is the historical proposal). The `/speckit-implement`
+prerequisite for 005 is satisfied.
 
 **Version**: 1.0.0 → **1.1.0** (MINOR: materially expanded guidance on II, III, VII; no principle
 removed or redefined incompatibly — every existing rule remains true for human-present flows).

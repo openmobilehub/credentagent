@@ -148,6 +148,36 @@ cryptography. The mandate is AP2-shaped and dev-signed (integrity hash), not key
 > **`verification_required`** envelope the agent *drives* (which credential, a per-order approve link,
 > the tool to poll) instead of completing — the retained blocking **Mode B** primitive.
 
+## Delegated draws — human-not-present seams (005, preview)
+
+Approve a spending limit once; your agent draws against it while you're away, every draw re-checked
+server-side. The Stripe-grade entry point is **`DelegatedGate`**:
+
+```ts
+import { DelegatedGate } from "@openmobilehub/credentagent-gate";
+
+const gate  = new DelegatedGate({ catalog: { coffee: 18 } });
+const grant = await gate.preApprove({ merchant: "blue-bottle", perOrder: 30, total: 100 }); // approve once
+const result = await grant.spend({ idempotencyKey: "order-1", item: "coffee" });             // unattended draw (retry-safe key)
+//  → { ok: true, amount: 18, remaining: 82 }   — or { ok: false, reason: "over-cap", retryable: "terminal" }
+await grant.revoke();                                                                         // kill-switch
+```
+
+Under that facade are **signer-agnostic seams** for redeeming a user-sealed
+**Intent Mandate** (a bounded, revocable delegation) with no live human — `sealIntent` / `checkDraw`
+(pure, total, typed refusals), a `RevocationStore` (per-intent + subject kill-switch, atomic
+single-use consume), and an additive, fail-closed **draw branch** in `completeOrder` that re-runs
+every bounds + revocation check server-side, writes a `delegationId`, and **suppresses settlement**.
+Age is **non-delegable** — an age-restricted cart always steps up to a live ceremony.
+
+Honesty (Principle VII, constitution v1.1.0): draws carry a **`presence`** axis (`"delegated"` /
+`"delegated-demo"`) — *when* consent happened — separate from `trust_level` — *how strongly it's
+bound*. The wire crypto is **real** (ES256 over the canonical draw; content-addressed `intentId`), but
+v0.1 has **no issuer/DeviceKey trust anchor and no per-draw proof-of-possession** — the grant is
+effectively a bearer instrument, fenced as a demo. A *real* HNP control requires `presence:
+"delegated"` **and** `trust_level: "issuer-verified"`; the HTTP intent rail + the wallet server that
+provide those are later increments.
+
 ## API surface (v0.1)
 
 ```ts
@@ -166,6 +196,10 @@ dcql({ docType, claims })  ·  gate()  ·  discount({ percent?, amount? })  ·  
 
 // Stores + host-side composition seam
 MemoryVerificationStore  ·  completeOrder(input, ctx)
+
+// Delegated draws (HNP, 005 preview) — the Stripe-grade facade + the underlying seams
+DelegatedGate  ·  gate.preApprove(bounds) → DelegatedGrant  ·  grant.spend(purchase) → SpendResult  ·  grant.revoke()
+sealIntent  ·  checkDraw  ·  signDraw  ·  MemoryRevocationStore  ·  Draw / IntentBounds / CommittedDraw / Refusal
 
 // Cart Mandate (ap2.CartMandate) — signed, tamper-evident cart integrity; the
 // signingKey-gated check in completeOrder + the opt-in `statelessOrders` transport

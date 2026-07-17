@@ -18,22 +18,21 @@ a 13-item decision menu).
 
 ---
 
-> ## ⚠️ Decisions baked in from the research — confirm or override before `/speckit-plan`
+> ## ✅ Decisions baked in from the research — Group-A + sequencing RATIFIED 2026-07-08
 >
 > Drafted **autonomously while the maintainer was asleep** from the research's **recommended** answers, then
 > **hardened by a 4-lens adversarial review** (invariants / honesty / faithfulness / real-code feasibility) that
-> read the actual library code. They are recommendations, **not settled**. The Group-A calls (1–3) were
-> discussed with the maintainer on 2026-07-01 and a **tentative direction** was noted (D3: WebAuthn +
-> on-device DPC via Multipaz as the v0.2 user-signing ceremonies) — **tentative pending the maintainer's
-> fuller understanding of the key architecture; do not treat as confirmed**. Confirm/override each before
-> `/speckit-plan`; Decision 13 (the constitution amendment) remains a separate prerequisite step for
-> `/speckit-implement`.
+> read the actual library code. The Group-A calls (1–3) were discussed with the maintainer on 2026-07-01
+> (wallet/key-architecture deep-dives) and **RATIFIED on 2026-07-08**, D3 including the v0.2 user-signing
+> direction (WebAuthn + on-device DPC via Multipaz). The sequencing fork is likewise **ratified: Option B**
+> (`sequencing-fork-memo.md`). Decisions 4–12 stand as baked-in. Decision 13 (the constitution amendment) is
+> the remaining prerequisite for `/speckit-implement` — executed as the amendment in `.specify/memory/constitution.md`.
 >
 > | # | Decision | Baked-in choice (post-review) |
 > | :-- | :-- | :-- |
-> | 1 | Model the Intent Mandate now? | **Yes** — typed `ap2.IntentMandate` + a deterministic bounds-check gate. *Tentative (discussed 2026-07-01; not settled)* |
-> | 2 | Represent the absent human honestly? | **New orthogonal `presence` axis** (`live \| delegated-demo \| delegated`) AND a new weaker authorization value **`server-issued-demo`** — do NOT reuse `presence-only-demo` for HNP. *Tentative (discussed 2026-07-01; not settled)* |
-> | 3 | What signs the v0.1 grant? | **Server-HMAC** (reuse `signingKey`); proves *issuance only*. In v0.1 the **server**, not the user, composes + signs the bounds. `alg` is reserved (no working swap exists yet). *Tentative v0.2 direction (discussed 2026-07-01; not settled): two user-signing ceremonies — WebAuthn (passkey over hash-of-bounds) + on-device DPC via Multipaz (DC API / OpenID4VP)* |
+> | 1 | Model the Intent Mandate now? | **Yes** — typed `ap2.IntentMandate` + a deterministic bounds-check gate. **Ratified 2026-07-08** |
+> | 2 | Represent the absent human honestly? | **New orthogonal `presence` axis** (`live \| delegated-demo \| delegated`) AND a new weaker authorization value **`server-issued-demo`** — do NOT reuse `presence-only-demo` for HNP. **Ratified 2026-07-08** |
+> | 3 | What signs the v0.1 grant? | **Server-HMAC** (reuse `signingKey`); proves *issuance only*. In v0.1 the **server**, not the user, composes + signs the bounds. `alg` is reserved (no working swap exists yet). **Ratified 2026-07-08**, incl. the v0.2 direction: two user-signing ceremonies — WebAuthn (passkey over hash-of-bounds) + on-device DPC via Multipaz (DC API / OpenID4VP)* |
 > | 4 | Which effects get delegation? | **Action effects only**; age/membership **not delegable**; age-restricted ⇒ **always step up** |
 > | 5 | Single-use vs reusable? | **Single-use** grant, enforced by an **atomic** per-grant consume |
 > | 6 | Caps? | **Per-action cap only**, an **absolute ceiling (tolerance = 0)**; cumulative/velocity out |
@@ -239,7 +238,7 @@ user-authorization field; assert the `completeOrder` HNP branch never calls `ctx
   field is **reserved**: v0.1 fixes it to the HMAC suite; a future user/agent-key-signed variant (ES256 / KB-JWT)
   requires **widening the `alg` union AND adding a verify-dispatch that does not exist today** (this branch has
   only `mandate.ts` with `alg: "MOCK-DEV-SIGNER"`). Do not present `alg` as a working drop-in.
-  **Tentative direction (discussed 2026-07-01; not settled): v0.2 would ship two user-signing ceremonies for
+  **Ratified direction (2026-07-08): v0.2 ships two user-signing ceremonies for
   the intent bounds** —
   (a) **WebAuthn**: the passkey assertion's challenge = hash(intent bounds, including the agent key), mirroring
   the `passkey/` rail; (b) **on-device DPC (Multipaz)**: a device-stored Digital Payment Credential presented via
@@ -372,7 +371,7 @@ user-authorization field; assert the `completeOrder` HNP branch never calls `ctx
 - **Holder binding + per-draw proof-of-possession** (the grant is a bearer token in v0.1) — the v0.2/v0.3 line
   where invariant 6 becomes fully upheld.
 - **User/agent-key signing** — the v0.2 bridge (widening `alg` + a two-format verify-dispatch).
-  **Tentative direction (2026-07-01; not settled): two user-signing rails** — (a) **WebAuthn** passkey assertion over hash(bounds) and
+  **Ratified direction (2026-07-08): two user-signing rails** — (a) **WebAuthn** passkey assertion over hash(bounds) and
   (b) an **on-device DPC (Multipaz)** presented via the DC API / OpenID4VP with the bounds in the transcript.
   **Issuer-verified credentials** — the v0.3 destination where an HNP grant becomes a *real* control (the DPC
   rail is the natural bridge: device-bound today, issuer-verifiable once the trust anchor lands — but **not

@@ -69,6 +69,36 @@ export type {
   ClearableCart,
   SettlementRecordLike,
 } from "./ceremony/completion.js";
+// ── HNP delegated-draw seams (005, Option B) — the Intent Mandate bounds model, the
+// deterministic draw gates, the typed refusals, and the revocation/single-use store. The
+// completeOrder draw branch re-runs checkDraw + revocation + atomic consume server-side.
+export {
+  canonical,
+  contentAddressId,
+  sealIntent,
+  generateDelegate,
+  signDraw,
+  checkDraw,
+  verifyDrawEs256,
+} from "./ceremony/mandate.js";
+export type {
+  IntentBounds,
+  Draw,
+  DelegateJwk,
+  CommittedDraw,
+  DrawVerifier,
+  DrawVerdict,
+  CheckDrawContext,
+} from "./ceremony/mandate.js";
+export { MemoryRevocationStore } from "./ceremony/revocation.js";
+export type { RevocationStore } from "./ceremony/revocation.js";
+export { refusal } from "./ceremony/refusals.js";
+export type { Refusal, RefusalCode, RefusalEnforcer, RefusalRetryable } from "./ceremony/refusals.js";
+// The Stripe-grade facade over the delegated-draw seams: configure a gate with a priced
+// catalog, preApprove() once, spend()/revoke() — the ceremony (keys, signing, stores,
+// completeOrder) is bundled. Demo-fenced today; stable surface for the wallet-server increment.
+export { DelegatedGate, DelegatedGrant } from "./delegated.js";
+export type { DelegatedGateOptions, PreApproveOptions, Purchase, SpendResult, CatalogEntry } from "./delegated.js";
 export type {
   CeremonyOrder,
   CeremonyOrderLine,

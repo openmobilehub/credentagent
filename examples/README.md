@@ -1,5 +1,26 @@
 # CredentAgent examples
 
+Each is runnable against the two `@openmobilehub/credentagent-*` packages (build them first:
+`npm run build:packages`). Grouped by what they show:
+
+**Storefront + gate** (connect to Goose / any MCP host)
+- [`storefront.mjs`](#storefrontmjs--a-credential-gated-storefront-in-8-lines) — a credential-gated storefront in ~8 lines
+- [`custom-credential.mjs`](#custom-credentialmjs--gate-any-action-with-any-credential) — gate any action with **any** credential (Principle V)
+- [`with-x402-settlement.mjs`](#with-x402-settlementmjs--settle-payment-on-chain-via-the-settle-seam) — settle payment on-chain via the `settle` seam
+- [`storefront-redis.mjs`](storefront-redis.mjs) / [`storefront-firestore.mjs`](storefront-firestore.mjs) — injectable persistence (Upstash Redis stores / Firestore catalog source)
+- [`run-storefront/`](run-storefront/) — run THIS repo's storefront directly (stateful + stateless side by side)
+
+**Gating patterns** (identity-first, beyond commerce)
+- [`gate-any-action.mjs`](#gate-any-actionmjs--gate-a-non-commerce-action-identity-first-no-checkout) — gate a non-commerce action, no checkout
+
+**Cart Mandate / stateless** (004)
+- [`stateless-orders/`](stateless-orders/) — the created order rides in a signed Cart Mandate on the link
+
+**Human-not-present** (005, preview)
+- [`hnp-draws/`](hnp-draws/) — the delegated-draw "doorman": one pre-approval, good + bad draws, all decided server-side
+
+---
+
 ## [`quickstart/`](./quickstart/) — start here: try it, run it, own it (~5 min)
 
 The standalone quickstart: try the **hosted demo** (paste one URL into Claude / ChatGPT /

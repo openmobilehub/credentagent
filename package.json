@@ -16,6 +16,7 @@
   "scripts": {
     "prepare": "git config core.hooksPath scripts/git-hooks 2>/dev/null || true",
     "build": "npm run build --workspaces --if-present",
+    "build:packages": "npm run build --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "eslint .",
     "test": "vitest run"

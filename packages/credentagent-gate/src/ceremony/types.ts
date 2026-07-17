@@ -107,6 +107,12 @@ export interface CompletionInput {
    *  re-pricing and refuses a tampered/replayed/expired cart — additive, fail-closed
    *  defense-in-depth; the catalog stays the price authority either way. */
   cartMandate?: CartMandate;
+  /** Optional HNP delegated draw (005): a user-sealed Intent Mandate + the delegate-signed
+   *  draw redeeming it. When present, completion re-runs the full bounds + revocation +
+   *  atomic single-use checks server-side (additive, fail-closed) — never trusting an
+   *  upstream verify (invariant 1). Absent ⇒ the draw branch is skipped entirely (HP paths
+   *  byte-unchanged). */
+  draw?: { intent: import("./mandate.js").IntentBounds; draw: import("./mandate.js").Draw };
 }
 
 export interface CompletionResult {
@@ -117,9 +123,13 @@ export interface CompletionResult {
    *  expired Cart Mandate ("cart-mandate"), a tampered token re-priced against the
    *  catalog ("reprice"), a signed Cart Mandate and signed Payment Mandate that
    *  disagree on order/amount/currency ("reconcile"), an age-restricted order with
-   *  no proven per-order age claim ("age"), or an applicable custom gate() credential
-   *  with no proven per-order verification ("gate" — 007). */
-  reason?: "gates" | "cart-mandate" | "reprice" | "reconcile" | "age" | "gate";
+   *  no proven per-order age claim ("age"), an applicable custom gate() credential with no
+   *  proven per-order verification ("gate" — 007), or a refused delegated draw ("draw"). */
+  reason?: "gates" | "cart-mandate" | "reprice" | "reconcile" | "age" | "gate" | "draw";
+  /** For a refused delegated draw, the typed refusals (why + who + recovery class). */
+  refusals?: import("./refusals.js").Refusal[];
+  /** For a completed delegated draw, the authorizing grant id (the audit link). */
+  delegationId?: string;
 }
 
 /**

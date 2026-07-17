@@ -1,6 +1,6 @@
 # 005 sequencing fork — decision memo (2026-07-03)
 
-**For the maintainer to ratify.** Resolves the "Open maintainer decision" left in
+**RATIFIED by the maintainer 2026-07-08: Option B (wallet-custody directly, seams-first).** Resolves the "Open maintainer decision" left in
 `connector-architecture-design.md` §10, now that the on-device spike is complete (Runs 1–5,
 `on-device-spike-runbook.md`) **including a green settlement**. This memo does not change any
 load-bearing concept in `spec.md` — only *what ships first*.
