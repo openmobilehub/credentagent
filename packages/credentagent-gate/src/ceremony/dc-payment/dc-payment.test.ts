@@ -254,6 +254,19 @@ describe("CT8 — a membership-discounted order authorizes the discounted total 
   });
 });
 
+// ── #46 — the rail stepper reflects completion (Pay ✓, not a stuck highlighted number) ──
+describe("#46 — the dc-payment rail marks the Pay step ✓ on completion", () => {
+  it("flips the current (Pay) step to ✓ in the rail once the order completes", async () => {
+    const h = harness();
+    h.seed("ORD-DCDONE", [{ id: "oak-whiskey", quantity: 1 }]);
+    const res = await request(h.app).get("/credentagent/dc-payment").query({ order: "ORD-DCDONE" });
+    // checkoutRail renders the CURRENT step un-ticked; on completion the handler marks it done ✓
+    // so the stepper agrees with the "Order complete" banner (not a stuck highlighted number).
+    expect(res.text).toContain(".rail .rail-step.current");
+    expect(res.text).toContain('classList.add("done")');
+  });
+});
+
 // ── Presence-only honesty (CT11) + the scaffolded signed-presentation path ────
 
 describe("CT11 — page / request descriptor / receipt all state presence-only-demo", () => {

@@ -486,4 +486,15 @@ describe("#46 — passkey rail reflects the order (no phantom gates / phantom ti
     const done = await request(h.app).get("/credentagent/passkey").query({ order: "ORD-AGE" });
     expect(passkeyAgeStepDone(done.text)).toBe(true);
   });
+
+  it("flips the current (Pay) step to ✓ in the rail once the order completes", async () => {
+    const h = harness();
+    h.seed("ORD-DONE", [{ id: "oak-whiskey", quantity: 1 }]);
+    const res = await request(h.app).get("/credentagent/passkey").query({ order: "ORD-DONE" });
+    // checkoutRail renders the CURRENT step un-ticked (a highlighted number); on completion the
+    // handler marks it done ✓ so the stepper agrees with the "Order complete" banner. Removing
+    // the embed (railCompleteScript) drops this and Pay would stay a highlighted number.
+    expect(res.text).toContain(".rail .rail-step.current");
+    expect(res.text).toContain('classList.add("done")');
+  });
 });
