@@ -39,6 +39,10 @@ export function ageDcql(): DcqlQuery {
         claims: [{ path: ["eu.europa.ec.eudi.pid.1", "age_over_18"], intent_to_retain: false }],
       },
     ],
+    // mDL OR EU-PID — either proves age. WITHOUT this set, DCQL treats the two
+    // `credentials` as AND (both required), so a wallet holding only one doctype
+    // (e.g. an imported mDL) matches nothing and the picker shows "info not found".
+    credential_sets: [{ options: [["mdl"], ["eupid"]] }],
   };
 }
 

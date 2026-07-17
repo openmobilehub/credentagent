@@ -44,6 +44,19 @@ describe("ageDcql", () => {
     // selective disclosure: never retain
     expect(mdl!.claims.every((c) => c.intent_to_retain === false)).toBe(true);
   });
+
+  it("makes the mDL and EU-PID alternatives (present one OR the other, not both)", () => {
+    const q = ageDcql();
+    // Without credential_sets, listing two credentials means the wallet must present
+    // BOTH (DCQL treats `credentials` as AND) — so a wallet holding only an mDL matches
+    // nothing and the picker shows "info not found". The set makes them OR.
+    expect(q.credential_sets).toEqual([{ options: [["mdl"], ["eupid"]] }]);
+    // Every option references a declared credential id (no dangling reference).
+    const ids = new Set(q.credentials.map((c) => c.id));
+    for (const option of q.credential_sets![0].options) {
+      for (const id of option) expect(ids.has(id)).toBe(true);
+    }
+  });
 });
 
 describe("buildVerificationRequired", () => {

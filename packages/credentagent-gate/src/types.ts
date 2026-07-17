@@ -17,8 +17,20 @@ export interface DcqlCredentialOption {
   meta: Record<string, string>;
   claims: DcqlClaim[];
 }
+export interface DcqlCredentialSet {
+  /** Each inner array is one way to satisfy the set (a list of credential ids);
+   *  the outer array is the alternatives (OR). E.g. `[["mdl"], ["eupid"]]` = mDL OR EU-PID. */
+  options: string[][];
+  /** Whether this set must be satisfied (default true). */
+  required?: boolean;
+}
 export interface DcqlQuery {
   credentials: DcqlCredentialOption[];
+  /** Groups `credentials` into alternatives. WITHOUT this, DCQL requires EVERY entry in
+   *  `credentials` (AND) — so listing `mdl` + `eupid` with no set demands the wallet hold
+   *  BOTH, which no single-doctype wallet can satisfy. Use `[{ options: [["mdl"],["eupid"]] }]`
+   *  to mean "present mDL OR EU-PID". */
+  credential_sets?: DcqlCredentialSet[];
 }
 
 // ── Trust (honesty axis — Principle VII) ───────────────────────────────────
