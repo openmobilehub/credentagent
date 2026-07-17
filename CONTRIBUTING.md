@@ -89,8 +89,10 @@ your diff will be held against.
 
 - **Same-repo PRs** — an automated Claude review (`anthropics/claude-code-action`) runs on every
   non-draft PR opened from a branch in this repo. It's grounded in this project's security
-  invariants. **`claude-review` is a required status check**: a same-repo PR can't merge until it's
-  green. (Draft PRs are skipped to save cost; mark a PR ready for review to trigger the run.)
+  invariants. **The review is opt-in and currently OFF** — it only runs when the repo variable
+  `ENABLE_CLAUDE_REVIEW` is `"true"`; otherwise `claude-review` is skipped, which counts as passing,
+  so it doesn't block merges (human review is the gate). (Draft PRs are also skipped to save cost;
+  mark a PR ready for review to trigger a run.)
 - **Fork / external-contributor PRs** — the automated job is **skipped** (fork runs can't read the
   secret), and a skipped required check counts as passing, so it never blocks you. External PRs are
   reviewed instead by a maintainer commenting **`@claude`** on the PR (which runs in base-repo

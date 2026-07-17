@@ -17,8 +17,15 @@ _Updated **2026-07-12** · quickstart ladder (007) + storefront `0.2.1` (statele
       flags from `docs/naming-clearance.md` (generic "-Agent" suffix, cred- neighbors: Credant/CredenTek) still
       deserve the professional search. Fresh scoped packages were unpublishable-within-72h if it had surprised
       us; that window is the accepted risk.
-- [ ] **Add the `CLAUDE_CODE_OAUTH_TOKEN` secret** + a `claude-code-review.yml` workflow if you want the
-      automated PR review (the org-managed review also covers it).
+- [ ] **Automated `claude-review` is OFF — decide whether to re-enable it.** The
+      `CLAUDE_CODE_OAUTH_TOKEN` secret *exists*, but the maintainer's enterprise account can't use
+      it, so the action errored on *every* PR (`is_error:true`, `total_cost_usd: 0`) — and since
+      `claude-review` is a **required** check, nothing could merge. The job is now gated on a repo
+      variable, so it is **skipped** (skipped counts as passing) instead of failing.
+      **Recommendation: leave it off** — the org-managed review + human review already cover PRs.
+      To re-enable once the token works: `gh variable set ENABLE_CLAUDE_REVIEW --body true` (no
+      workflow change needed). If it stays off long-term, un-require `claude-review` in branch
+      protection so it isn't listed as required at all.
 - [ ] **005 sequencing fork — decision memo ready to ratify (2026-07-03).** Ship merchant-side v0.1
       (server-HMAC) first, or re-scope 005 to wallet-custody directly? Full analysis +
       recommendation in [`sequencing-fork-memo.md`](specs/005-human-not-present/sequencing-fork-memo.md).
