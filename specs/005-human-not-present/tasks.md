@@ -63,6 +63,7 @@ before "done".
   "Delegated draws (HNP seams, v0-preview)" section with the honesty labels (presence axis per
   constitution VII v1.1.0).
 - [ ] **T009** Full suite green (`npm run build` + `npm test`); red-verification spot checks recorded in
-  the PR body; STATUS.md updated; draft PR referencing this tasks.md.
+  the PR body; draft PR referencing this tasks.md (progress is tracked on the epic's sub-issues —
+  there is no status file to update).
 
 **Out of scope** (per plan): HTTP intent rail, wallet server, settlement verifier, `credentagent-agent`.

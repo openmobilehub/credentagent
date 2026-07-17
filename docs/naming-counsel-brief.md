@@ -52,4 +52,4 @@ heavily.
 The rename is a known-size mechanical find-replace (~171 sites across code + docs, same job as the
 prior `AttestoMcp → AttestoMCP` casing pass). After it: add `NPM_TOKEN` → publish `0.2.0` → flip the
 reference demo → 004/005 build. The rename is the single blocker in front of that whole chain
-(`STATUS.md`).
+([#80](https://github.com/openmobilehub/credentagent/issues/80)).

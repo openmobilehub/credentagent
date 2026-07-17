@@ -64,7 +64,7 @@ The vetted alternatives below are kept as reference IF the rename trigger is eve
 > **Update (2026-07-02): the rename trigger IS pulled.** LF brand counsel (Daniel Scales) ruled that "MCP"
 > in the name suggests the project is run by the MCP project (AgenticAI Foundation trademark) and violates
 > the LF trademark policy unless used **descriptively** — "X for MCP" is fine, a fused "XMCP" is not. See
-> `STATUS.md`. The shortlists below are now **live candidates**, not reference. Whatever the pick, the MCP
+> [#80](https://github.com/openmobilehub/credentagent/issues/80). The shortlists below are now **live candidates**, not reference. Whatever the pick, the MCP
 > association survives in the tagline ("X — the consent gate for MCP agents"), which counsel's pattern allows.
 
 ## Alternatives shortlist (reference — generated + cleared 2026-06-28)
@@ -358,4 +358,4 @@ metaphor+clearance / sound / plain-English person-word / instant-meaning Spanish
 (fallback) · Perpro · Dedimus · Idhini** → the rest. Counsel knockout shortlist: **Consentinel, Attorn,
 Creance, Assentio** (+ Poder if the foreign-equivalents check clears, Durward or Agensent as backup).
 
-Tracked in `STATUS.md` (rename mandatory per counsel 2026-07-02; this doc holds the candidate queue).
+Tracked in [#80](https://github.com/openmobilehub/credentagent/issues/80) (rename mandatory per counsel 2026-07-02; this doc holds the candidate queue).

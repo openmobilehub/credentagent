@@ -39,7 +39,8 @@ read it first; this skill encodes the order of operations and the traps.
 
 4. **Post-publish** — the `quickstart-smoke` CI job exercises the PUBLISHED packages
    from a clean checkout; a red run after publishing means registry/example drift.
-   Update `STATUS.md` (move the release into Done).
+   Nothing to hand-update afterwards: the **release + merged PR are the record** (there
+   is no status file). Close any issue the release resolves.
 
 ## The honesty gate (do not regress at publish)
 

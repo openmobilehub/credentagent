@@ -27,16 +27,26 @@ builds each package. The end-to-end reference DEMO lives in a **separate** repo,
 [`openmobilehub/mcp-apps-shopping-demo`](https://github.com/openmobilehub/mcp-apps-shopping-demo),
 which consumes these packages — link to it, don't describe it as part of this repo.
 
-## Status & decisions — read/update `STATUS.md`
+## Status & decisions — GitHub is the source of truth
 
-`STATUS.md` (repo root) is the single source of truth for project state. **Read it at the
-start of every working session and update it at the end.** It is **decisions-first**: it
-leads with **"Decisions for you"** (each a checkbox + recommendation the maintainer
-resolves inline), then in-flight / next, a rolling Done log (linked commits), and standing
-constraints. It is a *dashboard* — link out to `specs/*/tasks.md`, `docs/PUBLISHING.md`,
-etc. for detail rather than duplicating them. Keep it current: move a resolved decision
-into Done; don't let it rot. (Don't make the maintainer ask "what's done / pending /
-blocked on me" — that's what this file answers.)
+**There is no status file** (`STATUS.md` was retired 2026-07-16). Project state lives in
+GitHub, where it cannot rot or conflict. Read it there at the start of a session:
+
+| What you want | Where it lives | How to read it |
+| --- | --- | --- |
+| **Decisions waiting on the maintainer** | issues labelled `needs-decision` — each carries a **recommendation** | `gh issue list --label needs-decision` |
+| What's in flight / next | **epics + their sub-issues** (e.g. #12 → its increments), progress is automatic | `gh issue list --label epic` · `gh issue view <n>` |
+| What's done | merged PRs + closed issues — **git history IS the Done log** | `gh pr list --state merged` · `git log --oneline` |
+| Standing constraints / norms | **this file** — durable guidance, not state | you're reading it |
+
+**When you need a decision from the maintainer, file an issue labelled `needs-decision`
+with a recommendation** — don't bury it in prose, and don't hand-maintain a dashboard.
+
+*Why it was retired:* a status file mixes durable guidance with live state. The live half
+rots and lies — it claimed a PR was "MERGEABLE, all checks green" while that PR was in fact
+conflicting with CI unable to run at all — and it conflicted on every branch that touched
+it (it was the sole merge conflict in both #41 reconciles). Anything derivable from
+`git`/`gh` should be **derived, not transcribed**.
 
 ## Architecture (where things live)
 
