@@ -348,6 +348,17 @@ export function checkoutRail(
   return progressRail(steps.map((g) => ({ label: g.label, done: g.done && g.key !== current })), currentIndex);
 }
 
+/**
+ * Client-side statement (embed inside a rail page's completion handler): flip the progress
+ * rail's CURRENT step to done ✓. `checkoutRail` renders the current step un-ticked (a
+ * highlighted number), but once the order COMPLETES that step IS done — the pay rails call
+ * this on `out.completed` so the stepper agrees with the "Order complete" banner instead of
+ * leaving Pay a highlighted number (#46).
+ */
+export function railCompleteScript(): string {
+  return `(function(){var s=document.querySelector(".rail .rail-step.current");if(s){s.classList.remove("current");s.classList.add("done");var d=s.querySelector(".rail-dot");if(d)d.textContent="✓";}})();`;
+}
+
 // ── Trust footer ────────────────────────────────────────────────────────────
 
 /**

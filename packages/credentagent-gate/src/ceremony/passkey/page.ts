@@ -13,7 +13,7 @@
 // → resolveOrder), so the amount shown and bound comes from the catalog, never the
 // order id/token (invariant 2).
 import type { CeremonyOrder } from "../types.js";
-import { pageHead, brandHeader, orderSummaryCard, trustFooter, settlingBar, completionHandoffBanner } from "../theme.js";
+import { pageHead, brandHeader, orderSummaryCard, trustFooter, settlingBar, completionHandoffBanner, railCompleteScript } from "../theme.js";
 
 function money(amount: number, currency: string): string {
   return new Intl.NumberFormat("en-US", { style: "currency", currency }).format(amount);
@@ -157,6 +157,7 @@ ${pageHead(`Authorize payment · ${order.id}`, extraCss)}
       if (out.completed) {
         btn.disabled = true;
         btn.textContent = "Authorized ✓";
+        ${railCompleteScript()}
       }
     }
   </script>

@@ -15,7 +15,7 @@
 // crypto is real; the wallet's device/issuer trust anchor is not — never a real safety
 // control. Self-contained: takes the re-priced amount + lines, not a demo Order type.
 
-import { pageHead, brandHeader, orderSummaryCard, trustFooter, settlingBar, completionHandoffBanner } from "../theme.js";
+import { pageHead, brandHeader, orderSummaryCard, trustFooter, settlingBar, completionHandoffBanner, railCompleteScript } from "../theme.js";
 
 export interface DcPaymentLine {
   name: string;
@@ -218,6 +218,7 @@ ${pageHead(`Authorize payment (cross-device) · ${order}`, extraCss)}
       if (out.completed) {
         goDc.disabled = true;
         btn.textContent = "Authorized ✓";
+        ${railCompleteScript()}
       }
     }
   </script>

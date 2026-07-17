@@ -217,3 +217,44 @@ describe("renderRequirements — live completion poll (#63)", () => {
     expect(html).not.toContain("setInterval");
   });
 });
+
+// ── #46 follow-up: the hub stepper must AGREE with the ceremony-rail stepper ─────────────
+// #62 made the ceremony rails order-derived (theme.ts `checkoutRail`): Membership appears
+// ONLY when the loyalty discount is actually applied. The hub stepper still derived
+// Membership from the policy MANIFEST — shown whenever merely OFFERED — and ticked it ✓ on
+// ANY paid order. So a paid, full-price order rendered a phantom "Membership ✓" the buyer
+// never earned, and the desktop hub (Age·Membership·Pay) disagreed with the mobile rail
+// (Age·Pay) for the same order. These pin the hub to the SAME order-derived rule; each is
+// RED against the old manifest-derived `done: loyaltyApplied || paid` line.
+describe("renderRequirements — hub stepper agrees with the ceremony rail (#46)", () => {
+  const railLabels = (html: string): string[] =>
+    [...html.matchAll(/rail-label">([^<]*)</g)].map((m) => m[1]);
+
+  it("shows ONLY Age · Pay when the loyalty discount is offered but NOT applied (no phantom Membership)", () => {
+    const html = renderRequirements(order, manifest, { ageVerified: false }); // discount not applied
+    expect(railLabels(html)).toEqual(["Age", "Pay"]);
+  });
+
+  it("never phantom-ticks Membership ✓ on a paid, full-price order (no discount earned)", () => {
+    const html = renderRequirements(order, manifest, {}, { paid: { amount: 124, currency: "USD", method: "passkey" } });
+    expect(railLabels(html)).not.toContain("Membership");
+  });
+
+  it("adds Membership as a ✓ step only once the discount is actually applied", () => {
+    const discounted: RenderOrder = { ...order, discount: 12, total: 112 };
+    const html = renderRequirements(discounted, manifest, { ageVerified: true, loyaltyApplied: true });
+    expect(railLabels(html)).toEqual(["Age", "Membership", "Pay"]);
+    // the Membership dot carries the ✓ (done) — earned here, not a phantom
+    expect(html).toMatch(/rail-step done"><div class="rail-dot">✓<\/div><div class="rail-label">Membership</);
+  });
+
+  it("keeps Membership on a PAID discounted order, reconciled from the paid amount (completion clears the flag)", () => {
+    // completion.ts clears this order's verification, so `loyaltyApplied` is false on the
+    // paid revisit — but the order WAS paid at a loyalty discount (the summary derives the
+    // row from lineSum − paid.amount). The stepper must agree with that receipt, not the
+    // cleared flag, or it drops a Membership the buyer earned and disagrees with the rail.
+    const html = renderRequirements(order, manifest, {}, { paid: { amount: 111.6, currency: "USD", method: "passkey" } });
+    expect(html).toContain("Loyalty discount");                     // receipt: a discount WAS applied
+    expect(railLabels(html)).toEqual(["Age", "Membership", "Pay"]); // …so the stepper must show it too
+  });
+});
