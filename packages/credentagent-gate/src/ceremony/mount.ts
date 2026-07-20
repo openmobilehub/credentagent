@@ -23,6 +23,7 @@ import { verifyCartMandate } from "./cartMandate.js";
 import { registerCredentialGate } from "./credential-gate/routes.js";
 import { registerPasskeyGate } from "./passkey/routes.js";
 import { registerDcPaymentGate } from "./dc-payment/routes.js";
+import { registerDelegatedPaymentGate } from "./delegated-payment/routes.js";
 
 /** Minimal Express-app shape mount() needs (no `express` dependency). */
 export interface CeremonyApp {
@@ -103,7 +104,9 @@ export type RailRegistrar = (app: CeremonyApp, ctx: CeremonyContext) => void;
 // the credential gate (age + membership); passkey / dc-payment follow (US2/US3).
 // Each registrar no-ops on a route-less app shape, so mount()'s fail-fast tests
 // (which pass a `{ locals }`-only app) are unaffected.
-const RAILS: RailRegistrar[] = [registerCredentialGate, registerPasskeyGate, registerDcPaymentGate];
+// `registerDelegatedPaymentGate` (008) self-skips unless a `verifier` seam is
+// configured, so adding it here changes nothing for a host that hasn't opted in.
+const RAILS: RailRegistrar[] = [registerCredentialGate, registerPasskeyGate, registerDcPaymentGate, registerDelegatedPaymentGate];
 
 /**
  * Read + validate the injected seams, build the CeremonyContext, and register
