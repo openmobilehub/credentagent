@@ -179,15 +179,21 @@ seam passed to `mount()`.
 
 ### Key Entities
 
-- **`DelegatedVerifier`** — the seam. `buildRequest({ order, dcql, transactionData, origin })` →
-  `{ reference, handoff }`; `consume({ reference, order })` → `DelegatedVerdict`. Two methods mirroring
+- **`DelegatedVerifier`** — the seam. `buildRequest({ order, dcql, binding, origin })` →
+  `DelegatedHandoff`; `consume({ reference, order })` → `DelegatedVerdict`. Two methods mirroring
   the reference's own split (request minting in `marketplaceCheckout`, post-verification business logic
   in `VerifierAssistant.processResponse`).
 - **`DelegatedVerdict`** — structural, JSON-safe result: `{ approved, trust_level, claims, binding,
   settlement?, reason? }`. Deliberately carries **no** foreign types (no `PresentmentRecord`), so the
   gate never depends on a verifier's object model.
-- **`TransactionData`** — the gate-derived amount binding handed to `buildRequest`:
-  `{ amount, currency, payee: { id, name? }, transactionId? }`.
+- **`DelegatedHandoff`** — `{ reference, handoff }`: the opaque handle the verdict is later fetched by,
+  plus the verifier-specific payload the browser forwards. The gate never interprets `handoff`.
+- **`BindingFields`** (existing — `mandate.ts:24`) — the gate-derived amount binding handed to
+  `buildRequest`: `{ amount, currency, payee: { id, name }, orderId }`. **Reused, not re-invented**:
+  it is the same `buildBindingFields(order, origin)` struct the dc-payment rail's `transaction_data`
+  and the passkey mandate already bind on, so the delegated rail cannot drift from them. (The name
+  `TransactionData` is already taken by the OpenID4VP *wire* entry in `dc-payment/txData.ts:14`; the
+  adapter builds that wire shape from these fields.)
 - **`referenceToken`** — the HMAC-sealed `{ reference, orderId }` envelope carried by the browser
   between `/request` and `/verify`; the reason a browser cannot redeem someone else's verification.
 

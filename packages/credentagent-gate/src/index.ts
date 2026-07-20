@@ -113,6 +113,23 @@ export type {
   GateOutcome,
 } from "./ceremony/types.js";
 
+// ── Delegated verification seam (008, #60) — run a REAL external verifier/processor
+// INSIDE the mounted ceremony. Pass `{ verifier }` to `mount()` and the policy stays
+// byte-identical; only the verification/settlement backend moves in.
+//
+// The gate delegates TRUST (issuer/device signature against a real anchor, reported as
+// `trust_level`) and SETTLEMENT — never BINDING: it re-derives the amount/payee from the
+// catalog and re-checks the verdict against it, then re-runs its OWN policy over the
+// disclosed claims. An adapter that approves the wrong amount is still refused.
+//
+// This is the INTERFACE; a concrete adapter (Multipaz/UPay, @auth0/mdl, …) is host-side —
+// no processor-specific symbol lives in this package.
+export type { DelegatedVerifier, DelegatedVerdict, DelegatedHandoff } from "./ceremony/types.js";
+// The parameter types a host needs to implement `DelegatedVerifier`: `BindingFields` is the
+// SAME catalog-derived amount binding the dc-payment rail binds on (one definition, no drift).
+export type { BindingFields } from "./ceremony/mandate.js";
+export type { Origin, RequestLike } from "./ceremony/origin.js";
+
 // ── Public types ───────────────────────────────────────────────────────────
 export type {
   CredentAgentOptions,

@@ -404,3 +404,50 @@ describe("resolveOrder — FR-007 statelessOrders (reconstruct from a verified C
     expect(order?.total).toBe(199);
   });
 });
+
+// ── 008 (#85): the delegated verifier seam is OPTIONAL and inert by default ──
+// The seam must be additive: a host that configures no verifier keeps every existing
+// path byte-unchanged (FR-001). These pin the contract only — the delegated rail's
+// own enforcement lands with its verify handler (#87).
+
+describe("mountCeremony — delegated verifier seam (008)", () => {
+  // A verdict-returning stub. It is deliberately NOT trustworthy: later increments
+  // assert the gate refuses a stub that approves the wrong amount, which is only
+  // provable because the seam is injectable (see #87's bypass tests).
+  const stubVerifier = {
+    buildRequest: async () => ({ reference: "ref-1", handoff: { verifierUrl: "https://verifier.example" } }),
+    consume: async () => ({
+      approved: true,
+      trust_level: "issuer-verified" as const,
+      claims: {},
+      binding: { amount: 124, currency: "USD" },
+    }),
+  };
+
+  it("is genuinely optional — mounting without one leaves the context inert", () => {
+    const ctx = mountCeremony(fakeApp(), validSeams());
+    expect(ctx.verifier).toBeUndefined();
+  });
+
+  it("carries the verifier onto the context when supplied via options", () => {
+    const ctx = mountCeremony(fakeApp(), { ...validSeams(), verifier: stubVerifier });
+    expect(ctx.verifier).toBe(stubVerifier);
+  });
+
+  it("accepts the verifier from app.locals.credentagent, and options win over locals", () => {
+    const fromLocals = { ...stubVerifier };
+    const app = fakeApp();
+    app.locals.credentagent = { verifier: fromLocals };
+    expect(mountCeremony(app, validSeams()).verifier).toBe(fromLocals);
+
+    const app2 = fakeApp();
+    app2.locals.credentagent = { verifier: fromLocals };
+    expect(mountCeremony(app2, { ...validSeams(), verifier: stubVerifier }).verifier).toBe(stubVerifier);
+  });
+
+  it("does not become a required seam — a missing verifier never trips the fail-fast", () => {
+    // Guards the additive promise: the CT2 fail-fast list must stay
+    // verificationStore/orderStore/catalog/completion, never verifier.
+    expect(() => mountCeremony(fakeApp(), validSeams())).not.toThrow();
+  });
+});
