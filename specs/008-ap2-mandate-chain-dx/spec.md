@@ -48,7 +48,11 @@ server.registerTool("checkout", inputSchema, async (args) => {
   const { id, approveUrl, manifest } = await credentagent.orders.create({ order: { items: cartItems(args) }, policy });
   return { structuredContent: { id, approveUrl, manifest } };   // keep id — retrieve the door by it
 });
-const res = await credentagent.orders.retrieve(id);             // the DOOR: res.ok / res.pending+approveUrl / res.code
+// later — the gate fires "order.settled"; your handler does ONE retrieve (never a poll loop):
+credentagent.on("order.settled", async ({ id }) => {
+  const res = await credentagent.orders.retrieve(id);          // the DOOR: res.ok / res.pending+approveUrl / res.code
+  if (res.ok) { /* complete + settle res.mandateBundle.paymentMandate */ }
+});
 
 // ── requireInTool — page-less MCP tool ─────────────────────────
 server.registerTool("place-order", inputSchema, credentagent.requireInTool(
@@ -106,6 +110,21 @@ await grant.revoke();                                           // grant.status 
   `DelegatedGate`, and the existing `ap2.CartMandate`/`ap2.PaymentMandate`/`IntentBounds`. Ships without
   breaking their current callers; `delegate()` may remain a thin alias of `grants.create()` during
   migration.
+- **FR-009 — Completion signal, never a poll loop.** The async "human finished proving" transition is
+  delivered by a **webhook/callback** — `credentagent.on("order.settled", …)` plus a return-URL redirect
+  for the human — mirroring Stripe's `success_url` + `checkout.session.completed`. `orders.retrieve(id)`
+  is a **single current-state read** (for the callback handler, or a fallback), and an optional
+  `orders.awaitProof(id, { timeout })` resolves when settled. A hand-written poll loop MUST NOT be the
+  documented path. The page-less `orders.gate` path needs **no** signal — the agent's re-call is the trigger.
+- **FR-010 — Intent Mandate production (grants only).** The AP2 **Intent Mandate** is produced in the
+  `grants` flow, at the one-time authorize ceremony (`grant.approveUrl`) — **not** in `orders` (a
+  human-present order signs the **Cart** Mandate directly, so `mandateBundle.intentMandate` is absent).
+  At authorize, the human's wallet **seals the bounded intent** — merchant, `perSpend`, `budget`, `policy`,
+  expiry, and the delegate key permitted to sign later spends — into the Intent Mandate; it then rides on
+  `grant.intentMandate`, and every subsequent spend's Payment Mandate references it. Today it is
+  **dev-sealed** (content-addressed integrity hash, `sealIntent`), `trustLevel: "presence-only-demo"`; the
+  roadmap swaps the internals so the wallet **key-signs** it during the live ceremony (KB-JWT/SD-JWT —
+  #14/#39/#71) with no change to this surface.
 
 ### Honesty (Constitution VII — load-bearing)
 
