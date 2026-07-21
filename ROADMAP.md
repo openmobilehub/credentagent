@@ -29,11 +29,13 @@ claims about itself.
 
 ## Next
 
-- **Mode B — gate any page-less tool.** The `verification_required` envelope primitive ships
-  today; the **page-less proving ceremony** (for hosts with no browser handoff — e.g. a CLI
-  agent gating `release-record`, `approve-deploy`, `file-prescription` with **no checkout at
-  all**) is the next build. This is where "gate **any** consequential action with **any**
-  credential" becomes runnable beyond commerce — the heart of the identity-first promise.
+- **Mode B — the standalone proving page.** `credentagent.gate(handler, { require, provenBy })`
+  ships today: wrap any tool (`release-records`, `approve-deploy`, `file-prescription` — **no
+  checkout at all**) and it refuses-until-proven with the `verification_required` envelope.
+  What remains is the **standalone proving-page mount**: today `approve_url` is served by the
+  checkout-shaped ceremony seams, so a page-less host (stdio MCP, CLI) still needs a small web
+  process for the ceremony. A proving-only `mount()` — no orderStore/catalog/completion — is
+  the next build, and the top follow-up from the gate() cold-reader DX loop.
 - **Cart Mandate, end to end.** Issuance at checkout, `PaymentMandate` reconciliation by id,
   and the opt-in **stateless-orders** transport (the cart travels as the signed mandate, no
   shared order store).

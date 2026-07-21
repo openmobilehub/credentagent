@@ -14,7 +14,7 @@ node examples/gate-my-tool-sample/server.mjs  # serves release-records over stdi
    and the records come back. No consent, no proof.
 2. **Run the skill** — tell your coding agent: *"gate my `release-records` tool"*.
    The [`gate-my-tool`](../../.claude/skills/gate-my-tool/SKILL.md) skill wraps the
-   handler in `credentagent.gate(handler, { require, subject, name })`.
+   handler in `credentagent.gate(handler, { require, provenBy, name })`.
 3. **After** — the same call now returns a typed `verification_required` refusal
    (approve link + agent instruction) until the credential is proven, and the
    change is pinned by a **load-bearing bypass test** (it goes red if the wrap is

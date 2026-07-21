@@ -58,8 +58,9 @@ the widget shows the confirmation. Add the headphones instead and the age gate d
 
 ## Gate a single tool — `credentagent.gate()`
 
-Not selling anything? Gate **any** MCP tool behind a credential — page-less Mode B. Your
-handler is unchanged; wrap it and it refuses-until-proven:
+Not selling anything? Gate **any** MCP tool behind a credential — no page of your own, no
+checkout anywhere (internally: the blocking **Mode B** surface). Your handler is unchanged;
+wrap it and it refuses-until-proven:
 
 ```ts
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -78,16 +79,17 @@ server.registerTool(
     }),
     {
       require: age.over(21),               // the credential to prove
-      provenBy: ({ subject }) => subject,  // whose proof unlocks the call
+      provenBy: ({ subject }) => subject,  // self-service: the subject proves their OWN age
     },
   ),
 );
 ```
 
 Until the proof exists, the handler does not run. The agent receives a **normal, success-shaped
-tool result** (`isError` is not set — don't let an error path swallow it) whose
-`structuredContent` is the typed refusal, with a plain-English instruction in `content`
-(detect it with `isVerificationRequired(result.structuredContent)`):
+tool result** — the standard MCP fields `content` / `structuredContent`, with `isError` NOT
+set (don't let an error path swallow it). `structuredContent` is the typed refusal (raw wire
+JSON, snake_case), with a plain-English instruction in `content`; detect it with
+`isVerificationRequired(result.structuredContent)`:
 
 ```jsonc
 {
@@ -106,22 +108,35 @@ tool result** (`isError` is not set — don't let an error path swallow it) whos
 ```
 
 The loop: the agent shows the person `approve_url` → they prove the credential on their
-phone → the proof is stored under `provenBy(args)` on this server — per subject, **never**
-process-global → the agent re-calls the tool and the handler runs. `require` takes any
-`gate()`-effect credential (or an array): `age.over(21)`, a custom `defineCredential`.
-Payment and discounts are refused at wrap time — they belong to the checkout ceremony.
+phone → the proof is stored under `provenBy(...)` on this server — per subject, **never**
+process-global → the agent re-calls the tool and the handler runs.
 
-- **`provenBy` is load-bearing.** It keys the proof. `provenBy: () => "global"` would let
-  the *first* person who verifies unlock the tool for **everyone** — derive a per-caller
-  id (user / session / subject). An empty value is refused fail-closed, never shared.
+**Who serves the approve page? Read this first if your server is stdio.** `approve_url` is
+served by the ceremony `mount()` wires onto an Express host (see the storefront quickstart
+above) — same process as an HTTP MCP server, or a small web process sharing the store. A
+**stdio-only** server has no page of its own yet: `gate()` still refuses correctly, but the
+link has nothing listening until you mount the ceremony somewhere — it warns at refusal time
+if nothing is mounted in the process, and a standalone proving-page mount is a tracked
+follow-up. Stated, not faked.
+
+- **`provenBy` is load-bearing — key it by the CALLER.** `provenBy: () => "global"` would
+  let the *first* person who verifies unlock the tool for **everyone**. On a multi-user
+  server use the MCP per-request context (passed as the second argument):
+  `provenBy: (_args, extra) => extra.sessionId`. Keying by a tool arg — as the example does —
+  is right only when the subject **is** the prover (self-service). An empty value is
+  refused fail-closed, never shared.
 - **Don't declare an MCP `outputSchema` on a gated tool** — the refusal envelope replaces
-  the success shape in `structuredContent`, and the SDK would reject it against your schema.
-- **The approve page:** `approve_url` is served by the ceremony `mount()` wires onto an
-  Express host (see the storefront quickstart above). A stdio-only server has no page of
-  its own yet — `gate()` warns at refusal time if nothing is mounted in the process, and a
-  standalone proving-page mount is a tracked follow-up. Stated, not faked.
-- Optional: `name: "release-records"` makes the refusal name the re-call precisely
-  (`resume.tool`); it must match your registered tool id.
+  the success shape in `structuredContent`, and the SDK would reject it against your
+  schema. Strip the schema when you gate an existing tool.
+- `require` takes any `gate()`-effect credential (or an array): `age.over(21)`, a custom
+  `defineCredential`. Payment and discounts are refused at wrap time — they belong to the
+  checkout ceremony.
+- Optional: `name: "release-records"` makes the refusal name the re-call precisely —
+  `resume.tool` stays the literal placeholder `"this-tool"` until you pass it; it must
+  match your registered tool id.
+- A presence-only gate is a **flow demo, not a real age-verification control** — don't put
+  it in front of a genuinely restricted action until issuer-verified trust lands
+  ([Honest status](#honest-status)).
 
 Runnable target: [`examples/gate-my-tool-sample/`](../../examples/gate-my-tool-sample/) —
 and the repo skill [`gate-my-tool`](../../.claude/skills/gate-my-tool/SKILL.md) lets a

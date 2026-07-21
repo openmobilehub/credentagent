@@ -28,7 +28,8 @@ const releaseRecords = credentagent.gate(
   async ({ subject }) => ({ released: true, subject, records: [`record:${subject}:summary`] }),
   {
     require: age.over(21),               // the credential to prove — swap in any defineCredential
-    provenBy: ({ subject }) => subject,  // whose proof unlocks the call (per subject, never global)
+    provenBy: ({ subject }) => subject,  // self-service: the subject proves their OWN age
+    //                                      (multi-user servers key by the CALLER: (_args, extra) => extra.sessionId)
     name: "release-records",
   },
 );

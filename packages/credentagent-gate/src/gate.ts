@@ -21,13 +21,19 @@ export interface GateOptions<A> {
    *  ceremony (`requirements()` + `mount()`), and a discount is a benefit, not a gate. */
   require: Credential | Credential[];
   /**
-   * Whose proof unlocks the call — derive a stable id (a user / session / subject id)
-   * from the tool args. Calls that derive the same value share one proof; proofs are
-   * stored per-subject on this server's store, NEVER process-global (Security
-   * invariant 4). Returning a shared constant would let one person's proof unlock
-   * everyone's calls — an empty/missing value is refused fail-closed, not shared.
+   * Whose proof unlocks the call — derive a stable id for the CALLER. Calls that derive
+   * the same value share one proof; proofs are stored per-subject on this server's
+   * store, NEVER process-global (Security invariant 4). Returning a shared constant
+   * would let one person's proof unlock everyone's calls — an empty/missing value is
+   * refused fail-closed, not shared.
+   *
+   * On a multi-user server key by the caller, not the requested resource: the MCP
+   * SDK's per-request `extra` is passed as the second argument, so
+   * `(_args, extra) => extra.sessionId` keys per transport session. Keying by a tool
+   * arg (e.g. the record's subject) is right only when the subject IS the prover
+   * (self-service).
    */
-  provenBy: (args: A) => string;
+  provenBy: (args: A, extra?: unknown) => string;
   /** Your registered tool name — names the re-call in the refusal (`resume.tool`).
    *  Optional; without it the refusal says "this tool" (the agent knows what it called). */
   name?: string;
@@ -87,7 +93,7 @@ export function makeToolGate<A, R>(
   let warnedUnmounted = false;
 
   return async (args: A, ...rest: unknown[]): Promise<R | MinimalToolResult> => {
-    const subject = opts.provenBy(args);
+    const subject = opts.provenBy(args, rest[0]);
     if (typeof subject !== "string" || subject.trim() === "") {
       // Fail CLOSED: a missing subject must never collapse callers into a shared
       // proof bucket (cross-user bleed, invariant 4) — refuse loudly instead.

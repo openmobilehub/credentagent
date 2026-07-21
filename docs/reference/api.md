@@ -101,8 +101,10 @@ call runs `handler` unchanged. Built on the same resolver as `requirements()`
 - **`require`** — the `gate()`-effect credential(s) to prove (`age.over(21)`, a custom
   `defineCredential`, or an array). `payment` / discount steps **throw at wrap time** —
   they belong to the checkout ceremony, and a silently-unenforced step would fail open.
-- **`provenBy`** — `(args) => string`; derives the id the proof is stored under (per
-  subject, never process-global). An empty value **throws fail-closed**.
+- **`provenBy`** — `(args, extra?) => string`; derives the id the proof is stored under
+  (per subject, never process-global). Key by the **caller** — the MCP per-request
+  `extra` (e.g. `extra.sessionId`) is the second argument; key by a tool arg only when
+  that subject is the prover. An empty value **throws fail-closed**.
 - **`name?`** — your registered tool id; names the re-call in `resume.tool`.
 
 ```ts

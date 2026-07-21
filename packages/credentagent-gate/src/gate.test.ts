@@ -177,6 +177,21 @@ describe("CredentAgent.gate", () => {
     expect(res.content?.[0]?.text).toContain("this tool");
   });
 
+  it("passes the MCP handler's `extra` through to provenBy — session-keyed proofs work", async () => {
+    const credentagent = new CredentAgent({ walletOrigin: "https://records.example" });
+    const gated = credentagent.gate(async () => ({ content: [] }), {
+      require: age.over(21),
+      // The SDK calls handlers as (args, extra) — key by the transport session.
+      provenBy: (_args, extra) => (extra as { sessionId: string }).sessionId,
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const res = (await gated({}, { sessionId: "sess-9" })) as { structuredContent?: Record<string, unknown> };
+    warn.mockRestore();
+    const env = res.structuredContent;
+    if (!isVerificationRequired(env)) throw new Error("expected envelope");
+    expect(env.order.id).toBe("sess-9");
+  });
+
   it("warns ONCE at refusal time when the ceremony is not mounted in this process (the approve link may be a dead end)", async () => {
     const { call } = gatedFixture();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
