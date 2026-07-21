@@ -7,6 +7,8 @@ import type { Credential, CredentAgentOptions, GateOrder, ReaderIdentity, Step, 
 import { resolveRequirements } from "./manifest.js";
 import { MemoryVerificationStore } from "./store.js";
 import { mountCeremony, type CeremonyApp, type CeremonySeams } from "./ceremony/mount.js";
+import { makeToolGate, type GateOptions } from "./gate.js";
+import type { MinimalToolResult } from "./gated.js";
 
 x509.cryptoProvider.set(globalThis.crypto);
 
@@ -90,6 +92,39 @@ export class CredentAgent {
     // (an in-memory Map write), so `requirements()` stays sync — no public-API change.
     for (const step of policy) this.registry.set(step.credential.id, step.credential);
     return resolveRequirements(order, policy, { walletOrigin: this.walletOrigin, mountedRoutes: this.mountedRoutes });
+  }
+
+  /**
+   * Gate an MCP tool handler: the wrapped tool refuses-until-proven. An unproven
+   * call returns the typed `verification_required` envelope (approve link + agent
+   * instruction) instead of running; once the credential is proven for
+   * `provenBy(args)` (per this client's per-subject store — invariant 4), the real
+   * handler runs. Same policy nouns as `requirements()`; the wrap is the
+   * enforcement point, so the tool cannot fail open by forgetting the check.
+   *
+   *   server.registerTool("release-records", config, credentagent.gate(handler, {
+   *     require: age.over(21),
+   *     provenBy: ({ subject }) => subject,
+   *   }));
+   */
+  gate<A, R>(
+    handler: (args: A, ...rest: unknown[]) => R | Promise<R>,
+    opts: GateOptions<A>,
+  ): (args: A, ...rest: unknown[]) => Promise<R | MinimalToolResult> {
+    return makeToolGate(handler, opts, {
+      store: this.store,
+      resolve: (order, steps) => {
+        // Register-on-resolve, like requirements(): the mounted rails +
+        // completeOrder can reach each credential's request/verify by id.
+        for (const s of steps) this.registry.set(s.credential.id, s.credential);
+        return resolveRequirements(order, steps, {
+          walletOrigin: this.walletOrigin,
+          mountedRoutes: this.mountedRoutes,
+          enforcedAt: "tool",
+        });
+      },
+      isMounted: () => this.mountedRoutes,
+    });
   }
 
   /**
