@@ -24,7 +24,7 @@ credentagent.on("order.settled", ({ id }) => console.log(`✓ order.settled: ${i
 // to the human; the amount + age gate are re-derived server-side, never trusted from a token.
 app.post("/buy-wine", (_req, res) => {
   const { id, approveUrl } = credentagent.orders.create({
-    order: { id: "", total: 2100, currency: "USD", lines: [{ id: "wine", name: "Bottle of wine", quantity: 1, unitPrice: 2100, minimumAge: 21 }] },
+    order: { id: "", total: 21, currency: "USD", lines: [{ id: "wine", name: "Bottle of wine", quantity: 1, unitPrice: 21, minimumAge: 21 }] },
     policy: [required(age.over(21)), required(payment.in("usd"))],
   });
   res.json({ id, approveUrl });

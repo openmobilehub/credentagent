@@ -77,6 +77,11 @@ export interface CeremonySeams {
    *  `app.locals.credentagent` so the host's `completion` seam can hand it to
    *  `completeOrder` for the custom-gate sweep. Holds CODE (never the wire). */
   credentialRegistry?: ReadonlyMap<string, Credential>;
+  /** Where a rail returns the buyer after they prove (the "continue to checkout" link +
+   *  the post-proof redirect). Absent ⇒ each rail's default `/checkout?order=<id>` (the
+   *  storefront's route). A host that serves its checkout elsewhere — e.g. `orders.serve`
+   *  at `/credentagent/orders/:id` — sets this so the buyer lands back on the right page. */
+  returnUrl?: (orderId: string) => string;
 }
 
 /** The resolved context each rail receives (every required seam present). */
@@ -100,6 +105,8 @@ export interface CeremonyContext {
   /** The gate's credential registry (007) — the rails read it to serve a custom
    *  credential's own request/verify. Absent when no CredentAgent registry was passed. */
   credentialRegistry?: ReadonlyMap<string, Credential>;
+  /** Build the buyer's return-to-checkout URL for an order (absent ⇒ the rail default). */
+  returnUrl?: (orderId: string) => string;
 }
 
 /** A rail attaches its routes to the host app given the resolved context. */
@@ -133,6 +140,7 @@ export function mountCeremony(app: CeremonyApp, options: Partial<CeremonySeams> 
   const statelessOrders = options.statelessOrders ?? locals.statelessOrders ?? false;
   const readerIdentity = options.readerIdentity ?? locals.readerIdentity;
   const credentialRegistry = options.credentialRegistry ?? locals.credentialRegistry;
+  const returnUrl = options.returnUrl ?? locals.returnUrl;
   let signingKey = options.signingKey ?? locals.signingKey;
 
   // Fail fast (CT2) — a load-bearing seam must never silently default. (`origin`
@@ -174,6 +182,7 @@ export function mountCeremony(app: CeremonyApp, options: Partial<CeremonySeams> 
     ...(settlement ? { settlement } : {}),
     ...(verifier ? { verifier } : {}),
     ...(readerIdentity ? { readerIdentity } : {}),
+    ...(returnUrl ? { returnUrl } : {}),
   };
 
   // Re-expose the resolved seams on app.locals so the storefront's gate routes

@@ -92,6 +92,24 @@ describe("orders.serve — checkout wiring", () => {
     if (after.ok) expect(after.completion.amount).toBe(500); // amount re-derived server-side (invariant 2)
   });
 
+  // Regression (found by driving the browser): after a rail proves, the buyer must return to
+  // THIS order's checkout page — not the storefront's `/checkout`, which the orders interface
+  // doesn't serve (a "Cannot GET /checkout" dead end). serve() threads a returnUrl into the rails.
+  it("threads the orders return URL into the ceremony rails (not the storefront's /checkout)", async () => {
+    const ca = new CredentAgent({ walletOrigin: "http://localhost:4000" });
+    const app = fakeApp();
+    ca.orders.serve(app);
+    const { id } = ca.orders.create({ order: wineOrder(), policy: gatedPolicy() });
+
+    const credentialHandler = app._get.get("/credentagent/credential");
+    expect(credentialHandler).toBeTruthy();
+    const res = fakeRes();
+    await credentialHandler!({ query: { order: id, cred: "age" }, headers: { host: "localhost:4000" }, protocol: "http", params: {} }, res);
+
+    expect(res._body).toContain(`/credentagent/orders/${id}`); // returns to the orders page
+    expect(res._body).not.toContain("/checkout?order=");        // NOT the storefront route
+  });
+
   it("status returns { completed } for the poll", async () => {
     const ca = new CredentAgent({ walletOrigin: "http://localhost:4000" });
     const app = fakeApp();

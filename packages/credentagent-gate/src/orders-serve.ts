@@ -193,6 +193,9 @@ export function serveOrders(app: CeremonyApp, deps: ServeOrdersDeps): void {
     completion: (input) => completeOrder(input, { catalog, verificationStore: deps.verificationStore, records, credentialRegistry: deps.credentialRegistry }),
     verificationStore: deps.verificationStore,
     credentialRegistry: deps.credentialRegistry,
+    // After a rail proves / pays, return the buyer to THIS order's checkout page — not the
+    // storefront's `/checkout` default (which the orders interface doesn't serve).
+    returnUrl: (id) => `${deps.walletOrigin}/credentagent/orders/${encodeURIComponent(id)}`,
     ...(deps.readerIdentity ? { readerIdentity: deps.readerIdentity } : {}),
     ...(deps.signingKey ? { signingKey: deps.signingKey } : { allowEphemeralKey: true }),
   });

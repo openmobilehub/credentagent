@@ -166,6 +166,7 @@ export const registerCredentialGate: RailRegistrar = (app: CeremonyApp, ctx: Cer
         renderCredentialPage({
           kind: resolved.credential.id,
           order: order.id,
+          returnUrl: ctx.returnUrl?.(order.id),
           total: order.total,
           currency: order.currency,
           label: resolved.credential.ui.label,
@@ -181,6 +182,7 @@ export const registerCredentialGate: RailRegistrar = (app: CeremonyApp, ctx: Cer
       renderCredentialPage({
         kind: resolved.kind,
         order: order.id,
+        returnUrl: ctx.returnUrl?.(order.id),
         minimumAge: requiredAgeForOrder(order) ?? undefined,
         total: order.total,
         currency: order.currency,
