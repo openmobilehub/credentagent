@@ -16,12 +16,14 @@ import type {
   CeremonyOrder,
   CeremonyOrderStore,
   CompletionSeam,
+  DelegatedVerifier,
   SettlementSeam,
 } from "./types.js";
 import { verifyCartMandate } from "./cartMandate.js";
 import { registerCredentialGate } from "./credential-gate/routes.js";
 import { registerPasskeyGate } from "./passkey/routes.js";
 import { registerDcPaymentGate } from "./dc-payment/routes.js";
+import { registerDelegatedPaymentGate } from "./delegated-payment/routes.js";
 
 /** Minimal Express-app shape mount() needs (no `express` dependency). */
 export interface CeremonyApp {
@@ -51,6 +53,12 @@ export interface CeremonySeams {
   origin?: (req: RequestLike) => Origin;
   /** Optional demo-mode settlement seam (absent ⇒ mock-complete). */
   settlement?: SettlementSeam;
+  /** Optional external verifier/processor (008, #60). When present, the delegated rail
+   *  is served and verification/settlement are delegated to it — the gate still owns
+   *  pricing, binding, policy and recording. Absent ⇒ the delegated rail registers
+   *  NOTHING and every existing path is byte-unchanged (genuinely optional, like
+   *  `settlement`). */
+  verifier?: DelegatedVerifier;
   /** Dev-only: allow an ephemeral per-process signing key. NEVER inferred —
    *  mount() does not guess "serverless". */
   allowEphemeralKey?: boolean;
@@ -76,6 +84,9 @@ export interface CeremonyContext {
   signingKey: string;
   origin: (req: RequestLike) => Origin;
   settlement?: SettlementSeam;
+  /** The external verifier/processor, when the host configured one (008). Absent ⇒
+   *  the delegated rail is inert and no delegated route exists. */
+  verifier?: DelegatedVerifier;
   /** FR-007: when true, `resolveOrder` may reconstruct from a verified Cart Mandate
    *  with no store read (absent/false — store is the source of truth). `mountCeremony`
    *  always sets it; optional here so a hand-built context literal need not. */
@@ -93,7 +104,9 @@ export type RailRegistrar = (app: CeremonyApp, ctx: CeremonyContext) => void;
 // the credential gate (age + membership); passkey / dc-payment follow (US2/US3).
 // Each registrar no-ops on a route-less app shape, so mount()'s fail-fast tests
 // (which pass a `{ locals }`-only app) are unaffected.
-const RAILS: RailRegistrar[] = [registerCredentialGate, registerPasskeyGate, registerDcPaymentGate];
+// `registerDelegatedPaymentGate` (008) self-skips unless a `verifier` seam is
+// configured, so adding it here changes nothing for a host that hasn't opted in.
+const RAILS: RailRegistrar[] = [registerCredentialGate, registerPasskeyGate, registerDcPaymentGate, registerDelegatedPaymentGate];
 
 /**
  * Read + validate the injected seams, build the CeremonyContext, and register
@@ -108,6 +121,7 @@ export function mountCeremony(app: CeremonyApp, options: Partial<CeremonySeams> 
   const catalog = options.catalog ?? locals.catalog;
   const completion = options.completion ?? locals.completion;
   const settlement = options.settlement ?? locals.settlement;
+  const verifier = options.verifier ?? locals.verifier;
   const origin = options.origin ?? locals.origin ?? deriveOrigin;
   const allowEphemeralKey = options.allowEphemeralKey ?? locals.allowEphemeralKey ?? false;
   const statelessOrders = options.statelessOrders ?? locals.statelessOrders ?? false;
@@ -151,6 +165,7 @@ export function mountCeremony(app: CeremonyApp, options: Partial<CeremonySeams> 
     statelessOrders,
     ...(credentialRegistry ? { credentialRegistry } : {}),
     ...(settlement ? { settlement } : {}),
+    ...(verifier ? { verifier } : {}),
   };
 
   // Re-expose the resolved seams on app.locals so the storefront's gate routes

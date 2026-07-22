@@ -8,6 +8,9 @@
 import type { CartMandate } from "./cartMandate.js";
 
 import type { SettlementRecordLike } from "./completion.js";
+import type { BindingFields } from "./mandate.js";
+import type { Origin } from "./origin.js";
+import type { DcqlQuery, TrustLevel } from "../types.js";
 
 export type MaybePromise<T> = T | Promise<T>;
 
@@ -142,3 +145,99 @@ export type CompletionSeam = (input: CompletionInput) => MaybePromise<Completion
 // ── Settlement seam (optional, demo-mode) ───────────────────────────────────
 
 export type SettlementSeam = (order: CeremonyOrder) => Promise<SettlementRecordLike>;
+
+// ── Delegated verification seam (external verifier / processor — 008, #60) ──
+//
+// The gate's own rails verify in-process and are honestly fenced at
+// `trust_level: "presence-only-demo"` — the wire crypto is real, but there is no
+// issuer/device TRUST ANCHOR. This seam lets a host delegate verification (and, for
+// payment, settlement) to a real external verifier/processor WITHOUT leaving the
+// mounted ceremony, so the policy (`payment.in()`, `defineCredential`, `gate()`) is
+// byte-identical and only the backend moves in.
+//
+// The load-bearing split, and the reason delegation stays safe:
+//
+//   TRUST is delegable — issuer/device signature against a real anchor is exactly
+//   what the gate lacks; the verifier reports it via `trust_level`.
+//   BINDING is NOT — the amount/payee/currency are re-derived from the catalog by
+//   the gate (invariant 2/3/6) and RE-CHECKED against the verdict before anything
+//   completes. An adapter that "approves" the wrong amount is still refused.
+//
+// Nothing here names a specific verifier or processor: the seam is the interface,
+// a concrete adapter (Multipaz/UPay, @auth0/mdl, …) is a HOST-side implementation.
+
+/**
+ * A verified presentment as it reaches the gate — STRUCTURAL and JSON-safe on
+ * purpose, so the gate never depends on any verifier's object model (a foreign
+ * `PresentmentRecord` must not leak into this package).
+ */
+export interface DelegatedVerdict {
+  /** Did the external verifier approve? NECESSARY, never SUFFICIENT — the gate still
+   *  re-checks `binding` and re-runs its own policy before completing. */
+  approved: boolean;
+  /** How strongly the presentment is trusted, as reported BY THE VERIFIER. Only a real
+   *  issuer/device trust anchor may report `"issuer-verified"`; the gate RELAYS this
+   *  value and never upgrades it (Principle VII — honesty carried in the type). */
+  trust_level: TrustLevel;
+  /** Disclosed claims keyed by credential id (e.g. `{ payment: {...}, mdl: {...} }`),
+   *  so the gate can run its OWN `verify` over them (invariants 1/5): the verifier's
+   *  business rules may be laxer than this merchant's policy (an 18+ check does not
+   *  satisfy an `age.over(21)` gate). */
+  claims: Record<string, Record<string, unknown>>;
+  /** What the verifier reports the holder actually authorized. Re-checked against the
+   *  catalog-re-priced order; any disagreement refuses (invariants 2/3/6). */
+  binding: {
+    amount: number;
+    currency: string;
+    payee?: { id: string };
+    /** The processor-side transaction id, when one was minted in `buildRequest`. */
+    transactionId?: string;
+  };
+  /** Opaque settlement receipt from the host's processor, recorded on completion. */
+  settlement?: SettlementRecordLike;
+  /** Why the verifier refused — surfaced when `!approved`. */
+  reason?: string;
+}
+
+/** What `buildRequest` hands back: the opaque reference the gate seals, plus the
+ *  payload the browser passes to the external verifier. */
+export interface DelegatedHandoff {
+  /** Opaque handle the verdict is later fetched BY (server-to-server). The gate seals
+   *  it with the order id, so it cannot be redeemed against another order. */
+  reference: string;
+  /** Verifier-specific payload for the browser (e.g. `{ dcql, transaction_data, nonce,
+   *  verifierUrl }`). Opaque to the gate — it is forwarded, never interpreted. */
+  handoff: unknown;
+}
+
+/**
+ * The external verifier/processor seam. Two methods, mirroring the split a real
+ * verifier already has: mint the request, then consume the verified presentment.
+ *
+ * `consume` is deliberately fetch-BY-REFERENCE rather than "receive the result":
+ * the browser sits between the verifier and this server, so anything it carries is
+ * forgeable. The browser carries only the sealed reference; the host re-fetches the
+ * verified presentment over an authenticated server-to-server channel and runs
+ * issuer-trust + settlement there.
+ */
+export interface DelegatedVerifier {
+  /**
+   * Mint the external verifier's request for THIS order. `binding` carries the gate's
+   * catalog-re-derived amount/currency/payee (the SAME `buildBindingFields` the
+   * dc-payment rail binds on, so the two rails cannot drift): the adapter binds TO it
+   * and never supplies it.
+   */
+  buildRequest(input: {
+    order: CeremonyOrder;
+    dcql: DcqlQuery;
+    binding: BindingFields;
+    origin: Origin;
+  }): MaybePromise<DelegatedHandoff>;
+
+  /**
+   * Fetch + finalize the verified presentment by reference, server-to-server. The
+   * adapter runs issuer-trust verification and settlement host-side and returns a
+   * structural verdict; the gate then re-checks binding + policy before recording.
+   */
+  consume(input: { reference: string; order: CeremonyOrder }): MaybePromise<DelegatedVerdict>;
+}
