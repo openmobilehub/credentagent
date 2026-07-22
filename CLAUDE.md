@@ -162,6 +162,11 @@ Quick gate for any new/changed public API (full list in the rubric):
   ceremony rail mirrors the existing rail layout; it does not bolt onto an existing one.
 - Keep the two package READMEs honest and in sync with the API surface — they are the
   published docs.
+- **Write PR/issue descriptions for a human who did NOT write the code.** Lead with plain
+  language — clear and concrete, not clever. Define each term on first use, spell out
+  cross-references (never a bare `#85` or `invariant 4`), prefer everyday use cases, use at
+  most one universal analogy and only for an abstract idea, and keep the technical detail
+  below a divider. Follow `.github/pull_request_template.md`; the review enforces it (REVIEW.md §5).
 
 ## Code review
 

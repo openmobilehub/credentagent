@@ -84,6 +84,12 @@ is never presented as a real safety control.
   `dcql`/`request`/`verify`/`page`/`routes` split (the `add-ceremony-rail` skill
   scaffolds it) rather than bolting onto an existing rail.
 - The two package READMEs stay in sync with any API surface the diff changes.
+- **Readable to someone who didn't write it.** The PR description leads with a plain-language
+  summary a non-specialist follows from the first paragraph — clear and concrete, not clever.
+  Every term is defined on first use; no bare cross-reference (`#85`, `invariant 4`, a rail
+  name) is left unexplained; use everyday examples; an abstract idea gets at most one universal
+  analogy (a prepaid card, a key), and the technical detail sits below a divider. Template:
+  `.github/pull_request_template.md`.
 - **Fix it or flag it:** anything broken the PR author must have seen is either
   fixed inline (small and safe) or filed as an issue — never silently ignored.
 
