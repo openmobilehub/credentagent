@@ -85,6 +85,17 @@ describe("mountCeremony — fail fast on missing seams (CT2)", () => {
     app.locals.credentagent = validSeams();
     expect(() => mountCeremony(app)).not.toThrow();
   });
+
+  it("threads readerIdentity from the seams onto the ctx the rails receive (#51)", () => {
+    const readerIdentity = { key: "PEM-KEY", cert: "PEM-CERT" };
+    const ctx = mountCeremony(fakeApp(), { ...validSeams(), readerIdentity });
+    expect(ctx.readerIdentity).toBe(readerIdentity);
+  });
+
+  it("leaves readerIdentity undefined when none is supplied (self-signed default)", () => {
+    const ctx = mountCeremony(fakeApp(), validSeams());
+    expect(ctx.readerIdentity).toBeUndefined();
+  });
 });
 
 describe("CredentAgent.mount — back-compat + ceremony delegation (T008)", () => {

@@ -61,6 +61,10 @@ export interface MdocDocSpec {
 // (basicConstraints CA:true) and a leaf signed by it carrying the reader-auth
 // EKUs and a DNS SAN matching the request origin. The reader auth is signed with
 // the leaf key; x5chain = [leaf, ca].
+//
+// NOTE: this iOS ReaderAuthAll path always self-mints. The stable `readerIdentity`
+// (CredentAgentOptions) is applied on the OpenID4VP (Android/Chrome) path only —
+// presenting it here (so an iOS wallet's RICAL matches) is a follow-up (#51).
 async function makeMdocReaderCert(
   origin: string,
   host: string,

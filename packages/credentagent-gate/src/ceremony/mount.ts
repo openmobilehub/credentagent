@@ -9,7 +9,7 @@
 // The package stays dependency-free: `CeremonyApp` is a minimal structural type
 // (no `express` import) carrying just `locals` + the route methods a rail needs.
 import { randomBytes } from "node:crypto";
-import type { Credential, VerificationStore } from "../types.js";
+import type { Credential, ReaderIdentity, VerificationStore } from "../types.js";
 import { deriveOrigin, type Origin, type RequestLike } from "./origin.js";
 import type {
   CeremonyCatalog,
@@ -67,6 +67,10 @@ export interface CeremonySeams {
    *  `orderStore` read (FR-007 / US3). Off ⇒ the store stays the source of truth
    *  and the mandate is an additive integrity envelope only. */
   statelessOrders?: boolean;
+  /** Stable reader identity the rails present in their OpenID4VP request (clears
+   *  the wallet's "unknown verifier" warning). Absent ⇒ per-request self-signed
+   *  reader (presence-only). Normally set once on `new CredentAgent({ readerIdentity })`. */
+  readerIdentity?: ReaderIdentity;
   /** The gate's in-process credential registry (id → Credential), populated by
    *  `requirements()` and passed here by `CredentAgent.mount()` (007). The rails read
    *  it to serve a custom credential's own request/verify; it is re-published on
@@ -91,6 +95,8 @@ export interface CeremonyContext {
    *  with no store read (absent/false — store is the source of truth). `mountCeremony`
    *  always sets it; optional here so a hand-built context literal need not. */
   statelessOrders?: boolean;
+  /** Stable reader identity the rails present (absent ⇒ per-request self-signed). */
+  readerIdentity?: ReaderIdentity;
   /** The gate's credential registry (007) — the rails read it to serve a custom
    *  credential's own request/verify. Absent when no CredentAgent registry was passed. */
   credentialRegistry?: ReadonlyMap<string, Credential>;
@@ -125,6 +131,7 @@ export function mountCeremony(app: CeremonyApp, options: Partial<CeremonySeams> 
   const origin = options.origin ?? locals.origin ?? deriveOrigin;
   const allowEphemeralKey = options.allowEphemeralKey ?? locals.allowEphemeralKey ?? false;
   const statelessOrders = options.statelessOrders ?? locals.statelessOrders ?? false;
+  const readerIdentity = options.readerIdentity ?? locals.readerIdentity;
   const credentialRegistry = options.credentialRegistry ?? locals.credentialRegistry;
   let signingKey = options.signingKey ?? locals.signingKey;
 
@@ -166,6 +173,7 @@ export function mountCeremony(app: CeremonyApp, options: Partial<CeremonySeams> 
     ...(credentialRegistry ? { credentialRegistry } : {}),
     ...(settlement ? { settlement } : {}),
     ...(verifier ? { verifier } : {}),
+    ...(readerIdentity ? { readerIdentity } : {}),
   };
 
   // Re-expose the resolved seams on app.locals so the storefront's gate routes

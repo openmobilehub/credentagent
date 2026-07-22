@@ -2,10 +2,13 @@
 // then declarative calls. `requirements(order, policy)` resolves a policy to the
 // serializable manifest (Context 1); `mount(app)` is the Context-2 seam.
 
-import type { Credential, CredentAgentOptions, GateOrder, Step, VerificationManifestEntry, VerificationStore } from "./types.js";
+import * as x509 from "@peculiar/x509";
+import type { Credential, CredentAgentOptions, GateOrder, ReaderIdentity, Step, VerificationManifestEntry, VerificationStore } from "./types.js";
 import { resolveRequirements } from "./manifest.js";
 import { MemoryVerificationStore } from "./store.js";
 import { mountCeremony, type CeremonyApp, type CeremonySeams } from "./ceremony/mount.js";
+
+x509.cryptoProvider.set(globalThis.crypto);
 
 /** The ceremony seams the host supplies to `mount()`; the per-order
  *  verification store is CredentAgent's own, so the host never passes it here. */
@@ -25,6 +28,8 @@ const DEFAULT_WALLET_ORIGIN = `http://localhost:${process.env.PORT ?? 3000}`;
 export class CredentAgent {
   readonly walletOrigin: string;
   readonly store: VerificationStore;
+  /** Stable reader identity presented by the rails (undefined ⇒ per-request self-signed). */
+  readonly readerIdentity?: ReaderIdentity;
   // True once the ceremony rails are wired onto a host app (so `/credentagent/*` routes
   // exist on this server). `requirements()` then emits approve links that resolve
   // to those mounted routes rather than the legacy `/credential-gate/*` shape.
@@ -60,6 +65,11 @@ export class CredentAgent {
     }
     this.walletOrigin = origin.replace(/\/$/, "");
     this.store = opts.store ?? new MemoryVerificationStore();
+    this.readerIdentity = opts.readerIdentity;
+    // Honesty / fail-fast: a reader cert whose SAN doesn't cover the origin host is
+    // silently rejected by the wallet (origin binding, invariant 6). Warn now, at
+    // construction, rather than let it surface as an opaque ceremony failure.
+    if (this.readerIdentity) warnOnReaderSanMismatch(this.readerIdentity, this.walletOrigin);
     // Item 5: register any credentials declared up front so EVERY instance enforces them from
     // boot — not only after requirements() ran on THIS instance. A serverless / multi-worker
     // completion instance may never run requirements() (checkout landed elsewhere), leaving the
@@ -98,7 +108,7 @@ export class CredentAgent {
    */
   mount(app: ExpressApp, ceremony?: MountCeremony): void {
     if (ceremony) {
-      mountCeremony(app as CeremonyApp, { ...ceremony, verificationStore: this.store, credentialRegistry: this.registry });
+      mountCeremony(app as CeremonyApp, { ...ceremony, verificationStore: this.store, readerIdentity: this.readerIdentity, credentialRegistry: this.registry });
       this.mountedRoutes = true;
       return;
     }
@@ -109,7 +119,7 @@ export class CredentAgent {
     // rails write (invariant 4). Falls back to CredentAgent's own store otherwise.
     const locals = (app.locals.credentagent ?? {}) as Partial<CeremonySeams>;
     if (locals.orderStore && locals.catalog && locals.completion) {
-      mountCeremony(app as CeremonyApp, { credentialRegistry: this.registry, ...(locals.verificationStore ? {} : { verificationStore: this.store }) });
+      mountCeremony(app as CeremonyApp, { readerIdentity: this.readerIdentity, credentialRegistry: this.registry, ...(locals.verificationStore ? {} : { verificationStore: this.store }) });
       this.mountedRoutes = true;
       return;
     }
@@ -118,5 +128,34 @@ export class CredentAgent {
     const existing = app.locals.credentagent as { store?: VerificationStore } | undefined;
     if (existing?.store === this.store) return; // idempotent
     app.locals.credentagent = { store: this.store, walletOrigin: this.walletOrigin, credentialRegistry: this.registry };
+  }
+}
+
+/** DNS SAN entries on a reader leaf cert (empty if none / unparseable). */
+function readerSanDnsNames(certPem: string): string[] {
+  const san = new x509.X509Certificate(certPem).getExtension(x509.SubjectAlternativeNameExtension);
+  return san ? san.names.items.filter((n) => n.type === "dns").map((n) => n.value) : [];
+}
+
+/** Warn (never throw) if the reader cert's SAN doesn't cover the wallet-origin
+ *  host — the wallet would otherwise reject the request with no useful signal. */
+function warnOnReaderSanMismatch(identity: ReaderIdentity, walletOrigin: string): void {
+  let host: string;
+  try {
+    host = new URL(walletOrigin).hostname;
+  } catch {
+    return;
+  }
+  let dns: string[];
+  try {
+    dns = readerSanDnsNames(identity.cert);
+  } catch {
+    return; // malformed cert surfaces at request time; don't crash construction
+  }
+  if (dns.length > 0 && !dns.includes(host)) {
+    console.warn(
+      `[credentagent] readerIdentity cert SAN [${dns.join(", ")}] does not include walletOrigin host "${host}". ` +
+        `The wallet will reject the request (origin binding). Re-mint the reader cert with a SAN covering "${host}".`,
+    );
   }
 }

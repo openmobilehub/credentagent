@@ -16,7 +16,7 @@ import { makeReaderCert, makeEncryptionKey } from "../mdoc/reader.js";
 import { sealReaderContext } from "../mdoc/readerContext.js";
 import type { CeremonyOrder } from "../types.js";
 import type { Origin } from "../origin.js";
-import type { DcqlQuery } from "../../types.js";
+import type { DcqlQuery, ReaderIdentity } from "../../types.js";
 
 export interface SignedDcPaymentRequest {
   protocol: "openid4vp-v1-signed";
@@ -31,9 +31,12 @@ export interface SignedDcPaymentRequest {
   trust_level: "presence-only-demo";
 }
 
-/** Build the REAL signed OpenID4VP request for the payment credential. */
-export async function buildDcPaymentRequest(order: CeremonyOrder, origin: Origin, secret: string): Promise<SignedDcPaymentRequest> {
-  const { x5c, privateKey } = await makeReaderCert(origin.rpID);
+/** Build the REAL signed OpenID4VP request for the payment credential. When a
+ *  `readerIdentity` is supplied, the request presents that stable reader (so a
+ *  wallet trusting it via a RICAL shows the verifier as trusted); otherwise a
+ *  self-signed ephemeral reader is used (presence-only default). */
+export async function buildDcPaymentRequest(order: CeremonyOrder, origin: Origin, secret: string, readerIdentity?: ReaderIdentity): Promise<SignedDcPaymentRequest> {
+  const { x5c, privateKey } = await makeReaderCert(origin.rpID, readerIdentity);
   const { encJwk, ecdhPrivateJwk } = await makeEncryptionKey();
   const dcql = buildDcPaymentDcql();
   const txDataB64 = encodeTransactionData(buildTransactionData(order, origin));
@@ -54,7 +57,7 @@ export async function buildDcPaymentRequest(order: CeremonyOrder, origin: Origin
   };
 
   const request = await new jose.SignJWT(requestObject)
-    .setProtectedHeader({ alg: "ES256", typ: "oauth-authz-req+jwt", x5c: [x5c] })
+    .setProtectedHeader({ alg: "ES256", typ: "oauth-authz-req+jwt", x5c })
     .setIssuedAt()
     .sign(privateKey as unknown as Parameters<InstanceType<typeof jose.SignJWT>["sign"]>[0]);
 

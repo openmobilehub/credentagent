@@ -177,6 +177,28 @@ export interface VerificationStore {
   clear(orderId: string): void | Promise<void>;
 }
 
+/**
+ * A stable reader identity the gate presents in its OpenID4VP request, so a wallet
+ * that trusts this reader (via an imported RICAL) shows the verifier as trusted —
+ * no "unknown verifier" warning. All fields are PEM strings; the caller reads them
+ * (e.g. `readFileSync`), so the library does no file I/O and every value's origin
+ * is visible. Omit it entirely and the gate self-signs an ephemeral reader cert per
+ * request (the zero-config `presence-only-demo` default) — origin binding still
+ * holds, but no wallet has a reason to trust the verifier.
+ *
+ * The certificate's SubjectAltName MUST include the `walletOrigin` host, or the
+ * wallet rejects the request (origin binding, invariant 6); the client warns at
+ * construction on a mismatch.
+ */
+export interface ReaderIdentity {
+  /** PEM private key (EC P-256) the gate ES256-signs the request with. */
+  key: string;
+  /** PEM leaf certificate — rides in the request's `x5c`; matched against the RICAL. */
+  cert: string;
+  /** Optional PEM issuer chain above the leaf (e.g. the reader root), leaf-exclusive. */
+  chain?: string[];
+}
+
 export interface CredentAgentOptions {
   /**
    * Absolute origin the wallet ceremony binds to (e.g. `https://shop.example`).
@@ -187,6 +209,12 @@ export interface CredentAgentOptions {
   walletOrigin?: string;
   /** Per-order verification state; default in-memory, pluggable (Redis). */
   store?: VerificationStore;
+  /**
+   * Optional stable reader identity to present (clears the wallet's "unknown
+   * verifier" warning when the wallet trusts it via a RICAL). Omit ⇒ the gate
+   * self-signs an ephemeral reader cert per request (`presence-only-demo`).
+   */
+  readerIdentity?: ReaderIdentity;
   /**
    * Custom credentials to register at construction, so EVERY instance can enforce them
    * from boot — independent of whether `requirements()` ran on this instance (007 / item 5).

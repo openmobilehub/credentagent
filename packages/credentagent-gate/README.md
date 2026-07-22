@@ -144,6 +144,30 @@ The three rails `mount()` serves differ in how much crypto is real today:
 The OpenID4VP plumbing is scaffolded; cryptographic mdoc trust is the integration step, not new
 cryptography. The mandate is AP2-shaped and dev-signed (integrity hash), not key-signed.
 
+### Presenting a stable reader identity (optional)
+
+By default the OpenID4VP rails **self-sign an ephemeral reader certificate per request**, so a
+wallet has no reason to trust the verifier and shows an "unknown verifier" warning. Pass a stable
+reader identity and the rails present it instead — a wallet that trusts it (via an imported RICAL)
+shows the verifier as trusted:
+
+```ts
+new CredentAgent({
+  walletOrigin: "https://shop.example",
+  readerIdentity: {
+    key: readFileSync("reader.key", "utf8"),   // PEM, EC P-256
+    cert: readFileSync("reader.pem", "utf8"),  // PEM leaf → rides in the request's `x5c`
+  },
+});
+```
+
+The cert's SubjectAltName must cover the `walletOrigin` host or the wallet rejects the request
+(origin binding); the client warns at construction on a mismatch.
+
+> **This is verifier trust, not issuer trust — they point in opposite directions.** It changes
+> whether the *wallet* trusts *us* to ask. It does **not** verify the mdoc the wallet presents
+> *back*, so `trust_level` stays **`presence-only-demo`** either way.
+
 > **A refused tool call is a protocol, not a wall.** For a page-less tool, `gated()` returns a typed
 > **`verification_required`** envelope the agent *drives* (which credential, a per-order approve link,
 > the tool to poll) instead of completing — the retained blocking **Mode B** primitive.

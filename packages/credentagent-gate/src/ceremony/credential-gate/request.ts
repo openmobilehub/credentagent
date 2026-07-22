@@ -15,7 +15,7 @@ import type { Origin } from "../origin.js";
 import { makeReaderCert, makeEncryptionKey } from "../mdoc/reader.js";
 import { sealReaderContext } from "../mdoc/readerContext.js";
 import { buildCredentialDcql, type CredentialDcqlOpts, type CredentialKind } from "./dcql.js";
-import type { DcqlQuery } from "../../types.js";
+import type { DcqlQuery, ReaderIdentity } from "../../types.js";
 
 export interface SignedCredentialRequest {
   protocol: "openid4vp-v1-signed";
@@ -34,8 +34,9 @@ export async function buildCredentialRequest(
   origin: Origin,
   secret: string,
   opts: CredentialDcqlOpts = {},
+  readerIdentity?: ReaderIdentity,
 ): Promise<SignedCredentialRequest> {
-  return buildSignedRequestForDcql(buildCredentialDcql(kind, opts), origin, secret);
+  return buildSignedRequestForDcql(buildCredentialDcql(kind, opts), origin, secret, readerIdentity);
 }
 
 /**
@@ -44,14 +45,16 @@ export async function buildCredentialRequest(
  * supplies the age/membership DCQL; the generalized rail passes a custom credential's
  * OWN `request` here. The crypto — reader cert, ephemeral ECDH key, sealed nonce,
  * ES256 signature, origin/RP binding — is identical to the built-in path (invariant 6);
- * only the source of the DCQL differs. trust_level stays presence-only-demo.
+ * only the source of the DCQL differs. trust_level stays presence-only-demo. A stable
+ * `readerIdentity` (#51), when supplied, is presented instead of a self-signed cert.
  */
 export async function buildSignedRequestForDcql(
   dcql: DcqlQuery,
   origin: Origin,
   secret: string,
+  readerIdentity?: ReaderIdentity,
 ): Promise<SignedCredentialRequest> {
-  const { x5c, privateKey } = await makeReaderCert(origin.rpID);
+  const { x5c, privateKey } = await makeReaderCert(origin.rpID, readerIdentity);
   const { encJwk, ecdhPrivateJwk } = await makeEncryptionKey();
   const nonce = jose.base64url.encode(crypto.getRandomValues(new Uint8Array(16)));
 
@@ -69,7 +72,7 @@ export async function buildSignedRequestForDcql(
   };
 
   const request = await new jose.SignJWT(requestObject)
-    .setProtectedHeader({ alg: "ES256", typ: "oauth-authz-req+jwt", x5c: [x5c] })
+    .setProtectedHeader({ alg: "ES256", typ: "oauth-authz-req+jwt", x5c })
     .setIssuedAt()
     .sign(privateKey as unknown as Parameters<InstanceType<typeof jose.SignJWT>["sign"]>[0]);
 

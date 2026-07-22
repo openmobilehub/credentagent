@@ -206,8 +206,8 @@ export const registerCredentialGate: RailRegistrar = (app: CeremonyApp, ctx: Cer
       // A custom credential embeds its OWN request DCQL + doctype (007); a built-in uses
       // the age/membership order-parameterized builders. Same signer + crypto either way.
       const oid = resolved.credential
-        ? await buildSignedRequestForDcql(resolved.credential.request, reqOrigin, ctx.signingKey)
-        : await buildCredentialRequest(resolved.kind, reqOrigin, ctx.signingKey, { minimumAge: resolved.kind === "age" ? requiredAgeForOrder(order) ?? 21 : undefined });
+        ? await buildSignedRequestForDcql(resolved.credential.request, reqOrigin, ctx.signingKey, ctx.readerIdentity)
+        : await buildCredentialRequest(resolved.kind, reqOrigin, ctx.signingKey, { minimumAge: resolved.kind === "age" ? requiredAgeForOrder(order) ?? 21 : undefined }, ctx.readerIdentity);
       const docSpec = resolved.credential
         ? mdocDocSpecsFromDcql(resolved.credential.request) // every credential → one iOS doc spec (item 6)
         : mdocDocSpec(resolved.kind, resolved.kind === "age" ? requiredAgeForOrder(order) ?? 21 : 21);

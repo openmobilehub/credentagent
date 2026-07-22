@@ -106,7 +106,7 @@ export const registerDcPaymentGate: RailRegistrar = (app: CeremonyApp, ctx: Cere
     const order = await resolveOrder(ctx, typeof req.query.order === "string" ? req.query.order : undefined, { cartMandate: decodeCartMandateParam(req.query.cart) });
     if (!order) { res.status(404).json({ error: "order not found" }); return; }
     try {
-      res.json(await buildDcPaymentRequest(order, originOf(ctx, req), ctx.signingKey));
+      res.json(await buildDcPaymentRequest(order, originOf(ctx, req), ctx.signingKey, ctx.readerIdentity));
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
     }
