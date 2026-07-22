@@ -51,7 +51,7 @@ export async function buildDelegatedRequest(
   // Invariant 2/6: amount + currency + payee re-derived server-side from the
   // catalog-priced order and THIS request's origin — never from the token or the adapter.
   const binding = buildBindingFields(order, origin);
-  const dcql = mergeDelegatedDcql(delegatedPolicyEntries(ctx.credentialRegistry, order));
+  const { query: dcql } = mergeDelegatedDcql(delegatedPolicyEntries(ctx.credentialRegistry, order));
 
   const { reference, handoff } = await verifier.buildRequest({ order, dcql, binding, origin });
 

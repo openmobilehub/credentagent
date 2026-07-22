@@ -116,6 +116,16 @@ export interface CompletionInput {
    *  upstream verify (invariant 1). Absent ⇒ the draw branch is skipped entirely (HP paths
    *  byte-unchanged). */
   draw?: { intent: import("./mandate.js").IntentBounds; draw: import("./mandate.js").Draw };
+  /** Optional per-request settlement thunk (008: the delegated rail's gate-authorized
+   *  `verifier.settle`). Runs at the shared settlement point — after every gate + the
+   *  re-price + age/custom enforcement pass, before the record — and takes precedence over
+   *  the mount-time `ctx.settle`. Throwing GATES completion (authorized-but-not-settled).
+   *  Absent ⇒ `ctx.settle` (if any) is used, exactly as before (additive). */
+  settle?: () => import("./types.js").MaybePromise<SettlementRecordLike>;
+  /** Optional trust level to RELAY onto the completed record (008), sourced from an external
+   *  verifier's verdict. The gate never synthesizes it — only records a level it received.
+   *  Absent ⇒ the record omits it (the built-in rails' honesty level stays the manifest's). */
+  trustLevel?: import("../types.js").TrustLevel;
 }
 
 export interface CompletionResult {
@@ -172,29 +182,31 @@ export type SettlementSeam = (order: CeremonyOrder) => Promise<SettlementRecordL
  * `PresentmentRecord` must not leak into this package).
  */
 export interface DelegatedVerdict {
-  /** Did the external verifier approve? NECESSARY, never SUFFICIENT — the gate still
-   *  re-checks `binding` and re-runs its own policy before completing. */
+  /** Did the external verifier approve (issuer/device trust + disclosure)? NECESSARY,
+   *  never SUFFICIENT — the gate still re-checks `binding` and re-runs its OWN policy
+   *  before authorizing settlement. `consume` performs NO settlement; approving here
+   *  does not move money (that is the separate, gate-authorized `settle`). */
   approved: boolean;
   /** How strongly the presentment is trusted, as reported BY THE VERIFIER. Only a real
    *  issuer/device trust anchor may report `"issuer-verified"`; the gate RELAYS this
    *  value and never upgrades it (Principle VII — honesty carried in the type). */
   trust_level: TrustLevel;
-  /** Disclosed claims keyed by credential id (e.g. `{ payment: {...}, mdl: {...} }`),
-   *  so the gate can run its OWN `verify` over them (invariants 1/5): the verifier's
-   *  business rules may be laxer than this merchant's policy (an 18+ check does not
-   *  satisfy an `age.over(21)` gate). */
+  /** Disclosed claims keyed by the credential id from the request's DCQL (e.g.
+   *  `{ payment: {...}, age_mdl: {...} }`), so the gate can run its OWN `verify` over
+   *  them (invariants 1/5): the verifier's business rules may be laxer than this
+   *  merchant's policy (an 18+ check does not satisfy an `age.over(21)` gate). */
   claims: Record<string, Record<string, unknown>>;
-  /** What the verifier reports the holder actually authorized. Re-checked against the
-   *  catalog-re-priced order; any disagreement refuses (invariants 2/3/6). */
+  /** What the verifier reports the holder actually signed over (the amount-bound
+   *  transaction_data). Re-checked against the catalog-re-priced order + this RP's
+   *  payee; any disagreement refuses BEFORE settlement (invariants 2/3/6). */
   binding: {
     amount: number;
     currency: string;
-    payee?: { id: string };
-    /** The processor-side transaction id, when one was minted in `buildRequest`. */
+    /** The payee the wallet authorized — re-checked === this RP's re-derived payee. */
+    payee: { id: string };
+    /** The processor-side transaction id minted in `buildRequest` (carried to `settle`). */
     transactionId?: string;
   };
-  /** Opaque settlement receipt from the host's processor, recorded on completion. */
-  settlement?: SettlementRecordLike;
   /** Why the verifier refused — surfaced when `!approved`. */
   reason?: string;
 }
@@ -211,14 +223,22 @@ export interface DelegatedHandoff {
 }
 
 /**
- * The external verifier/processor seam. Two methods, mirroring the split a real
- * verifier already has: mint the request, then consume the verified presentment.
+ * The external verifier/processor seam. THREE methods, mirroring the split a real
+ * verifier/processor already has (Multipaz verifier + UPay `createTransaction` /
+ * `commitTransaction`): mint the request, verify the presentment, then — only when
+ * the gate authorizes it — settle.
  *
- * `consume` is deliberately fetch-BY-REFERENCE rather than "receive the result":
- * the browser sits between the verifier and this server, so anything it carries is
- * forgeable. The browser carries only the sealed reference; the host re-fetches the
- * verified presentment over an authenticated server-to-server channel and runs
- * issuer-trust + settlement there.
+ * Everything is fetch-BY-REFERENCE rather than "receive the result": the browser sits
+ * between the verifier and this server, so anything it carries is forgeable. The
+ * browser carries only the sealed reference; the host re-fetches server-to-server.
+ *
+ * Why settlement is a SEPARATE, third step and not folded into `consume`:
+ * the gate's policy can be STRICTER than the verifier's. The reference verifier's age
+ * rule passes at 18+, but `age.over(21)` demands 21+ — so the verifier can legitimately
+ * `approve` a purchase the gate must refuse. If `consume` settled, the gate would refuse
+ * a 20-year-old's alcohol order AFTER the money moved. So `consume` performs NO
+ * settlement; the gate re-checks binding + re-runs its own policy, and ONLY then calls
+ * `settle`. Settlement is gate-authorized, never verifier-authorized.
  */
 export interface DelegatedVerifier {
   /**
@@ -235,9 +255,23 @@ export interface DelegatedVerifier {
   }): MaybePromise<DelegatedHandoff>;
 
   /**
-   * Fetch + finalize the verified presentment by reference, server-to-server. The
-   * adapter runs issuer-trust verification and settlement host-side and returns a
-   * structural verdict; the gate then re-checks binding + policy before recording.
+   * Fetch the verified presentment by reference, server-to-server, and run issuer-trust
+   * verification. Returns a structural verdict (trust + disclosed claims + the amount
+   * binding the wallet signed over). MUST NOT move money — settlement is the gate's call
+   * (`settle`). The gate re-checks binding + re-runs its own policy over `claims` next.
    */
   consume(input: { reference: string; order: CeremonyOrder }): MaybePromise<DelegatedVerdict>;
+
+  /**
+   * Settle — commit the transaction the reference identifies (e.g. the processor's
+   * `commitTransaction` consuming the verifier's presentment record). Called by the gate
+   * ONLY after `consume` approved AND the gate's own binding + policy re-checks passed,
+   * and ONLY for a policy that authorizes payment. `amount`/`currency` are the gate's
+   * re-derived, re-checked figures (never the adapter's). Returns the settlement receipt
+   * recorded on completion; throwing GATES completion (authorized-but-not-settled).
+   *
+   * Optional: a delegated ceremony that only gates identity (age / a custom credential)
+   * with no payment never calls it.
+   */
+  settle?(input: { reference: string; order: CeremonyOrder; amount: number; currency: string }): MaybePromise<SettlementRecordLike>;
 }

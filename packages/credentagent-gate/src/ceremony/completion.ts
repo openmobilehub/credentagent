@@ -5,7 +5,7 @@
 // (no hardcoded demo imports) so dc-payment and passkey reconcile against the same
 // amount-binding logic. Settlement GATES completion: a configured-but-failed
 // settle means authorized-but-not-completed (no record, cart intact — FR-013).
-import type { Credential, GateOrder, VerificationStore } from "../types.js";
+import type { Credential, GateOrder, TrustLevel, VerificationStore } from "../types.js";
 import type { CartItemRef, CeremonyCatalog, CeremonyOrder, CompletionInput, CompletionResult, GateOutcome } from "./types.js";
 import { verifyCartMandate, type CartMandate } from "./cartMandate.js";
 import { reconcileCartPayment } from "./reconciliation.js";
@@ -40,6 +40,11 @@ export interface CompletedRecord {
   /** The authorizing Intent Mandate id, when this order completed via a delegated draw
    *  (005) — the audit link from an unattended completion back to its grant. */
   delegationId?: string;
+  /** How strongly this completion was trusted, RELAYED from an external verifier's verdict
+   *  (008). `"issuer-verified"` only when a real trust anchor produced it; the built-in rails
+   *  omit this (their honesty level is the manifest's `presence-only-demo`). Never synthesized
+   *  here — the gate only records a level it received. */
+  trustLevel?: TrustLevel;
 }
 
 export interface CompletedOrderStore {
@@ -297,10 +302,17 @@ export async function completeOrder(input: CompletionInput, ctx: CompletionConte
     return { completed: false, reason: "gate" };
   }
 
+  // Settlement runs HERE — after every gate, the re-price, and the age/custom-gate
+  // enforcement above have passed, and just before the record is written — so a refused
+  // order never settles. A per-input `settle` thunk (008: the delegated rail's
+  // gate-authorized `verifier.settle`, bound to the amount THIS path re-derived) takes
+  // precedence over the mount-time `ctx.settle(order)`; both gate completion identically
+  // (a throw ⇒ authorized-but-not-settled, no record — FR-013).
   let settlement: SettlementRecordLike | undefined;
-  if (ctx.settle) {
+  const settleFn = input.settle ?? (ctx.settle ? () => ctx.settle!(input.order) : undefined);
+  if (settleFn) {
     try {
-      settlement = await ctx.settle(input.order);
+      settlement = await settleFn();
     } catch (err) {
       return { completed: false, settlementError: (err as Error).message };
     }
@@ -316,6 +328,7 @@ export async function completeOrder(input: CompletionInput, ctx: CompletionConte
     gates: input.gates,
     completedAt: new Date().toISOString(),
     ...(settlement ? { settlement } : {}),
+    ...(input.trustLevel ? { trustLevel: input.trustLevel } : {}),
   });
   if (ctx.cart) await ctx.cart.clear();
   // Completed purchase: clear this order's age/loyalty verification.
