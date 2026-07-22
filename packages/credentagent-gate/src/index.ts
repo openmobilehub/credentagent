@@ -28,6 +28,14 @@ export { MemoryVerificationStore } from "./store.js";
 export { Orders, MemoryOrderStore } from "./orders.js";
 export type { OrderStore, CreatedOrder, CompletedOrder, OrderDoor } from "./orders.js";
 
+// ── Webhooks (spec 010) — the REAL HTTP completion signal ───────────────────
+// SEND: `new CredentAgent({ webhooks: { endpoints: [{ url, secret }] } })` → every settled order
+// POSTs a signed `order.settled` event. RECEIVE (a different service, secret only):
+// `constructEvent(rawBody, sigHeader, secret)` → typed event, or throws on a forged/tampered/replayed
+// body (the Stripe idiom). `verifyEvent(...)` is the never-throws verdict door.
+export { constructEvent, verifyEvent, generateWebhookSecret, signPayload, Webhooks, WebhookSignatureError, SIGNATURE_HEADER, DEFAULT_TOLERANCE_SECONDS } from "./webhooks.js";
+export type { WebhookEvent, WebhookEndpoint, WebhookOptions, WebhookVerdict, WebhookRefusalCode, WebhookTransport, VerifyOptions } from "./webhooks.js";
+
 // ── Ceremony composition (host-side: bind completion over YOUR stores) ──────
 // A composing host (e.g. @openmobilehub/credentagent-storefront) binds `completeOrder`
 // to its completed-order / cart stores + catalog and exposes it as the `completion`

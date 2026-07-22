@@ -16,6 +16,9 @@ Each is runnable against the two `@openmobilehub/credentagent-*` packages (build
 **Orders — checkout in one call** (009)
 - [`orders-checkout/`](orders-checkout/) — the real `credentagent.orders` API: `orders.serve(app)` wires the whole checkout, `orders.create()` returns a link, `order.settled` fires when it's paid
 
+**Order webhooks — the real HTTP completion signal** (010)
+- [`order-webhooks/`](order-webhooks/) — a sender + a separate receiver: a settled order POSTs a **signed** `order.settled` event; the receiver verifies it with `constructEvent` (the Stripe idiom). Forged/tampered/replayed events are rejected
+
 **Cart Mandate / stateless** (004)
 - [`stateless-orders/`](stateless-orders/) — the created order rides in a signed Cart Mandate on the link
 

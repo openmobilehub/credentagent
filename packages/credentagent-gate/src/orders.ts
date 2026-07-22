@@ -61,6 +61,8 @@ export interface OrdersDeps {
   /** The completed-order store; its write() fires "order.settled". */
   completed: OrderStore<CompletedOrder>;
   emit: (event: "order.settled", payload: { id: string }) => void;
+  /** Fan the settled order out to registered HTTP webhook endpoints (fire-and-forget). */
+  deliverWebhook?: (type: "order.settled", object: CompletedOrder) => void;
   /** Wire the checkout (rails + page + completion) onto an Express app — `orders.serve(app)`. */
   serve: (app: unknown) => void;
 }
@@ -116,6 +118,9 @@ export class Orders {
    *  in-process `order.settled` event (see `CredentAgent.on` — a local listener, not a webhook). */
   async _complete(record: CompletedOrder): Promise<void> {
     await this.deps.completed.write(record.orderId, record);
+    // One completion choke point feeds both signals: the in-process listener AND the HTTP
+    // webhook fan-out. Delivery is fire-and-forget — it never blocks or rolls back completion.
     this.deps.emit("order.settled", { id: record.orderId });
+    this.deps.deliverWebhook?.("order.settled", record);
   }
 }

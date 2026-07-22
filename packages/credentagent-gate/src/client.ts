@@ -9,6 +9,7 @@ import { MemoryVerificationStore } from "./store.js";
 import { mountCeremony, type CeremonyApp, type CeremonySeams } from "./ceremony/mount.js";
 import { Orders, MemoryOrderStore, type CreatedOrder, type CompletedOrder } from "./orders.js";
 import { serveOrders } from "./orders-serve.js";
+import { Webhooks } from "./webhooks.js";
 
 x509.cryptoProvider.set(globalThis.crypto);
 
@@ -32,6 +33,8 @@ export class CredentAgent {
   readonly store: VerificationStore;
   /** The human-present checkout resource — `orders.create()` / `orders.retrieve()` (spec 009). */
   readonly orders: Orders;
+  /** Outbound HTTP webhooks — `webhooks.register()` / `webhooks.constructEvent()` (spec 010). */
+  readonly webhooks: Webhooks;
   /** Stable reader identity presented by the rails (undefined ⇒ per-request self-signed). */
   readonly readerIdentity?: ReaderIdentity;
   private readonly listeners = new Map<string, Set<(payload: { id: string }) => void>>();
@@ -90,12 +93,16 @@ export class CredentAgent {
     // state `orders.create()` / `orders.retrieve()` use (invariant 4 — keyed per order id).
     const createdStore = opts.orderStore ?? new MemoryOrderStore<CreatedOrder>();
     const completedStore = opts.completedOrderStore ?? new MemoryOrderStore<CompletedOrder>();
+    // The outbound HTTP webhook sender (spec 010). Zero endpoints ⇒ inert (additive, zero-cost).
+    this.webhooks = new Webhooks(opts.webhooks ?? {});
     this.orders = new Orders({
       walletOrigin: this.walletOrigin,
       requirements: (order, policy) => this.requirements(order, policy),
       created: createdStore,
       completed: completedStore,
       emit: (event, payload) => this.emit(event, payload),
+      // Fire-and-forget from the completion choke point — never blocks a settled order.
+      deliverWebhook: (type, object) => { void this.webhooks.deliver(type, object); },
       serve: (app) => {
         if (this.ordersServed) return; // idempotent
         serveOrders(app as CeremonyApp, {

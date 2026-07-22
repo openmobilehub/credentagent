@@ -93,15 +93,40 @@ app.get("/orders/:id", async (req, res) => res.json(await credentagent.orders.re
 > one long-lived Node process that completed the order. On serverless (Vercel, Lambda) the instance
 > can be frozen the moment the response is sent, so async work started in the listener may never
 > finish — don't fulfill from it there. Instead, inject shared stores (`orderStore`,
-> `completedOrderStore`) and read `orders.retrieve(id)` as the durable, cross-instance signal. A
-> real signed HTTP webhook is the next increment
-> ([#101](https://github.com/openmobilehub/credentagent/issues/101)).
+> `completedOrderStore`) and read `orders.retrieve(id)` as the durable, cross-instance signal — or
+> register a **webhook** (next section) so a different service gets the signed HTTP `POST`.
 
 `orders.retrieve(id)` is the one result **door**: `{ ok: true, completion }` once paid, `{ ok: false,
 pending: true, approveUrl }` while it's open, or `{ ok: false, code }` for an unknown id. The amount and
 the age threshold are re-derived from the order you stored server-side — never trusted from the link
 (invariant 2), and a gated order can only complete through the wallet ceremony, never a shortcut
 (invariant 1). Runnable: [`examples/orders-checkout/`](https://github.com/openmobilehub/credentagent/tree/main/examples/orders-checkout).
+
+### Webhooks — tell a *different* service when an order settles
+
+`on("order.settled", …)` only fires in the process that settled the order. When fulfillment runs
+elsewhere, register a **webhook**: the gate sends a **signed** HTTP `POST` and the other service
+verifies it — the Stripe idiom (`constructEvent`). Real HMAC signature, replay-protected.
+
+```ts
+// SENDING — configure once; a settled order is POSTed to each endpoint (signed, retried, non-blocking):
+new CredentAgent({ webhooks: { endpoints: [{ url: "https://fulfillment.example/hooks", secret: process.env.WHSEC }] } });
+
+// RECEIVING — a different service; only the shared secret. Verify the RAW body:
+import { constructEvent } from "@openmobilehub/credentagent-gate";
+app.post("/hooks", express.raw({ type: "application/json" }), (req, res) => {
+  let event;
+  try { event = constructEvent(req.body, req.get("CredentAgent-Signature"), process.env.WHSEC); }
+  catch (err) { return res.status(400).send(err.message); }        // forged / tampered / replayed → rejected
+  if (event.type === "order.settled") fulfill(event.data.object.orderId); // dedupe on event.id
+  res.json({ received: true });
+});
+```
+
+Signature: `CredentAgent-Signature: t=…,v1=<hex HMAC-SHA256>` over `` `${t}.${rawBody}` ``, secret
+`whsec_…`. Delivery is **at-least-once** with retry (dedupe on `event.id`) — it never blocks a settled
+order. `verifyEvent(...)` is the never-throws verdict door if you prefer a result to a try/catch. Runnable:
+[`examples/order-webhooks/`](https://github.com/openmobilehub/credentagent/tree/main/examples/order-webhooks).
 
 ## The three execution contexts
 

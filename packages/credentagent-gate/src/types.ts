@@ -6,6 +6,7 @@
 //                manifest. Functions NEVER cross the wire. `requirements()` is that code→data boundary.
 
 import type { OrderStore, CreatedOrder, CompletedOrder } from "./orders.js";
+import type { WebhookOptions } from "./webhooks.js";
 
 // ── DCQL (what to ask the wallet) ──────────────────────────────────────────
 
@@ -240,4 +241,10 @@ export interface CredentAgentOptions {
    * `process.env.GATE_SECRET`) for any multi-instance deploy.
    */
   gateSecret?: string;
+  /**
+   * Outbound HTTP webhooks (spec 010). Register endpoint URL(s) + their `whsec_` secret and every
+   * settled order is POSTed to them as a signed event — the durable, cross-service signal the
+   * in-process `on("order.settled")` listener can't provide. Omit ⇒ no delivery (additive, zero-cost).
+   */
+  webhooks?: WebhookOptions;
 }
