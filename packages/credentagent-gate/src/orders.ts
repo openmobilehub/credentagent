@@ -1,6 +1,6 @@
 // credentagent.orders — the human-present checkout resource (spec 009).
 //
-//   const { id, approveUrl, manifest } = credentagent.orders.create({ order, policy });
+//   const { id, approveUrl, manifest } = await credentagent.orders.create({ order, policy });
 //   // hand approveUrl to the human; they prove on the checkout page (renderRequirements + the rails).
 //   const res = await credentagent.orders.retrieve(id);   // the DOOR: ok | pending+approveUrl | reason
 //
@@ -72,15 +72,18 @@ export class Orders {
   constructor(private readonly deps: OrdersDeps) {}
 
   /** Open an order that needs consent. Returns the id, the approve link, and the manifest. */
-  create({ order, policy }: { order: GateOrder; policy: Step[] }): {
+  async create({ order, policy }: { order: GateOrder; policy: Step[] }): Promise<{
     id: string;
     approveUrl: string;
     manifest: VerificationManifestEntry[];
-  } {
+  }> {
     const id = order.id && order.id.trim() !== "" ? order.id : genId();
     const withId: GateOrder = { ...order, id };
     const manifest = this.deps.requirements(withId, policy);   // re-priced/resolved server-side (invariant 2)
-    void this.deps.created.write(id, { order: withId, policy });
+    // Await persistence BEFORE handing out approveUrl: with an injected async/shared store
+    // (Redis, multi-instance) an unawaited write can still be in flight when the human opens
+    // the link on another instance — the page would 404 on an order create() reported.
+    await this.deps.created.write(id, { order: withId, policy });
     return { id, approveUrl: `${this.deps.walletOrigin}/credentagent/orders/${id}`, manifest };
   }
 
@@ -103,7 +106,7 @@ export class Orders {
    *
    *   ca.orders.serve(app);
    *   ca.on("order.settled", ({ id }) => fulfill(id));
-   *   const { approveUrl } = ca.orders.create({ order, policy });
+   *   const { approveUrl } = await ca.orders.create({ order, policy });
    */
   serve(app: unknown): void {
     this.deps.serve(app);

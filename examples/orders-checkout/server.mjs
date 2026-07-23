@@ -25,8 +25,8 @@ credentagent.on("order.settled", ({ id }) => console.log(`✓ order.settled: ${i
 // ── PER PURCHASE — a request handler that runs each time an agent wants to buy ────
 // It gets back a link to hand to the human; the amount + age gate are re-derived
 // server-side, never trusted from a token.
-app.post("/buy-wine", (_req, res) => {
-  const { id, approveUrl } = credentagent.orders.create({
+app.post("/buy-wine", async (_req, res) => {
+  const { id, approveUrl } = await credentagent.orders.create({
     order: { id: "", total: 21, currency: "USD", lines: [{ id: "wine", name: "Bottle of wine", quantity: 1, unitPrice: 21, minimumAge: 21 }] },
     policy: [required(age.over(21)), required(payment.in("usd"))],
   });

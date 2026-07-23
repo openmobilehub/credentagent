@@ -22,12 +22,9 @@ export { age, membership, payment, required, optional, defineCredential, dcql, g
 // ── Store ────────────────────────────────────────────────────────────────
 export { MemoryVerificationStore } from "./store.js";
 
-// ── The orders resource (spec 009) + Money ──────────────────────────────────
-// `credentagent.orders.create({ order, policy })` → { id, approveUrl, manifest };
+// ── The orders resource (spec 009) ──────────────────────────────────────────
+// `await credentagent.orders.create({ order, policy })` → { id, approveUrl, manifest };
 // `credentagent.orders.retrieve(id)` → the door (ok | pending+approveUrl | reason).
-// Money is opaque + currency-checked: build with `usd.dollars(20)`, compare with .lt/.gte.
-export { usd } from "./money.js";
-export type { Money } from "./money.js";
 export { Orders, MemoryOrderStore } from "./orders.js";
 export type { OrderStore, CreatedOrder, CompletedOrder, OrderDoor } from "./orders.js";
 

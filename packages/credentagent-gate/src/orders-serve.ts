@@ -8,7 +8,7 @@
 //   const ca = new CredentAgent({ walletOrigin });
 //   ca.orders.serve(app);                                   // rails + page + completion → order.settled
 //   ca.on("order.settled", ({ id }) => fulfill(id));
-//   const { approveUrl } = ca.orders.create({ order, policy });
+//   const { approveUrl } = await ca.orders.create({ order, policy });
 //
 // It reuses the SAME proven pieces every other path uses — `mountCeremony` (the rails),
 // `completeOrder` (the shared, fail-closed completion), and `renderRequirements` (the one
@@ -256,8 +256,13 @@ export function serveOrders(app: CeremonyApp, deps: ServeOrdersDeps): void {
         res.status(403).type("html").send(html("<h1>Verification required</h1><p>This order has age / payment requirements — complete it on the checkout page. It can't be placed from the instant-demo path.</p>"));
         return;
       }
-      const order = repriceStored(created, created.order.lines.map((l) => ({ productId: l.id, quantity: l.quantity })));
-      await deps.complete({ orderId: id, amount: order.total, currency: order.currency, method: "demo", completedAt: new Date().toISOString() });
+      // Idempotent, like the rails' completeOrder: a retried / double-clicked POST must not
+      // re-record the order or fire order.settled again (the listener triggers fulfillment).
+      const done = await deps.completed.read(id);
+      if (!done) {
+        const order = repriceStored(created, created.order.lines.map((l) => ({ productId: l.id, quantity: l.quantity })));
+        await deps.complete({ orderId: id, amount: order.total, currency: order.currency, method: "demo", completedAt: new Date().toISOString() });
+      }
     }
     res.type("html").send(html("<h1>✓ Order placed (demo)</h1><p>You can close this tab.</p>"));
   };

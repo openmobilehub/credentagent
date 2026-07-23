@@ -23,8 +23,8 @@ credentagent.orders.serve(app);                              // wire the whole c
 credentagent.on("order.settled", ({ id }) => fulfill(id));   // subscribe once — fires when it's paid
 
 // ── per purchase — a request handler that runs on each buy ────
-app.post("/buy-wine", (_req, res) => {
-  const { approveUrl } = credentagent.orders.create({
+app.post("/buy-wine", async (_req, res) => {
+  const { approveUrl } = await credentagent.orders.create({
     order:  { id: "", total: 21, currency: "USD", lines: [{ id: "wine", name: "Bottle of wine", quantity: 1, unitPrice: 21, minimumAge: 21 }] },
     policy: [required(age.over(21)), required(payment.in("usd"))],
   });

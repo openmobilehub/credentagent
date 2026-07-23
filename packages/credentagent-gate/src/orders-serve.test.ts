@@ -27,8 +27,9 @@ function fakeRes() {
   return res;
 }
 
-const wineOrder = () => ({ id: "", total: 2100, currency: "USD", lines: [{ id: "wine", name: "Wine", quantity: 1, unitPrice: 2100, minimumAge: 21 }] });
-const stickerOrder = () => ({ id: "", total: 500, currency: "USD", lines: [{ id: "sticker", name: "Sticker", quantity: 1, unitPrice: 500 }] });
+// Amounts are dollars, matching the checkout page's formatter ($21.00 — not minor units).
+const wineOrder = () => ({ id: "", total: 21, currency: "USD", lines: [{ id: "wine", name: "Wine", quantity: 1, unitPrice: 21, minimumAge: 21 }] });
+const stickerOrder = () => ({ id: "", total: 5, currency: "USD", lines: [{ id: "sticker", name: "Sticker", quantity: 1, unitPrice: 5 }] });
 const gatedPolicy = () => [required(age.over(21)), required(payment.in("usd"))];
 
 describe("orders.serve — checkout wiring", () => {
@@ -45,7 +46,7 @@ describe("orders.serve — checkout wiring", () => {
     const ca = new CredentAgent({ walletOrigin: "http://localhost:4000" });
     const app = fakeApp();
     ca.orders.serve(app);
-    const { id } = ca.orders.create({ order: wineOrder(), policy: gatedPolicy() });
+    const { id } = await ca.orders.create({ order: wineOrder(), policy: gatedPolicy() });
 
     const res = fakeRes();
     await app._get.get("/credentagent/orders/:id")!({ params: { id } }, res);
@@ -63,7 +64,7 @@ describe("orders.serve — checkout wiring", () => {
     const ca = new CredentAgent({ walletOrigin: "http://localhost:4000" });
     const app = fakeApp();
     ca.orders.serve(app);
-    const { id } = ca.orders.create({ order: wineOrder(), policy: gatedPolicy() });
+    const { id } = await ca.orders.create({ order: wineOrder(), policy: gatedPolicy() });
 
     const res = fakeRes();
     await app._post.get("/credentagent/orders/:id/place")!({ params: { id } }, res);
@@ -80,7 +81,7 @@ describe("orders.serve — checkout wiring", () => {
     ca.on("order.settled", ({ id }) => settled.push(id));
     ca.orders.serve(app);
     // No blocking gate → ungated → the instant-demo path is allowed.
-    const { id } = ca.orders.create({ order: stickerOrder(), policy: [] });
+    const { id } = await ca.orders.create({ order: stickerOrder(), policy: [] });
 
     const res = fakeRes();
     await app._post.get("/credentagent/orders/:id/place")!({ params: { id } }, res);
@@ -89,7 +90,26 @@ describe("orders.serve — checkout wiring", () => {
     expect(settled).toEqual([id]);            // the in-process order.settled event fired once
     const after = await ca.orders.retrieve(id);
     expect(after.ok).toBe(true);
-    if (after.ok) expect(after.completion.amount).toBe(500); // amount re-derived server-side (invariant 2)
+    if (after.ok) expect(after.completion.amount).toBe(5); // amount re-derived server-side (invariant 2)
+  });
+
+  // The order.settled listener triggers fulfillment, so a retried / double-clicked place POST
+  // must not re-fire it. Delete the completed-store check in the place handler and this goes
+  // red: every duplicate POST would re-record the order and fulfill it again.
+  it("the demo place path is IDEMPOTENT — a duplicate POST never re-fires order.settled", async () => {
+    const ca = new CredentAgent({ walletOrigin: "http://localhost:4000" });
+    const app = fakeApp();
+    const settled: string[] = [];
+    ca.on("order.settled", ({ id }) => settled.push(id));
+    ca.orders.serve(app);
+    const { id } = await ca.orders.create({ order: stickerOrder(), policy: [] });
+
+    const place = app._post.get("/credentagent/orders/:id/place")!;
+    await place({ params: { id } }, fakeRes());
+    const res = fakeRes();
+    await place({ params: { id } }, res); // retry / double-click / duplicate delivery
+    expect(res._status).toBe(200);        // still acknowledged…
+    expect(settled).toEqual([id]);        // …but settled exactly once
   });
 
   // Regression (found by driving the browser): after a rail proves, the buyer must return to
@@ -99,7 +119,7 @@ describe("orders.serve — checkout wiring", () => {
     const ca = new CredentAgent({ walletOrigin: "http://localhost:4000" });
     const app = fakeApp();
     ca.orders.serve(app);
-    const { id } = ca.orders.create({ order: wineOrder(), policy: gatedPolicy() });
+    const { id } = await ca.orders.create({ order: wineOrder(), policy: gatedPolicy() });
 
     const credentialHandler = app._get.get("/credentagent/credential");
     expect(credentialHandler).toBeTruthy();
@@ -114,7 +134,7 @@ describe("orders.serve — checkout wiring", () => {
     const ca = new CredentAgent({ walletOrigin: "http://localhost:4000" });
     const app = fakeApp();
     ca.orders.serve(app);
-    const { id } = ca.orders.create({ order: stickerOrder(), policy: [] });
+    const { id } = await ca.orders.create({ order: stickerOrder(), policy: [] });
 
     let res = fakeRes();
     await app._get.get("/credentagent/orders/:id/status")!({ params: { id } }, res);
@@ -132,7 +152,7 @@ describe("orders.serve — checkout wiring", () => {
     const ca = new CredentAgent({ walletOrigin: "http://localhost:4000" });
     const app = fakeApp();
     ca.orders.serve(app);
-    const { id } = ca.orders.create({ order: stickerOrder(), policy: [optional(membership.discount(10))] });
+    const { id } = await ca.orders.create({ order: stickerOrder(), policy: [optional(membership.discount(10))] });
     const res = fakeRes();
     await app._post.get("/credentagent/orders/:id/place")!({ params: { id } }, res);
     expect(res._status).toBe(200);

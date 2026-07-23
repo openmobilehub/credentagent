@@ -18,13 +18,14 @@ const ca = new CredentAgent({ walletOrigin: "http://localhost:0" });
 ca.orders.serve(app);
 ca.on("order.settled", ({ id }) => settled.push(id));
 
-// Two create endpoints — a gated one (wine) and an ungated one (sticker) — plus retrieve.
-app.post("/gated", (_req, res) => res.json(ca.orders.create({
-  order: { id: "", total: 2100, currency: "USD", lines: [{ id: "wine", name: "Wine", quantity: 1, unitPrice: 2100, minimumAge: 21 }] },
+// Two create endpoints — a gated one (a $21 wine) and an ungated one (a $5 sticker) — plus
+// retrieve. Amounts are dollars, matching what the checkout page renders.
+app.post("/gated", async (_req, res) => res.json(await ca.orders.create({
+  order: { id: "", total: 21, currency: "USD", lines: [{ id: "wine", name: "Wine", quantity: 1, unitPrice: 21, minimumAge: 21 }] },
   policy: [required(age.over(21)), required(payment.in("usd"))],
 })));
-app.post("/ungated", (_req, res) => res.json(ca.orders.create({
-  order: { id: "", total: 500, currency: "USD", lines: [{ id: "sticker", name: "Sticker", quantity: 1, unitPrice: 500 }] },
+app.post("/ungated", async (_req, res) => res.json(await ca.orders.create({
+  order: { id: "", total: 5, currency: "USD", lines: [{ id: "sticker", name: "Sticker", quantity: 1, unitPrice: 5 }] },
   policy: [],
 })));
 app.get("/orders/:id", async (req, res) => res.json(await ca.orders.retrieve(req.params.id)));
@@ -56,8 +57,11 @@ try {
   check("ungated order completes on the demo place path (200)", placeUngated.status === 200);
   check("order.settled fired exactly once for the ungated order", settled.length === 1 && settled[0] === ungated.id);
 
+  const placeAgain = await j(await fetch(`${base}/credentagent/orders/${ungated.id}/place`, { method: "POST" }));
+  check("a duplicate place POST is acknowledged but does NOT re-fire order.settled", placeAgain.status === 200 && settled.length === 1);
+
   const ungatedAfter = (await j(await fetch(`${base}/orders/${ungated.id}`))).body;
-  check("ungated order retrieves as ok with the server-derived amount ($5.00)", ungatedAfter.ok === true && ungatedAfter.completion?.amount === 500);
+  check("ungated order retrieves as ok with the server-derived amount ($5)", ungatedAfter.ok === true && ungatedAfter.completion?.amount === 5);
 } finally {
   server.close();
 }
