@@ -179,9 +179,13 @@ class WebhookSignatureError extends Error { code: WebhookRefusalCode }
 - **Rejected** → `WebhookRefusalCode`: `no-signature`, `bad-format`, `no-match` (forged / tampered /
   wrong-secret), `timestamp` (replay). Secret is never logged, never in a delivery record.
 - **Secret** `whsec_` + base64url(32 random bytes). **SSRF:** endpoint URLs are trusted developer config
-  (not user input); https required by default (http allowed for localhost dev); no redirect-following.
+  (not user input); https is **enforced where endpoints enter** — the constructor and `register()` refuse a
+  non-https URL (http allowed for localhost dev only); the default transport sends `redirect: "manual"`, so
+  a 3xx is a failed delivery, never followed.
 - **Delivery** fire-and-forget from `_complete` (never blocks or rolls back a settled order); **at-least-once**
-  with bounded exponential backoff; `transport` injectable (default global `fetch`) for testability.
+  with bounded exponential backoff; each attempt is bounded by a per-attempt timeout (`timeoutMs`, default
+  10s) so a stalled receiver is retried + reported, never accumulated as a forever-pending request;
+  `transport` injectable (default global `fetch`) for testability.
 
 ### Load-bearing bypass tests (each must FAIL when its control is removed)
 
@@ -191,6 +195,10 @@ class WebhookSignatureError extends Error { code: WebhookRefusalCode }
 4. valid signature within tolerance → returns the event (the positive control).
 5. delivery: a settled order POSTs a correctly-signed event whose signature the receiver verifies (round-trip);
    a first-attempt failure is retried.
+6. an endpoint answering 3xx → the redirect is NOT followed (the redirect target never sees the delivery);
+   the 3xx surfaces as a failed delivery.
+7. a non-localhost http endpoint URL → refused at the constructor and at `register()`.
+8. a receiver that accepts but never responds → the attempt times out, is retried, and is reported.
 
 ## Dependencies & increment map
 

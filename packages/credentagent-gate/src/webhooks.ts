@@ -22,6 +22,25 @@ export const SIGNATURE_HEADER = "CredentAgent-Signature";
 /** Replay window: an event whose timestamp is older/newer than this is refused (invariant-6 analogue). */
 export const DEFAULT_TOLERANCE_SECONDS = 300;
 const DEFAULT_RETRIES = 3;
+/** Per-attempt delivery bound: a receiver that accepts but never responds counts as a failed attempt. */
+const DEFAULT_TIMEOUT_MS = 10_000;
+
+/** Hosts where plain http is allowed (local dev). Everywhere else the SSRF stance requires https.
+ *  An immutable module-level lookup (not per-order state) — typed ReadonlySet per the invariant-4 rule. */
+const LOCALHOST_HOSTS: ReadonlySet<string> = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+/** Enforce the SSRF boundary where endpoints enter (constructor + `register()`): https, or http on localhost. */
+function assertEndpointUrl(url: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new TypeError(`webhook endpoint url is not a valid URL: ${JSON.stringify(url)}`);
+  }
+  const isLocalhost = LOCALHOST_HOSTS.has(parsed.hostname) || parsed.hostname.endsWith(".localhost");
+  if (parsed.protocol === "https:" || (parsed.protocol === "http:" && isLocalhost)) return;
+  throw new TypeError(`webhook endpoint url must be https (http is allowed only for localhost dev): ${JSON.stringify(url)}`);
+}
 
 /** The Stripe-shaped event envelope. `data.object` is the settled resource (a CompletedOrder). */
 export interface WebhookEvent<T = unknown> {
@@ -148,7 +167,7 @@ export function constructEvent<T = unknown>(
 /** One attempt at delivering a signed body to a URL. Default = global `fetch`; injectable for tests. */
 export type WebhookTransport = (
   url: string,
-  init: { method: "POST"; headers: Record<string, string>; body: string },
+  init: { method: "POST"; headers: Record<string, string>; body: string; signal?: AbortSignal },
 ) => Promise<{ status: number }>;
 
 export interface WebhookOptions {
@@ -156,6 +175,8 @@ export interface WebhookOptions {
   endpoints?: WebhookEndpoint[];
   /** Delivery attempts before giving up (default 3). */
   retries?: number;
+  /** Per-attempt timeout in ms — a stalled receiver is aborted, retried, and reported (default 10_000). */
+  timeoutMs?: number;
   /** Replay tolerance passed to receivers' verify (informational default; receivers set their own). */
   toleranceSeconds?: number;
   /** Injectable HTTP transport (default global fetch). */
@@ -169,10 +190,19 @@ export interface WebhookOptions {
 }
 
 const realFetch: WebhookTransport = async (url, init) => {
-  const res = await (globalThis.fetch as typeof fetch)(url, init);
+  // `redirect: "manual"` is the SSRF stance: a 3xx is surfaced as-is (a failed attempt), never followed —
+  // a compromised endpoint must not be able to bounce delivery traffic to an internal host.
+  const res = await (globalThis.fetch as typeof fetch)(url, { ...init, redirect: "manual" });
   return { status: res.status };
 };
 const realSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/** Rejects with the abort reason when `signal` fires — bounds even a transport that ignores `signal`. */
+function abortRejection(signal: AbortSignal): Promise<never> {
+  return new Promise((_, reject) => {
+    signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+  });
+}
 
 /**
  * The sender + registry, exposed as `credentagent.webhooks`. Fans a settled order out to every
@@ -183,6 +213,7 @@ const realSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 export class Webhooks {
   private endpoints: WebhookEndpoint[];
   private readonly retries: number;
+  private readonly timeoutMs: number;
   private readonly transport: WebhookTransport;
   private readonly now: () => number;
   private readonly sleep: (ms: number) => Promise<void>;
@@ -190,7 +221,9 @@ export class Webhooks {
 
   constructor(opts: WebhookOptions = {}) {
     this.endpoints = [...(opts.endpoints ?? [])];
+    for (const e of this.endpoints) assertEndpointUrl(e.url);
     this.retries = opts.retries ?? DEFAULT_RETRIES;
+    this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.transport = opts.transport ?? realFetch;
     this.now = opts.now ?? Date.now;
     this.sleep = opts.sleep ?? realSleep;
@@ -209,6 +242,7 @@ export class Webhooks {
    * instance signs alike.
    */
   register(input: { url: string; events?: string[]; secret?: string }): { id: string; url: string; secret: string } {
+    assertEndpointUrl(input.url);
     const secret = input.secret ?? generateWebhookSecret();
     const id = `whep_${randomBytes(12).toString("hex")}`;
     const endpoint: WebhookEndpoint = { url: input.url, secret, ...(input.events ? { events: input.events } : {}) };
@@ -251,16 +285,30 @@ export class Webhooks {
     for (let attempt = 0; attempt <= this.retries; attempt++) {
       if (attempt > 0) await this.sleep(250 * 2 ** (attempt - 1)); // 250, 500, 1000, …
       const t = Math.floor(this.now() / 1000);
+      // Bound the attempt: abort the request at timeoutMs AND race the transport against the abort, so
+      // a receiver that accepts but never responds becomes a failed attempt (retried, then reported) —
+      // it can never leave this promise pending forever.
+      const controller = new AbortController();
+      const timer = setTimeout(
+        () => controller.abort(new Error(`webhook delivery attempt timed out after ${this.timeoutMs}ms`)),
+        this.timeoutMs,
+      );
       try {
-        const res = await this.transport(endpoint.url, {
-          method: "POST",
-          headers: { "content-type": "application/json", [SIGNATURE_HEADER]: signPayload(body, endpoint.secret, t) },
-          body,
-        });
+        const res = await Promise.race([
+          this.transport(endpoint.url, {
+            method: "POST",
+            headers: { "content-type": "application/json", [SIGNATURE_HEADER]: signPayload(body, endpoint.secret, t) },
+            body,
+            signal: controller.signal,
+          }),
+          abortRejection(controller.signal),
+        ]);
         lastStatus = res.status;
-        if (res.status >= 200 && res.status < 300) return; // delivered
+        if (res.status >= 200 && res.status < 300) return; // delivered (a 3xx is NOT followed — see realFetch)
       } catch (err) {
         lastError = err;
+      } finally {
+        clearTimeout(timer);
       }
     }
     // Exhausted — surface for observability; never throw (delivery must not affect completion).

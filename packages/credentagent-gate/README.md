@@ -125,7 +125,9 @@ app.post("/hooks", express.raw({ type: "application/json" }), (req, res) => {
 
 Signature: `CredentAgent-Signature: t=…,v1=<hex HMAC-SHA256>` over `` `${t}.${rawBody}` ``, secret
 `whsec_…`. Delivery is **at-least-once** with retry (dedupe on `event.id`) — it never blocks a settled
-order. `verifyEvent(...)` is the never-throws verdict door if you prefer a result to a try/catch. Runnable:
+order. Endpoint URLs must be **https** (http only for localhost dev — enforced where endpoints enter);
+redirects are never followed, and each attempt is bounded by a timeout (`timeoutMs`, default 10s).
+`verifyEvent(...)` is the never-throws verdict door if you prefer a result to a try/catch. Runnable:
 [`examples/order-webhooks/`](https://github.com/openmobilehub/credentagent/tree/main/examples/order-webhooks).
 
 ## The three execution contexts

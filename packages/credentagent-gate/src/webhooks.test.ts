@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import {
   constructEvent,
   verifyEvent,
@@ -128,6 +130,81 @@ describe("webhooks — deliver (the sender)", () => {
     expect(ep.id).toMatch(/^whep_/);
     await wh.deliver("order.settled", { orderId: "ord_reg" });
     expect(calls).toEqual(["https://ops.example/hooks"]);
+  });
+
+  // BYPASS (SSRF via redirect) — a compromised endpoint answers 3xx pointing at an internal host. The
+  // default transport must NOT follow it: the 3xx is a failed delivery, the redirect target sees nothing.
+  // Uses the REAL fetch transport against local servers — deleting `redirect: "manual"` turns this red.
+  it("BYPASS: a 3xx from the receiver is not followed — the redirect target never sees the delivery", async () => {
+    let targetHits = 0;
+    const target = createServer((_req, res) => { targetHits++; res.writeHead(200); res.end("ok"); });
+    await new Promise<void>((r) => target.listen(0, "127.0.0.1", r));
+    const targetPort = (target.address() as AddressInfo).port;
+
+    const redirector = createServer((_req, res) => {
+      res.writeHead(302, { location: `http://127.0.0.1:${targetPort}/internal` });
+      res.end();
+    });
+    await new Promise<void>((r) => redirector.listen(0, "127.0.0.1", r));
+    const redirectorPort = (redirector.address() as AddressInfo).port;
+
+    const errors: Array<{ lastStatus?: number }> = [];
+    const wh = new Webhooks({
+      endpoints: [{ url: `http://127.0.0.1:${redirectorPort}/hooks`, secret }], // localhost http = dev carve-out
+      retries: 0,
+      sleep: async () => {},
+      onDeliveryError: (info) => errors.push(info),
+    });
+    try {
+      await wh.deliver("order.settled", { orderId: "ord_redirect" });
+    } finally {
+      target.close();
+      redirector.close();
+    }
+
+    expect(targetHits).toBe(0); // the internal host was never contacted
+    expect(errors).toMatchObject([{ lastStatus: 302 }]); // the 3xx surfaced as a failed delivery
+  });
+
+  // BYPASS (resource pinning) — a receiver accepts the connection and never responds. The per-attempt
+  // timeout must unblock the retry loop and report the exhaustion; without it this promise pends forever
+  // (deleting the timeout turns this red by hanging the test past vitest's own timeout).
+  it("BYPASS: a receiver that accepts but never responds is timed out, retried, and reported", async () => {
+    let attempts = 0;
+    const errors: Array<{ attempts: number; error?: unknown }> = [];
+    const wh = new Webhooks({
+      endpoints: [{ url: "https://hung.example/hooks", secret }],
+      transport: () => { attempts++; return new Promise(() => {}); }, // never settles, ignores the signal
+      timeoutMs: 5,
+      retries: 1,
+      sleep: async () => {},
+      now,
+      onDeliveryError: (info) => errors.push(info),
+    });
+    await wh.deliver("order.settled", { orderId: "ord_hung" });
+
+    expect(attempts).toBe(2); // the timeout unblocked the loop: attempt 1 timed out, attempt 2 ran
+    expect(errors).toMatchObject([{ attempts: 2 }]);
+    expect(String((errors[0] as { error?: unknown }).error)).toMatch(/timed out/);
+  });
+});
+
+describe("webhooks — endpoint URLs (the SSRF boundary at entry)", () => {
+  // BYPASS — an http endpoint pointed at an internal host is refused where endpoints ENTER (both doors:
+  // constructor and register()), per the spec's "https required by default; http for localhost dev".
+  it("BYPASS: a non-localhost http endpoint is refused at the constructor and at register()", () => {
+    expect(() => new Webhooks({ endpoints: [{ url: "http://internal.example/hooks", secret }] }))
+      .toThrow(/must be https/);
+    const wh = new Webhooks();
+    expect(() => wh.register({ url: "http://internal.example/hooks" })).toThrow(/must be https/);
+    expect(() => wh.register({ url: "not a url" })).toThrow(/not a valid URL/);
+  });
+
+  it("allows https anywhere and http on localhost (dev)", () => {
+    const wh = new Webhooks();
+    expect(() => wh.register({ url: "https://fulfillment.example/hooks" })).not.toThrow();
+    expect(() => wh.register({ url: "http://localhost:3000/hooks" })).not.toThrow();
+    expect(() => wh.register({ url: "http://127.0.0.1:3000/hooks" })).not.toThrow();
   });
 });
 
