@@ -142,7 +142,7 @@ export const registerPasskeyGate: RailRegistrar = (app: CeremonyApp, ctx: Ceremo
     const verified = (await ctx.verificationStore.read(order.id)) ?? {};
     const rail = checkoutRail(order, "pay", { ageVerified: verified.ageVerified === true });
     try {
-      res.status(200).type("html").send(renderPasskeyPage({ order, crossDevice: isCrossDevice(req.query.xdev), cart: typeof req.query.cart === "string" ? req.query.cart : undefined, rail }));
+      res.status(200).type("html").send(renderPasskeyPage({ order, crossDevice: isCrossDevice(req.query.xdev), cart: typeof req.query.cart === "string" ? req.query.cart : undefined, rail, returnUrl: ctx.returnUrl?.(order.id) }));
     } catch {
       // A hand-edited order can carry a bad currency that throws in Intl; never 500.
       res.status(404).type("html").send("<!doctype html><h1>Order not found</h1>");

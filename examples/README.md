@@ -13,6 +13,9 @@ Each is runnable against the two `@openmobilehub/credentagent-*` packages (build
 **Gating patterns** (identity-first, beyond commerce)
 - [`gate-any-action.mjs`](#gate-any-actionmjs--gate-a-non-commerce-action-identity-first-no-checkout) — gate a non-commerce action, no checkout
 
+**Orders — checkout in one call** (009)
+- [`orders-checkout/`](orders-checkout/) — the real `credentagent.orders` API: `orders.serve(app)` wires the whole checkout, `orders.create()` returns a link, `order.settled` fires when it's paid
+
 **Cart Mandate / stateless** (004)
 - [`stateless-orders/`](stateless-orders/) — the created order rides in a signed Cart Mandate on the link
 

@@ -56,6 +56,53 @@ the widget shows the confirmation. Add the headphones instead and the age gate d
 > predicate keys off the cart's lines — e.g. `order.lines.some((l) => l.minimumAge != null)`.
 > For a deployment pass your public origin: `new CredentAgent({ walletOrigin: "https://shop.example" })`.
 
+## Orders — a checkout without a storefront
+
+Don't have (or want) the MCP storefront? Drive the checkout yourself with `credentagent.orders`.
+Two things happen at **startup** (wire the checkout once, subscribe to completion once); the third,
+`orders.create()`, happens **per purchase** — inside a request handler, each time an agent wants to buy.
+The comments below mark which is which:
+
+```ts
+import express from "express";
+import { CredentAgent, age, payment, required } from "@openmobilehub/credentagent-gate";
+
+const app = express();
+app.use(express.json());
+const credentagent = new CredentAgent({ walletOrigin: "http://localhost:4000" });
+
+// ── once, at startup ──────────────────────────────────────────────
+credentagent.orders.serve(app);                              // wire the whole checkout onto your app
+credentagent.on("order.settled", ({ id }) => fulfill(id));   // subscribe once — fires when ANY order is paid
+
+// ── per purchase — inside a request handler (runs every time) ──────
+app.post("/buy-wine", async (_req, res) => {
+  const { id, approveUrl } = await credentagent.orders.create({   // → { id, approveUrl, manifest }
+    order:  { id: "", total: 21, currency: "USD", lines: [{ id: "wine", name: "Bottle of wine", quantity: 1, unitPrice: 21, minimumAge: 21 }] },
+    policy: [required(age.over(21)), required(payment.in("usd"))],
+  });
+  res.json({ id, approveUrl });                              // hand approveUrl to the human
+});
+
+// read status here (durable, works across instances). In a single-process server the
+// in-process order.settled listener above is enough; this is the cross-instance signal.
+app.get("/orders/:id", async (req, res) => res.json(await credentagent.orders.retrieve(req.params.id)));
+```
+
+> **`on("order.settled")` is an in-process event, not a webhook** — it fires synchronously in the
+> one long-lived Node process that completed the order. On serverless (Vercel, Lambda) the instance
+> can be frozen the moment the response is sent, so async work started in the listener may never
+> finish — don't fulfill from it there. Instead, inject shared stores (`orderStore`,
+> `completedOrderStore`) and read `orders.retrieve(id)` as the durable, cross-instance signal. A
+> real signed HTTP webhook is the next increment
+> ([#101](https://github.com/openmobilehub/credentagent/issues/101)).
+
+`orders.retrieve(id)` is the one result **door**: `{ ok: true, completion }` once paid, `{ ok: false,
+pending: true, approveUrl }` while it's open, or `{ ok: false, code }` for an unknown id. The amount and
+the age threshold are re-derived from the order you stored server-side — never trusted from the link
+(invariant 2), and a gated order can only complete through the wallet ceremony, never a shortcut
+(invariant 1). Runnable: [`examples/orders-checkout/`](https://github.com/openmobilehub/credentagent/tree/main/examples/orders-checkout).
+
 ## The three execution contexts
 
 The split is load-bearing — conflating them is the documented root cause of confusion

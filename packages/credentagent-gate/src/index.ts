@@ -22,6 +22,12 @@ export { age, membership, payment, required, optional, defineCredential, dcql, g
 // ── Store ────────────────────────────────────────────────────────────────
 export { MemoryVerificationStore } from "./store.js";
 
+// ── The orders resource (spec 009) ──────────────────────────────────────────
+// `await credentagent.orders.create({ order, policy })` → { id, approveUrl, manifest };
+// `credentagent.orders.retrieve(id)` → the door (ok | pending+approveUrl | reason).
+export { Orders, MemoryOrderStore } from "./orders.js";
+export type { OrderStore, CreatedOrder, CompletedOrder, OrderDoor } from "./orders.js";
+
 // ── Ceremony composition (host-side: bind completion over YOUR stores) ──────
 // A composing host (e.g. @openmobilehub/credentagent-storefront) binds `completeOrder`
 // to its completed-order / cart stores + catalog and exposes it as the `completion`
