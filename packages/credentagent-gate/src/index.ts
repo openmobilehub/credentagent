@@ -19,6 +19,10 @@ export type { ExpressApp } from "./client.js";
 // ── Policy builders + extensibility ────────────────────────────────────────
 export { age, membership, payment, required, optional, defineCredential, dcql, gate, discount, authorize } from "./credentials.js";
 
+// ── Gate a tool (Mode B): credentagent.gate(handler, { require, subject }) ──
+// The wrapper itself is a CredentAgent method; only its option type is public.
+export type { GateOptions } from "./gate.js";
+
 // ── Store ────────────────────────────────────────────────────────────────
 export { MemoryVerificationStore } from "./store.js";
 

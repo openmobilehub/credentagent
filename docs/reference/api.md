@@ -85,6 +85,38 @@ const requires = credentagent.requirements(order, [
 ]);
 ```
 
+#### `credentagent.gate(handler, options)` — gate a tool (Mode B)
+
+```ts
+gate<A, R>(handler: (args: A) => R | Promise<R>, options: GateOptions<A>):
+  (args: A) => Promise<R | MinimalToolResult>
+```
+
+Wraps an MCP tool handler so it **refuses-until-proven**. An unproven call returns a
+success-shaped tool result (`isError` unset) carrying the typed `verification_required`
+envelope in `structuredContent` and an action-agnostic instruction in `content`; a proven
+call runs `handler` unchanged. Built on the same resolver as `requirements()`
+(entries carry `enforcedAt: "tool"`).
+
+- **`require`** — the `gate()`-effect credential(s) to prove (`age.over(21)`, a custom
+  `defineCredential`, or an array). `payment` / discount steps **throw at wrap time** —
+  they belong to the checkout ceremony, and a silently-unenforced step would fail open.
+- **`provenBy`** — `(args, extra?) => string`; derives the id the proof is stored under
+  (per subject, never process-global). Key by the **caller** — the MCP per-request
+  `extra` (e.g. `extra.sessionId`) is the second argument; key by a tool arg only when
+  that subject is the prover. An empty value **throws fail-closed**.
+- **`name?`** — your registered tool id; names the re-call in `resume.tool`.
+
+```ts
+server.registerTool("release-records", config, credentagent.gate(
+  async ({ subject }) => ({ content: [{ type: "text", text: `Released records for ${subject}.` }] }),
+  { require: age.over(21), provenBy: ({ subject }) => subject },
+));
+```
+
+Do **not** declare an MCP `outputSchema` on a gated tool — the envelope replaces the
+success shape in `structuredContent`.
+
 #### `credentagent.mount(app, ceremony?)` — Context 2
 
 ```ts

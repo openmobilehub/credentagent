@@ -60,7 +60,8 @@ export interface VerificationRequired {
   order: { id: string; total: number; currency: string };
   reason: { gate: string; pass: false; detail: string };
   present: {
-    credential: BuiltinKind;
+    /** A built-in kind, or a custom `defineCredential` id (same wire shape: a string). */
+    credential: BuiltinKind | (string & {});
     /** Age threshold, when the credential is `age`. */
     min_age?: number;
     /** The DCQL the wallet will receive. */
@@ -75,13 +76,15 @@ export interface VerificationRequired {
 
 export interface BuildEnvelopeArgs {
   order: { id: string; total: number; currency: string };
-  credential: BuiltinKind;
+  credential: BuiltinKind | (string & {});
   request: DcqlQuery;
   approveUrl: string;
   detail: string;
   minAge?: number;
   gate?: string;
   resumeTool?: string;
+  /** Override the checkout-worded default poll hint (e.g. a gated tool's "re-call…"). */
+  resumePoll?: string;
   trustLevel?: TrustLevel;
 }
 
@@ -102,7 +105,7 @@ export function buildVerificationRequired(args: BuildEnvelopeArgs): Verification
       request: args.request,
       approve_url: args.approveUrl,
     },
-    resume: { tool: args.resumeTool ?? "get-order-status", poll: "until status=completed or refused" },
+    resume: { tool: args.resumeTool ?? "get-order-status", poll: args.resumePoll ?? "until status=completed or refused" },
     trust_level: args.trustLevel ?? "presence-only-demo",
   };
 }

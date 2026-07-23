@@ -56,6 +56,103 @@ the widget shows the confirmation. Add the headphones instead and the age gate d
 > predicate keys off the cart's lines — e.g. `order.lines.some((l) => l.minimumAge != null)`.
 > For a deployment pass your public origin: `new CredentAgent({ walletOrigin: "https://shop.example" })`.
 
+## Gate a single tool — `credentagent.gate()`
+
+Not selling anything? Gate **any** MCP tool behind a credential — no page of your own, no
+checkout anywhere (internally: the blocking **Mode B** surface). Your handler is unchanged;
+wrap it and it refuses-until-proven:
+
+```ts
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { CredentAgent, age } from "@openmobilehub/credentagent-gate";
+import { z } from "zod";
+
+const server = new McpServer({ name: "records", version: "1.0.0" });
+const credentagent = new CredentAgent();               // zero config for local dev
+
+server.registerTool(
+  "release-records",
+  { description: "Release a subject's record summary", inputSchema: { subject: z.string() } },
+  credentagent.gate(
+    async ({ subject }) => ({
+      content: [{ type: "text", text: `Released records for ${subject}.` }],
+    }),
+    {
+      require: age.over(21),               // the credential to prove
+      provenBy: ({ subject }) => subject,  // self-service: the subject proves their OWN age
+    },
+  ),
+);
+```
+
+Until the proof exists, the handler does not run. The agent receives a **normal, success-shaped
+tool result** — the standard MCP fields `content` / `structuredContent`, with `isError` NOT
+set (don't let an error path swallow it). `structuredContent` is the typed refusal (raw wire
+JSON, snake_case), with a plain-English instruction in `content`; detect it with
+`isVerificationRequired(result.structuredContent)`:
+
+```jsonc
+{
+  "content": [{ "type": "text", "text": "This action requires Age 21+ before it can run. Ask the person to open this link on their phone and present the credential: http://localhost:3000/credential-gate/age?order=casey — then call this tool again with the same arguments. …" }],
+  "structuredContent": {
+    "_credentagent": "verification_required",
+    "reason":  { "gate": "Age 21+", "pass": false,
+                 "detail": "Age 21+ must be proven before this action can run — no proof on file for \"casey\"." },
+    "present": { "credential": "age", "min_age": 21,
+                 "approve_url": "http://localhost:3000/credential-gate/age?order=casey",
+                 "request": { /* the OpenID4VP query the person's wallet receives */ } },
+    "resume":  { "tool": "this-tool", "poll": "re-call with the same arguments until verification_required clears" },
+    "trust_level": "presence-only-demo"
+  }
+}
+```
+
+The loop: the agent shows the person `approve_url` → they prove the credential on their
+phone → the proof is stored under `provenBy(...)` on this server — per subject, **never**
+process-global → the agent re-calls the tool and the handler runs.
+
+**Who serves the approve page? Read this first if your server is stdio.** `approve_url` is
+served by the ceremony `mount()` wires onto an Express host (see the storefront quickstart
+above) — same process as an HTTP MCP server, or a small web process sharing the store. A
+**stdio-only** server has no page of its own yet: `gate()` still refuses correctly, but the
+link has nothing listening until you mount the ceremony somewhere — it warns at refusal time
+if nothing is mounted in the process, and a standalone proving-page mount is a tracked
+follow-up. Stated, not faked.
+
+- **`provenBy` is load-bearing — key it by the CALLER.** `provenBy: () => "global"` would
+  let the *first* person who verifies unlock the tool for **everyone**. On a multi-user
+  server use the MCP per-request context (passed as the second argument):
+  `provenBy: (_args, extra) => extra.sessionId`. Keying by a tool arg — as the example does —
+  is right only when the subject **is** the prover (self-service). An empty value is
+  refused fail-closed, never shared.
+- **Don't declare an MCP `outputSchema` on a gated tool** — the refusal envelope replaces
+  the success shape in `structuredContent`, and the SDK would reject it against your
+  schema. Strip the schema when you gate an existing tool.
+- `require` takes any `gate()`-effect credential (or an array): `age.over(21)`, a custom
+  `defineCredential`. Payment and discounts are refused at wrap time — they belong to the
+  checkout ceremony.
+- Optional: `name: "release-records"` makes the refusal name the re-call precisely —
+  `resume.tool` stays the literal placeholder `"this-tool"` until you pass it; it must
+  match your registered tool id.
+- A presence-only gate is a **flow demo, not a real age-verification control** — don't put
+  it in front of a genuinely restricted action until issuer-verified trust lands
+  ([Honest status](#honest-status)).
+
+Runnable target: [`examples/gate-my-tool-sample/`](../../examples/gate-my-tool-sample/) —
+and the repo skill [`gate-my-tool`](../../.claude/skills/gate-my-tool/SKILL.md) lets a
+coding agent install this wrap (plus its bypass test) on any existing tool in one shot.
+
+### One policy language, three enforcement surfaces
+
+| Surface | Scenario | Shape | You get |
+| :-- | :-- | :-- | :-- |
+| `requirements()` + `mount()` | human present · hosted checkout page | resolver | a `requires` manifest; the person completes it on your page |
+| `credentagent.gate()` | human present · page-less tool | wrapper | a gated handler; the agent drives refuse → prove → re-call |
+| `DelegatedGate.preApprove()` / `spend()` | human **not** present · delegated | stateful grant | a bounded grant agents spend later (demo-fenced preview) |
+
+All three enforce the same policy nouns (`age.over(21)`, `defineCredential`, …), so a
+policy you write once reads the same on every surface.
+
 ## The three execution contexts
 
 The split is load-bearing — conflating them is the documented root cause of confusion
@@ -124,9 +221,9 @@ completion path (a hard block, independent of `required`/`optional`). Worked pac
 
 Honesty is carried in the **types**, not prose (Principle VII):
 
-- **`enforcedAt: "checkout"`** — v0.1 is consolidated Mode A: every gate runs on the checkout page
-  (Context 2) and is enforced server-side on the completion path. (`"tool"` is the Mode-B blocking
-  shape — roadmap.)
+- **`enforcedAt`** — where the gate is enforced, stated per entry: `"checkout"` for the
+  consolidated Mode-A page (Context 2, enforced server-side on the completion path), `"tool"`
+  for a `credentagent.gate()`-wrapped tool (Mode B — the wrap blocks the handler itself).
 - **`trust_level: "presence-only-demo"`** — the gate enforces *disclosure* (an explicit positive
   claim, not token-presence) and *binding* (nonce / ephemeral key), but **not trust** (mdoc
   issuer / device signatures). A self-crafted mdoc would pass. **This is a flow demo, not a real
@@ -168,9 +265,11 @@ The cert's SubjectAltName must cover the `walletOrigin` host or the wallet rejec
 > whether the *wallet* trusts *us* to ask. It does **not** verify the mdoc the wallet presents
 > *back*, so `trust_level` stays **`presence-only-demo`** either way.
 
-> **A refused tool call is a protocol, not a wall.** For a page-less tool, `gated()` returns a typed
-> **`verification_required`** envelope the agent *drives* (which credential, a per-order approve link,
-> the tool to poll) instead of completing — the retained blocking **Mode B** primitive.
+> **A refused tool call is a protocol, not a wall.** For a page-less tool,
+> [`credentagent.gate()`](#gate-a-single-tool--credentagentgate) returns a typed
+> **`verification_required`** envelope the agent *drives* (which credential, a per-subject approve
+> link, how to resume) instead of completing — the blocking **Mode B** primitive. (`gated()` is its
+> deprecated v0-era predecessor, kept one minor version.)
 
 ## Delegated draws — human-not-present seams (005, preview)
 
@@ -209,6 +308,7 @@ provide those are later increments.
 class CredentAgent {
   constructor(opts?: { walletOrigin?: string; store?: VerificationStore; credentials?: Credential[] });
   requirements(order: GateOrder, policy: Step[]): VerificationManifestEntry[];   // Context 1
+  gate(handler, { require, provenBy, name? }): wrapped handler;                  // Mode B: gate a tool
   mount(app: ExpressApp, ceremony?: MountCeremony): void;                        // Context 2
 }
 
@@ -229,9 +329,9 @@ sealIntent  ·  checkDraw  ·  signDraw  ·  MemoryRevocationStore  ·  Draw / I
 // signingKey-gated check in completeOrder + the opt-in `statelessOrders` transport
 issueCartMandate(args, secret)  ·  verifyCartMandate(mandate, orderId, secret)  ·  DEFAULT_CART_MANDATE_TTL_MS
 
-// Retained Mode-B / roadmap blocking primitive
-gated()  ·  buildVerificationRequired()  ·  isVerificationRequired()  ·  envelopeInstruction()
-ageDcql()  ·  ENVELOPE_VERSION  ·  ENVELOPE_SENTINEL
+// Mode-B envelope helpers (credentagent.gate() emits these; gated() is the deprecated shim)
+buildVerificationRequired()  ·  isVerificationRequired()  ·  envelopeInstruction()  ·  gated()
+ageDcql()  ·  ENVELOPE_VERSION  ·  ENVELOPE_SENTINEL  ·  GateOptions
 
 // Types: CredentAgentOptions, GateOrder, OrderLine, Credential, Step, Effect,
 //        VerificationManifestEntry, VerificationStore, VerificationRecord,

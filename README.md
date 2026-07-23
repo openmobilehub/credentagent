@@ -70,6 +70,21 @@ and the age gate drops — the `.when()` predicate receives the **order** and is
 
 For a deployment, pass your public origin: `new CredentAgent({ walletOrigin: "https://shop.example" })`.
 
+**Not selling anything?** Gate a single MCP tool — no cart, no checkout — with
+[`credentagent.gate()`](./packages/credentagent-gate/README.md#gate-a-single-tool--credentagentgate):
+
+```ts
+server.registerTool("release-records", config, credentagent.gate(
+  async ({ subject }) => ({ content: [{ type: "text", text: `Released records for ${subject}.` }] }),
+  { require: age.over(21), provenBy: ({ subject }) => subject },
+));
+```
+
+An unproven call returns a typed `verification_required` refusal (approve link + agent
+instruction) instead of running; once the person proves the credential on their phone, the
+same call goes through. One policy language, three enforcement surfaces — checkout page,
+gated tool, delegated grant ([the table](./packages/credentagent-gate/README.md#one-policy-language-three-enforcement-surfaces)).
+
 ## Documentation
 
 - **Reference** ([`docs/reference/`](./docs/reference/)):
@@ -89,8 +104,8 @@ For a deployment, pass your public origin: `new CredentAgent({ walletOrigin: "ht
   security-bypass testing bar, and the module conventions.
 - **[docs/deployment.md](./docs/deployment.md)** — running it for real (serverless stores,
   the stable signing key, the settle seam) + a troubleshooting table.
-- **[ROADMAP.md](./ROADMAP.md)** — what binds cryptographically today (Mode A) vs. what's
-  next (Mode B page-less gating, issuer-verified trust).
+- **[ROADMAP.md](./ROADMAP.md)** — what binds cryptographically today (Mode A checkout +
+  Mode-B `gate()`-wrapped tools) vs. what's next (issuer-verified trust).
 
 ## Honest status
 

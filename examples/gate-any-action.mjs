@@ -7,61 +7,43 @@
 // tool that releases sensitive records — behind an identity credential, with no payment
 // anywhere. Identity leads; commerce is just one of the actions you can gate.
 //
-// It uses the Mode-B `verification_required` envelope: instead of performing the action, a
-// gated tool returns a TYPED REFUSAL the agent drives — share a link, the user proves the
-// credential on their phone, the agent re-calls and the action runs. The agent keys on the
-// `_credentagent` sentinel (isVerificationRequired) and follows envelopeInstruction.
+// `credentagent.gate(handler, { require, provenBy })` is the whole integration: an unproven
+// call returns a TYPED REFUSAL the agent drives — share the approve link, the person proves
+// the credential on their phone, the agent re-calls and the action runs. Agents detect the
+// handshake with isVerificationRequired(result.structuredContent).
 //
-// HONESTY: the envelope + the gating decision are real today. The user proves on the
-// `approve_url` PAGE that `credentagent.mount()` serves (see examples/storefront.mjs for the full
-// ceremony); a fully page-LESS proving handshake is on the roadmap (ROADMAP.md). trust_level
-// is "presence-only-demo" — the wire crypto is real, the issuer trust anchor is not yet, so
-// don't put a presence-only gate in front of anything that needs a real safety guarantee.
+// HONESTY: the envelope + the gating decision are real today. The person proves on the
+// approve_url PAGE the ceremony mount serves (see examples/storefront.mjs) — gate() warns
+// below because nothing is mounted in this process. trust_level is "presence-only-demo":
+// the wire crypto is real, the issuer trust anchor is not yet, so don't put a
+// presence-only gate in front of anything that needs a real safety guarantee.
 
-import {
-  buildVerificationRequired,
-  isVerificationRequired,
-  ageDcql,
-} from "@openmobilehub/credentagent-gate";
+import { CredentAgent, age, isVerificationRequired } from "@openmobilehub/credentagent-gate";
 
-// A sensitive action an agent might be asked to perform — NOT a purchase. The gate is the
-// same shape you'd put in front of "approve-deploy", "file-prescription-refill", or
-// "grant-access": prove a credential first, then act.
-function releaseRecords(args, ctx) {
-  if (!ctx.ageVerified) {
-    // Gate any tool call: return the typed refusal instead of doing the action. The
-    // "order" here is a $0 ACTION, not a sale — the gate doesn't care that there's no money.
-    return buildVerificationRequired({
-      order: { id: args.requestId, total: 0, currency: "USD" },
-      credential: "age",
-      minAge: 21,
-      request: ageDcql(),
-      approveUrl: `https://example.test/credentagent/credential?order=${args.requestId}&cred=age`,
-      gate: "Age over 21",
-      detail: "Releasing these records requires proof the requester is 21 or older.",
-      resumeTool: "get-record-status",
-    });
-  }
-  return { released: true, subject: args.subject, records: [`record:${args.subject}:summary`] };
-}
+const credentagent = new CredentAgent({ walletOrigin: "https://records.example" });
+
+// A sensitive action an agent might be asked to perform — NOT a purchase. The same wrap
+// fits "approve-deploy", "file-prescription-refill", or "grant-access".
+const releaseRecords = credentagent.gate(
+  async ({ subject }) => ({ released: true, subject, records: [`record:${subject}:summary`] }),
+  {
+    require: age.over(21),               // the credential to prove — swap in any defineCredential
+    provenBy: ({ subject }) => subject,  // self-service: the subject proves their OWN age
+    //                                      (multi-user servers key by the CALLER: (_args, extra) => extra.sessionId)
+    name: "release-records",
+  },
+);
 
 // 1) Ungated call — the agent receives a verification_required envelope, not the records.
-const refusal = releaseRecords({ requestId: "REQ-1", subject: "patient-7" }, { ageVerified: false });
+const refusal = await releaseRecords({ subject: "patient-7" });
 console.log("\n— ungated tool call —");
-console.log("  is a verification handshake:", isVerificationRequired(refusal));
-console.log("  gate:", refusal.reason.gate, "| trust_level:", refusal.trust_level);
-// NOTE: the built-in envelopeInstruction() is worded for the CHECKOUT framing ("buyer",
-// "placed") — fine for the storefront, but for a non-commerce action build the agent
-// instruction from the envelope's fields directly (action-agnostic). An action-agnostic
-// instruction helper is a small follow-up (see ROADMAP).
-const instruction =
-  `This action is gated. ${refusal.reason.detail} ` +
-  `Send the requester this link to prove the credential on their phone: ${refusal.present.approve_url} — ` +
-  `then re-call once \`${refusal.resume.tool}\` reports completion. Don't perform the action until then.`;
-console.log("  agent instruction:\n   ", instruction);
+console.log("  is a verification handshake:", isVerificationRequired(refusal.structuredContent));
+console.log("  gate:", refusal.structuredContent.reason.gate, "| trust_level:", refusal.structuredContent.trust_level);
+console.log("  agent instruction:\n   ", refusal.content[0].text);
 
-// 2) After the user proves age on the approve_url page (which credentagent.mount() serves), the
-//    agent re-calls the tool and the action runs — no payment ever involved.
-const ok = releaseRecords({ requestId: "REQ-1", subject: "patient-7" }, { ageVerified: true });
+// 2) The person proves age on the approve_url page (served by the ceremony mount), which
+//    records the proof for THIS subject — simulated here by writing the store directly.
+await credentagent.store.write("patient-7", { ageVerified: true });
+const ok = await releaseRecords({ subject: "patient-7" });
 console.log("\n— after the credential is proven —");
 console.log("  ", JSON.stringify(ok), "\n");

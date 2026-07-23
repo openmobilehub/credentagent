@@ -38,9 +38,9 @@ export interface GateDeps<A, O extends GateOrder> {
 }
 
 /**
- * @deprecated v0.1 uses consolidated Mode A — wrap your checkout tool with
- * `CredentAgent.requirements(order, policy)` instead. `gated()` is the Mode-B
- * blocking shim, kept for page-less tools / one minor version.
+ * @deprecated Use `credentagent.gate(handler, { require, provenBy })` — the
+ * general Mode-B facade — for page-less tools, or `CredentAgent.requirements()`
+ * for checkout. `gated()` is the v0-era shim, kept one minor version.
  *
  * Wrap an MCP tool handler so it returns a `verification_required` envelope when
  * the age gate isn't met, instead of completing. The handler receives the

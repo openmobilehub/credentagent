@@ -11,7 +11,8 @@ Each is runnable against the two `@openmobilehub/credentagent-*` packages (build
 - [`run-storefront/`](run-storefront/) — run THIS repo's storefront directly (stateful + stateless side by side)
 
 **Gating patterns** (identity-first, beyond commerce)
-- [`gate-any-action.mjs`](#gate-any-actionmjs--gate-a-non-commerce-action-identity-first-no-checkout) — gate a non-commerce action, no checkout
+- [`gate-any-action.mjs`](#gate-any-actionmjs--gate-a-non-commerce-action-identity-first-no-checkout) — gate a non-commerce action with `credentagent.gate()`, no checkout
+- [`gate-my-tool-sample/`](gate-my-tool-sample/) — the deliberately **ungated** server the `gate-my-tool` skill targets (before/after demo)
 
 **Cart Mandate / stateless** (004)
 - [`stateless-orders/`](stateless-orders/) — the created order rides in a signed Cart Mandate on the link
@@ -224,20 +225,23 @@ payments is one application* — by gating a **non-commerce** action: an MCP too
 records, behind an identity credential, with **no payment anywhere**.
 
 ```ts
-import { buildVerificationRequired, isVerificationRequired, ageDcql } from "@openmobilehub/credentagent-gate";
+import { CredentAgent, age } from "@openmobilehub/credentagent-gate";
 
-function releaseRecords(args, ctx) {
-  if (!ctx.ageVerified) {
-    return buildVerificationRequired({         // ← gate any tool call: return a typed refusal,
-      order: { id: args.requestId, total: 0, currency: "USD" }, //   a $0 ACTION, not a sale
-      credential: "age", minAge: 21, request: ageDcql(),
-      approveUrl: `https://shop.example/credentagent/credential?order=${args.requestId}&cred=age`,
-      detail: "Releasing these records requires proof the requester is 21+.",
-    });
-  }
-  return { released: true, records: [/* … */] };
-}
+const credentagent = new CredentAgent({ walletOrigin: "https://records.example" });
+
+const releaseRecords = credentagent.gate(          // ← the whole integration: wrap the handler
+  async ({ subject }) => ({ released: true, subject, records: [/* … */] }),
+  {
+    require: age.over(21),                         // the credential to prove
+    provenBy: ({ subject }) => subject,            // whose proof unlocks the call
+  },
+);
 ```
+
+An unproven call returns the typed `verification_required` refusal (a **$0 action**, not a
+sale) with the approve link and an action-agnostic agent instruction; a proven call runs the
+handler unchanged. (This example previously hand-rolled the envelope with
+`buildVerificationRequired` — `credentagent.gate()` absorbed that plumbing.)
 
 ### Run it
 
@@ -253,9 +257,7 @@ after the credential is proven. The same shape gates `approve-deploy`, `file-pre
 ### Honest limits
 
 - The envelope + the gating decision are real today. The user proves on the `approve_url` **page** that
-  `credentagent.mount()` serves (see `storefront.mjs` for the full ceremony); a fully **page-less** proving
-  handshake is on the roadmap.
-- The built-in `envelopeInstruction()` is worded for the **checkout** framing ("buyer", "placed"), so this
-  example builds an **action-agnostic** instruction from the envelope's fields instead. (An action-agnostic
-  instruction helper is a small follow-up.)
+  `credentagent.mount()` serves (see `storefront.mjs` for the full ceremony); `gate()` **warns at refusal
+  time** when nothing is mounted in the process, and a standalone proving-page mount for page-less
+  servers is a tracked follow-up.
 - `trust_level` is `"presence-only-demo"` — don't gate anything needing a real safety guarantee on it yet.
