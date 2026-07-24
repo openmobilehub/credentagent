@@ -97,3 +97,44 @@ describe("CT4 — required vs optional", () => {
     expect(ageEntry!.required).toBe(true);
   });
 });
+
+// 008 (#88): when a `verifier` seam is wired, the PAYMENT (authorize) approve link resolves
+// to the ONE delegated ceremony; identity gates (age) stay on the built-in credential rail —
+// the buyer proves age there FIRST, then pays through the delegated ceremony (a two-step flow).
+// A discount also stays on the credential rail; without a verifier the links are byte-unchanged.
+describe("008 — delegated approve-link routing", () => {
+  const minimalCeremony = () => ({
+    orderStore: { read: async () => null },
+    catalog: { createOrder: (_items: unknown, id: string) => ({ id, lines: [], itemCount: 0, subtotal: 0, discount: 0, total: 0, currency: "USD" }) },
+    completion: async () => ({ completed: true as const }),
+    signingKey: "stable-test-secret",
+  });
+  const verifier = {
+    buildRequest: async () => ({ reference: "r", handoff: {} }),
+    consume: async () => ({ approved: true, trust_level: "presence-only-demo" as const, claims: {}, binding: { amount: 0, currency: "USD", payee: { id: "shop.example" } } }),
+  };
+
+  it("routes payment to /credentagent/delegated; age + discount stay on the credential rail (two-step)", () => {
+    const ca = new CredentAgent({ walletOrigin: "https://shop.example" });
+    // A route-less app is fine: mount() sets the delegated flag from ceremony.verifier
+    // regardless of whether the rail's HTTP routes register.
+    ca.mount({ locals: {} }, { ...minimalCeremony(), verifier });
+    const manifest = ca.requirements(alcoholOrder, fullPolicy);
+    const url = (id: string) => manifest.find((e) => e.credential === id)!.approveUrl;
+    // Two-step: age is proven on the built-in credential rail FIRST (a real OpenID4VP mdoc
+    // step), NOT folded into the delegated ceremony — only the payment goes delegated.
+    expect(url("age")).toBe("https://shop.example/credentagent/credential?order=ORD-1&cred=age");
+    expect(url("payment")).toBe("https://shop.example/credentagent/delegated?order=ORD-1");
+    // A discount is NOT in the delegated presentation — the buyer opts in on the credential rail.
+    expect(url("membership")).toBe("https://shop.example/credentagent/credential?order=ORD-1&cred=membership");
+  });
+
+  it("WITHOUT a verifier the links are the built-in rails (byte-unchanged)", () => {
+    const ca = new CredentAgent({ walletOrigin: "https://shop.example" });
+    ca.mount({ locals: {} }, minimalCeremony()); // no verifier
+    const manifest = ca.requirements(alcoholOrder, fullPolicy);
+    const url = (id: string) => manifest.find((e) => e.credential === id)!.approveUrl;
+    expect(url("age")).toBe("https://shop.example/credentagent/credential?order=ORD-1&cred=age");
+    expect(url("payment")).toBe("https://shop.example/credentagent/dc-payment?order=ORD-1");
+  });
+});

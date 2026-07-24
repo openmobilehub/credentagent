@@ -136,8 +136,8 @@ export type {
 // catalog and re-checks the verdict against it, then re-runs its OWN policy over the
 // disclosed claims. An adapter that approves the wrong amount is still refused.
 //
-// This is the INTERFACE; a concrete adapter (Multipaz/UPay, @auth0/mdl, …) is host-side —
-// no processor-specific symbol lives in this package.
+// This is the INTERFACE — processor-agnostic by design; ANY external verifier + settlement
+// processor is a host-side adapter, and no processor-specific symbol lives in this package.
 export type { DelegatedVerifier, DelegatedVerdict, DelegatedHandoff } from "./ceremony/types.js";
 // The parameter types a host needs to implement `DelegatedVerifier`: `BindingFields` is the
 // SAME catalog-derived amount binding the dc-payment rail binds on (one definition, no drift).

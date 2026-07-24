@@ -3,7 +3,7 @@
 // gated/ungated), CT5 (ui resource + the 6/3 UI-linked split), CT6 (state
 // isolation), CT9/FR-014 (the ChatGPT widget meta — widgetAccessible).
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import request from "supertest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -16,6 +16,7 @@ import { firestoreCatalog, type FirestoreLike } from "./firestore.js";
 import { MemoryOrderStore } from "./state.js";
 import type { Order } from "./index.js";
 import { CredentAgent, age, membership, payment, required, optional, defineCredential, dcql, gate, MemoryVerificationStore } from "@openmobilehub/credentagent-gate";
+import type { DelegatedVerifier } from "@openmobilehub/credentagent-gate";
 import type { Request } from "express";
 
 // A Map-backed RedisLike fake so a `redisStorage(...)` provider can be exercised through
@@ -850,5 +851,105 @@ describe("live cross-device status mirror (#73)", () => {
     await vstore.write(orderId, { ageVerified: true });
     const after = (await request(store.app).get(`/checkout/order-status?orderId=${orderId}`)).body.revision;
     expect(after).not.toBe(before);
+  });
+});
+
+// 008 (#89, S5): a REAL delegated ceremony runs end-to-end through the storefront's mounted
+// rail — same gate() policy, only the verification/settlement backend moved in. The verifier
+// here is a test double (never shipped): it is the only way to drive completion before the
+// real Multipaz/UPay adapter (S6, downstream) exists, and it captures the gate's minted
+// binding and echoes it, exactly as a real adapter binds to what the gate sent.
+describe("008 — delegated ceremony completes through the storefront (S5)", () => {
+  function scriptedVerifier() {
+    let captured: { amount: number; currency: string; payee: { id: string } } | undefined;
+    const settle = vi.fn(async () => ({ network: "test", txId: "tx_e2e", status: "settled" }));
+    const verifier: DelegatedVerifier = {
+      buildRequest: async ({ binding }) => {
+        captured = { amount: binding.amount, currency: binding.currency, payee: { id: binding.payee.id } };
+        return { reference: "ref-e2e", handoff: { verifierUrl: "https://verifier.test" } };
+      },
+      // A real adapter re-fetches the verified presentment by reference; the double echoes the
+      // captured binding + a 21+ disclosure so the gate's own re-checks all pass.
+      consume: async () => ({
+        approved: true,
+        trust_level: "issuer-verified",
+        claims: { age_mdl: { age_over_21: true }, payment: { issuer_name: "TestBank", holder_name: "Jo" } },
+        binding: { amount: captured!.amount, currency: captured!.currency, payee: { id: captured!.payee.id } },
+      }),
+      settle,
+    };
+    return { verifier, settle };
+  }
+
+  function delegatedStore() {
+    const { verifier, settle } = scriptedVerifier();
+    const store = createStorefront({ verifier });
+    const credentagent = new CredentAgent();
+    credentagent.mount(store.app); // zero-arg — picks up the verifier from app.locals
+    store.gate((order) =>
+      credentagent.requirements(order, [
+        required(age.over(21).when((o: { lines: { minimumAge?: number }[] }) => o.lines.some((l) => l.minimumAge != null))),
+        required(payment.in("usd")),
+      ]),
+    );
+    return { store, settle };
+  }
+
+  it("a real delegated payment completes the order through the mounted rail, relaying issuer-verified trust", async () => {
+    const { store, settle } = delegatedStore();
+    const c = await connect(store);
+    const sc = (await c.callTool({ name: "checkout", arguments: { items: [{ productId: "oak-whiskey", quantity: 1 }] } })).structuredContent as any;
+    const orderId = sc.orderId as string;
+
+    // The manifest routes the blocking gates to the ONE delegated ceremony (S4).
+    const approve = (sc.requires as { credential: string; approveUrl?: string }[]).find((e) => e.credential === "payment")!.approveUrl!;
+    expect(approve).toContain("/credentagent/delegated?order=");
+
+    // 1. Fetch the handoff + the sealed, order-bound reference.
+    const reqRes = await request(store.app).get(`/credentagent/delegated/request?order=${orderId}`);
+    expect(reqRes.status).toBe(200);
+    const referenceToken = reqRes.body.referenceToken as string;
+    expect(referenceToken).toBeTruthy();
+
+    // 2. Complete via the verify leg — the browser carries ONLY the reference.
+    const verifyRes = await request(store.app).post("/credentagent/delegated/verify").send({ order: orderId, referenceToken });
+    expect(verifyRes.status).toBe(200);
+    expect(verifyRes.body.completed).toBe(true);
+    expect(verifyRes.body.trust_level).toBe("issuer-verified"); // relayed from the verdict, not synthesized
+    expect(settle).toHaveBeenCalledTimes(1); // gate-authorized settlement fired
+
+    // 3. The shared completion recorded it — the widget poll now sees the order paid.
+    const status = await request(store.app).get(`/checkout/order-status?orderId=${orderId}`);
+    expect(status.body.completed).toBe(true);
+    expect(status.body.order?.orderId).toBe(orderId);
+  });
+
+  it("a wrong-amount verdict is refused end-to-end and the order stays unpaid", async () => {
+    // A misbehaving verifier that binds a cheaper amount than the gate priced — the shared
+    // seam refuses and nothing settles or records (the storefront-level proof of invariant 2).
+    const settle = vi.fn(async () => ({ network: "test", txId: "x", status: "settled" }));
+    const verifier: DelegatedVerifier = {
+      buildRequest: async () => ({ reference: "r", handoff: {} }),
+      consume: async ({ order }) => ({
+        approved: true,
+        trust_level: "issuer-verified",
+        claims: { age_mdl: { age_over_21: true } },
+        binding: { amount: 1, currency: order.currency, payee: { id: "shop.example" } },
+      }),
+      settle,
+    };
+    const store = createStorefront({ verifier });
+    const credentagent = new CredentAgent();
+    credentagent.mount(store.app);
+    store.gate((order) => credentagent.requirements(order, [required(age.over(21).when((o: { lines: { minimumAge?: number }[] }) => o.lines.some((l) => l.minimumAge != null))), required(payment.in("usd"))]));
+    const c = await connect(store);
+    const sc = (await c.callTool({ name: "checkout", arguments: { items: [{ productId: "oak-whiskey", quantity: 1 }] } })).structuredContent as any;
+    const orderId = sc.orderId as string;
+    const referenceToken = (await request(store.app).get(`/credentagent/delegated/request?order=${orderId}`)).body.referenceToken as string;
+    const verifyRes = await request(store.app).post("/credentagent/delegated/verify").send({ order: orderId, referenceToken });
+    expect(verifyRes.body.completed).toBe(false);
+    expect(settle).not.toHaveBeenCalled();
+    const status = await request(store.app).get(`/checkout/order-status?orderId=${orderId}`);
+    expect(status.body.completed).toBe(false);
   });
 });

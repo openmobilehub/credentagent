@@ -83,6 +83,9 @@ package can be tested and reasoned about without a web server, a DB, or a clock.
 - **Here:** the gate never imports Express — it talks to structural ports (`orderStore`, `catalog`,
   `completion`, `CeremonyApp`); stores are injectable (`MemoryVerificationStore` default; a shared store
   for multi-instance). `mount()` **fails fast** on a missing required seam (never silently degrades).
+  The `verifier` seam (008) is the same shape: verification and settlement are a structural port
+  (`DelegatedVerifier`), so **any** external verifier + payment processor is a host-side adapter the gate
+  neither names nor depends on — no processor is a dependency of the core.
 - **Push further:** any new `Date.now()`, `process.env`, or hard import in the core is a smell — inject it.
 
 ### 7. One choke point for each critical concern
@@ -90,7 +93,10 @@ Security- and correctness-critical logic lives in exactly one place it *cannot* 
 critical path is a latent inconsistency bug.
 - **Exemplar:** a single auth middleware; one settlement path.
 - **Here:** the shared `completeOrder` seam — *every* rail records through it (re-price, reconcile,
-  age gate, idempotency, settle). "No second completion path" is the best decision in the codebase.
+  age gate, idempotency, settle). "No second completion path" is the best decision in the codebase. The
+  delegated rail (008) proves the discipline holds under delegation: rather than re-implement age/settle,
+  it writes the *same* verification state and passes a settle *thunk* through the *same* `completeOrder`,
+  so an external verifier gains no second enforcement path.
 - **Push further:** the same rule should govern *order resolution* and *mandate transport* (Open gaps).
 
 ### 8. Idempotency and safe retries are first-class

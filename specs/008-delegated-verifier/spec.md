@@ -53,6 +53,7 @@ The load-bearing idea, and the reason this is safe:
 | **D2** | **Server-to-server verdict fetch by reference** — the browser carries only an opaque reference; the host re-fetches the verified presentment over an authenticated channel. | The browser sits between verifier and gate; anything it carries is forgeable. Mirrors Multipaz's own `RpcAuthorizedServerClient` topology. | A signed verdict envelope through the browser (viable, needs verifier signing keys + key distribution); trusting a browser-posted `approved` (rejected outright — fail-open). |
 | **D3** | **A new `delegated-payment` rail** mirroring the `dc-payment` split. | The topology genuinely differs (redirect + reference fetch, no in-process JWE decrypt). CLAUDE.md: a new rail mirrors the rail layout, it does not bolt onto an existing one. | Branching inside `dc-payment/routes.ts` — two ceremonies tangled in one verify handler. |
 | **D4** | **Combined age+payment presentation** in one delegated round-trip. | The reference requests identity and payment in one DCQL with `credential_sets`; splitting would force two wallet round-trips. | Payment-only first — cheaper, but not what the reference ceremony does. |
+| **D5** | **Two-phase, gate-authorized settlement** — the seam has three methods (`buildRequest` / `consume` / `settle?`); `consume` verifies but performs NO settlement, and the gate calls `settle` ONLY after its own re-checks pass. (Refinement made in S3 — the half S1 flagged provisional.) | The gate's policy can be *stricter* than the verifier's: the reference verifier's age check passes at 18+, but `age.over(21)` demands 21+, so the verifier can legitimately *approve* what the gate must *refuse*. Settling inside `consume` would move money before the age gate ran. | Settlement folded into `consume` (as the reference's `VerifierAssistant.processResponse` does) — rejected: it settles before the gate's stricter policy check, so a refused purchase could already be paid. |
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -180,9 +181,11 @@ seam passed to `mount()`.
 ### Key Entities
 
 - **`DelegatedVerifier`** — the seam. `buildRequest({ order, dcql, binding, origin })` →
-  `DelegatedHandoff`; `consume({ reference, order })` → `DelegatedVerdict`. Two methods mirroring
-  the reference's own split (request minting in `marketplaceCheckout`, post-verification business logic
-  in `VerifierAssistant.processResponse`).
+  `DelegatedHandoff`; `consume({ reference, order })` → `DelegatedVerdict` (verify + trust, NO
+  settlement); `settle?({ reference, order, amount, currency })` → `SettlementRecordLike` (commit,
+  called by the gate only after its re-checks pass — D5). Three methods mirroring the reference's own
+  split (request minting in `marketplaceCheckout`; verification + `createTransaction`/`commitTransaction`
+  around `VerifierAssistant.processResponse`).
 - **`DelegatedVerdict`** — structural, JSON-safe result: `{ approved, trust_level, claims, binding,
   settlement?, reason? }`. Deliberately carries **no** foreign types (no `PresentmentRecord`), so the
   gate never depends on a verifier's object model.
@@ -206,11 +209,13 @@ seam passed to `mount()`.
   unmodified (US2).
 - **SC-003**: A verdict with `approved: true` whose claims fail the gate's own policy (age threshold
   or an applicable custom `gate()`) does not complete (US3).
-- **SC-004**: `trust_level` in the manifest and the completed record equals the verdict's value, and is
-  `presence-only-demo` on every non-delegated path (US4).
+- **SC-004**: `trust_level` on the completed **record** equals the verdict's value; the **manifest**
+  stays `presence-only-demo` (nothing is verified at manifest time, so it must not advertise
+  `issuer-verified`), and every non-delegated path stays `presence-only-demo` (US4). *(Refinement: the
+  manifest cannot source a verdict that does not exist yet — the earned level lives on the record.)*
 - **SC-005**: `grep -ri upay packages/credentagent-gate/src` returns nothing; the same policy completes
-  on both the built-in rail and a `FakeDelegatedVerifier` with only the `verifier` seam differing (US5,
-  FR-002).
+  on both the built-in rail and a test-only scripted verifier (`scriptedVerifier`, never shipped) with
+  only the `verifier` seam differing (US5, FR-002).
 
 ## Assumptions
 
@@ -257,13 +262,15 @@ sweep reads).
 
 | Increment | Issue | Lands |
 | --- | --- | --- |
-| **S1** — seam contract + this spec | #85 | this branch |
-| **S2** — `delegated-payment` rail: request/handoff builder | #86 | this branch |
-| **S3** — verify + the non-delegable re-checks (security core) | #87 | separate PR |
-| **S4** — manifest routing + honesty plumbing | #88 | separate PR |
-| **S5** — storefront wiring + fake verifier + docs | #89 | separate PR |
+| **S1** — seam contract + this spec | #85 | merged (PR #91) |
+| **S2** — `delegated-payment` rail: request/handoff builder | #86 | merged (PR #91) |
+| **S3** — verify + the non-delegable re-checks (security core) | #87 | `feat/008-delegated-verify` |
+| **S4** — manifest routing + honesty plumbing | #88 | `feat/008-delegated-verify` |
+| **S5** — storefront wiring + scripted verifier + docs | #89 | `feat/008-delegated-verify` |
 | **S6** — rework multipaz-utopia#15 onto the seam | multipaz-utopia#16 | downstream repo |
 
-S1+S2 land together deliberately: an interface with no caller cannot be judged against the
-"example IS the DX test" rule. Note that S2 exercises **`buildRequest` only** — `consume()` and
-`DelegatedVerdict` have no caller until S3 and are therefore **provisional** on this branch.
+S1+S2 landed together (PR #91): an interface with no caller cannot be judged against the "example IS
+the DX test" rule. That PR flagged `consume()` / `DelegatedVerdict` as **provisional** — S3 exercised
+that half and refined it: `DelegatedVerdict` dropped its `settlement` field and the seam grew a third
+`settle?` method (D5). S3+S4+S5 land on one branch so the security core, its routing, and its host
+wiring are reviewed as one coherent change.

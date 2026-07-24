@@ -214,9 +214,12 @@ The three rails `mount()` serves differ in how much crypto is real today:
 | `passkey` (same-device + cross-device caBLE) | WebAuthn assertion verified against this server's origin / RP-ID, user-verification required, nonce/replay-bound — **real cryptography** (`@simplewebauthn`) | real WebAuthn crypto |
 | `credential` (age / membership) | OpenID4VP presentation; the explicit positive claim is checked, but the mdoc's issuer/device signatures are **not** verified | `presence-only-demo` |
 | `dc-payment` (Digital Credentials API) | amount-bound mdoc presentation; the JWE vp_token + device signature are taken at face value, **not** cryptographically verified | `presence-only-demo` |
+| `delegated` (opt-in — `mount({ verifier })`) | the same policy, verified + settled by an **external** verifier/processor; the gate re-derives the binding and re-runs your policy, and **relays** the verdict's trust | the verifier's — `issuer-verified` with a real anchor |
 
-The OpenID4VP plumbing is scaffolded; cryptographic mdoc trust is the integration step, not new
-cryptography. The mandate is AP2-shaped and dev-signed (integrity hash), not key-signed.
+The built-in OpenID4VP plumbing is scaffolded; cryptographic mdoc trust is the integration step, not
+new cryptography. The mandate is AP2-shaped and dev-signed (integrity hash), not key-signed.
+`trust_level: "issuer-verified"` is reachable **today** through the `verifier` seam (below) — the gate
+relays a level a real anchor produced; it does not verify issuer signatures itself.
 
 ### Presenting a stable reader identity (optional)
 
@@ -241,6 +244,42 @@ The cert's SubjectAltName must cover the `walletOrigin` host or the wallet rejec
 > **This is verifier trust, not issuer trust — they point in opposite directions.** It changes
 > whether the *wallet* trusts *us* to ask. It does **not** verify the mdoc the wallet presents
 > *back*, so `trust_level` stays **`presence-only-demo`** either way.
+
+### Real trust: delegate to an external verifier (`verifier`)
+
+The built-in rails lack an issuer/device **trust anchor** — that is what keeps them
+`presence-only-demo`. Pass a `verifier` seam and the gate serves a **delegated ceremony**: the same
+`gate()` policy runs a real, issuer-trust-verified, amount-bound payment through an external
+verifier/processor (e.g. a Multipaz verifier + a UPay-style processor), **inside** the mounted
+ceremony instead of around it. Your policy and storefront are unchanged — only the backend moves in.
+
+```ts
+credentagent.mount(app, { ...seams, verifier });   // the only new thing
+```
+
+The seam is three methods, mirroring what a real verifier/processor already splits:
+
+```ts
+interface DelegatedVerifier {
+  buildRequest(x): DelegatedHandoff;   // mint the verifier request from the gate's re-derived binding
+  consume(x):     DelegatedVerdict;    // fetch the verified presentment by reference — trust, NO settlement
+  settle?(x):     SettlementRecordLike // commit — called by the gate ONLY after its re-checks pass
+}
+```
+
+The one rule that makes delegation safe: **trust is delegable, binding is not.**
+
+- The **verifier** brings what the gate lacks: issuer/device signature verification against a real
+  anchor. Its verdict reports `trust_level: "issuer-verified"`, which the gate **relays** — it never
+  synthesizes a level it did not receive.
+- The **gate** keeps what it must never outsource: it re-derives the amount/payee from the catalog and
+  re-checks the verdict against it, re-runs *your* policy over the disclosed claims (an 18+ verifier
+  check never satisfies `age.over(21)`), and only **then** authorizes `settle`. A verifier that
+  approves the wrong amount — or a stricter-than-the-merchant age — is refused before any money moves.
+
+The verdict travels **server-to-server by reference**: the browser carries only a sealed, order-bound
+handle, never the result, so it cannot forge an approval. The concrete verifier is a **host-side
+adapter** — no processor-specific symbol lives in this package.
 
 > **A refused tool call is a protocol, not a wall.** For a page-less tool, `gated()` returns a typed
 > **`verification_required`** envelope the agent *drives* (which credential, a per-order approve link,
