@@ -1,0 +1,77 @@
+# openssl.cnf — CredentAgent demo PKI (ISO/IEC 18013-5 Annex B profiles)
+#
+# Extension sections mirror Multipaz's MdocUtil cert generators
+# (multipaz/src/commonMain/kotlin/org/multipaz/mdoc/util/MdocUtil.kt):
+#   generateIacaCertificate       -> [v3_iaca]
+#   generateDsCertificate         -> [v3_ds]
+#   generateReaderRootCertificate -> [v3_reader_root]
+#   generateReaderCertificate     -> [v3_reader]
+# plus a self-signed [v3_list_signer] used to COSE-sign the VICAL/RICAL.
+#
+# Load-bearing profile facts (see MORNING-BRIEF.md "cert-profile decisions"):
+#  - Curve P-256, signature ecdsa-with-SHA256.
+#  - SKI = SHA-1 of the subjectPublicKey (RFC 5280 method 1) — non-critical.
+#  - AKI = issuer's SKI — non-critical.
+#  - KeyUsage is CRITICAL: keyCertSign+cRLSign on the two roots,
+#    digitalSignature on the two leaves.
+#  - BasicConstraints CRITICAL CA:TRUE,pathlen:0 on the two roots; ABSENT on
+#    the two leaves (end-entity).
+#  - ExtendedKeyUsage is CRITICAL (Multipaz sets critical=true, matching
+#    ISO 18013-5 Table B.3/B.7): 1.0.18013.5.1.2 on DS, 1.0.18013.5.1.6 on reader.
+#  - IssuerAltName (URI) non-critical on IACA, copied onto DS.
+#  - CRLDistributionPoints (URI) non-critical on all four.
+#  - The @-referenced URIs below are substituted by gen-pki.sh from $BASE_URL.
+
+[ req ]
+distinguished_name = req_dn
+prompt             = no
+[ req_dn ]
+CN = Demo
+
+# ---- IACA root (self-signed CA) : ISO 18013-5 Annex B, generateIacaCertificate ----
+[ v3_iaca ]
+subjectKeyIdentifier   = hash
+authorityKeyIdentifier = keyid:always
+keyUsage               = critical, keyCertSign, cRLSign
+basicConstraints       = critical, CA:TRUE, pathlen:0
+issuerAltName          = URI:${ENV::IACA_IAN_URI}
+crlDistributionPoints  = URI:${ENV::IACA_CRL_URI}
+
+# ---- Document Signer (issued by IACA) : generateDsCertificate ----
+# EKU critical = mDL Document Signer (1.0.18013.5.1.2). IAN + CRL copied from IACA.
+[ v3_ds ]
+subjectKeyIdentifier   = hash
+authorityKeyIdentifier = keyid:always
+keyUsage               = critical, digitalSignature
+extendedKeyUsage       = critical, 1.0.18013.5.1.2
+issuerAltName          = URI:${ENV::IACA_IAN_URI}
+crlDistributionPoints  = URI:${ENV::IACA_CRL_URI}
+
+# ---- Reader root (self-signed CA) : generateReaderRootCertificate ----
+[ v3_reader_root ]
+subjectKeyIdentifier   = hash
+authorityKeyIdentifier = keyid:always
+keyUsage               = critical, keyCertSign, cRLSign
+basicConstraints       = critical, CA:TRUE, pathlen:0
+crlDistributionPoints  = URI:${ENV::READER_CRL_URI}
+
+# ---- Reader leaf (issued by reader root) : generateReaderCertificate ----
+# EKU critical = mDL Reader Auth (1.0.18013.5.1.6). dNSName SAN(s) bind the reader
+# to its origin host(s): gen-pki.sh builds $READER_SAN ("DNS:a, DNS:b") from the
+# READER_DNS list, so one reader cert can serve localhost + a hosted origin. The
+# wallet trusts it when the request's origin matches ANY listed name. CRL from root.
+[ v3_reader ]
+subjectKeyIdentifier   = hash
+authorityKeyIdentifier = keyid:always
+keyUsage               = critical, digitalSignature
+extendedKeyUsage       = critical, 1.0.18013.5.1.6
+subjectAltName         = ${ENV::READER_SAN}
+crlDistributionPoints  = URI:${ENV::READER_CRL_URI}
+
+# ---- VICAL/RICAL list signer (self-signed leaf identity) ----
+# Not an ISO cert profile; it is the COSE_Sign1 provider identity for the
+# trust lists. digitalSignature only; carries an SKI so it can appear in a chain.
+[ v3_list_signer ]
+subjectKeyIdentifier   = hash
+authorityKeyIdentifier = keyid:always
+keyUsage               = critical, digitalSignature

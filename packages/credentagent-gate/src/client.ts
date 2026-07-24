@@ -7,6 +7,9 @@ import type { Credential, CredentAgentOptions, GateOrder, ReaderIdentity, Step, 
 import { resolveRequirements } from "./manifest.js";
 import { MemoryVerificationStore } from "./store.js";
 import { mountCeremony, type CeremonyApp, type CeremonySeams } from "./ceremony/mount.js";
+import { Orders, MemoryOrderStore, type CreatedOrder, type CompletedOrder } from "./orders.js";
+import { serveOrders } from "./orders-serve.js";
+import { Webhooks } from "./webhooks.js";
 
 x509.cryptoProvider.set(globalThis.crypto);
 
@@ -28,17 +31,25 @@ const DEFAULT_WALLET_ORIGIN = `http://localhost:${process.env.PORT ?? 3000}`;
 export class CredentAgent {
   readonly walletOrigin: string;
   readonly store: VerificationStore;
+  /** The human-present checkout resource — `orders.create()` / `orders.retrieve()` (spec 009). */
+  readonly orders: Orders;
+  /** Outbound HTTP webhooks — `webhooks.register()` / `webhooks.constructEvent()` (spec 010). */
+  readonly webhooks: Webhooks;
   /** Stable reader identity presented by the rails (undefined ⇒ per-request self-signed). */
   readonly readerIdentity?: ReaderIdentity;
+  private readonly listeners = new Map<string, Set<(payload: { id: string }) => void>>();
   // True once the ceremony rails are wired onto a host app (so `/credentagent/*` routes
   // exist on this server). `requirements()` then emits approve links that resolve
   // to those mounted routes rather than the legacy `/credential-gate/*` shape.
   private mountedRoutes = false;
   // True once a `verifier` seam has been wired at mount() (008). `requirements()` then
-  // routes the blocking gate/authorize approve links to the single `/credentagent/delegated`
-  // ceremony (the combined external-verifier round-trip) instead of the built-in dc-payment
-  // / credential rails. A discount stays on the built-in credential rail either way.
+  // routes the PAYMENT (authorize) approve link to the single `/credentagent/delegated`
+  // ceremony (the external-verifier round-trip) instead of the built-in dc-payment rail.
+  // Identity gates (age) and a discount stay on the built-in credential rail either way —
+  // the buyer proves age there FIRST, then pays through the delegated ceremony (two-step).
   private delegated = false;
+  // True once `orders.serve(app)` has wired the checkout (idempotent — one serve per client).
+  private ordersServed = false;
   // In-process credential registry (id → Credential), populated as `requirements()`
   // resolves policies — register-on-resolve, so a developer registers nothing (Principle
   // V). Injected into the ceremony context at `mount()` so the rails can serve a custom
@@ -82,6 +93,63 @@ export class CredentAgent {
     // (fail-open). register-on-resolve stays for zero-config dev; this makes multi-instance
     // deploys fail-closed. Reserved ids are inert here (the sweep + resolveCred skip them).
     for (const c of opts.credentials ?? []) this.registry.set(c.id, c);
+    // The orders resource — configure-once: it reuses this client's origin + requirements(),
+    // with in-memory order stores by default (inject a shared store for multi-instance deploys).
+    // The two stores are held here so `orders.serve(app)` binds the checkout over the SAME
+    // state `orders.create()` / `orders.retrieve()` use (invariant 4 — keyed per order id).
+    const createdStore = opts.orderStore ?? new MemoryOrderStore<CreatedOrder>();
+    const completedStore = opts.completedOrderStore ?? new MemoryOrderStore<CompletedOrder>();
+    // The outbound HTTP webhook sender (spec 010). Zero endpoints ⇒ inert (additive, zero-cost).
+    this.webhooks = new Webhooks(opts.webhooks ?? {});
+    this.orders = new Orders({
+      walletOrigin: this.walletOrigin,
+      requirements: (order, policy) => this.requirements(order, policy),
+      created: createdStore,
+      completed: completedStore,
+      emit: (event, payload) => this.emit(event, payload),
+      // Fire-and-forget from the completion choke point — never blocks a settled order.
+      deliverWebhook: (type, object) => { void this.webhooks.deliver(type, object); },
+      serve: (app) => {
+        if (this.ordersServed) return; // idempotent
+        serveOrders(app as CeremonyApp, {
+          walletOrigin: this.walletOrigin,
+          created: createdStore,
+          completed: completedStore,
+          complete: (record) => this.orders._complete(record),
+          requirements: (order, policy) => this.requirements(order, policy),
+          verificationStore: this.store,
+          credentialRegistry: this.registry,
+          ...(this.readerIdentity ? { readerIdentity: this.readerIdentity } : {}),
+          ...(opts.gateSecret ? { signingKey: opts.gateSecret } : {}),
+        });
+        this.ordersServed = true;
+        this.mountedRoutes = true; // approve links now resolve to the mounted rails
+      },
+    });
+  }
+
+  /**
+   * Subscribe to a lifecycle event. Today: `"order.settled"` — fired once when an order
+   * completes (the completed-store write emits it).
+   *
+   * This is an IN-PROCESS listener, NOT an HTTP webhook: the handler runs in the same Node
+   * process that completed the order, synchronously, with no network hop, retry, or signing.
+   * In a single-process server that's all you need — react here instead of polling. In a
+   * multi-instance / serverless deploy the event fires only on the instance that completed
+   * the order; a listener elsewhere won't hear it, so read `orders.retrieve(id)` (backed by a
+   * shared completed-order store) as the durable, cross-instance signal. A real outbound HTTP
+   * webhook is not built yet.
+   */
+  on(event: "order.settled", handler: (payload: { id: string }) => void): void {
+    const set = this.listeners.get(event) ?? new Set();
+    set.add(handler);
+    this.listeners.set(event, set);
+  }
+
+  private emit(event: string, payload: { id: string }): void {
+    for (const h of this.listeners.get(event) ?? []) {
+      try { h(payload); } catch (err) { console.error(`[credentagent] ${event} handler threw:`, err); }
+    }
   }
 
   /**
