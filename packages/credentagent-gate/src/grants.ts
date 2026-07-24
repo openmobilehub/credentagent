@@ -180,6 +180,14 @@ export class Grants {
     });
     await this.deps.store.write(id, { ...record, status: "authorized", intent, delegateJwk: priv });
   }
+
+  /** Called by the approve page's decline — pending → denied; every other state is a no-op
+   *  (fail-closed: an authorized grant is stopped by `revoke()`, never silently re-labelled). */
+  async _decline(id: string): Promise<void> {
+    const record = await this.deps.store.read(id);
+    if (!record || record.status !== "pending") return;
+    await this.deps.store.write(id, { ...record, status: "denied" });
+  }
 }
 
 /**

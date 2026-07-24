@@ -11,6 +11,7 @@ import { Orders, MemoryOrderStore, type CreatedOrder, type CompletedOrder } from
 import { serveOrders } from "./orders-serve.js";
 import { Webhooks } from "./webhooks.js";
 import { Grants, type GrantRecord } from "./grants.js";
+import { serveGrants } from "./grants-serve.js";
 import { buildCatalog } from "./delegated.js";
 import { MemoryRevocationStore } from "./ceremony/revocation.js";
 
@@ -49,6 +50,8 @@ export class CredentAgent {
   private mountedRoutes = false;
   // True once `orders.serve(app)` has wired the checkout (idempotent — one serve per client).
   private ordersServed = false;
+  // True once `grants.serve(app)` has wired the approve page (idempotent — one serve per client).
+  private grantsServed = false;
   // In-process credential registry (id → Credential), populated as `requirements()`
   // resolves policies — register-on-resolve, so a developer registers nothing (Principle
   // V). Injected into the ceremony context at `mount()` so the rails can serve a custom
@@ -139,6 +142,17 @@ export class CredentAgent {
       completeSpend: (record) => this.orders._complete(record),
       readSpend: (orderId) => completedStore.read(orderId),
       credentialRegistry: this.registry,
+      serve: (app) => {
+        if (this.grantsServed) return; // idempotent
+        serveGrants(app as Parameters<typeof serveGrants>[0], {
+          walletOrigin: this.walletOrigin,
+          store: grantStore,
+          authorize: (id) => this.grants._authorize(id),
+          decline: (id) => this.grants._decline(id),
+          requirements: (order, policy) => this.requirements(order, policy),
+        });
+        this.grantsServed = true;
+      },
     });
   }
 

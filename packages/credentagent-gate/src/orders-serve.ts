@@ -128,8 +128,9 @@ function toRenderOrder(o: CeremonyOrder): RenderOrder {
 
 /** An order is "gated" when its policy needs a ceremony — any blocking gate or payment
  *  authorize. Gated orders complete ONLY through the fail-closed rails; the instant-demo
- *  place path is refused for them (invariant 1 — enforced server-side, not by hiding a button). */
-function isGated(manifest: VerificationManifestEntry[]): boolean {
+ *  place path is refused for them (invariant 1 — enforced server-side, not by hiding a button).
+ *  Shared with grants-serve: a policy-gated GRANT is likewise never approvable by a button. */
+export function isGated(manifest: VerificationManifestEntry[]): boolean {
   return manifest.some((e) => e.effect === "gate" || e.effect === "authorize");
 }
 
