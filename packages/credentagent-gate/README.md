@@ -102,6 +102,50 @@ the age threshold are re-derived from the order you stored server-side — never
 (invariant 2), and a gated order can only complete through the wallet ceremony, never a shortcut
 (invariant 1). Runnable: [`examples/orders-checkout/`](https://github.com/openmobilehub/credentagent/tree/main/examples/orders-checkout).
 
+## Grants — approve a spending limit once, spend while the human is away
+
+An order needs the human every time. A **grant** needs them once: they approve a limit
+("up to $15 per purchase, $50 total, at this merchant") at the grant's `approveUrl`, and the
+agent then spends against it unattended — every spend re-priced from your catalog, capped,
+replay-safe, and revocable. Amounts are `Money` (`usd.dollars(50)`) — never a raw number.
+
+```ts
+const credentagent = new CredentAgent({ walletOrigin, catalog: { coffee: 4.5, beans: 14 } });
+
+// ── once, at startup ──────────────────────────────────────────────
+credentagent.grants.serve(app);                          // the approve page at each grant's approveUrl
+
+// ── the agent asks for authority — hand the link to the human ─────
+const grant = await credentagent.grants.create({
+  merchant: "corner-cafe", budget: usd.dollars(50), perSpend: usd.dollars(15), policy: [],
+});
+sendToUser(grant.approveUrl);                            // ONE approval; grant.status: "pending" → "authorized"
+
+// ── later, in a worker — human away ───────────────────────────────
+const g = await credentagent.grants.retrieve(grantId);   // rehydrates across processes
+if (g.status === "authorized") {
+  const s = await g.spend({ idempotencyKey: purchaseId, items: [{ sku: "coffee" }] });
+  if (s.ok) console.log(`spent ${s.amount}, ${s.remaining} left`);      // Money, not floats
+  else if (s.code === "budget-exceeded") { /* spent out — stop */ }
+}
+await g.revoke();                                        // kill switch — the very next spend refuses
+```
+
+`spend()` is one result **door**: `{ ok: true, amount, remaining, mandateBundle }` (with
+`replayed: true` when a retried `idempotencyKey` was answered once-charged) or `{ ok: false,
+code }` — `"budget-exceeded"`, `"per-spend-exceeded"`, `"revoked"`, `"not-authorized"`, or
+`"step-up"` (age-restricted and custom-gated items **never** complete on autopilot; a live
+ceremony is the only way). Completed spends fire `order.settled` and the webhook fan-out,
+exactly like human-present orders.
+
+> **Honesty:** a grant's trust level is **`server-issued-demo`** — the approval key is minted
+> by your server at the approve click, not by the user's wallet, and no real value moves. The
+> grant is the durable authority; the AP2 **Intent Mandate** it carries (`grant.intentMandate`,
+> dev-sealed) is where the wallet-custody increment swaps in real key-signing without changing
+> this surface. A grant whose `policy` names a credential renders its requirements but cannot
+> be approved from the demo button (403, fail-closed) until rails-backed approval lands.
+> Runnable: [`examples/grants-preapproved/`](https://github.com/openmobilehub/credentagent/tree/main/examples/grants-preapproved).
+
 ### Webhooks — tell a *different* service when an order settles
 
 `on("order.settled", …)` only fires in the process that settled the order. When fulfillment runs
