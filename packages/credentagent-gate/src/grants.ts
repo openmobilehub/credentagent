@@ -18,12 +18,17 @@
 // This is the ONE seam where Money converts to the repo's dollar-number amounts
 // (GateOrder / IntentBounds / catalog prices): `dollarsOf()` below. Nowhere else.
 
-import type { GateOrder, Step, VerificationManifestEntry } from "./types.js";
+import { webcrypto } from "node:crypto";
+import type { Credential, GateOrder, Step, VerificationManifestEntry } from "./types.js";
 import type { OrderStore, CompletedOrder } from "./orders.js";
 import type { CeremonyCatalog } from "./ceremony/types.js";
 import type { RevocationStore } from "./ceremony/revocation.js";
-import type { IntentBounds, DelegateJwk } from "./ceremony/mandate.js";
+import { sealIntent, signDraw, type IntentBounds, type DelegateJwk } from "./ceremony/mandate.js";
+import { completeOrder, type CompletedRecord } from "./ceremony/completion.js";
+import { MemoryVerificationStore } from "./store.js";
 import { usd, type Money } from "./money.js";
+
+const { subtle } = webcrypto;
 
 /** The delegate PRIVATE key as a JWK — server-held custody (trust_level "server-issued-demo").
  *  Unlike `DelegatedGate` (in-process, non-extractable key), a grant must rehydrate in a
@@ -108,6 +113,8 @@ export interface GrantsDeps {
   completeSpend: (record: CompletedOrder) => Promise<void>;
   /** Read a spend's completion (replay detection) — the orders completed store. */
   readSpend: (orderId: string) => Promise<CompletedOrder | undefined> | CompletedOrder | undefined;
+  /** The client's credential registry, so the spend path enforces custom gate()s (007/inv. 1). */
+  credentialRegistry?: ReadonlyMap<string, Credential>;
   /** Wire the approve page + rails onto an Express app — `grants.serve(app)` (set in client). */
   serve?: (app: unknown) => void;
 }
@@ -146,6 +153,32 @@ export class Grants {
   serve(app: unknown): void {
     if (!this.deps.serve) throw new Error("[credentagent] grants.serve(app) is not wired on this client.");
     this.deps.serve(app);
+  }
+
+  /** Called by the approve ceremony when the human approves — seals the AP2 Intent Mandate
+   *  (dev-sealed, trust_level "server-issued-demo"), mints the delegate key (server custody —
+   *  extractable, because a worker process rehydrates and spends later; see DelegatePrivateJwk),
+   *  and flips status to "authorized". Idempotent: only a PENDING grant seals; a re-POST or a
+   *  denied/revoked grant is a no-op (fail-closed — never re-seal, never resurrect). */
+  async _authorize(id: string): Promise<void> {
+    const record = await this.deps.store.read(id);
+    if (!record || record.status !== "pending") return;
+    const pair = await subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
+    const pub = await subtle.exportKey("jwk", pair.publicKey);
+    const priv = (await subtle.exportKey("jwk", pair.privateKey)) as DelegatePrivateJwk;
+    const delegate: DelegateJwk = { kty: "EC", crv: "P-256", x: pub.x!, y: pub.y! };
+    const intent = await sealIntent({
+      type: "credentagent.IntentBounds/v0",
+      ...(record.description ? { naturalLanguageDescription: record.description } : {}),
+      merchants: [record.merchant],
+      currency: record.currency,
+      maxAmount: record.perSpendDollars,
+      totalAmount: record.budgetDollars,
+      delegate,
+      presence: "delegated-demo",
+      trust_level: "server-issued-demo",
+    });
+    await this.deps.store.write(id, { ...record, status: "authorized", intent, delegateJwk: priv });
   }
 }
 
@@ -203,5 +236,110 @@ export class Grant {
   private requireRecord(): GrantRecord {
     if (!this.record) throw new Error(`[credentagent] grant ${this.missingId} not found.`);
     return this.record;
+  }
+
+  /** Budget headroom from the committed-draw ledger (the revocation store is the authority). */
+  private async remainingOf(record: GrantRecord): Promise<Money> {
+    if (!record.intent) return usd.dollars(record.budgetDollars);
+    const committed = await this.deps.revocation.priorDraws(record.intent.intentId);
+    return usd.dollars(record.budgetDollars - committed.reduce((sum, d) => sum + d.amount, 0));
+  }
+
+  /**
+   * Spend against the grant while the human is away. Refusals are DATA (`{ ok:false, code }`),
+   * never throws; a throw is a programming error (unknown sku, missing catalog config).
+   *
+   * Always re-reads the stored record — a stale handle can never bypass a revocation — and
+   * routes the completion through the SAME choke point human-present orders use, so
+   * `order.settled` and webhook fan-out fire for a delegated spend too.
+   */
+  async spend({ idempotencyKey, items }: { idempotencyKey: string; items: SpendItem[] }): Promise<SpendDoor> {
+    const record = await this.deps.store.read(this.id);
+    if (!record) return { ok: false, code: "not-found", remaining: usd.dollars(0), retryable: "terminal", trustLevel: TRUST_PENDING };
+    const trust = record.intent?.trust_level ?? TRUST_PENDING;
+    const remaining = await this.remainingOf(record);
+    if (record.status === "revoked") return { ok: false, code: "revoked", remaining, retryable: "terminal", trustLevel: trust };
+    if (record.status !== "authorized" || !record.intent || !record.delegateJwk) {
+      // pending or denied — the human has not approved; surface the approve link path.
+      return { ok: false, code: "not-authorized", remaining, retryable: "needs-human", trustLevel: trust };
+    }
+    if (!this.deps.catalog) {
+      throw new Error(
+        "[credentagent] grants: no catalog configured. Pass `new CredentAgent({ catalog: { sku: price, ... } })` — spends are re-priced server-side from it (a caller never passes an amount).",
+      );
+    }
+
+    // The order id is DERIVED from the caller's idempotency key, namespaced by the grant
+    // (invariant 4 — grant B must never read grant A's completion). A retry with the same key
+    // is answered from the completed record — one draw, charged once, `replayed: true`.
+    const orderId = `${this.id}-${idempotencyKey}`;
+    const prior = await this.deps.readSpend(orderId);
+    if (prior) {
+      return {
+        ok: true,
+        amount: usd.dollars(prior.amount ?? 0),
+        remaining,
+        replayed: true,
+        authorization: "delegated",
+        trustLevel: trust,
+        mandateBundle: (prior.mandateBundle as { intentMandate: IntentBounds; draw: unknown } | undefined) ?? { intentMandate: record.intent, draw: undefined },
+      };
+    }
+
+    const order = this.deps.catalog.createOrder(
+      items.map((i) => ({ productId: i.sku, quantity: i.qty ?? 1 })),
+      orderId,
+    );
+    const key = await subtle.importKey("jwk", record.delegateJwk as webcrypto.JsonWebKey, { name: "ECDSA", namedCurve: "P-256" }, false, ["sign"]);
+    const draw = await signDraw(
+      {
+        type: "credentagent.Draw/v0",
+        intentId: record.intent.intentId,
+        paymentMandateId: idempotencyKey,
+        merchant: record.merchant,
+        amount: order.total,
+        currency: record.currency,
+        pspTransactionId: idempotencyKey,
+      },
+      key,
+    );
+    const mandateBundle = { intentMandate: record.intent, draw };
+    // The records seam forwards to `orders._complete` — the one completion choke point —
+    // persisting the bundle so a later replay echoes it.
+    const records = {
+      read: async (oid: string): Promise<CompletedRecord | undefined> => {
+        const done = await this.deps.readSpend(oid);
+        if (!done) return undefined;
+        return { orderId: oid, mandateId: done.txId ?? "", amount: done.amount ?? 0, currency: done.currency ?? "", method: done.method ?? "", gates: [], completedAt: done.completedAt ?? "" };
+      },
+      write: async (r: CompletedRecord): Promise<void> => {
+        await this.deps.completeSpend({
+          orderId: r.orderId,
+          amount: r.amount,
+          currency: r.currency,
+          method: r.method,
+          completedAt: r.completedAt,
+          mandateBundle,
+        });
+      },
+    };
+    const res = await completeOrder(
+      { order, mandateId: idempotencyKey, amount: order.total, currency: record.currency, method: "delegated", gates: [], draw: { intent: record.intent, draw } },
+      {
+        catalog: this.deps.catalog,
+        revocation: this.deps.revocation,
+        verificationStore: new MemoryVerificationStore(), // draws carry no live-verification state
+        records,
+        ...(this.deps.credentialRegistry ? { credentialRegistry: this.deps.credentialRegistry } : {}),
+      },
+    );
+    const after = await this.remainingOf(record);
+    if (res.completed) {
+      return { ok: true, amount: usd.dollars(order.total), remaining: after, authorization: "delegated", trustLevel: trust, mandateBundle };
+    }
+    const refusal = res.refusals?.[0];
+    // The spec-009 door names for the two budget codes; everything else passes through.
+    const code = refusal?.code === "over-total" ? "budget-exceeded" : refusal?.code === "over-cap" ? "per-spend-exceeded" : (refusal?.code ?? "refused");
+    return { ok: false, code, remaining: after, ...(refusal?.retryable ? { retryable: refusal.retryable } : {}), trustLevel: trust };
   }
 }

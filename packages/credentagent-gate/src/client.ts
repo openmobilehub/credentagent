@@ -138,6 +138,7 @@ export class CredentAgent {
       requirements: (order, policy) => this.requirements(order, policy),
       completeSpend: (record) => this.orders._complete(record),
       readSpend: (orderId) => completedStore.read(orderId),
+      credentialRegistry: this.registry,
     });
   }
 
