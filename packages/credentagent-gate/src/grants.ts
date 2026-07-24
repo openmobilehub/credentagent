@@ -238,6 +238,22 @@ export class Grant {
     return this.record;
   }
 
+  /**
+   * Revoke the grant — the kill switch. Writes BOTH authorities: the revocation store
+   * (what the draw engine checks — a stale handle can never spend past it) AND the stored
+   * status (what retrieve()/UIs read). A revoked grant is never resurrected: `_authorize`
+   * only seals a PENDING record.
+   */
+  async revoke(): Promise<void> {
+    const record = await this.deps.store.read(this.id);
+    if (!record) return;
+    // The intent may not exist yet (revoking a pending grant) — the status write alone
+    // covers that case; the ledger write covers the authorized case.
+    if (record.intent) await this.deps.revocation.revoke(record.intent.intentId);
+    await this.deps.store.write(this.id, { ...record, status: "revoked" });
+    this.constructorStatus = "revoked";
+  }
+
   /** Budget headroom from the committed-draw ledger (the revocation store is the authority). */
   private async remainingOf(record: GrantRecord): Promise<Money> {
     if (!record.intent) return usd.dollars(record.budgetDollars);

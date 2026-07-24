@@ -182,3 +182,31 @@ describe("grant.spend() — the delegated draw door", () => {
     await expect(g.spend({ idempotencyKey: "p1", items: [{ sku: "coffee" }] })).rejects.toThrow(/catalog/);
   });
 });
+
+describe("grant.revoke() — the kill switch", () => {
+  // BYPASS: revoke() writes two INDEPENDENT refusal paths — the stored status (what spend's
+  // own gate + retrieve()/UIs read) and the revocation ledger (what the draw engine checks,
+  // so even a process with a stale record refuses). Each alone still refuses the spend;
+  // delete BOTH and the spend assertion goes red, delete the status write and the
+  // status assertion goes red.
+  it("revoke() flips status AND the very next spend refuses — fail-closed", async () => {
+    const ca = client();
+    const g = await authorizedGrant(ca);
+    expect((await g.spend({ idempotencyKey: "p1", items: [{ sku: "coffee" }] })).ok).toBe(true);
+    await g.revoke();
+    expect((await ca.grants.retrieve(g.id)).status).toBe("revoked");
+    const s = await g.spend({ idempotencyKey: "p2", items: [{ sku: "coffee" }] }); // STALE handle — still refused
+    expect(s.ok).toBe(false);
+    if (!s.ok) expect(s.code).toBe("revoked");
+  });
+
+  it("a pending grant can be revoked; authorize afterwards is a no-op (never resurrect)", async () => {
+    const ca = client();
+    const { id } = await ca.grants.create({ merchant: "utopia", budget: usd.dollars(40), perSpend: usd.dollars(20), policy: [] });
+    await (await ca.grants.retrieve(id)).revoke();
+    await ca.grants._authorize(id); // must NOT seal a revoked grant
+    const g = await ca.grants.retrieve(id);
+    expect(g.status).toBe("revoked");
+    expect(g.intentMandate).toBeUndefined();
+  });
+});
