@@ -26,6 +26,7 @@ Each is runnable against the two `@openmobilehub/credentagent-*` packages (build
 - [`stateless-orders/`](stateless-orders/) — the created order rides in a signed Cart Mandate on the link
 
 **Human-not-present** (spec 009 · #104)
+- [`hnp-on-claude/`](hnp-on-claude/) — connect the WHOLE store (checkout + grants) to the Claude app: tunnel it, add /mcp as a custom connector, approve a grant once, then watch Claude spend within your bounds
 - [`grants-proto/`](grants-proto/) — the two-pane `credentagent.grants` demo (REAL API): authorize once, watch the agent's spend loop draw the budget down, revoke
 - [`hnp-draws/`](hnp-draws/) — the lower-level `DelegatedGate` seams reference (superseded for everyday use by `grants` + the demo hub)
 
