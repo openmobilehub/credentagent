@@ -77,12 +77,26 @@ typo is flagged. (Shipped in the orders door; the grants/webhook refusals were a
 
 ---
 
+### 6. A delegated grant can't buy what you didn't allow — and never age-restricted goods
+
+**Guarantee:** a pre-approved grant ("$100, $30/purchase, Beverages only") is enforced by the
+server on every spend: the wrong item refuses `not-allowed`, an unapproved grant refuses
+`not-authorized`, over-cap/over-budget refuse, a revoked grant refuses — and **age-restricted goods
+always refuse** (`step-up`): buying wine needs a live human, no matter the budget.
+
+```bash
+npm run test --workspace=@openmobilehub/credentagent-gate -- run src/grants.test.ts
+```
+**You should see:** 9 passed — including the two BYPASS tests (each proven to fail when its check is
+removed). Or just click through **Section 3 of the hub** and watch every refusal land in the feed.
+
 ## The short version
 
 - **Nothing completes without the proof it requires** (age, payment) — enforced on the server (#1).
 - **You can't change the price from the outside** (#2).
 - **Only genuinely-signed notifications are accepted** (#3), delivered reliably and safe to retry (#4).
 - **The API tells you *why* in typed terms, not loose strings** (#5).
+- **A grant bounds what, how much, and for whom — and age never delegates** (#6).
 
 Each of these is pinned by a test that goes red if the protection is deleted — that's the difference
 between "it looks like it works" and "it's proven to work."

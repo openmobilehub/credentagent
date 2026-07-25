@@ -25,6 +25,13 @@ const broadcast = (obj) => { const line = `data: ${JSON.stringify(obj)}\n\n`; fo
 const credentagent = new CredentAgent({
   walletOrigin: `http://localhost:${PORT}`,
   webhooks: { endpoints: [{ url: `http://localhost:${PORT}/hooks`, secret: SECRET }] },
+  // The priced catalog (dollars) — grants price + bound delegated spends from it, never the caller.
+  catalog: {
+    coffee: { price: 18, category: "Beverages" },
+    "espresso-machine": { price: 45, category: "Beverages" },
+    wine: { price: 21, minAge: 21, category: "Beverages" },
+    headphones: { price: 40, category: "Electronics" },
+  },
 });
 credentagent.orders.serve(app);
 
@@ -54,6 +61,46 @@ app.post("/demo/buy-wine", async (_req, res) => res.json(await credentagent.orde
   order: { id: "", total: 21, currency: "USD", lines: [{ id: "wine", name: "Bottle of wine", quantity: 1, unitPrice: 21, minimumAge: 21 }] },
   policy: [required(age.over(21)), required(payment.in("usd"))], // gated → shows the 21+ age gate
 })));
+
+// ── grants — pre-approve once, the agent spends while you're away ──────────────
+// The REAL credentagent.grants API: create (pending) → YOU approve/deny (the demo stand-in for
+// the wallet ceremony) → the agent spends within the sealed bounds → revoke kills it. Every
+// spend outcome is broadcast to the same live feed, so refusals are as visible as successes.
+const grantView = async (id) => {
+  const g = await credentagent.grants.retrieve(id);
+  return g && { id: g.id, status: g.status, budget: g.budget, perSpend: g.perSpend, allow: g.allow };
+};
+app.post("/demo/grants/create", async (_req, res) => {
+  const g = await credentagent.grants.create({
+    merchant: "utopia",
+    budget: 100,
+    perSpend: 30,
+    allow: { categories: ["Beverages"] },
+    description: "Up to $100 at Utopia, $30/purchase, Beverages only",
+  });
+  res.json(await grantView(g.id));
+});
+app.post("/demo/grants/:id/approve", async (req, res) => {
+  await credentagent.grants._authorize(req.params.id);
+  res.json(await grantView(req.params.id));
+});
+app.post("/demo/grants/:id/deny", async (req, res) => {
+  await credentagent.grants._deny(req.params.id);
+  res.json(await grantView(req.params.id));
+});
+app.post("/demo/grants/:id/spend", async (req, res) => {
+  const g = await credentagent.grants.retrieve(req.params.id);
+  if (!g) return res.status(404).json({ error: "unknown grant" });
+  const sku = String(req.body?.sku ?? "coffee");
+  const s = await g.spend({ idempotencyKey: `hub-${globalThis.crypto.randomUUID().slice(0, 8)}`, items: [{ sku }] });
+  broadcast({ kind: "grant", sku, ...s }); // ✓ and ✗ alike land in the live feed
+  res.json({ ...s, status: g.status });
+});
+app.post("/demo/grants/:id/revoke", async (req, res) => {
+  const g = await credentagent.grants.retrieve(req.params.id);
+  if (g) await g.revoke();
+  res.json(await grantView(req.params.id));
+});
 
 app.get("/", (_req, res) => res.type("html").send(PAGE));
 
@@ -103,7 +150,34 @@ const PAGE = /* html */ `<!doctype html><html lang="en"><head><meta charset="utf
     <div id="feed"><span class="empty">Waiting for a settled order… complete a checkout above.</span></div>
   </div>
 
-  <p class="foot">🔒 <strong>Demo, not a safety control.</strong> The signature is real HMAC-SHA256, but the wallet trust level is <code>presence-only-demo</code> (no issuer anchor yet) and <strong>no real money moves</strong>.</p>
+  <div class="card">
+    <h2><span class="n">3</span>Grants — the agent buys <em>while you're away</em></h2>
+    <p>You approve <strong>once</strong>: <em>"up to $100 at Utopia, max $30 per purchase, Beverages only."</em> Then the agent spends against it without you — and every rule is enforced by the server. Try to break it.</p>
+    <div id="grant-setup" class="row">
+      <button onclick="grantCreate()">Pre-approve $100 · $30/purchase · Beverages →</button>
+    </div>
+    <div id="grant-panel" style="display:none">
+      <p id="grant-status" style="margin:4px 0 12px"></p>
+      <div id="grant-pending" class="row" style="display:none">
+        <button onclick="grantApprove()">✓ Approve (you're the human)</button>
+        <button class="ghost" onclick="grantDeny()">✗ Deny</button>
+      </div>
+      <div id="grant-live" style="display:none">
+        <p style="margin:2px 0 8px">Now play the <em>agent</em> — you're away; the server decides:</p>
+        <div class="row">
+          <button class="ghost" onclick="grantSpend('coffee')">☕ Coffee $18 <small>(allowed)</small></button>
+          <button class="ghost" onclick="grantSpend('headphones')">🎧 Headphones $40 <small>(not Beverages)</small></button>
+          <button class="ghost" onclick="grantSpend('espresso-machine')">⚙️ Espresso machine $45 <small>(over $30 cap)</small></button>
+          <button class="ghost" onclick="grantSpend('wine')">🍷 Wine $21 <small>(21+ — needs a human)</small></button>
+        </div>
+        <div class="row" style="margin-top:10px">
+          <button class="ghost" style="border-color:var(--bad); color:var(--bad)" onclick="grantRevoke()">Revoke the grant</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <p class="foot">🔒 <strong>Demo, not a safety control.</strong> The signature is real HMAC-SHA256, but the wallet trust level is <code>presence-only-demo</code> (no issuer anchor yet), the grant approval is a demo stand-in for the wallet ceremony (<code>delegated-demo</code>), and <strong>no real money moves</strong>.</p>
 </div>
 <script>
   async function start(kind){
@@ -112,15 +186,48 @@ const PAGE = /* html */ `<!doctype html><html lang="en"><head><meta charset="utf
     window.open(approveUrl, '_blank');            // the checkout page opens in a new tab
   }
   const feed = document.getElementById('feed');
+  const CODE_TEXT = {
+    'not-allowed': 'outside the allowed items (Beverages only)',
+    'per-spend-exceeded': 'over the $30 per-purchase cap',
+    'budget-exceeded': 'the $100 budget is spent out',
+    'step-up': 'age-restricted — the agent must hand back to a human',
+    'revoked': 'the grant was revoked',
+    'not-authorized': 'the grant was never approved',
+    'wrong-merchant': 'outside the granted merchant',
+  };
   new EventSource('/events').onmessage = (m) => {
     const e = JSON.parse(m.data);
     if (feed.querySelector('.empty')) feed.innerHTML = '';
     const div = document.createElement('div');
-    div.className = 'ev' + (e.verified ? '' : ' bad');
-    div.innerHTML = e.verified
-      ? '✓ <strong>' + e.type + '</strong> — signature verified · <span class="k">order</span> ' + e.order.orderId
-        + ' · <span class="k">$</span>' + (e.order.amount ?? '?') + ' · <span class="k">via</span> ' + (e.order.method ?? 'demo')
-      : '✗ <strong>rejected</strong> — ' + e.reason;
+    if (e.kind === 'grant') {
+      div.className = 'ev' + (e.ok ? '' : ' bad');
+      div.innerHTML = e.ok
+        ? '✓ <strong>agent bought ' + e.sku + '</strong> — $' + e.amount + ' · <span class="k">budget left</span> $' + e.remaining + ' · <span class="k">authorization</span> delegated'
+        : '✗ <strong>agent tried ' + e.sku + '</strong> — refused: ' + (CODE_TEXT[e.code] ?? e.code) + ' <span class="k">(' + e.code + ')</span>';
+    } else {
+      div.className = 'ev' + (e.verified ? '' : ' bad');
+      div.innerHTML = e.verified
+        ? '✓ <strong>' + e.type + '</strong> — signature verified · <span class="k">order</span> ' + e.order.orderId
+          + ' · <span class="k">$</span>' + (e.order.amount ?? '?') + ' · <span class="k">via</span> ' + (e.order.method ?? 'demo')
+        : '✗ <strong>rejected</strong> — ' + e.reason;
+    }
     feed.prepend(div);
   };
+
+  // ── grants ──
+  let grantId = null;
+  const $ = (id) => document.getElementById(id);
+  function grantUi(g){
+    $('grant-setup').style.display = 'none';
+    $('grant-panel').style.display = 'block';
+    const chip = { pending:'⏳ pending — waiting for YOUR approval', authorized:'✅ authorized — the agent may spend', denied:'⛔ denied — terminal; the agent never spends', revoked:'🚫 revoked — the very next spend is refused' }[g.status];
+    $('grant-status').innerHTML = '<strong>Grant ' + g.id.slice(0,14) + '…</strong> · ' + chip;
+    $('grant-pending').style.display = g.status === 'pending' ? 'flex' : 'none';
+    $('grant-live').style.display = (g.status === 'authorized' || g.status === 'revoked') ? 'block' : 'none';
+  }
+  async function grantCreate(){ const g = await (await fetch('/demo/grants/create',{method:'POST'})).json(); grantId = g.id; grantUi(g); }
+  async function grantApprove(){ grantUi(await (await fetch('/demo/grants/'+grantId+'/approve',{method:'POST'})).json()); }
+  async function grantDeny(){ grantUi(await (await fetch('/demo/grants/'+grantId+'/deny',{method:'POST'})).json()); }
+  async function grantSpend(sku){ await fetch('/demo/grants/'+grantId+'/spend',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sku})}); }
+  async function grantRevoke(){ grantUi(await (await fetch('/demo/grants/'+grantId+'/revoke',{method:'POST'})).json()); }
 </script></body></html>`;

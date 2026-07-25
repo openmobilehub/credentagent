@@ -7,6 +7,7 @@
 
 import type { OrderStore, CreatedOrder, CompletedOrder } from "./orders.js";
 import type { WebhookOptions } from "./webhooks.js";
+import type { CatalogEntry } from "./delegated.js";
 
 // ── DCQL (what to ask the wallet) ──────────────────────────────────────────
 
@@ -247,4 +248,11 @@ export interface CredentAgentOptions {
    * in-process `on("order.settled")` listener can't provide. Omit ⇒ no delivery (additive, zero-cost).
    */
   webhooks?: WebhookOptions;
+  /**
+   * The priced catalog (dollars) the `grants` resource prices + bounds delegated spends from —
+   * the ONE price source (invariant 2: a caller never passes an amount). Entries may carry
+   * `minAge` (age-restricted → non-delegable) and `category` (feeds a grant's `allow` bounds).
+   * Omit if you don't use `grants`.
+   */
+  catalog?: Record<string, CatalogEntry>;
 }
