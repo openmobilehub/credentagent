@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { CredentAgent } from "./client.js";
 import { age, payment, required } from "./credentials.js";
-import type { CreatedOrder, OrderStore } from "./orders.js";
+import type { CreatedOrder, OrderStore, OrderDoorCode } from "./orders.js";
 
 // Amounts are dollars, matching the checkout page's formatter ($21.00 — not minor units).
 const anOrder = () => ({
@@ -81,8 +81,15 @@ describe("credentagent.orders", () => {
     expect(seen).toEqual([id]);
   });
 
-  it("retrieve of an unknown id is a typed refusal, not a throw", async () => {
+  it("retrieve of an unknown id is a typed refusal with the typed OrderDoorCode, not a throw", async () => {
     const ca = new CredentAgent({ walletOrigin: "https://shop.example" });
-    expect(await ca.orders.retrieve("ord_nope")).toMatchObject({ ok: false, code: "not-found" });
+    const res = await ca.orders.retrieve("ord_nope");
+    expect(res).toMatchObject({ ok: false, code: "not-found" });
+    // `code` is the typed union OrderDoorCode (not `string`); the compile-time guard that keeps it
+    // narrow lives in orders.ts (revert it to `string` and the build fails). Here we pin the value.
+    if (!res.ok && "code" in res) {
+      const code: OrderDoorCode = res.code; // narrows to the union — a `string` would need a cast
+      expect(code).toBe("not-found");
+    }
   });
 });

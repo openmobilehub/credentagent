@@ -26,7 +26,7 @@ export { MemoryVerificationStore } from "./store.js";
 // `await credentagent.orders.create({ order, policy })` → { id, approveUrl, manifest };
 // `credentagent.orders.retrieve(id)` → the door (ok | pending+approveUrl | reason).
 export { Orders, MemoryOrderStore } from "./orders.js";
-export type { OrderStore, CreatedOrder, CompletedOrder, OrderDoor } from "./orders.js";
+export type { OrderStore, CreatedOrder, CompletedOrder, OrderDoor, OrderDoorCode } from "./orders.js";
 
 // ── Webhooks (spec 010) — the REAL HTTP completion signal ───────────────────
 // SEND: `new CredentAgent({ webhooks: { endpoints: [{ url, secret }] } })` → every settled order
