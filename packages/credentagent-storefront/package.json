@@ -1,7 +1,7 @@
 {
   "name": "@openmobilehub/credentagent-storefront",
-  "version": "0.2.1",
-  "description": "The agentic storefront core — the cart/pricing/order model for an MCP shopping app, catalog-injected (own-the-code). Pairs with @openmobilehub/credentagent-gate.",
+  "version": "0.3.0",
+  "description": "The agentic storefront core \u2014 the cart/pricing/order model for an MCP shopping app, catalog-injected (own-the-code). Pairs with @openmobilehub/credentagent-gate.",
   "license": "Apache-2.0",
   "author": "Open Mobile Hub (Linux Foundation)",
   "homepage": "https://github.com/openmobilehub/mcp-apps-shopping-demo/tree/main/packages/credentagent-storefront#readme",
@@ -51,7 +51,7 @@
   "dependencies": {
     "@modelcontextprotocol/ext-apps": "^1.0.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "@openmobilehub/credentagent-gate": "^0.2.0",
+    "@openmobilehub/credentagent-gate": "^0.3.0",
     "express": "^5.1.0",
     "zod": "^4.1.13"
   },
