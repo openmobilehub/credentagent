@@ -99,4 +99,81 @@ describe("credentagent.grants — the sealed bounds enforce", () => {
     expect(first).toMatchObject({ ok: true, remaining: 82, replayed: false });
     expect(again).toMatchObject({ ok: true, remaining: 82, replayed: true }); // remaining unchanged — charged once
   });
+
+  // BYPASS (#112 P2 — refusal replay): a REFUSED key must replay the refusal, never be repurposed.
+  // Revert the cache check to successes-only and this goes red: the refused key buys the coffee.
+  it("BYPASS: a refused idempotency key cannot be repurposed with a cheaper item", async () => {
+    const g = await authorizedGrant(client());
+    const refused = await g.spend({ idempotencyKey: "k", items: [{ sku: "espresso-machine" }] }); // $45 > $30 cap
+    expect(refused).toMatchObject({ ok: false, code: "per-spend-exceeded" });
+    const reused = await g.spend({ idempotencyKey: "k", items: [{ sku: "coffee" }] }); // same key, cheaper item
+    expect(reused).toMatchObject({ ok: false, code: "per-spend-exceeded", replayed: true }); // the ORIGINAL refusal
+    // …and the budget was never touched by either call:
+    expect(await g.spend({ idempotencyKey: "k2", items: [{ sku: "coffee" }] })).toMatchObject({ ok: true, remaining: 82 });
+  });
+
+  // BYPASS (#112 P1 — sealed bounds are immutable): mutating grant.allow after approval must not
+  // widen enforcement. Remove the deepFreeze snapshot and this goes red: the push succeeds and
+  // headphones — outside what the human approved — get bought.
+  it("BYPASS: mutating grant.allow after approval cannot widen the sealed bounds", async () => {
+    const g = await authorizedGrant(client(), { categories: ["Beverages"] });
+    expect(() => g.allow!.categories!.push("Electronics")).toThrow(); // frozen — the mutation itself fails
+    const s = await g.spend({ idempotencyKey: "m1", items: [{ sku: "headphones" }] });
+    expect(s).toMatchObject({ ok: false, code: "not-allowed" }); // …and enforcement is unchanged
+  });
+
+  it("a multi-item or empty spend refuses invalid-request — no item is silently dropped (#112 P2)", async () => {
+    const g = await authorizedGrant(client());
+    expect(await g.spend({ idempotencyKey: "x1", items: [{ sku: "coffee" }, { sku: "wine" }] })).toMatchObject({ ok: false, code: "invalid-request" });
+    expect(await g.spend({ idempotencyKey: "x2", items: [] })).toMatchObject({ ok: false, code: "invalid-request" });
+    // invalid-request does NOT consume the key — a corrected retry proceeds:
+    expect(await g.spend({ idempotencyKey: "x1", items: [{ sku: "coffee" }] })).toMatchObject({ ok: true });
+  });
+
+  it("a zero-qty spend refuses invalid-amount — never misreported as revoked (#112 P2)", async () => {
+    const g = await authorizedGrant(client());
+    const s = await g.spend({ idempotencyKey: "z1", items: [{ sku: "coffee", qty: 0 }] });
+    expect(s).toMatchObject({ ok: false, code: "invalid-amount" });
+    expect((await g.spend({ idempotencyKey: "z2", items: [{ sku: "coffee" }] })).ok).toBe(true); // still authorized
+  });
+});
+
+describe("credentagent.grants — the approve page (grants.serve, #112 P1)", () => {
+  function fakeApp() {
+    const get = new Map<string, Function>();
+    const post = new Map<string, Function>();
+    return { get(p: string, ...h: unknown[]) { get.set(p, h[h.length - 1] as Function); }, post(p: string, ...h: unknown[]) { post.set(p, h[h.length - 1] as Function); }, _get: get, _post: post };
+  }
+  function fakeRes() {
+    const r: any = { _status: 200, _body: "", _redirect: null };
+    r.status = (c: number) => { r._status = c; return r; };
+    r.type = () => r;
+    r.send = (b: string) => { r._body = b; return r; };
+    r.redirect = (c: number, url: string) => { r._redirect = { c, url }; };
+    return r;
+  }
+
+  it("approveUrl serves a real page; POST approve authorizes; deny denies; unknown 404s", async () => {
+    const ca = client();
+    const app = fakeApp();
+    ca.grants.serve(app);
+    const g = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30, allow: { categories: ["Beverages"] } });
+
+    let res = fakeRes();
+    await app._get.get("/credentagent/grants/:id")!({ params: { id: g.id } }, res);
+    expect(res._status).toBe(200);
+    expect(res._body).toContain("Approve"); // the pending page offers the choice
+    expect(res._body).toContain("$100");
+
+    await app._post.get("/credentagent/grants/:id/approve")!({ params: { id: g.id } }, fakeRes());
+    expect((await ca.grants.retrieve(g.id))!.status).toBe("authorized");
+
+    const g2 = await ca.grants.create({ merchant: "utopia", budget: 50, perSpend: 10 });
+    await app._post.get("/credentagent/grants/:id/deny")!({ params: { id: g2.id } }, fakeRes());
+    expect((await ca.grants.retrieve(g2.id))!.status).toBe("denied");
+
+    res = fakeRes();
+    await app._get.get("/credentagent/grants/:id")!({ params: { id: "grant_nope" } }, res);
+    expect(res._status).toBe(404);
+  });
 });

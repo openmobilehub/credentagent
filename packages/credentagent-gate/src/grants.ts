@@ -16,27 +16,38 @@
 // key-signing ceremony is the roadmap (#71/#14); it will call the SAME _authorize seam.
 
 import { DelegatedGate, DelegatedGrant, type CatalogEntry } from "./delegated.js";
+import { serveGrants, type GrantsApp } from "./grants-serve.js";
 
 /** Why a grant operation refused — a TYPED union (never `string`; #95 review). */
 export type GrantDoorCode =
   | "not-authorized" // the grant is pending / denied — the human never approved it
   | "not-allowed" // the item is outside the grant's `allow` bounds (what, not how much)
+  | "invalid-request" // malformed spend input (e.g. not exactly one item) — the key is NOT consumed
+  | "invalid-amount" // the priced amount is not a finite positive number (e.g. qty 0 / negative)
   | "per-spend-exceeded" // this one purchase is over the per-spend cap (engine: over-cap)
   | "budget-exceeded" // the cumulative budget is spent out (engine: over-total)
   | "wrong-merchant" // outside the granted merchant scope (engine: out-of-scope)
   | "step-up" // needs a live human — e.g. age-restricted goods are NON-delegable
   | "revoked" // the grant was revoked; nothing spends against it again
-  | "expired"; // the grant's validity window passed
+  | "expired" // the grant's validity window passed (or hasn't started)
+  | "refused"; // an internal engine refusal (integrity class) — terminal; never a specific lie
 
-/** Engine RefusalCode → the door's vocabulary (the proto's validated mapping, now shipped). */
+/** Engine RefusalCode → the door's vocabulary. EVERY engine code is mapped deliberately
+ *  (refusals.ts documents that surfaces may coarsen); the integrity class — signature /
+ *  bounds-tampered / intent-mismatch / currency-mismatch / replay / revocation-unavailable,
+ *  unreachable by design through this facade — coarsens to the honest catch-all "refused"
+ *  rather than misreporting a specific cause (a P2 on #112: unknown ≠ "revoked"). */
 const CODE_MAP: Record<string, GrantDoorCode> = {
+  "invalid-amount": "invalid-amount",
   "over-cap": "per-spend-exceeded",
   "over-total": "budget-exceeded",
   "out-of-scope": "wrong-merchant",
   "step-up": "step-up",
+  "unpermitted-presentment": "step-up", // also "a live human must present it"
   "revoked": "revoked",
   "consumed": "revoked",
   "expired": "expired",
+  "not-yet-valid": "expired",
 };
 
 /** Bound WHAT the agent may buy (not just how much): explicit SKUs and/or catalog categories. */
@@ -60,10 +71,12 @@ export interface CreateGrantOptions {
 
 export type GrantStatus = "pending" | "authorized" | "denied" | "revoked";
 
-/** The one spend door (spec 009 FR-003 shape). */
+/** The one spend door (spec 009 FR-003 shape). A retried idempotency key replays the ORIGINAL
+ *  outcome — success OR refusal (`replayed: true` on both) — so a key can never be repurposed
+ *  with a different item after a refusal (a P2 on #112). */
 export type SpendDoor =
   | { ok: true; amount: number; remaining: number; replayed: boolean; authorization: "delegated"; delegationId?: string }
-  | { ok: false; code: GrantDoorCode; remaining?: number; retryable?: string };
+  | { ok: false; code: GrantDoorCode; remaining?: number; retryable?: string; replayed?: boolean };
 
 export interface SpendItems {
   /** Durable per-purchase key — a safe retry replays the SAME outcome (`replayed: true`). */
@@ -90,9 +103,19 @@ export interface GrantsDeps {
 
 const genGrantId = (): string => `grant_${globalThis.crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
 
+/** Recursively freeze a plain-data object (the sealed grant bounds — arrays included). */
+function deepFreeze<T>(value: T): T {
+  if (value && typeof value === "object") {
+    for (const v of Object.values(value as Record<string, unknown>)) deepFreeze(v);
+    Object.freeze(value);
+  }
+  return value;
+}
+
 export class Grants {
   private readonly records = new Map<string, GrantRecord>();
   private gate?: DelegatedGate;
+  private served = false;
 
   constructor(private readonly deps: GrantsDeps) {}
 
@@ -106,11 +129,26 @@ export class Grants {
     return this.gate;
   }
 
+  /**
+   * Serve the approve/deny page at each grant's `approveUrl` (`/credentagent/grants/:id`) —
+   * so the documented create-and-send-the-link flow actually works. Idempotent per instance.
+   * The page is the demo stand-in for the wallet ceremony; it calls the same seams (#71).
+   */
+  serve(app: unknown): void {
+    if (this.served) return;
+    serveGrants(app as GrantsApp, this);
+    this.served = true;
+  }
+
   /** Open a grant awaiting the human's one-time approval. Returns immediately (status "pending"). */
   async create(opts: CreateGrantOptions): Promise<Grant> {
     this.engineGate(); // fail fast on a missing catalog at create, not first spend
     const id = genGrantId();
-    const rec: GrantRecord = { id, status: "pending", opts, cache: new Map() };
+    // SNAPSHOT + FREEZE the bounds at create (a P1 on #112): the record and the exposed handle
+    // share this immutable copy, so neither a caller mutating `grant.allow` nor the original
+    // options object can widen what the human approved after the fact.
+    const sealed: CreateGrantOptions = deepFreeze(structuredClone(opts));
+    const rec: GrantRecord = { id, status: "pending", opts: sealed, cache: new Map() };
     this.records.set(id, rec);
     return this.view(rec);
   }
@@ -164,26 +202,38 @@ export class Grants {
 
   private view(rec: GrantRecord): Grant {
     const spend = async ({ idempotencyKey, items }: SpendItems): Promise<SpendDoor> => {
-      // Idempotent replay FIRST — a safe retry echoes the original outcome, charging nothing twice.
+      // Malformed input refuses BEFORE the key is consulted or consumed (P2 on #112): the engine
+      // prices exactly one item, so a multi-item array must not silently drop items past the first.
+      if (!Array.isArray(items) || items.length !== 1) return { ok: false, code: "invalid-request" };
+
+      // Idempotent replay FIRST — a safe retry echoes the original outcome, SUCCESS OR REFUSAL
+      // (P2 on #112: replaying only successes let a refused key be repurposed with a cheaper item).
       const cached = rec.cache.get(idempotencyKey);
-      if (cached?.ok) return { ...cached, replayed: true };
+      if (cached) return { ...cached, replayed: true };
 
       // Status gates the spend (FR-007): only an authorized grant spends. Fail-closed —
       // pending/denied never reach the engine; revoked is ALSO re-checked by the engine's
-      // ledger at settle (revoke-wins, even for an in-flight spend).
+      // ledger at settle (revoke-wins, even for an in-flight spend). Deliberately UNCACHED:
+      // status legitimately transitions (pending → authorized), so a retry after approval
+      // must proceed — unlike engine/bounds refusals, which are final for that key.
       if (rec.status !== "authorized" || !rec.engine) {
         return { ok: false, code: rec.status === "revoked" ? "revoked" : "not-authorized" };
       }
 
       // The `allow` bounds — WHAT may be bought (invariant 1: enforced here, server-side,
-      // before any engine work; the sealed caps then bound HOW MUCH).
+      // before any engine work; the sealed caps then bound HOW MUCH). Refusal is cached like
+      // any engine outcome — a refused key can't be re-tried with a different item.
       const { sku, qty = 1 } = items[0];
-      if (!this.allowed(rec, sku)) return { ok: false, code: "not-allowed" };
+      if (!this.allowed(rec, sku)) {
+        const refusal: SpendDoor = { ok: false, code: "not-allowed" };
+        rec.cache.set(idempotencyKey, refusal);
+        return refusal;
+      }
 
       const r = await rec.engine.spend({ idempotencyKey, item: sku, quantity: qty });
       const door: SpendDoor = r.ok
         ? { ok: true, amount: r.amount, remaining: r.remaining, replayed: false, authorization: "delegated", ...(r.delegationId ? { delegationId: r.delegationId } : {}) }
-        : { ok: false, code: CODE_MAP[r.reason ?? ""] ?? "revoked", remaining: r.remaining, ...(r.retryable ? { retryable: r.retryable } : {}) };
+        : { ok: false, code: CODE_MAP[r.reason ?? ""] ?? "refused", remaining: r.remaining, ...(r.retryable ? { retryable: r.retryable } : {}) };
       rec.cache.set(idempotencyKey, door);
       return door;
     };

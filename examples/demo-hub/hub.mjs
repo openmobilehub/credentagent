@@ -34,6 +34,7 @@ const credentagent = new CredentAgent({
   },
 });
 credentagent.orders.serve(app);
+credentagent.grants.serve(app); // grant.approveUrl → a real approve/deny page
 
 // ── the "different service" that receives the webhook ──────────────────────────
 app.post("/hooks", express.raw({ type: "application/json" }), (req, res) => {
