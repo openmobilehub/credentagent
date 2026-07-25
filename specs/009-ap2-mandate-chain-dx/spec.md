@@ -28,7 +28,10 @@ const credentagent = new CredentAgent({
   catalog: { wine: usd.dollars(20) },        // the ONE price source. Money is OPAQUE: compare with .lt()/.gte()/.eq(); .serialize() to the wire
 });
 credentagent.mount(app);
-const policy = [ required(age.over(21)), required(payment.in("usd")) ];   // credentials — payment is just one of them
+const policy = [
+  required(age.over(21).when(o => o.lines.some(l => l.minimumAge >= 21))),  // 21+ ONLY when the cart holds an age-restricted line — a shirt-only cart skips it
+  required(payment.in("usd")),                                             // credentials — payment is just one of them
+];
 
 // ══ ONE CONTRACT (learn once) ═════════════════════════════════
 //   PRICED INPUT:  order = { id?, items: [{ sku, qty }] }   // priced from the catalog; you NEVER pass an amount
@@ -36,7 +39,10 @@ const policy = [ required(age.over(21)), required(payment.in("usd")) ];   // cre
 //                  else if (res.pending)  res.approveUrl     // send to the human; then re-check / the agent re-calls
 //                  else                   res.code           // switch on this; res.credential names which credential, when relevant
 //   res.trustLevel ALWAYS present (every branch): "presence-only-demo" today — disclosure+binding, NOT issuer trust.
-//   res.code ∈ "under-age" | "payment-declined" | "no-membership" | "budget-exceeded" | "per-spend-exceeded" | "revoked" | …
+//   res.code is a TYPED union RefusalCode (NOT string) — so `s.code === "budget-exceeded"` autocompletes,
+//   a typo fails to compile, and a switch is exhaustiveness-checked:
+//     type RefusalCode = "under-age" | "payment-declined" | "no-membership"
+//                      | "budget-exceeded" | "per-spend-exceeded" | "not-allowed" | "revoked";
 //
 //   TWO RESOURCES + one top-level wrapper:
 //     orders   one-shot verification   ≈ Checkout Session / PaymentIntent    orders.create()→{id,approveUrl} · orders.retrieve(id)→door
@@ -67,7 +73,11 @@ server.registerTool("release-records", inputSchema, credentagent.gate(
 
 // ── grants — authorize once, spend later (human not present) ──
 // (A) human PRESENT — create, persist id (exists before they prove), send approveUrl:
-const grant = await credentagent.grants.create({ merchant: "utopia", budget: usd.dollars(100), perSpend: usd.dollars(30), policy });
+const grant = await credentagent.grants.create({
+  merchant: "utopia", budget: usd.dollars(100), perSpend: usd.dollars(30),
+  allow:  { category: ["Beverages"] },   // ← bound WHAT the agent may buy (SKUs/categories/attributes), not just how much
+  policy,
+});
 await store.save(userId, grant.id);
 sendToUser(grant.approveUrl);
 // (B) LATER, worker/cron — human AWAY — rehydrate, gate on status, spend:
@@ -102,6 +112,12 @@ await grant.revoke();                                           // grant.status 
   lives on the client, not under a commerce resource (thesis: identity leads, payment is one application).
 - **FR-005 — Money is a type.** `usd.dollars(n)`; opaque (no public scalar); compared via
   `.lt()/.gte()/.eq()`, combined via `.plus()/.minus()`, emitted via `.serialize()`.
+  > **Reconciliation (2026-07-25):** the shipped orders half (#98) landed with **plain dollar numbers**,
+  > not this opaque `Money` type — a review call ("dollars everywhere") removed `money.ts` for the first
+  > increment. Money-as-type remains the design intent (it kills float/currency-mix footguns); whether the
+  > grants build (#104) reinstates `usd` or the SDK standardizes on plain numbers is an **open decision to
+  > settle in #104**, so the two halves don't drift. This spec keeps the `Money` design on record; the code is
+  > the interim.
 - **FR-006 — MandateBundle on `ok`.** `{ intentMandate?, cartMandate, paymentMandate }`, each with
   its own `trustLevel` and `.serialize()`. `authorization: "direct" | "delegated"` rides on the result
   AND is stamped into the serialized `paymentMandate` (so a PSP can't mistake an off-session,
@@ -109,7 +125,19 @@ await grant.revoke();                                           // grant.status 
 - **FR-007 — Delegated lifecycle.** `grants.create()` returns `grant.id` immediately (before the human
   proves), so it persists across the authorize-now / spend-later process boundary; `grants.retrieve(id)`
   rehydrates; `grant.status` gates spending; `idempotencyKey` is a durable per-purchase key
-  (`s.replayed` on a safe retry).
+  (`s.replayed` on a safe retry). **`grant.status` has exactly four states:**
+  - **`pending`** — created; waiting for the human to approve at `approveUrl`.
+  - **`authorized`** — the human approved; `spend()` is allowed within the sealed bounds.
+  - **`denied`** — the authorize ceremony ENDED WITHOUT approval: the human rejected the approve screen, or
+    it expired before they proved. It is **terminal for that grant** (unlike `pending`, no approval is still
+    coming); create a fresh grant to retry. Distinct from `revoked` in *when* it happens — `denied` is a grant
+    that was **never** authorized; `revoked` is one that **was** authorized and later cancelled.
+  - **`revoked`** — `grant.revoke()` was called after authorization; no further spend succeeds.
+  - **Race (authorize-now / spend-later): `revoke()` wins, fail-closed.** A `revoke()` can land while a
+    `spend()` is in flight. `spend()` re-reads the grant status + revocation store **server-side at settle**
+    (never trusting the rehydrated handle) and consumes the `idempotencyKey` atomically — so a spend that
+    started before the revoke but settles after it refuses with `code:"revoked"`. The revoke is authoritative;
+    an in-flight spend never sneaks past it.
 - **FR-008 — Additive.** Layers over today's `requirements()`/`mount()`, the retained Mode-B envelope,
   `DelegatedGate`, and the existing `ap2.CartMandate`/`ap2.PaymentMandate`/`IntentBounds`. Ships without
   breaking their current callers; `delegate()` may remain a thin alias of `grants.create()` during
@@ -124,8 +152,12 @@ await grant.revoke();                                           // grant.status 
   `grants` flow, at the one-time authorize ceremony (`grant.approveUrl`) — **not** in `orders` (a
   human-present order signs the **Cart** Mandate directly, so `mandateBundle.intentMandate` is absent).
   At authorize, the human's wallet **seals the bounded intent** — merchant, `perSpend`, `budget`, `policy`,
-  expiry, and the delegate key permitted to sign later spends — into the Intent Mandate; it then rides on
-  `grant.intentMandate`, and every subsequent spend's Payment Mandate references it. Today it is
+  the optional **`allow`** item constraint (which SKUs / categories / attributes are permitted — so a human
+  who's away bounds *what* is bought, not only *how much*), expiry, and the delegate key permitted to sign
+  later spends — into the Intent Mandate; it then rides on `grant.intentMandate`, and every subsequent
+  spend's Payment Mandate references it. **Enforcement (invariant #1):** each `grant.spend()` re-checks the
+  requested items against the sealed `allow` (and `perSpend`/`budget`) **server-side, fail-closed** — an item
+  outside `allow` refuses with `code:"not-allowed"`, never trusting a caller-supplied item. Today it is
   **dev-sealed** (content-addressed integrity hash, `sealIntent`), `trustLevel: "presence-only-demo"`; the
   roadmap swaps the internals so the wallet **key-signs** it during the live ceremony (KB-JWT/SD-JWT —
   #14/#39/#71) with no change to this surface.
@@ -197,8 +229,10 @@ predates this call; the surface + FR-004 reflect it.
 
 **On the prototypes:** `examples/orders-proto/` and `examples/grants-proto/` are **validation demos** — facades
 that *stand in for* the API to prove the design runs; they are not the shipping library code. They graduate
-into the real `credentagent.orders.*` / `credentagent.grants.*` API in **#97** (the demos get rewired to the
-real API rather than deleted, so nothing is thrown away).
+into the real `credentagent.orders.*` / `credentagent.grants.*` API in **#97**. **Status:** the orders half
+graduated — `credentagent.orders.*` + `orders.serve()` shipped in **#98** (merged) — so `orders-proto`'s
+page-less wrapper (which trusted a caller-supplied order id — a bind bug) was removed as superseded, and the
+real fail-closed path is `credentagent.gate()`. The grants half graduates under **#104** (this spec is its contract).
 
 ## Dependencies
 
