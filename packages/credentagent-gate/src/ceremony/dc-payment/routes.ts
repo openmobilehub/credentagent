@@ -95,6 +95,7 @@ export const registerDcPaymentGate: RailRegistrar = (app: CeremonyApp, ctx: Cere
         lines: order.lines.map((l) => ({ name: l.name ?? l.id, quantity: l.quantity, lineTotal: l.lineTotal, currency: l.currency ?? order.currency })),
         cart: typeof req.query.cart === "string" ? req.query.cart : undefined,
         rail,
+        returnUrl: ctx.returnUrl?.(order.id),
       }),
     );
   });

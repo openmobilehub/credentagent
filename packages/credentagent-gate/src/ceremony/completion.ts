@@ -93,6 +93,19 @@ export interface CompletionContext {
  */
 function hasUnprovenCustomGate(ctx: CompletionContext, repriced: CeremonyOrder, verification: unknown): boolean {
   if (!ctx.credentialRegistry) return false;
+  // Pre-filter to the custom `gate()` credentials ONCE (#64 item 2). The common case is a
+  // registry of only reserved built-ins (age/membership/payment), which the loop below skips
+  // anyway — so building `gateOrder` (which clones every re-priced line) and iterating would
+  // be pure waste. Skip both entirely when the custom set is empty. Same predicate as the
+  // loop's per-cred skips, so behavior is unchanged: an empty set could never return true.
+  const customGates = [...ctx.credentialRegistry.values()].filter(
+    (cred) => !RESERVED_CREDENTIAL_IDS.has(cred.id) && cred.effect.kind === "gate",
+  );
+  if (customGates.length === 0) return false;
+  // Evaluate `appliesTo` against the FULL re-priced line — spread every field, never a
+  // hand-picked allow-list. A dropped field could make an applicable gate look inapplicable
+  // here (fail-OPEN), skipping enforcement the manifest promised (invariant 1). #64 item 1
+  // — narrowing this projection — was declined for exactly that reason.
   const gateOrder: GateOrder = {
     id: repriced.id,
     total: repriced.total,
@@ -100,9 +113,7 @@ function hasUnprovenCustomGate(ctx: CompletionContext, repriced: CeremonyOrder, 
     lines: repriced.lines.map((l) => ({ ...l })),
   };
   const verifiedGates = (verification as { verifiedGates?: Record<string, true> } | undefined)?.verifiedGates ?? {};
-  for (const cred of ctx.credentialRegistry.values()) {
-    if (RESERVED_CREDENTIAL_IDS.has(cred.id)) continue;
-    if (cred.effect.kind !== "gate") continue;
+  for (const cred of customGates) {
     const applies = cred.appliesTo ? cred.appliesTo(gateOrder) : true;
     if (applies && verifiedGates[cred.id] !== true) return true;
   }

@@ -1,0 +1,37 @@
+name: deployed-smoke
+
+# Runs the quickstart smoke (examples/quickstart/smoke.mjs) against the LIVE demo after
+# every Vercel Production deploy — the same security-bearing assertions ci.yml runs
+# against a local server, pointed at the deployed URL via SMOKE_URL. Vercel's GitHub
+# integration emits deployment_status when the deploy finishes, so this never races the
+# build and needs no Vercel credentials.
+#
+# Preview deploys are skipped: the Preview environment lacks the KV/GATE_SECRET config
+# and 500s (observed 2026-07-23), which would turn the check red for non-code reasons.
+# Drop the environment condition once preview env vars are configured.
+on: deployment_status
+
+jobs:
+  smoke:
+    if: >-
+      github.event.deployment_status.state == 'success' &&
+      github.event.deployment.environment == 'Production'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: examples/quickstart
+    steps:
+      # Check out the deployed commit, not the default branch, so the assertions match
+      # the code that is actually live.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.deployment.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: examples/quickstart/package-lock.json
+      - run: npm ci
+      - run: npm run smoke
+        env:
+          SMOKE_URL: ${{ github.event.deployment_status.environment_url }}

@@ -5,6 +5,9 @@
 //   • manifest — data: `requirements()` resolves the policy server-side and emits a flat, JSON-safe
 //                manifest. Functions NEVER cross the wire. `requirements()` is that code→data boundary.
 
+import type { OrderStore, CreatedOrder, CompletedOrder } from "./orders.js";
+import type { WebhookOptions } from "./webhooks.js";
+
 // ── DCQL (what to ask the wallet) ──────────────────────────────────────────
 
 export interface DcqlClaim {
@@ -226,4 +229,22 @@ export interface CredentAgentOptions {
    * (fail-open). Declare your custom credentials here and every instance enforces them.
    */
   credentials?: Credential[];
+  /** Persist created orders (`orders.create`); default in-memory, inject a shared store for multi-instance. */
+  orderStore?: OrderStore<CreatedOrder>;
+  /** Persist completed orders (its `write()` fires `order.settled`); default in-memory, injectable. */
+  completedOrderStore?: OrderStore<CompletedOrder>;
+  /**
+   * Stable HMAC secret the checkout `orders.serve(app)` signs its challenges with, so a
+   * challenge issued on one instance verifies on another (a serverless / multi-worker split).
+   * Omit for a single-process dev server — `orders.serve` then uses an ephemeral per-process
+   * key (fine for one process; a challenge can't cross an instance boundary). Set it (e.g.
+   * `process.env.GATE_SECRET`) for any multi-instance deploy.
+   */
+  gateSecret?: string;
+  /**
+   * Outbound HTTP webhooks (spec 010). Register endpoint URL(s) + their `whsec_` secret and every
+   * settled order is POSTed to them as a signed event — the durable, cross-service signal the
+   * in-process `on("order.settled")` listener can't provide. Omit ⇒ no delivery (additive, zero-cost).
+   */
+  webhooks?: WebhookOptions;
 }

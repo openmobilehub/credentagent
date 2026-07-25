@@ -1,0 +1,8 @@
+# Private keys never leave this machine. gen-pki.sh writes them here.
+keys/
+*.csr
+# Staged site download artifacts — copies of out/ made by site/build_site.py.
+site/credentials/
+site/trust/
+# macOS cruft
+.DS_Store
