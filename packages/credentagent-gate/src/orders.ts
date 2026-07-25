@@ -47,11 +47,23 @@ export class MemoryOrderStore<T> implements OrderStore<T> {
   clear(id: string): void { this.m.delete(id); }
 }
 
+/**
+ * The refusal codes the door's `{ ok:false, code }` branch can carry — a TYPED union, not
+ * `string`, so `res.code === "not-found"` autocompletes, a typo fails to compile, and a
+ * `switch` on it is exhaustiveness-checked (#95 review — a bare string is a footgun).
+ *
+ * Today `orders.retrieve` reads stores and only refuses with `"not-found"`; it does not surface
+ * policy failures — an age/payment gate refuses at the ceremony, not here. Widen this union
+ * DELIBERATELY when a new orders refusal path lands; the compile error at each `switch` is the
+ * reminder to handle it. (Sibling of the delegated `RefusalCode` and the webhook `WebhookRefusalCode`.)
+ */
+export type OrderDoorCode = "not-found";
+
 /** The one result shape every consent path shares (spec 009 FR-003). */
 export type OrderDoor =
   | { ok: true; mandateBundle?: unknown; authorization: "direct"; trustLevel: TrustLevel; completion: Omit<CompletedOrder, "orderId" | "mandateBundle"> }
   | { ok: false; pending: true; approveUrl: string; trustLevel: TrustLevel }
-  | { ok: false; code: string; credential?: string; trustLevel: TrustLevel };
+  | { ok: false; code: OrderDoorCode; credential?: string; trustLevel: TrustLevel };
 
 export interface OrdersDeps {
   walletOrigin: string;
