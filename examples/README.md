@@ -25,8 +25,9 @@ Each is runnable against the two `@openmobilehub/credentagent-*` packages (build
 **Cart Mandate / stateless** (004)
 - [`stateless-orders/`](stateless-orders/) — the created order rides in a signed Cart Mandate on the link
 
-**Human-not-present** (005, preview)
-- [`hnp-draws/`](hnp-draws/) — the delegated-draw "doorman": one pre-approval, good + bad draws, all decided server-side
+**Human-not-present** (spec 009 · #104)
+- [`grants-proto/`](grants-proto/) — the two-pane `credentagent.grants` demo (REAL API): authorize once, watch the agent's spend loop draw the budget down, revoke
+- [`hnp-draws/`](hnp-draws/) — the lower-level `DelegatedGate` seams reference (superseded for everyday use by `grants` + the demo hub)
 
 ---
 
