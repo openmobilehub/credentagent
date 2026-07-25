@@ -1,0 +1,38 @@
+name: agent-e2e
+
+# Nightly agent-in-the-loop E2E: a REAL Claude agent drives the deployed MCP storefront
+# (browse → cart → checkout) and the harness asserts on the tool trace — that the agent
+# could use our tools unaided, that the age gate + honesty labels reached the agent-facing
+# wire, and that nothing claimed a gated order completed. Catches the failure class the
+# deterministic smokes can't: "an agent can no longer figure out our tools."
+#
+# Requires the ANTHROPIC_API_KEY repo secret. Without it the job SKIPS (green, with a
+# notice) — same opt-in pattern as claude-review — so this can merge before the secret exists.
+
+on:
+  schedule:
+    - cron: "17 13 * * *" # nightly, 13:17 UTC (~6:17 PT)
+  workflow_dispatch: {}
+
+jobs:
+  agent-e2e:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ci/agent-e2e
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install harness deps
+        run: npm install --no-audit --no-fund
+      - name: Run the agent E2E
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "::notice::ANTHROPIC_API_KEY secret not configured — skipping agent-e2e (add the secret to enable the nightly agent run)."
+            exit 0
+          fi
+          node agent-e2e.mjs

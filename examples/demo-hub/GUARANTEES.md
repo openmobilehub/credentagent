@@ -90,6 +90,22 @@ npm run test --workspace=@openmobilehub/credentagent-gate -- run src/grants.test
 **You should see:** 9 passed — including the two BYPASS tests (each proven to fail when its check is
 removed). Or just click through **Section 3 of the hub** and watch every refusal land in the feed.
 
+---
+
+### 7. A real AI agent can complete the flow unaided — proven nightly
+
+**Guarantee:** every night, a real Claude agent is pointed at the live store with one plain-language
+task ("buy the whiskey") and no help. The check fails if the agent can no longer figure out our
+tools, if the age gate or honesty labels stop reaching the agent, or if anything claims a gated
+order completed. This catches what no scripted test can: drift in the *agent-facing* contract.
+
+```bash
+ANTHROPIC_API_KEY=... node ci/agent-e2e/agent-e2e.mjs
+```
+**You should see:** `ALL AGENT-E2E CHECKS PASSED`, with the agent's tool-call chain printed
+(browse → add → checkout) and the assertions on the trace. Runs automatically via the
+`agent-e2e` GitHub Action (nightly + on-demand).
+
 ## The short version
 
 - **Nothing completes without the proof it requires** (age, payment) — enforced on the server (#1).
@@ -97,6 +113,7 @@ removed). Or just click through **Section 3 of the hub** and watch every refusal
 - **Only genuinely-signed notifications are accepted** (#3), delivered reliably and safe to retry (#4).
 - **The API tells you *why* in typed terms, not loose strings** (#5).
 - **A grant bounds what, how much, and for whom — and age never delegates** (#6).
+- **A real AI agent can drive the whole flow unaided** — checked nightly against the live demo (#7).
 
 Each of these is pinned by a test that goes red if the protection is deleted — that's the difference
 between "it looks like it works" and "it's proven to work."

@@ -1,0 +1,12 @@
+{
+  "name": "credentagent-agent-e2e",
+  "private": true,
+  "type": "module",
+  "description": "Nightly agent-in-the-loop E2E: a real Claude agent drives the deployed MCP storefront; assertions run on the tool trace.",
+  "scripts": {
+    "start": "node agent-e2e.mjs"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.110.0"
+  }
+}
