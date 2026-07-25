@@ -6,6 +6,7 @@
 // build fails. It is type-only; nothing runs at test time.
 
 import { age, payment, membership } from "./credentials.js";
+import type { OrderDoor } from "./orders.js";
 
 // age has only `.over()` (+ `.when()`), never `.in()`:
 // @ts-expect-error — age.over(...) returns a Credential with no `.in`
@@ -23,3 +24,12 @@ membership.discount(10).over(21);
 age.over(21).when((o) => o.lines.length > 0);
 payment.in("usd").when(() => true);
 membership.discount(10).when(() => true);
+
+// OrderDoor's refusal `code` is the typed union OrderDoorCode, NOT a bare `string` (#95 review) —
+// so a non-member literal must be a COMPILE error. This is the guard in the right place (#111,
+// Codex): if `code` regresses to `string`, the suppression below goes UNUSED and this build fails.
+type DoorRefusalCode = Extract<OrderDoor, { ok: false; code: unknown }>["code"];
+declare function takesOrderDoorCode(c: DoorRefusalCode): void;
+takesOrderDoorCode("not-found"); // the real member — compiles
+// @ts-expect-error — "budget-exceded" is not an OrderDoorCode (a typo can't silently pass as `string`)
+takesOrderDoorCode("budget-exceded");

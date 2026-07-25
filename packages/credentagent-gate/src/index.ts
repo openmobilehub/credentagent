@@ -26,7 +26,7 @@ export { MemoryVerificationStore } from "./store.js";
 // `await credentagent.orders.create({ order, policy })` → { id, approveUrl, manifest };
 // `credentagent.orders.retrieve(id)` → the door (ok | pending+approveUrl | reason).
 export { Orders, MemoryOrderStore } from "./orders.js";
-export type { OrderStore, CreatedOrder, CompletedOrder, OrderDoor } from "./orders.js";
+export type { OrderStore, CreatedOrder, CompletedOrder, OrderDoor, OrderDoorCode } from "./orders.js";
 
 // ── Grants (spec 009, #104) — authorize once, spend later (human NOT present) ──
 // `await credentagent.grants.create({ merchant, budget, perSpend, allow? })` → a pending grant;
