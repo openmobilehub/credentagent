@@ -24,6 +24,42 @@ jobs:
       - run: npm ci
       - run: npm run smoke
 
+  # Proves main's UNPUBLISHED package source works in publish shape: builds both
+  # workspaces, npm-packs them (the exact tarball `npm publish` would ship), installs
+  # the tarballs into a throwaway copy of the quickstart, and runs the same smoke.
+  # Red here + green quickstart-smoke = an unpublished change broke the quickstart
+  # (packaging or behavior) — catch it pre-merge instead of on publish day (#113).
+  quickstart-smoke-source:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+      - run: npm ci
+      - run: npm run build
+      - name: Pack both workspaces (publish shape)
+        run: npm pack ./packages/credentagent-gate ./packages/credentagent-storefront
+      - name: Install the tarballs into a throwaway quickstart
+        run: |
+          cp -r examples/quickstart "$RUNNER_TEMP/quickstart"
+          cd "$RUNNER_TEMP/quickstart"
+          npm ci
+          npm install --no-audit --no-fund "$GITHUB_WORKSPACE"/openmobilehub-credentagent-*.tgz
+          # Guard against silently re-testing the registry versions: both packages
+          # must resolve to the tarballs (no registry "resolved" URL).
+          node -e '
+            const meta = JSON.parse(require("child_process").execSync("npm ls --json --long @openmobilehub/credentagent-gate @openmobilehub/credentagent-storefront"));
+            for (const [name, dep] of Object.entries(meta.dependencies)) {
+              if (!/\.tgz$/.test(dep.resolved ?? "")) { console.error(`${name} resolved to ${dep.resolved} — not the packed tarball`); process.exit(1); }
+              console.log(`${name}@${dep.version} <- ${dep.resolved}`);
+            }
+          '
+      - name: Smoke against the packed source
+        working-directory: ${{ runner.temp }}/quickstart
+        run: npm run smoke
+
   build-test:
     runs-on: ubuntu-latest
     steps:
