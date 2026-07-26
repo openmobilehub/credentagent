@@ -12,14 +12,14 @@
 //     declares `credential_sets` keeps them; one that doesn't gets a set requiring
 //     exactly its own ids (preserving AND-within-one-credential).
 //
-//  2. ids must be UNIQUE across the merged query. `dcql()` derives its id from the
-//     doctype's LAST SEGMENT, so `payment` (org.openwallet.payment.1) and
-//     `membership` (org.multipaz.loyalty.1) both yield "1" (#90). Colliding ids make
-//     the merged query ambiguous and silently corrupt the `credential_sets`
-//     references, so every entry is re-id'd here under its POLICY credential id,
-//     which is unique by construction (the registry is keyed by it). This is a
-//     merge-layer fix: it does not change what `dcql()` emits for the single-credential
-//     rails (#90 tracks the underlying weakness).
+//  2. ids must be UNIQUE across the merged query, and readable. `dcql()` now derives a
+//     unique id per doctype (#90 fixed: `org_openwallet_payment_1` vs
+//     `org_multipaz_loyalty_1`), but the merge still re-ids every entry under its POLICY
+//     credential id — which is unique by construction (the registry is keyed by it),
+//     reads like the reference ceremony's ids (`payment`, not `org_openwallet_payment_1`),
+//     and stays distinct even if two policy credentials happen to share a doctype.
+//     Colliding ids would make the merged query ambiguous and silently corrupt the
+//     `credential_sets` references.
 import type { Credential, DcqlCredentialOption, DcqlCredentialSet, DcqlQuery, GateOrder } from "../../types.js";
 import type { CeremonyOrder } from "../types.js";
 

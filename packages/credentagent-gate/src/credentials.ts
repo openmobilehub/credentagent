@@ -30,18 +30,36 @@ export function authorize(): Effect {
  * Concise DCQL for a single mdoc credential: name the doctype and the claim
  * leaves, get back the full verifier-shaped `DcqlQuery`. Selective disclosure
  * (never retain) is the default.
+ *
+ * The credential `id` (the key `credential_sets` references, and the key the
+ * wallet echoes each presentation back under) defaults to a stable, unique
+ * derivation from the FULL doctype — pass `id` to name it yourself (like the
+ * hand-written age query's `"mdl"` / `"eupid"`).
  */
-export function dcql(spec: { docType: string; claims: string[] }): DcqlQuery {
+export function dcql(spec: { docType: string; claims: string[]; id?: string }): DcqlQuery {
   return {
     credentials: [
       {
-        id: spec.docType.split(".").pop() ?? spec.docType,
+        id: spec.id ?? dcqlIdFromDocType(spec.docType),
         format: "mso_mdoc",
         meta: { doctype_value: spec.docType },
         claims: spec.claims.map((leaf) => ({ path: [spec.docType, leaf], intent_to_retain: false })),
       },
     ],
   };
+}
+
+/**
+ * A stable, unique, DCQL-valid credential id derived from the FULL doctype.
+ *
+ * The last segment alone is NOT unique: mdoc doctypes are conventionally
+ * version-suffixed, so `org.openwallet.payment.1` and `org.multipaz.loyalty.1`
+ * both end in `"1"` and would collide (#90). The full doctype IS unique per
+ * credential. DCQL ids are restricted to `[A-Za-z0-9_-]` (OpenID4VP), so the
+ * dots become `_`: `org.openwallet.payment.1` → `org_openwallet_payment_1`.
+ */
+function dcqlIdFromDocType(docType: string): string {
+  return docType.replace(/[^A-Za-z0-9_-]/g, "_");
 }
 
 /**

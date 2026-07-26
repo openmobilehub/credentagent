@@ -179,8 +179,10 @@ const prescription = defineCredential({
 ```
 
 `dcql({ docType, claims })` is concise sugar for a single-mdoc DCQL query (selective disclosure,
-never-retain by default). The three effect builders — `gate()`, `discount({ percent })`,
-`authorize()` — are the only effects the resolver interprets.
+never-retain by default). The credential id defaults to a stable, unique derivation from the full
+doctype (`org.openwallet.payment.1` → `org_openwallet_payment_1`); pass `dcql({ docType, claims, id })`
+to name it yourself. The three effect builders — `gate()`, `discount({ percent })`, `authorize()` —
+are the only effects the resolver interprets.
 
 A custom credential is **served by the mounted ceremony and enforced end-to-end** — no new code
 path: `requirements()` registers it by id, the credential-gate rail builds the wallet request from
