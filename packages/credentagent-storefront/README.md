@@ -82,6 +82,19 @@ const store = createStorefront({
 });
 ```
 
+**Skip the env plumbing with `redisStorage.fromEnv()`.** On a deployment, the connection is already in
+the environment — so read it for free instead of hand-wiring `url`/`token`. `fromEnv()` reads the
+standard Redis env pairs your host sets — **Vercel KV** (`KV_REST_API_URL` + `KV_REST_API_TOKEN`) or
+**Upstash** (`UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN`), in that precedence — and returns a
+provider, or `undefined` when none are set, which is exactly the in-memory default. So the **same file**
+runs locally with no env and persists on a deployment with no code change:
+
+```ts
+const store = createStorefront({ storage: redisStorage.fromEnv() });
+// namespace it:        redisStorage.fromEnv({ namespace: "my-shop" })
+// require persistence:  redisStorage.fromEnv({ required: true })   // throws (naming the vars) if no env
+```
+
 - **In-memory stays the zero-config default** — omit `storage` and nothing changes.
 - **Escape hatch:** an explicit `cartStore` / `orderStore` / `createdOrderStore` / `verificationStore`
   still wins over the provider for that slot (bring any custom backend).

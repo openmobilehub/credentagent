@@ -4,7 +4,7 @@
 // sharing one backend.
 
 import { describe, it, expect } from "vitest";
-import { redisStorage, type RedisLike } from "./redis.js";
+import { redisStorage, type RedisLike, type UpstashLoader } from "./redis.js";
 
 // A Map-backed RedisLike fake standing in for one shared Upstash instance. `set`
 // round-trips through JSON to mirror Upstash's auto-serialization (so a test would catch
@@ -191,5 +191,98 @@ describe("redisStorage — fail-closed on backend error (Polish / FR-012, CT-11)
     const s = redisStorage({ client: throwingRedis() });
     await expect(s.cartStore.read("sess-1")).rejects.toThrow(/backend down/);
     await expect(s.verificationStore.write("ORD-1", { ageVerified: true })).rejects.toThrow(/backend down/);
+  });
+});
+
+describe("redisStorage.fromEnv — storage from standard deployment env (issue #54)", () => {
+  const KV = { KV_REST_API_URL: "https://kv.example.io", KV_REST_API_TOKEN: "kv-token" };
+  const UPSTASH = { UPSTASH_REDIS_REST_URL: "https://upstash.example.io", UPSTASH_REDIS_REST_TOKEN: "upstash-token" };
+
+  // A loader that records the { url, token } each client is constructed with and shares one
+  // in-memory Map across them, so a test can assert WHICH env vars fromEnv() read (and inspect
+  // the keys it writes). Mirrors the `_load` seam the { url, token } tests above use.
+  function recordingBackend(): { load: UpstashLoader; built: { url: string; token: string }[]; store: Map<string, unknown> } {
+    const built: { url: string; token: string }[] = [];
+    const store = new Map<string, unknown>();
+    const load: UpstashLoader = async () =>
+      class implements RedisLike {
+        constructor(config: { url: string; token: string }) {
+          built.push(config);
+        }
+        async get<T = unknown>(key: string): Promise<T | null> {
+          return (store.get(key) as T) ?? null;
+        }
+        async set(key: string, value: unknown): Promise<unknown> {
+          store.set(key, JSON.parse(JSON.stringify(value)));
+          return "OK";
+        }
+        async del(key: string): Promise<unknown> {
+          return store.delete(key) ? 1 : 0;
+        }
+      };
+    return { load, built, store };
+  }
+
+  it("builds a full provider from the Vercel KV env pair", async () => {
+    const { load, built } = recordingBackend();
+    const provider = redisStorage.fromEnv({ _env: { ...KV }, _load: load });
+
+    expect(provider).toBeDefined();
+    // All four stores present.
+    expect(Object.keys(provider!)).toEqual(["cartStore", "createdOrderStore", "orderStore", "verificationStore"]);
+    // The lazy client is constructed with EXACTLY the KV url/token — proves fromEnv read them.
+    await provider!.cartStore.read("sess-1");
+    expect(built).toEqual([{ url: KV.KV_REST_API_URL, token: KV.KV_REST_API_TOKEN }]);
+  });
+
+  it("builds from the Upstash env pair when the KV pair is absent", async () => {
+    const { load, built } = recordingBackend();
+    const provider = redisStorage.fromEnv({ _env: { ...UPSTASH }, _load: load });
+
+    await provider!.cartStore.read("sess-1");
+    expect(built).toEqual([{ url: UPSTASH.UPSTASH_REDIS_REST_URL, token: UPSTASH.UPSTASH_REDIS_REST_TOKEN }]);
+  });
+
+  it("prefers the Vercel KV pair over Upstash when BOTH are set (precedence)", async () => {
+    const { load, built } = recordingBackend();
+    const provider = redisStorage.fromEnv({ _env: { ...KV, ...UPSTASH }, _load: load });
+
+    await provider!.cartStore.read("sess-1");
+    // Load-bearing: if the precedence order flipped, this would read the Upstash url and fail.
+    expect(built).toEqual([{ url: KV.KV_REST_API_URL, token: KV.KV_REST_API_TOKEN }]);
+  });
+
+  it("returns undefined when no env pair is set — the in-memory zero-config default", () => {
+    expect(redisStorage.fromEnv({ _env: {} })).toBeUndefined();
+  });
+
+  it("returns undefined for a half-set pair (url without token, or token without url)", () => {
+    expect(redisStorage.fromEnv({ _env: { KV_REST_API_URL: KV.KV_REST_API_URL } })).toBeUndefined();
+    expect(redisStorage.fromEnv({ _env: { KV_REST_API_TOKEN: KV.KV_REST_API_TOKEN } })).toBeUndefined();
+  });
+
+  it("throws an actionable error naming the env vars when required and none are set", () => {
+    expect(() => redisStorage.fromEnv({ _env: {}, required: true })).toThrow(/KV_REST_API_URL/);
+    expect(() => redisStorage.fromEnv({ _env: {}, required: true })).toThrow(/UPSTASH_REDIS_REST_URL/);
+  });
+
+  it("does not throw when required and the env IS present", () => {
+    expect(() => redisStorage.fromEnv({ _env: { ...KV }, required: true, _load: recordingBackend().load })).not.toThrow();
+  });
+
+  it("passes a custom namespace through to the store keys", async () => {
+    const { load, store } = recordingBackend();
+    const provider = redisStorage.fromEnv({ _env: { ...KV }, namespace: "my-shop", _load: load });
+
+    await provider!.verificationStore.write("ORD-1", { ageVerified: true });
+    expect([...store.keys()]).toContain("my-shop:verification:ORD-1");
+  });
+
+  it("defaults the namespace to credentagent-storefront", async () => {
+    const { load, store } = recordingBackend();
+    const provider = redisStorage.fromEnv({ _env: { ...KV }, _load: load });
+
+    await provider!.verificationStore.write("ORD-1", { ageVerified: true });
+    expect([...store.keys()]).toContain("credentagent-storefront:verification:ORD-1");
   });
 });
