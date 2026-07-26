@@ -10,6 +10,7 @@ import { mountCeremony, type CeremonyApp, type CeremonySeams } from "./ceremony/
 import { Orders, MemoryOrderStore, type CreatedOrder, type CompletedOrder } from "./orders.js";
 import { serveOrders } from "./orders-serve.js";
 import { Webhooks } from "./webhooks.js";
+import { Grants } from "./grants.js";
 
 x509.cryptoProvider.set(globalThis.crypto);
 
@@ -35,6 +36,8 @@ export class CredentAgent {
   readonly orders: Orders;
   /** Outbound HTTP webhooks — `webhooks.register()` / `webhooks.constructEvent()` (spec 010). */
   readonly webhooks: Webhooks;
+  /** The human-not-present resource — `grants.create()` / `grants.retrieve()` (spec 009, #104). */
+  readonly grants: Grants;
   /** Stable reader identity presented by the rails (undefined ⇒ per-request self-signed). */
   readonly readerIdentity?: ReaderIdentity;
   private readonly listeners = new Map<string, Set<(payload: { id: string }) => void>>();
@@ -101,6 +104,8 @@ export class CredentAgent {
     const completedStore = opts.completedOrderStore ?? new MemoryOrderStore<CompletedOrder>();
     // The outbound HTTP webhook sender (spec 010). Zero endpoints ⇒ inert (additive, zero-cost).
     this.webhooks = new Webhooks(opts.webhooks ?? {});
+    // The delegated-spend resource (spec 009): needs the priced catalog to bound + price spends.
+    this.grants = new Grants({ walletOrigin: this.walletOrigin, ...(opts.catalog ? { catalog: opts.catalog } : {}) });
     this.orders = new Orders({
       walletOrigin: this.walletOrigin,
       requirements: (order, policy) => this.requirements(order, policy),

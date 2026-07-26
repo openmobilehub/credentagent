@@ -1,9 +1,12 @@
 // Smoke — the executable form of specs/007-quickstart-ladder/contracts/quickstart-surface.md.
 //
-//   npm run smoke                        # spawns server.mjs (stateless mode) and asserts a–e
+//   npm run smoke                        # spawns server.mjs (stateless mode) and asserts a–i
 //   SMOKE_URL=https://… npm run smoke    # same assertions against a deployed URL
 //
-// Every assertion is security-bearing: each fails when its control is removed.
+// Every assertion is security-bearing: each fails when its control is removed. Beyond the
+// a–g contract surface, (h) pins the age THRESHOLD match (invariant 5 — an 18+ proof must
+// not satisfy a 21+ gate) and (i) pins per-order state SCOPING (invariant 4 — one order's
+// age verification must not unlock another).
 import { spawn, spawnSync } from "node:child_process";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -92,6 +95,12 @@ try {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ order, cartMandate: JSON.parse(Buffer.from(cartB64, "base64url").toString()), claims: CLAIMS }),
     }).then((r) => r.json());
+  // The credential rail's instant-demo path: present disclosed age claims for THIS order.
+  const ageVerify = (order, cartB64, claims) =>
+    fetch(`${base}/credentagent/credential/verify`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ cred: "age", order, cart: cartB64, claims }),
+    }).then((r) => r.json());
 
   // (d) unverified completion of a GATED order → refused server-side (403)
   const d = await placeOrder(gated.orderId, gated.cart);
@@ -120,6 +129,33 @@ try {
       done.completed === true && (await completed(victim.orderId)) === true, JSON.stringify(done));
   } else {
     ok("(e) skipped — store mode (no cart param); run with statelessOrders for the tamper probe", true);
+  }
+
+  // (h) THRESHOLD match (invariant 5): the 21+ whiskey gate must refuse an age_over_18
+  // proof and accept an age_over_21 proof — the SAME order and gate, so the gate is shown
+  // to discriminate by threshold, not by the mere presence of an age claim. (h) fails if
+  // the gate is loosened to accept a lower threshold; (h′) fails if it rejects everything
+  // (which would make (h) pass trivially) — the pair pins the boundary from both sides.
+  if (gated.cart) {
+    const under = await ageVerify(gated.orderId, gated.cart, { age_over_18: true });
+    ok("(h) age_over_18 proof refused at the 21+ gate", under.verified === false, JSON.stringify(under.gates));
+    const at = await ageVerify(gated.orderId, gated.cart, { age_over_21: true });
+    ok("(h′) age_over_21 proof accepted at the 21+ gate", at.verified === true, JSON.stringify(at.gates));
+
+    // (i) per-order state SCOPING (invariant 4): verifying age on one order must NOT
+    // unlock a different age-gated order. Verify age on A only, then pay both A and B.
+    // A completes; B — never age-verified — is refused by the payment rail for age. This
+    // fails if verification state is process-global (B would wrongly complete: cross-user
+    // bleed). A and B are independent checkouts, so they carry distinct order ids.
+    const A = await checkout([{ productId: "oak-whiskey", quantity: 1 }]);
+    const B = await checkout([{ productId: "oak-whiskey", quantity: 1 }]);
+    await ageVerify(A.orderId, A.cart, { age_over_21: true }); // A only — B stays unverified
+    const payA = await railVerify(A.orderId, A.cart);
+    const payB = await railVerify(B.orderId, B.cart);
+    ok("(i) A's age verification lets A complete on the payment rail",
+      payA.completed === true && (await completed(A.orderId)) === true, JSON.stringify(payA).slice(0, 120));
+    ok("(i′) A's age verification does NOT bleed to B (refused: age)",
+      payB.completed !== true && payB.reason === "age" && (await completed(B.orderId)) === false, JSON.stringify(payB).slice(0, 120));
   }
 
   await mcp.close();

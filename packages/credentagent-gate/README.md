@@ -285,19 +285,60 @@ adapter** — no processor-specific symbol lives in this package.
 > **`verification_required`** envelope the agent *drives* (which credential, a per-order approve link,
 > the tool to poll) instead of completing — the retained blocking **Mode B** primitive.
 
-## Delegated draws — human-not-present seams (005, preview)
+## Grants — approve once, the agent spends while you're away
 
-Approve a spending limit once; your agent draws against it while you're away, every draw re-checked
-server-side. The Stripe-grade entry point is **`DelegatedGate`**:
+You approve **one spending limit** — *"up to $100 at this store, max $30 per purchase, Beverages
+only"* — and your agent buys against it unattended, every rule re-checked **server-side** on every
+spend. This is the human-NOT-present resource, `credentagent.grants` (spec 009):
 
 ```ts
-import { DelegatedGate } from "@openmobilehub/credentagent-gate";
+import express from "express";
+import { CredentAgent } from "@openmobilehub/credentagent-gate";
 
+const app = express();
+app.use(express.json());
+const credentagent = new CredentAgent({
+  walletOrigin: "https://shop.example",
+  catalog: { coffee: { price: 18, category: "Beverages" }, wine: { price: 21, minAge: 21, category: "Beverages" } },
+});
+
+// ── once, at startup ─────────────────────────────────────────────
+credentagent.grants.serve(app);                       // serves each grant's approveUrl (approve/deny page)
+
+// ── the human approves ONCE ──────────────────────────────────────
+const grant = await credentagent.grants.create({
+  merchant: "utopia", budget: 100, perSpend: 30,
+  allow: { categories: ["Beverages"] },               // bound WHAT may be bought, not just how much
+});
+sendToUser(grant.approveUrl);                         // grant.status: "pending" → "authorized" | "denied"
+
+// ── later, human AWAY — rehydrate and spend within the sealed bounds ──
+const g = await credentagent.grants.retrieve(grant.id);
+if (g.status === "authorized") {
+  const s = await g.spend({ idempotencyKey: "order-1", items: [{ sku: "coffee" }] });
+  //  → { ok: true, amount: 18, remaining: 82, authorization: "delegated" }
+  //  or { ok: false, code: "per-spend-exceeded" | "budget-exceeded" | "not-allowed" | "step-up" | "revoked" | … }
+  await g.revoke();                                   // kill-switch — the very next spend refuses
+}
+```
+
+The refusal `code` is a **typed union** (`GrantDoorCode`) — a typo fails to compile. A retried
+`idempotencyKey` replays the ORIGINAL outcome, refusal included, so a key can never be repurposed.
+The sealed bounds are **immutable** after create. **Age is non-delegable** — an age-restricted item
+refuses `step-up` no matter the budget: buying wine always needs a live human. Try all of it
+clickable in [`examples/demo-hub/`](https://github.com/openmobilehub/credentagent/tree/main/examples/demo-hub)
+(Section 3) or the two-pane [`examples/grants-proto/`](https://github.com/openmobilehub/credentagent/tree/main/examples/grants-proto).
+
+### Under the hood — the delegated-draw seams (005)
+
+`grants` wraps **`DelegatedGate`** (`preApprove`/`spend`/`revoke`), which remains exported for
+direct use:
+
+```ts
 const gate  = new DelegatedGate({ catalog: { coffee: 18 } });
-const grant = await gate.preApprove({ merchant: "blue-bottle", perOrder: 30, total: 100 }); // approve once
-const result = await grant.spend({ idempotencyKey: "order-1", item: "coffee" });             // unattended draw (retry-safe key)
-//  → { ok: true, amount: 18, remaining: 82 }   — or { ok: false, reason: "over-cap", retryable: "terminal" }
-await grant.revoke();                                                                         // kill-switch
+const grant = await gate.preApprove({ merchant: "blue-bottle", perOrder: 30, total: 100 });
+const result = await grant.spend({ idempotencyKey: "order-1", item: "coffee" });
+await grant.revoke();
 ```
 
 Under that facade are **signer-agnostic seams** for redeeming a user-sealed

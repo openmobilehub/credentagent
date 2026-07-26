@@ -1,3 +1,7 @@
+> **Superseded for everyday use:** the delegated-spend flow now ships as the real
+> `credentagent.grants` API — see `examples/demo-hub/` (Section 3) and `examples/grants-proto/`.
+> This demo drives the lower-level `DelegatedGate` seams directly and stays as the seams reference.
+
 # `hnp-draws/` — the human-not-present "doorman" in action (005 seams, preview)
 
 Watch the [PR #41](https://github.com/openmobilehub/credentagent/pull/41) HNP seams decide, with **no web

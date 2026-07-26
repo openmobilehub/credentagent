@@ -23,8 +23,9 @@ import type { RefusalCode, RefusalRetryable } from "./ceremony/refusals.js";
 /** The delegate private key type, without naming the DOM `CryptoKey` global. */
 type DelegateKey = Awaited<ReturnType<typeof generateDelegate>>["privateKey"];
 
-/** A catalog entry: a bare price, or a price plus an age restriction. */
-export type CatalogEntry = number | { price: number; minAge?: number };
+/** A catalog entry: a bare price, or a price plus an age restriction and/or a category
+ *  (categories feed the grants `allow` bounds — what a delegated agent may buy). */
+export type CatalogEntry = number | { price: number; minAge?: number; category?: string };
 
 export interface DelegatedGateOptions {
   /** Your priced catalog: item id → price, or → { price, minAge }. */

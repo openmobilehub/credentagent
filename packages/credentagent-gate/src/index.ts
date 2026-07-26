@@ -26,7 +26,14 @@ export { MemoryVerificationStore } from "./store.js";
 // `await credentagent.orders.create({ order, policy })` → { id, approveUrl, manifest };
 // `credentagent.orders.retrieve(id)` → the door (ok | pending+approveUrl | reason).
 export { Orders, MemoryOrderStore } from "./orders.js";
-export type { OrderStore, CreatedOrder, CompletedOrder, OrderDoor } from "./orders.js";
+export type { OrderStore, CreatedOrder, CompletedOrder, OrderDoor, OrderDoorCode } from "./orders.js";
+
+// ── Grants (spec 009, #104) — authorize once, spend later (human NOT present) ──
+// `await credentagent.grants.create({ merchant, budget, perSpend, allow? })` → a pending grant;
+// the human approves once (grant.approveUrl) → `grant.spend({ idempotencyKey, items })` runs the
+// REAL engine (per-spend cap, budget, single-use, revocation, age-non-delegable) → typed door.
+export { Grants } from "./grants.js";
+export type { Grant, GrantStatus, GrantDoorCode, GrantAllow, CreateGrantOptions, SpendDoor, SpendItems } from "./grants.js";
 
 // ── Webhooks (spec 010) — the REAL HTTP completion signal ───────────────────
 // SEND: `new CredentAgent({ webhooks: { endpoints: [{ url, secret }] } })` → every settled order
