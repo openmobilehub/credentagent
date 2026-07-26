@@ -21,6 +21,7 @@ import { completeOrder, type CompletedRecord, type CompletedOrderStore } from ".
 import { renderRequirements, type RenderOrder } from "./ceremony/checkout-page.js";
 import type { CartItemRef, CeremonyCatalog, CeremonyOrder, CeremonyOrderStore, RepriceOpts } from "./ceremony/types.js";
 import type {
+  Branding,
   Credential,
   GateOrder,
   ReaderIdentity,
@@ -48,6 +49,8 @@ export interface ServeOrdersDeps {
   credentialRegistry: ReadonlyMap<string, Credential>;
   /** Stable reader identity the rails present (omit ⇒ per-request self-signed). */
   readerIdentity?: ReaderIdentity;
+  /** Host brand for the checkout page + rails (omit ⇒ the built-in look). Never brands the footer. */
+  branding?: Branding;
   /** Stable HMAC key for the challenge (survives an instance split). Omit ⇒ ephemeral dev key. */
   signingKey?: string;
 }
@@ -197,6 +200,7 @@ export function serveOrders(app: CeremonyApp, deps: ServeOrdersDeps): void {
     // storefront's `/checkout` default (which the orders interface doesn't serve).
     returnUrl: (id) => `${deps.walletOrigin}/credentagent/orders/${encodeURIComponent(id)}`,
     ...(deps.readerIdentity ? { readerIdentity: deps.readerIdentity } : {}),
+    ...(deps.branding ? { branding: deps.branding } : {}),
     ...(deps.signingKey ? { signingKey: deps.signingKey } : { allowEphemeralKey: true }),
   });
 
@@ -241,7 +245,7 @@ export function serveOrders(app: CeremonyApp, deps: ServeOrdersDeps): void {
           orderToken: id,
         };
     const statusUrl = `/credentagent/orders/${orderQ}/status`;
-    res.type("html").send(renderRequirements(toRenderOrder(order), manifest, verification, { payment, paid, statusUrl }));
+    res.type("html").send(renderRequirements(toRenderOrder(order), manifest, verification, { payment, paid, statusUrl, ...(deps.branding ? { branding: deps.branding } : {}) }));
   };
 
   // Instant-demo completion — UNGATED orders only. A gated order (age / payment) is refused

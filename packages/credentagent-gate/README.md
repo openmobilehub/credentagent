@@ -56,6 +56,34 @@ the widget shows the confirmation. Add the headphones instead and the age gate d
 > predicate keys off the cart's lines — e.g. `order.lines.some((l) => l.minimumAge != null)`.
 > For a deployment pass your public origin: `new CredentAgent({ walletOrigin: "https://shop.example" })`.
 
+### Branding the ceremony pages
+
+The buyer proves their credential on pages the gate serves during **your** checkout, so those
+pages can carry **your** brand. Set `branding` **once** on the constructor and every ceremony page
+— the checkout hub and the age / payment / credential gate pages — picks it up. No per-page wiring:
+
+```ts
+const credentagent = new CredentAgent({
+  walletOrigin: "https://shop.acme.example",
+  branding: {
+    wordmark: "ACME",          // replaces the "CREDENTAGENT" wordmark
+    accent: "#7c3aed",         // primary colour (button, active step, ✓); hover derived
+    logo: "data:image/svg+xml;base64,…", // optional; shown instead of the wordmark
+    demoPill: false,           // hide the DEMO pill (e.g. in production)
+  },
+});
+credentagent.mount(store.app); // every /credentagent/* page now carries ACME's brand
+```
+
+- **Zero-config default** — omit `branding` and the pages render exactly as before.
+- **Chrome only, by design.** Branding never touches the honesty trust footer: the
+  `presence-only-demo` disclosure (see [Honest status](#honest-status)) is the same on every page,
+  branded or not. Nothing you pass can alter or remove it.
+- **Safe by construction.** Every field is sanitized where it's used — the wordmark is HTML-escaped,
+  the `accent` must be a valid CSS colour (anything else is ignored, keeping the built-in teal), and
+  `logo` accepts only a `data:image/…` URI, an `https:`/`http:` URL, or a root-relative `/path`. A
+  host-supplied string can't inject markup or CSS onto a consent screen.
+
 ## Orders — a checkout without a storefront
 
 Don't have (or want) the MCP storefront? Drive the checkout yourself with `credentagent.orders`.
@@ -322,7 +350,7 @@ provide those are later increments.
 ```ts
 // Client (configure once, then declarative calls)
 class CredentAgent {
-  constructor(opts?: { walletOrigin?: string; store?: VerificationStore; credentials?: Credential[] });
+  constructor(opts?: { walletOrigin?: string; store?: VerificationStore; credentials?: Credential[]; branding?: Branding });
   requirements(order: GateOrder, policy: Step[]): VerificationManifestEntry[];   // Context 1
   mount(app: ExpressApp, ceremony?: MountCeremony): void;                        // Context 2
 }

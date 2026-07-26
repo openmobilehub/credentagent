@@ -18,12 +18,68 @@
 // It MUST keep the literal token "presence-only-demo" so the honesty tests and the FR
 // stay satisfied — the wire crypto is real; the issuer trust anchor is not.
 
+import type { Branding } from "../types.js";
+
 function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
 function money(amount: number, currency: string): string {
   return new Intl.NumberFormat("en-US", { style: "currency", currency }).format(amount);
+}
+
+// ── Branding sanitizers — the single escaping choke point ────────────────────
+// Branding is host-supplied and lands on a consent page the BUYER sees, so every value is
+// validated/escaped HERE, at the one point it is interpolated, before it can become HTML/CSS.
+// The rule is allowlist-and-drop: a value that isn't provably safe falls back to the default,
+// so a malformed or hostile input can never break the stylesheet or inject markup.
+
+// A CSS colour we will drop verbatim into a stylesheet. The grammars admit only characters
+// that cannot escape a CSS value or the surrounding <style> (no `<`, `>`, `"`, `;`, `{`, `}`):
+// a hex colour, a numeric rgb()/hsl() functional colour, or a bare named colour.
+const HEX_COLOR = /^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
+const FUNC_COLOR = /^(?:rgb|rgba|hsl|hsla)\(\s*[0-9.,%\s/]+\)$/i;
+const NAMED_COLOR = /^[a-zA-Z]{1,20}$/;
+
+/** Return the accent only if it is a recognized, injection-safe CSS colour; else undefined. */
+function safeAccent(accent: string): string | undefined {
+  const a = accent.trim();
+  return HEX_COLOR.test(a) || FUNC_COLOR.test(a) || NAMED_COLOR.test(a) ? a : undefined;
+}
+
+/** Derive a slightly darker hover shade. A 3/6-digit hex is darkened numerically (max browser
+ *  support for the documented hex case); any other safe colour uses `color-mix` toward black. */
+function accentHover(accent: string): string {
+  const hex = accent.startsWith("#") ? accent.slice(1) : "";
+  const full = hex.length === 3 ? hex.split("").map((c) => c + c).join("") : hex;
+  if (full.length === 6 && /^[0-9a-fA-F]{6}$/.test(full)) {
+    const darker = [0, 2, 4]
+      .map((i) => Math.round(parseInt(full.slice(i, i + 2), 16) * 0.86))
+      .map((n) => n.toString(16).padStart(2, "0"))
+      .join("");
+    return `#${darker}`;
+  }
+  return `color-mix(in srgb, ${accent} 86%, #000)`;
+}
+
+// A logo URL we will drop into an <img src>. Allowlist the schemes that are safe to load as an
+// image; anything else (e.g. `javascript:`) is dropped so the wordmark shows instead. The value
+// is STILL HTML-escaped at interpolation, so quote-breakout is impossible regardless.
+function safeLogo(logo: string): string | undefined {
+  const l = logo.trim();
+  return /^data:image\/[a-z0-9.+-]+[,;]/i.test(l) || /^https?:\/\//i.test(l) || /^\/(?!\/)/.test(l) ? l : undefined;
+}
+
+/** The branding style overrides appended after the design system, so a later `:root`
+ *  declaration wins. Emits NOTHING when there is no accent/logo to override — keeping the
+ *  no-branding output byte-for-byte identical to the built-in look. */
+function brandingCss(branding?: Branding): string {
+  if (!branding) return "";
+  let css = "";
+  const accent = branding.accent ? safeAccent(branding.accent) : undefined;
+  if (accent) css += `:root{--accent:${accent};--accent-hover:${accentHover(accent)};}`;
+  if (branding.logo && safeLogo(branding.logo)) css += `.brand-logo{height:20px;width:auto;display:block;}`;
+  return css;
 }
 
 // ── The design-system stylesheet ────────────────────────────────────────────
@@ -200,25 +256,35 @@ const DESIGN_CSS = `
 `;
 
 /** <head> with the shared design-system CSS. `extraCss` lets a page add the few
- *  component styles unique to it without forking the design language. */
-export function pageHead(title: string, extraCss = ""): string {
+ *  component styles unique to it without forking the design language. `branding` (from
+ *  `new CredentAgent({ branding })`) appends the host's accent/logo overrides after the
+ *  design system — omitted ⇒ the built-in look, byte-for-byte. */
+export function pageHead(title: string, extraCss = "", branding?: Branding): string {
   return `<head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>${escapeHtml(title)}</title>
-<style>${DESIGN_CSS}${extraCss}</style>
+<style>${DESIGN_CSS}${extraCss}${brandingCss(branding)}</style>
 </head>`;
 }
 
-/** The CREDENTAGENT wordmark + a discreet DEMO pill, with an optional confident h1 +
- *  identity-first tagline underneath. Pass `h1`/`tagline` to render the heading block;
- *  omit them to render just the brand row (a page can lay out its own heading). */
-export function brandHeader(opts: { h1?: string; tagline?: string } = {}): string {
+/** The wordmark + a discreet DEMO pill, with an optional confident h1 + identity-first
+ *  tagline underneath. Pass `h1`/`tagline` to render the heading block; omit them to render
+ *  just the brand row (a page can lay out its own heading). `branding` swaps the wordmark for
+ *  the host's (or its logo) and can hide the DEMO pill; omitted ⇒ the CREDENTAGENT wordmark +
+ *  DEMO pill, byte-for-byte. The honesty trust footer is NOT branded (see `trustFooter`). */
+export function brandHeader(opts: { h1?: string; tagline?: string } = {}, branding?: Branding): string {
   const heading =
     opts.h1 != null
       ? `<div class="head"><h1>${escapeHtml(opts.h1)}</h1>${opts.tagline != null ? `<p class="tagline">${escapeHtml(opts.tagline)}</p>` : ""}</div>`
       : "";
-  return `<div class="brand"><span class="wordmark">CREDENTAGENT</span><span class="demo-pill">DEMO</span></div>${heading}`;
+  const wordmark = branding?.wordmark ? escapeHtml(branding.wordmark) : "CREDENTAGENT";
+  const logo = branding?.logo ? safeLogo(branding.logo) : undefined;
+  const brandLeft = logo
+    ? `<img class="brand-logo" src="${escapeHtml(logo)}" alt="${wordmark}" />`
+    : `<span class="wordmark">${wordmark}</span>`;
+  const pill = branding?.demoPill === false ? "" : `<span class="demo-pill">DEMO</span>`;
+  return `<div class="brand">${brandLeft}${pill}</div>${heading}`;
 }
 
 /** An indeterminate "settling…" progress bar (hidden until JS adds `.on`). Shown on
@@ -365,6 +431,10 @@ export function railCompleteScript(): string {
  * The single, DISCREET presence-only honesty line (replaces the old yellow warning
  * box). It MUST keep the literal "presence-only-demo" token (FR-011 + the honesty
  * tests) — the wire crypto is real; the issuer trust anchor is not.
+ *
+ * DELIBERATELY takes no `branding` argument (issue #61): host branding customises the
+ * chrome, never the trust disclosure. This line is identical on every page, branded or
+ * not — do not thread branding in here (a bypass test asserts it stays fixed).
  */
 export function trustFooter(): string {
   return `<div class="trust"><div class="trust-line">🔒 presence-only-demo · secured by CredentAgent · the wire crypto is real; issuer trust anchor is not</div></div>`;
