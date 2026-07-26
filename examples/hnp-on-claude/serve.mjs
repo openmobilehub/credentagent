@@ -43,5 +43,13 @@ console.log(`\n  HNP-on-Claude store → MCP at ${PUBLIC_URL}/mcp (local: ${url}
 console.log(`  Tools: browse/cart/checkout (human-present) + create-spending-grant / spend-from-grant /`);
 console.log(`         get-grant-status / revoke-grant (human-NOT-present)`);
 console.log(`  Grant approve pages served at ${PUBLIC_URL}/credentagent/grants/:id`);
-if (!process.env.PUBLIC_URL) console.log(`\n  For claude.ai: tunnel this port, then restart with PUBLIC_URL=<tunnel URL>.`);
+if (!process.env.PUBLIC_URL) {
+  console.log(`\n  Testing on THIS machine? You're set — add http://localhost:${PORT}/mcp as a custom`);
+  console.log(`  connector in claude.ai; localhost approve links open fine here.`);
+  console.log(`\n  Testing from another device (phone wallet)? Expose the port and restart bound to it:`);
+  console.log(`    ngrok http ${PORT}                                   # copy the https URL it prints`);
+  console.log(`    # or: cloudflared tunnel --url http://localhost:${PORT}`);
+  console.log(`    PUBLIC_URL=<tunnel-url> node examples/hnp-on-claude/serve.mjs`);
+  console.log(`  then add <tunnel-url>/mcp as the connector.`);
+}
 console.log();
