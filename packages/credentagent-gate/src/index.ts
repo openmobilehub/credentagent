@@ -51,6 +51,16 @@ export type { WebhookEvent, WebhookEndpoint, WebhookOptions, WebhookVerdict, Web
 // type those seam adapters without re-declaring them.
 export { completeOrder } from "./ceremony/completion.js";
 
+// ── defineHost — the typed "bring your own host" seam contract ──────────────
+// The ergonomic facade over the above: give it your catalog + order store + completed-order
+// store and it BUILDS the shared completion, owns the per-order verification store, and
+// publishes every seam onto `app.locals.credentagent` — so a non-storefront host wires the
+// gate in three lines, with no `completeOrder` by hand and no raw `app.locals` plumbing.
+//   const host = defineHost({ catalog, orderStore, records, signingKey });
+//   host.publish(app); new CredentAgent({ walletOrigin }).mount(app);
+export { defineHost } from "./host.js";
+export type { DefineHostSpec, Host, HostApp } from "./host.js";
+
 // ── Cart Mandate (ap2.CartMandate) — signed, tamper-evident cart envelope ────
 // Additive + fail-closed: `issueCartMandate` seals a server-priced cart with the host's
 // HMAC key; `verifyCartMandate` (and `completeOrder`, when given a `cartMandate` +

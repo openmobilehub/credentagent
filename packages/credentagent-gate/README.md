@@ -130,6 +130,57 @@ redirects are never followed, and each attempt is bounded by a timeout (`timeout
 `verifyEvent(...)` is the never-throws verdict door if you prefer a result to a try/catch. Runnable:
 [`examples/order-webhooks/`](https://github.com/openmobilehub/credentagent/tree/main/examples/order-webhooks).
 
+## Bring your own host — mount on YOUR MCP server
+
+`createStorefront()` is one host; the product promise is "mount the gate on **any** app." If you
+have your own Express + MCP server, your own catalog/pricing, and your own order store, wire the
+gate over them with **`defineHost(...)`** — you should never call the low-level `completeOrder` by
+hand or reach into `app.locals` yourself.
+
+Give `defineHost` three things — how you **price** an order, how you **read** a created order, and
+where **completed** orders go — and it builds the shared completion for you, owns the per-order
+verification store, and publishes every seam. Then `mount(app)` serves the proof pages over them:
+
+```ts
+import { CredentAgent, defineHost, age, payment, required } from "@openmobilehub/credentagent-gate";
+
+const host = defineHost({
+  catalog: { createOrder: (items, orderId) => priceFromMyCatalog(items, orderId) }, // amount source of truth
+  orderStore: { read: (orderId) => myOrders.get(orderId) ?? null },                 // your created order
+  records: { read: (id) => myCompleted.get(id), write: (rec) => myCompleted.set(rec.orderId, rec) },
+  signingKey: process.env.GATE_SECRET, // stable across instances; or { allowEphemeralKey: true } for dev
+});
+
+host.publish(app);                                     // publish the seams onto your app
+new CredentAgent({ walletOrigin }).mount(app);         // serve the /credentagent/* proof pages over them
+
+// Your OWN place-order / MCP tool calls host.complete(...), so the gates run server-side on YOUR
+// completion path too (not just in a rendered page — Security invariant 1). Typed plain data back:
+app.post("/checkout/:id", async (req, res) => {
+  const order = priceFromMyCatalog([{ productId: "wine", quantity: 1 }], req.params.id);
+  const result = await host.complete({ order, mandateId: `demo-${order.id}`, amount: order.total, currency: "USD", method: "demo", gates: [{ gate: "demo", pass: true, detail: "" }] });
+  res.status(result.completed ? 200 : 402).json(result); // { completed:false, reason:"age" } until proven
+});
+```
+
+- **`host.complete(input)`** is the same shared completion the rails use — one choke point, no second
+  weaker path. It re-prices from your catalog (never the token), runs the age + any custom `gate()`
+  credentials, settles, and records idempotently, returning `{ completed, reason? }`.
+- **`host.verificationStore`** is the per-order proof store (default in-memory; inject a shared store
+  — e.g. Redis — for a multi-instance deploy). The rails write it when the buyer proves; your
+  completion reads it.
+- **Fail-closed like `mount()`:** `defineHost` throws at construction on an incomplete or contradictory
+  seam set (missing `catalog`/`orderStore`, both `records` and a `completion`, or neither a `signingKey`
+  nor `allowEphemeralKey`).
+- **Advanced:** pass your own `completion` seam instead of `records` if you'd rather bind `completeOrder`
+  yourself. Runnable end-to-end:
+  [`examples/bring-your-own-host.mjs`](https://github.com/openmobilehub/credentagent/blob/main/examples/bring-your-own-host.mjs).
+
+> Still storefront-only (not yet in `defineHost`): the catalog-injected MCP shopping tools, the widget
+> bundle, and the `?cart=` stateless-order transport wiring — `createStorefront()` remains the batteries-
+> included host. `defineHost` covers the seam contract (pricing, orders, completion, verification), which
+> is what a custom host actually needs.
+
 ## The three execution contexts
 
 The split is load-bearing — conflating them is the documented root cause of confusion
@@ -335,6 +386,10 @@ dcql({ docType, claims })  ·  gate()  ·  discount({ percent?, amount? })  ·  
 
 // Stores + host-side composition seam
 MemoryVerificationStore  ·  completeOrder(input, ctx)
+
+// Bring your own host — the typed seam contract (builds completion + publishes the seams)
+defineHost({ catalog, orderStore, records | completion, signingKey | allowEphemeralKey })
+  → { verificationStore, publish(app), complete(input) → { completed, reason? } }
 
 // Delegated draws (HNP, 005 preview) — the Stripe-grade facade + the underlying seams
 DelegatedGate  ·  gate.preApprove(bounds) → DelegatedGrant  ·  grant.spend(purchase) → SpendResult  ·  grant.revoke()
