@@ -166,12 +166,42 @@ describe("renderRequirements — paid revisit", () => {
       paid: {
         amount: 111.6,
         currency: "USD",
-        settlement: { network: "hedera-testnet", payer: { accountId: "0.0.5555" }, hashscanUrl: "https://hashscan.io/testnet/transaction/x" },
+        // The x402 label comes from the record (`provider`), not a hardcoded rail (#107).
+        settlement: { network: "hedera-testnet", provider: "x402", txId: "0.0.7@1", payer: { accountId: "0.0.5555" }, hashscanUrl: "https://hashscan.io/testnet/transaction/x" },
       },
     });
     expect(html).toContain("Order paid · $111.60 via x402");
-    expect(html).toContain("HashScan");
+    expect(html).toContain("View on HashScan"); // the actual explorer link, not just the CSS class
     expect(html).toContain("0.0.5555");
+  });
+
+  // #107 — the receipt settlement honesty bug. The paid banner must DERIVE what it shows
+  // from the recorded settlement, never assume the x402 (blockchain) rail. Two failing
+  // cases motivated this: a real external-processor settlement was labelled "no
+  // settlement", and every settlement was hardcoded to "via x402 · View on HashScan".
+  it("names an external processor from the record — via <provider> + txn, no HashScan, no x402 (#107 cause 2)", () => {
+    // A card-processor settlement: it has a txn id but NO chain account and NO explorer.
+    const html = renderRequirements(order, manifest, {}, {
+      paid: {
+        amount: 74,
+        currency: "USD",
+        method: "dc-payment",
+        settlement: { network: "upay", provider: "UPay", txId: "ccOuvUeikyv22XIn", status: "settled" },
+      },
+    });
+    expect(html).toContain("Order paid · $74.00 via UPay"); // backend named from the record
+    expect(html).toContain("txn ccOuvUeikyv22XIn"); // the real transaction id is shown
+    expect(html).not.toContain("via x402"); // never the hardcoded blockchain rail
+    expect(html).not.toContain("View on HashScan"); // no explorer link a processor can't back
+    expect(html).not.toContain("No settlement recorded"); // money DID move — don't deny it
+  });
+
+  it("says 'No settlement recorded' only when the order truly settled nothing (#107 cause 1)", () => {
+    // No settlement record at all ⇒ the honest empty copy (and no false x402 claim).
+    const html = renderRequirements(order, manifest, {}, { paid: { amount: 124, currency: "USD", method: "passkey" } });
+    expect(html).toContain("No settlement recorded for this payment method.");
+    expect(html).not.toContain("via x402");
+    expect(html).not.toContain("View on HashScan");
   });
 
   // bfcache guard: a buyer who authorizes on a gate page then taps browser-BACK would

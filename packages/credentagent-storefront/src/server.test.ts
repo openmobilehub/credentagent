@@ -10,7 +10,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { AddressInfo } from "node:net";
 import { readFileSync } from "node:fs";
-import { createStorefront, originFromRequest, verificationRevision, type Storefront } from "./server.js";
+import { createStorefront, originFromRequest, verificationRevision, type Storefront, type CompletedOrderRecord } from "./server.js";
 import { redisStorage, type RedisLike } from "./redis.js";
 import { firestoreCatalog, type FirestoreLike } from "./firestore.js";
 import { MemoryOrderStore } from "./state.js";
@@ -266,6 +266,29 @@ describe("GET /checkout — the shared three-gate page (renderRequirements)", ()
     const res = await request(store.app).get(`/checkout?order=${orderId}`);
     expect(res.text).toContain("Order paid");
     expect(res.text).not.toContain("/checkout/order-status");
+  });
+
+  // #107 — the receipt settlement honesty bug (Cause 1). completeOrder DOES persist the
+  // settlement onto the completed-order record, but GET /checkout rebuilt its `paid`
+  // object and dropped it, so EVERY paid order rendered "no settlement" — even one that
+  // really settled. This forwards it. Deleting the `settlement` pass-through turns this red.
+  it("a completed order's settlement record surfaces on the paid revisit (#107 cause 1)", async () => {
+    const orders = new MemoryOrderStore<CompletedOrderRecord>();
+    const store = createStorefront({ orderStore: orders }); // ungated
+    const orderId = await checkoutId(await connect(store), "drift-mouse");
+    // A real settlement recorded for THIS order, exactly as completeOrder writes it.
+    await orders.write(orderId, {
+      orderId,
+      amount: 74,
+      currency: "USD",
+      method: "dc-payment",
+      completedAt: new Date().toISOString(),
+      settlement: { network: "upay", provider: "UPay", txId: "ccOuvUeikyv22XIn", status: "settled" },
+    });
+    const res = await request(store.app).get(`/checkout?order=${orderId}`);
+    expect(res.text).toContain("via UPay"); // the backend that actually settled
+    expect(res.text).toContain("ccOuvUeikyv22XIn"); // its real transaction id
+    expect(res.text).not.toContain("No settlement recorded"); // money moved — don't deny it
   });
 
   // BYPASS (Security invariant 1, load-bearing): the instant-demo place-order path
