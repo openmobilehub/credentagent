@@ -5,8 +5,8 @@ Release checklist for the two npm packages extracted from this repo:
 - **`@openmobilehub/credentagent-gate`** — the credential/payment Gate (`new CredentAgent()`, `credentagent.mount(app)`).
 - **`@openmobilehub/credentagent-storefront`** — the reference storefront (`createStorefront()`).
 
-Both are at `0.2.0`, Apache-2.0, ESM, ship their own types, and declare `publishConfig.access: public`
-(required for a scoped public package).
+Both version in lockstep (bump them together), Apache-2.0, ESM, ship their own types, and declare
+`publishConfig.access: public` (required for a scoped public package).
 
 ## Pre-flight (verified by the pre-publish audit)
 
@@ -38,6 +38,23 @@ npm publish -w @openmobilehub/credentagent-storefront --access public
 
 > Requires `@openmobilehub` org publish rights on npm (`npm whoami` / `npm login`). This is a
 > maintainer action — CI does not publish.
+
+## Tag + GitHub release (the publish is not done until this is)
+
+The repo's record of what shipped is the tag + GitHub release — there is no status file, so an
+npm publish without them is a hole in the record (0.3.0 and 0.3.1 shipped untagged and had to be
+backfilled). After the publish succeeds and the post-publish `quickstart-smoke` run is green:
+
+```bash
+git tag vX.Y.Z <published-commit>       # lightweight, one tag per release — the packages
+git push origin vX.Y.Z                  # version in lockstep, so one tag marks both
+gh release create vX.Y.Z --title "vX.Y.Z — <plain-language headline>" --notes-file <notes> --latest
+```
+
+Release notes are **public copy, written for someone who didn't follow development**: plain
+language, each feature stated by what it does for the integrator, and the honesty gate (below)
+applies to them exactly as it does to the READMEs — never let notes present a presence-only gate
+as a real safety control.
 
 ## Optional polish (non-blocking, deferred)
 

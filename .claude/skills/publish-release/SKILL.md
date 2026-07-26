@@ -39,8 +39,22 @@ read it first; this skill encodes the order of operations and the traps.
 
 4. **Post-publish** — the `quickstart-smoke` CI job exercises the PUBLISHED packages
    from a clean checkout; a red run after publishing means registry/example drift.
-   Nothing to hand-update afterwards: the **release + merged PR are the record** (there
-   is no status file). Close any issue the release resolves.
+
+5. **Tag + GitHub release — the publish is not done until this is.** The packages
+   version in lockstep, so ONE lightweight tag `vX.Y.Z` on the exact commit you
+   published from marks both:
+
+   ```bash
+   git tag vX.Y.Z <published-commit> && git push origin vX.Y.Z
+   gh release create vX.Y.Z --title "vX.Y.Z — <plain-language headline>" --notes-file <notes> --latest
+   ```
+
+   Release notes are public copy — plain language for someone who didn't follow
+   development, and the honesty gate (below) applies to them exactly as to the
+   READMEs. Skipping this step breaks the record: 0.3.0/0.3.1 shipped untagged and
+   had to be backfilled. With the tag + release in place, nothing else needs
+   hand-updating: the **release + merged PR are the record** (there is no status
+   file). Close any issue the release resolves.
 
 ## The honesty gate (do not regress at publish)
 
