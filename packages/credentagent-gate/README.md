@@ -102,6 +102,38 @@ the age threshold are re-derived from the order you stored server-side — never
 (invariant 2), and a gated order can only complete through the wallet ceremony, never a shortcut
 (invariant 1). Runnable: [`examples/orders-checkout/`](https://github.com/openmobilehub/credentagent/tree/main/examples/orders-checkout).
 
+### Preflight — did I configure this right? (`doctor()`)
+
+Those deployment knobs — a stable `gateSecret`, a public `walletOrigin`, shared stores — are easy to
+forget, and a missing one fails at the worst time (a buyer mid-checkout, on the one instance that never
+saw the proof). Call `credentagent.doctor()` once at startup for a config check. It returns typed plain
+data, and **never throws or touches the network** — it reads your config plus `process.env` for
+deployment signals:
+
+```ts
+const report = credentagent.doctor();
+if (!report.ok) {                                            // ok === no error-level findings
+  for (const f of report.findings) console.error(`[${f.level}] ${f.message}\n  fix: ${f.fix}`);
+  process.exit(1);                                           // fail the boot rather than serve a broken deploy
+}
+
+// …or one line that prints a human-readable summary AND returns the same report:
+credentagent.doctor({ print: true });
+```
+
+Each finding is `{ level: "error" | "warn", code, message, fix }`. It checks the config you passed to
+`new CredentAgent(...)`:
+
+| `code` | fires when | `fix` |
+| --- | --- | --- |
+| `ephemeral-gate-secret` | no `gateSecret` on a deployment (serverless ⇒ error, else warn) | set `GATE_SECRET` — `openssl rand -hex 32` — and pass `{ gateSecret }` |
+| `localhost-wallet-origin` | `walletOrigin` is localhost on a deployment | pass your public `https` origin |
+| `in-memory-verification-store` | the default in-memory `store` on a deployment | inject a shared `{ store }` (Redis/Upstash) |
+| `in-memory-order-store` | the default in-memory order stores on a deployment | inject `{ orderStore, completedOrderStore }` |
+
+In plain local dev — no deployment env signals (`VERCEL`, `AWS_LAMBDA_*`, `NODE_ENV=production`, …) — it
+reports nothing, so the zero-config quickstart stays quiet.
+
 ### Webhooks — tell a *different* service when an order settles
 
 `on("order.settled", …)` only fires in the process that settled the order. When fulfillment runs
@@ -325,6 +357,7 @@ class CredentAgent {
   constructor(opts?: { walletOrigin?: string; store?: VerificationStore; credentials?: Credential[] });
   requirements(order: GateOrder, policy: Step[]): VerificationManifestEntry[];   // Context 1
   mount(app: ExpressApp, ceremony?: MountCeremony): void;                        // Context 2
+  doctor(opts?: { print?: boolean }): DoctorReport;                              // config preflight (#25)
 }
 
 // Policy builders + extensibility
