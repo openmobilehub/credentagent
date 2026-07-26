@@ -4,11 +4,11 @@
 This example connects the whole store (checkout **and** grants) to the Claude app so
 you can run the human-not-present flow in a real conversation.
 
-![A real Claude conversation: create a spending grant, approve it once, the agent buys the in-scope mouse and refuses the age-restricted whiskey](media/hnp-on-claude.gif)
+> A recorded walkthrough of the flow below is attached to the PR that introduced this
+> example ([#118](https://github.com/openmobilehub/credentagent/pull/118)) — kept out of
+> the repo so the tree carries no binaries.
 
-*(Same clip as [`media/hnp-on-claude.mp4`](media/hnp-on-claude.mp4) — smaller, for sharing.)*
-
-## What the recording shows (real, end to end)
+## What the flow shows (real, end to end)
 
 1. **You:** "Set up a spending grant — $200 total, $130 per purchase, Beverages and Electronics only. Give me the approval link."
 2. **Claude** calls `create-spending-grant` and hands back an **approve link** + the sealed bounds. It explains, unprompted, that spending is enforced by the server, age-restricted items come back to you, and the grant is revocable.
