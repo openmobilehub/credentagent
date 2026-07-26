@@ -520,13 +520,21 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
         await source.load();
         const catalog = source.current();
         const priced = await readPriced(sessionOf(extra));
+        // A compact, agent-legible catalog line (ids + names + prices + categories + age flags).
+        // A host rendering the widget shows the grid to a human; a HEADLESS agent (no widget, no
+        // human watching) has only this text — without the ids it can't call add-to-cart and dead-
+        // ends (#120). Ids are for the agent's OWN use, not for re-listing back to a present user.
+        const idLine = catalog
+          .map((p) => `${p.id} — ${p.name}, $${p.price}, ${p.category}${p.minimumAge ? `, ${p.minimumAge}+` : ""}`)
+          .join(" · ");
         return {
           content: [
             {
               type: "text",
               text:
                 `The product picker is now showing the catalog visually to the user (${catalog.length} products in a grid with images). ` +
-                `Do NOT re-list the products as text — they can see them. Briefly invite them to pick items or tell you what to add. ` +
+                `Do NOT re-list the products as text to a user who can see the grid — briefly invite them to pick, or act on what they ask for. ` +
+                `Catalog ids for YOUR OWN use when adding to the cart: ${idLine}. ` +
                 `Adjust the cart by id with add-to-cart / set-quantity / remove-from-cart; check out with checkout.`,
             },
           ],
