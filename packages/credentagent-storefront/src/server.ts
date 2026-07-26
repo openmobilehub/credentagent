@@ -62,6 +62,7 @@ import {
   MemoryVerificationStore,
   type CartItemRef,
   type Credential,
+  type Grants,
   type CeremonyCatalog,
   type CeremonyOrder,
   type CeremonyOrderStore,
@@ -165,6 +166,23 @@ export interface StorefrontOptions {
    * a configured-but-failed settle records nothing and leaves the cart intact.
    */
   settle?: (order: CeremonyOrder) => Promise<Record<string, unknown> & { network: string; txId: string; status: string }>;
+  /**
+   * The human-NOT-present resource (spec 009): pass `credentagent.grants` (a client constructed
+   * with a priced `catalog`) and the server additionally registers the four grant tools —
+   * `create-spending-grant`, `get-grant-status`, `spend-from-grant`, `revoke-grant` — so an AI
+   * agent can be granted a bounded spending authority ONCE by the human (grant.approveUrl) and
+   * then buy unattended within it, every rule enforced server-side (caps, allow-bounds,
+   * revocation; age-restricted items NEVER delegate — they refuse `step-up`). Omit ⇒ no grant
+   * tools (additive). Serve the approve page with `credentagent.grants.serve(store.app)`.
+   */
+  grants?: Grants;
+  /**
+   * The merchant identity a created grant is cryptographically scoped and audited as (spec 009).
+   * Only meaningful alongside `grants`. Defaults to `"storefront"` — set it to THIS storefront's
+   * identity (e.g. `"utopia"`) so the authorization record and downstream merchant-scope checks
+   * reflect the real host, not a placeholder.
+   */
+  merchant?: string;
 }
 
 /**
@@ -333,6 +351,10 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
     );
   }
   const signingKey = opts.signingKey ?? (statelessOrders ? randomBytes(32).toString("hex") : undefined);
+  // The human-not-present resource (spec 009) — grant tools register only when provided.
+  const grants = opts.grants;
+  // The merchant a created grant is sealed as — honest default for the generic package.
+  const merchant = opts.merchant ?? "storefront";
 
   // Issue + base64url-encode a Cart Mandate for a priced order (the checkout link's `cart`).
   const cartParamFor = (order: Order): string => {
@@ -597,6 +619,124 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
         return { content: [{ type: "text", text: JSON.stringify(order) }], structuredContent: { orderId, status: "completed", order } };
       },
     );
+
+    // ── grants — the human-NOT-present tools (spec 009), only when opts.grants is wired ──
+    // The lifecycle an agent drives: create (pending) → the HUMAN approves once at approveUrl →
+    // spend within the sealed bounds → revoke. Every refusal is a typed code the agent can act on.
+    if (grants) {
+      const grantView = (g: NonNullable<Awaited<ReturnType<Grants["retrieve"]>>>) =>
+        ({ grantId: g.id, status: g.status, merchant: g.merchant, approveUrl: g.approveUrl, budget: g.budget, perSpend: g.perSpend, allow: g.allow ?? null });
+      server.registerTool(
+        "create-spending-grant",
+        {
+          title: "Create Spending Grant",
+          description:
+            "Ask the human for a bounded spending authority you can buy against WHILE THEY ARE AWAY: a total budget, " +
+            "a per-purchase cap, and optionally which product categories are allowed. Returns an approveUrl — SEND IT " +
+            "TO THE HUMAN; nothing can be spent until they approve there (status pending → authorized). Amounts are dollars.",
+          inputSchema: {
+            budget: z.number().positive().describe("total budget in dollars"),
+            perSpend: z.number().positive().describe("max dollars per single purchase"),
+            categories: z.array(z.string()).optional().describe("allowed product categories (e.g. Beverages); omit = any"),
+            description: z.string().optional().describe("the human-readable sentence shown at approval"),
+          },
+          annotations: { readOnlyHint: false },
+        },
+        async ({ budget, perSpend, categories, description }): Promise<CallToolResult> => {
+          const g = await grants.create({
+            merchant,
+            budget,
+            perSpend,
+            ...(categories?.length ? { allow: { categories } } : {}),
+            ...(description ? { description } : {}),
+          });
+          const view = { ...grantView(g), note: "PENDING — send approveUrl to the human; spending refuses until they approve." };
+          return { content: [{ type: "text", text: JSON.stringify(view) }], structuredContent: view };
+        },
+      );
+      server.registerTool(
+        "get-grant-status",
+        {
+          title: "Get Grant Status",
+          description: "Read a spending grant: status (pending | authorized | denied | revoked) and its sealed bounds.",
+          inputSchema: { grantId: z.string() },
+          annotations: { readOnlyHint: true },
+        },
+        async ({ grantId }): Promise<CallToolResult> => {
+          const g = await grants.retrieve(grantId);
+          if (!g) return { content: [{ type: "text", text: JSON.stringify({ error: "unknown grant" }) }], structuredContent: { error: "unknown grant" }, isError: true };
+          const view = grantView(g);
+          return { content: [{ type: "text", text: JSON.stringify(view) }], structuredContent: view };
+        },
+      );
+      server.registerTool(
+        "spend-from-grant",
+        {
+          title: "Spend From Grant",
+          description:
+            "Buy ONE product unattended against an authorized grant. The server re-prices from the catalog and enforces " +
+            "every sealed rule; a refusal returns a typed code: not-authorized (human never approved), not-allowed (outside " +
+            "the allowed categories), per-spend-exceeded, budget-exceeded, step-up (age-restricted — NEVER delegable: hand " +
+            "back to the human), revoked. Pass a stable idempotencyKey to make retries safe (same key replays the SAME outcome).",
+          inputSchema: {
+            grantId: z.string(),
+            productId: z.string(),
+            quantity: z.number().int().min(1).optional(),
+            idempotencyKey: z.string().optional().describe("stable per-purchase key; omit for a fresh one"),
+          },
+          annotations: { readOnlyHint: false },
+        },
+        async ({ grantId, productId, quantity, idempotencyKey }): Promise<CallToolResult> => {
+          const g = await grants.retrieve(grantId);
+          if (!g) return { content: [{ type: "text", text: JSON.stringify({ error: "unknown grant" }) }], structuredContent: { error: "unknown grant" }, isError: true };
+          const qty = quantity ?? 1;
+          const reply = (door: Record<string, unknown>): CallToolResult => {
+            const view = { grantId, productId, ...door };
+            return { content: [{ type: "text", text: JSON.stringify(view) }], structuredContent: view };
+          };
+
+          // Re-price and re-validate against the storefront's LIVE catalog before delegating
+          // (Codex P1 + invariant 2). The grant engine holds its own catalog snapshot, which a
+          // dynamic `source` (e.g. Firestore) can drift from; these fail-closed pre-checks read
+          // `source.current()` so a price bump can't evade the sealed per-spend cap and an item
+          // newly marked age-restricted can't be bought unattended — regardless of the grant's
+          // snapshot. The engine remains the authority for allow-bounds and budget draw-down.
+          await source.load();
+          const live = getProduct(source.current(), productId);
+          if (!live) return reply({ ok: false, code: "invalid-request", reason: "unknown product" }); // P2: typed, not a throw
+          if (live.minimumAge != null) return reply({ ok: false, code: "step-up" }); // age NEVER delegates
+          if (live.price * qty > g.perSpend) return reply({ ok: false, code: "per-spend-exceeded" }); // live price vs sealed cap
+
+          try {
+            const s = await g.spend({
+              idempotencyKey: idempotencyKey ?? `mcp-${randomUUID().slice(0, 12)}`,
+              items: [{ sku: productId, qty }],
+            });
+            return reply(s as unknown as Record<string, unknown>);
+          } catch {
+            // The engine's catalog doesn't know this sku (it throws on an unknown item) — surface
+            // the promised typed refusal instead of a generic tool exception. P2.
+            return reply({ ok: false, code: "invalid-request", reason: "unknown product" });
+          }
+        },
+      );
+      server.registerTool(
+        "revoke-grant",
+        {
+          title: "Revoke Grant",
+          description: "Kill-switch a spending grant — the very next spend is refused (code: revoked). Not reversible.",
+          inputSchema: { grantId: z.string() },
+          annotations: { readOnlyHint: false },
+        },
+        async ({ grantId }): Promise<CallToolResult> => {
+          const g = await grants.retrieve(grantId);
+          if (!g) return { content: [{ type: "text", text: JSON.stringify({ error: "unknown grant" }) }], structuredContent: { error: "unknown grant" }, isError: true };
+          await g.revoke();
+          const view = grantView((await grants.retrieve(grantId))!);
+          return { content: [{ type: "text", text: JSON.stringify(view) }], structuredContent: view };
+        },
+      );
+    }
 
     // ── widget resource — two registrations from one bundle ─────────────────
     // Claude / MCP-Apps hosts read RESOURCE_URI; ChatGPT reads the skybridge URI.
