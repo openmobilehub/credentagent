@@ -12,7 +12,18 @@ import { reconcileCartPayment } from "./reconciliation.js";
 import { checkDraw, type DrawVerifier } from "./mandate.js";
 import type { RevocationStore } from "./revocation.js";
 import { refusal } from "./refusals.js";
+import { KeyedMutex } from "./keyed-mutex.js";
 import { RESERVED_CREDENTIAL_IDS } from "../credentials.js";
+
+// Per-order in-process serializer for completion (#103). The idempotency read at the top and
+// the settle + record write near the bottom are not atomic, so two CONCURRENT verifies for one
+// order could both pass "already completed?" and each call the processor's `settle` — a real
+// double-charge on the first path where `settle` moves real money (the delegated rail). Running
+// completion one-at-a-time per order id closes that window: the loser sees the winner's record
+// and takes the idempotent echo, settling nothing. Keyed by order id, so distinct orders never
+// contend; in-process only (see KeyedMutex — a multi-instance deploy also needs an idempotent
+// settle, which `DelegatedVerifier.settle` now documents).
+const completionSerializer = new KeyedMutex();
 
 // One on-chain (demo-mode) settlement backing a completed order. Kept structural
 // so the demo's richer SettlementRecord is assignable without the package taking
@@ -125,7 +136,13 @@ function hasUnprovenCustomGate(ctx: CompletionContext, repriced: CeremonyOrder, 
   return false;
 }
 
-export async function completeOrder(input: CompletionInput, ctx: CompletionContext): Promise<CompletionResult> {
+export function completeOrder(input: CompletionInput, ctx: CompletionContext): Promise<CompletionResult> {
+  // Serialize per order id so the idempotency check and the settle+record write below run as ONE
+  // critical section against concurrent same-order verifies (#103). Distinct orders don't contend.
+  return completionSerializer.run(input.order.id, () => completeOrderLocked(input, ctx));
+}
+
+async function completeOrderLocked(input: CompletionInput, ctx: CompletionContext): Promise<CompletionResult> {
   // Every deterministic gate must have passed; one failure refuses, recording
   // nothing.
   if (!input.gates.every((g) => g.pass)) return { completed: false, reason: "gates" };

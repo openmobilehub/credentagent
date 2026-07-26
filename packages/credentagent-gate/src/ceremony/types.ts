@@ -282,6 +282,13 @@ export interface DelegatedVerifier {
    * re-derived, re-checked figures (never the adapter's). Returns the settlement receipt
    * recorded on completion; throwing GATES completion (authorized-but-not-settled).
    *
+   * SHOULD be idempotent by `reference` (#103): the gate passes the SAME sealed, order-bound
+   * `reference` on every call for an order, and it serializes completion per order in-process to
+   * collapse concurrent verifies to one call — but an in-process lock says nothing across a
+   * multi-instance / serverless split, so two instances handling overlapping retries could each
+   * call `settle`. An implementation that de-duplicates on `reference` (e.g. an idempotency key on
+   * the processor's commit) makes the money path safe regardless of where the requests land.
+   *
    * Optional: a delegated ceremony that only gates identity (age / a custom credential)
    * with no payment never calls it.
    */
