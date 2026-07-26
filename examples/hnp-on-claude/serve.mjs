@@ -28,7 +28,7 @@ const gateCatalog = Object.fromEntries(
 const credentagent = new CredentAgent({ walletOrigin: PUBLIC_URL, catalog: gateCatalog });
 
 // ── once, at startup ──────────────────────────────────────────────────────────
-const store = createStorefront({ baseUrl: PUBLIC_URL, grants: credentagent.grants }); // storefront + the 4 grant tools
+const store = createStorefront({ baseUrl: PUBLIC_URL, grants: credentagent.grants, merchant: "utopia" }); // storefront + the 4 grant tools
 credentagent.mount(store.app);          // the human-present ceremony rails (/credentagent/*)
 credentagent.grants.serve(store.app);   // each grant's approveUrl → a real approve/deny page
 

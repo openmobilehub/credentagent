@@ -244,6 +244,7 @@ export class Grants {
         return rec.status;
       },
       approveUrl: `${this.deps.walletOrigin}/credentagent/grants/${rec.id}`,
+      merchant: rec.opts.merchant,
       budget: rec.opts.budget,
       perSpend: rec.opts.perSpend,
       allow: rec.opts.allow,
@@ -265,6 +266,8 @@ export interface Grant {
   readonly status: GrantStatus;
   /** Where the human approves ONCE. Today a demo page the host serves; the wallet ceremony later. */
   approveUrl: string;
+  /** The one merchant this grant is cryptographically scoped to (the sealed authorization record). */
+  readonly merchant: string;
   budget: number;
   perSpend: number;
   allow?: GrantAllow;

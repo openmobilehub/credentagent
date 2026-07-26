@@ -176,6 +176,13 @@ export interface StorefrontOptions {
    * tools (additive). Serve the approve page with `credentagent.grants.serve(store.app)`.
    */
   grants?: Grants;
+  /**
+   * The merchant identity a created grant is cryptographically scoped and audited as (spec 009).
+   * Only meaningful alongside `grants`. Defaults to `"storefront"` — set it to THIS storefront's
+   * identity (e.g. `"utopia"`) so the authorization record and downstream merchant-scope checks
+   * reflect the real host, not a placeholder.
+   */
+  merchant?: string;
 }
 
 /**
@@ -346,6 +353,8 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
   const signingKey = opts.signingKey ?? (statelessOrders ? randomBytes(32).toString("hex") : undefined);
   // The human-not-present resource (spec 009) — grant tools register only when provided.
   const grants = opts.grants;
+  // The merchant a created grant is sealed as — honest default for the generic package.
+  const merchant = opts.merchant ?? "storefront";
 
   // Issue + base64url-encode a Cart Mandate for a priced order (the checkout link's `cart`).
   const cartParamFor = (order: Order): string => {
@@ -616,7 +625,7 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
     // spend within the sealed bounds → revoke. Every refusal is a typed code the agent can act on.
     if (grants) {
       const grantView = (g: NonNullable<Awaited<ReturnType<Grants["retrieve"]>>>) =>
-        ({ grantId: g.id, status: g.status, approveUrl: g.approveUrl, budget: g.budget, perSpend: g.perSpend, allow: g.allow ?? null });
+        ({ grantId: g.id, status: g.status, merchant: g.merchant, approveUrl: g.approveUrl, budget: g.budget, perSpend: g.perSpend, allow: g.allow ?? null });
       server.registerTool(
         "create-spending-grant",
         {
@@ -635,7 +644,7 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
         },
         async ({ budget, perSpend, categories, description }): Promise<CallToolResult> => {
           const g = await grants.create({
-            merchant: "utopia",
+            merchant,
             budget,
             perSpend,
             ...(categories?.length ? { allow: { categories } } : {}),
@@ -680,12 +689,35 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
         async ({ grantId, productId, quantity, idempotencyKey }): Promise<CallToolResult> => {
           const g = await grants.retrieve(grantId);
           if (!g) return { content: [{ type: "text", text: JSON.stringify({ error: "unknown grant" }) }], structuredContent: { error: "unknown grant" }, isError: true };
-          const s = await g.spend({
-            idempotencyKey: idempotencyKey ?? `mcp-${randomUUID().slice(0, 12)}`,
-            items: [{ sku: productId, ...(quantity ? { qty: quantity } : {}) }],
-          });
-          const view = { grantId, productId, ...s };
-          return { content: [{ type: "text", text: JSON.stringify(view) }], structuredContent: view };
+          const qty = quantity ?? 1;
+          const reply = (door: Record<string, unknown>): CallToolResult => {
+            const view = { grantId, productId, ...door };
+            return { content: [{ type: "text", text: JSON.stringify(view) }], structuredContent: view };
+          };
+
+          // Re-price and re-validate against the storefront's LIVE catalog before delegating
+          // (Codex P1 + invariant 2). The grant engine holds its own catalog snapshot, which a
+          // dynamic `source` (e.g. Firestore) can drift from; these fail-closed pre-checks read
+          // `source.current()` so a price bump can't evade the sealed per-spend cap and an item
+          // newly marked age-restricted can't be bought unattended — regardless of the grant's
+          // snapshot. The engine remains the authority for allow-bounds and budget draw-down.
+          await source.load();
+          const live = getProduct(source.current(), productId);
+          if (!live) return reply({ ok: false, code: "invalid-request", reason: "unknown product" }); // P2: typed, not a throw
+          if (live.minimumAge != null) return reply({ ok: false, code: "step-up" }); // age NEVER delegates
+          if (live.price * qty > g.perSpend) return reply({ ok: false, code: "per-spend-exceeded" }); // live price vs sealed cap
+
+          try {
+            const s = await g.spend({
+              idempotencyKey: idempotencyKey ?? `mcp-${randomUUID().slice(0, 12)}`,
+              items: [{ sku: productId, qty }],
+            });
+            return reply(s as unknown as Record<string, unknown>);
+          } catch {
+            // The engine's catalog doesn't know this sku (it throws on an unknown item) — surface
+            // the promised typed refusal instead of a generic tool exception. P2.
+            return reply({ ok: false, code: "invalid-request", reason: "unknown product" });
+          }
         },
       );
       server.registerTool(
