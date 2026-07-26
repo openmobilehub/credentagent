@@ -1,13 +1,14 @@
 name: agent-e2e
 
-# Nightly agent-in-the-loop E2E: a REAL Claude agent drives the deployed MCP storefront
-# (browse → cart → checkout) and the harness asserts on the tool trace — that the agent
-# could use our tools unaided, that the age gate + honesty labels reached the agent-facing
-# wire, and that nothing claimed a gated order completed. Catches the failure class the
-# deterministic smokes can't: "an agent can no longer figure out our tools."
+# Nightly agent-in-the-loop E2E: REAL agents drive the deployed MCP storefront (browse → cart →
+# checkout) and the harness asserts on the tool trace — that an agent could use our tools unaided,
+# that the age gate + honesty labels reached the agent-facing wire, and that nothing claimed a gated
+# order completed. Catches the failure class the deterministic smokes can't: "an agent can no longer
+# figure out our tools." Runs BOTH providers so it doubles as a cross-provider compatibility guarantee.
 #
-# Requires the ANTHROPIC_API_KEY repo secret. Without it the job SKIPS (green, with a
-# notice) — same opt-in pattern as claude-review — so this can merge before the secret exists.
+# Each provider step needs its own key secret (ANTHROPIC_API_KEY / OPENAI_API_KEY). A step with no
+# key SKIPS (green, with a notice) — so this merges before either secret exists, and you can enable
+# one or both providers independently.
 
 on:
   schedule:
@@ -27,12 +28,24 @@ jobs:
           node-version: "22"
       - name: Install harness deps
         run: npm install --no-audit --no-fund
-      - name: Run the agent E2E
+
+      - name: Claude agent E2E
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           if [ -z "$ANTHROPIC_API_KEY" ]; then
-            echo "::notice::ANTHROPIC_API_KEY secret not configured — skipping agent-e2e (add the secret to enable the nightly agent run)."
+            echo "::notice::ANTHROPIC_API_KEY not configured — skipping the Claude agent run."
             exit 0
           fi
           node agent-e2e.mjs
+
+      - name: ChatGPT agent E2E (cross-provider)
+        if: ${{ always() }} # run even if the Claude step failed — they're independent signals
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          if [ -z "$OPENAI_API_KEY" ]; then
+            echo "::notice::OPENAI_API_KEY not configured — skipping the ChatGPT agent run."
+            exit 0
+          fi
+          node agent-e2e-openai.mjs
