@@ -34,6 +34,13 @@ export interface CredentialPageArgs {
    *  presents (derived from the credential's requested claim leaves → true). Goes
    *  through the SAME server-side `verify` as a real wallet presentation. */
   demoClaims?: Record<string, unknown>;
+  /** Whether the instant-demo button can actually satisfy this credential's `verify`
+   *  (#59 finding 5). The demo synthesizes boolean-`true` for every requested claim leaf;
+   *  a credential whose `verify` checks a NON-boolean claim (e.g. `typeof license_no ===
+   *  "string"`) can't be proven that way. Default true; the credential-gate route sets it
+   *  false for such a credential so the page disables the demo button with a clear note
+   *  instead of offering a tap that silently fails. */
+  demoAvailable?: boolean;
   /**
    * Where to send the buyer after this gate succeeds — the checkout hub, so the
    * sequence flows (hub → gate → back to hub with this gate ✓ → next gate).
@@ -58,6 +65,9 @@ export function renderCredentialPage(args: CredentialPageArgs): string {
   const isAge = args.kind === "age";
   const isMembership = args.kind === "membership";
   const isCustom = !isAge && !isMembership; // 007: any non-built-in credential id
+  // #59 finding 5: a built-in demo always synthesizes a passing claim; a CUSTOM credential's
+  // demo works only when the route confirmed the synthesized boolean claim satisfies its verify.
+  const demoAvailable = args.demoAvailable ?? true;
   const customLabel = args.label ?? args.kind;
   const title = isAge
     ? `Verify your age (${minimumAge}+)`
@@ -105,7 +115,8 @@ ${pageHead(title, extraCss)}
     <p class="lede">${escapeHtml(lede)}</p>
     ${totalLine}
     <button id="go-dc" class="btn btn-primary">${escapeHtml(cta)}</button>
-    <button id="go" class="btn btn-secondary">${escapeHtml(demoCta)}</button>
+    <button id="go" class="btn btn-secondary"${demoAvailable ? "" : " disabled"}>${escapeHtml(demoCta)}</button>
+    ${demoAvailable ? "" : `<p class="small">The instant demo isn't available for this credential — it checks a claim the demo can't synthesize (only simple yes/no claims are supported). Prove it with your wallet using the button above.</p>`}
     <div id="log"></div>
   </div>
   <div id="done">✓ Done — returning to checkout… <a id="back" href="${escapeHtml(returnUrl)}">continue now ›</a></div>
@@ -181,6 +192,7 @@ ${pageHead(title, extraCss)}
     });
 
     go.addEventListener("click", async () => {
+      if (go.disabled) return; // #59 finding 5: demo fenced off for a non-boolean-claim credential
       go.disabled = true;
       try {
         step("→ verify (presence-only)");

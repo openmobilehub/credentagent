@@ -88,6 +88,19 @@ function demoClaimsFor(credential: Credential): Record<string, unknown> {
   return claims;
 }
 
+// Whether the boolean-`true` demo claims can actually satisfy this credential's OWN `verify`
+// (#59 finding 5). A credential whose verify checks a non-boolean claim (`typeof license_no ===
+// "string"`) can't be proven by the demo's synthesized booleans; the GET route uses this to
+// fence the instant-demo button off with a clear note. A throwing verify is treated as
+// unsatisfiable (fail-closed) rather than crashing the page render.
+function demoClaimsSatisfy(credential: Credential, demoClaims: Record<string, unknown>): boolean {
+  try {
+    return credential.verify(demoClaims) === true;
+  } catch {
+    return false;
+  }
+}
+
 function firstHeader(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
 }
@@ -162,6 +175,13 @@ export const registerCredentialGate: RailRegistrar = (app: CeremonyApp, ctx: Cer
     const ageVerified = verified.ageVerified === true;
     if (resolved.credential) {
       // Custom credential (007): render from its own ui + a demo claim derived from its request.
+      // #59 finding 5: the instant-demo synthesizes boolean-`true` for every requested claim leaf,
+      // so it can only prove a credential whose `verify` accepts that. Check it up front; when the
+      // demo claim doesn't satisfy this credential's own `verify` (e.g. it wants a non-boolean
+      // claim), tell the page so it disables the demo button with a clear note rather than offering
+      // a tap that silently fails.
+      const demoClaims = demoClaimsFor(resolved.credential);
+      const demoAvailable = demoClaimsSatisfy(resolved.credential, demoClaims);
       res.status(200).type("html").send(
         renderCredentialPage({
           kind: resolved.credential.id,
@@ -171,7 +191,8 @@ export const registerCredentialGate: RailRegistrar = (app: CeremonyApp, ctx: Cer
           currency: order.currency,
           label: resolved.credential.ui.label,
           action: resolved.credential.ui.action,
-          demoClaims: demoClaimsFor(resolved.credential),
+          demoClaims,
+          demoAvailable,
           cart,
           rail: checkoutRail(order, resolved.credential.id, { ageVerified, currentLabel: resolved.credential.ui.label }),
         }),

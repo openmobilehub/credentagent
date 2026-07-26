@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { CredentAgent } from "./client.js";
-import { age, payment, membership, required, optional } from "./credentials.js";
+import { age, payment, membership, required, optional, defineCredential, dcql, gate } from "./credentials.js";
+import type { CompletionInput, CompletionResult } from "./ceremony/types.js";
 
 // A minimal dependency-free Express double: capture the registered route handlers so we can
 // invoke the orders page / place / status handlers directly (the rails register too; we don't
@@ -144,6 +145,51 @@ describe("orders.serve — checkout wiring", () => {
     res = fakeRes();
     await app._get.get("/credentagent/orders/:id/status")!({ params: { id } }, res);
     expect(res._json).toMatchObject({ completed: true });
+  });
+
+  // #59 finding 2 (over-enforcement → DEADLOCK). The credential registry is process-wide and
+  // accumulates a custom gate declared for ONE purpose; the completion sweep must enforce only the
+  // gates THIS order's policy required, not every gate in the registry. A gate with no `appliesTo`
+  // ("applies to all") would otherwise block an unrelated order that never surfaced it → permanent
+  // fail-closed. orders.serve scopes the sweep to the created order's stored policy; these drive the
+  // wrapped completion seam (exposed on app.locals after serve) to pin both halves of that scoping.
+  describe("finding 2 — the completion sweep is scoped to THIS order's policy", () => {
+    // A gate registered from boot (multi-instance fail-closed path) with NO appliesTo → "applies to all".
+    const globalGate = defineCredential({
+      id: "global_gate",
+      request: dcql({ docType: "org.example.global.1", claims: ["ok"] }),
+      verify: (c) => c.ok === true,
+      effect: gate(),
+      ui: { label: "Global gate", action: "Prove" },
+    });
+    const seamOf = (app: ReturnType<typeof fakeApp>) =>
+      (app.locals.credentagent as { completion: (i: CompletionInput) => Promise<CompletionResult> }).completion;
+    const stickerInput = (id: string): CompletionInput => ({
+      order: { id, lines: [{ id: "sticker", name: "Sticker", unitPrice: 5, quantity: 1, lineTotal: 5, currency: "USD" }], subtotal: 5, discount: 0, total: 5, currency: "USD" },
+      mandateId: "m", amount: 5, currency: "USD", method: "test", gates: [{ gate: "g", pass: true, detail: "" }],
+    });
+
+    it("does NOT block an order whose policy never required the registered gate (no deadlock)", async () => {
+      const ca = new CredentAgent({ walletOrigin: "http://localhost:4000", credentials: [globalGate] });
+      const app = fakeApp();
+      ca.orders.serve(app);
+      const { id } = await ca.orders.create({ order: stickerOrder(), policy: [] }); // policy has no custom gate
+      await app._get.get("/credentagent/orders/:id")!({ params: { id } }, fakeRes()); // warm the order for re-pricing
+
+      const res = await seamOf(app)(stickerInput(id));
+      expect(res.completed).toBe(true); // scoped to THIS order's (empty) policy → global_gate is not enforced
+    });
+
+    it("control: it STILL blocks an order whose policy DID require that gate (scoping didn't disable it)", async () => {
+      const ca = new CredentAgent({ walletOrigin: "http://localhost:4000", credentials: [globalGate] });
+      const app = fakeApp();
+      ca.orders.serve(app);
+      const { id } = await ca.orders.create({ order: stickerOrder(), policy: [required(globalGate)] }); // gate IS in policy
+      await app._get.get("/credentagent/orders/:id")!({ params: { id } }, fakeRes());
+
+      const res = await seamOf(app)(stickerInput(id));
+      expect(res).toMatchObject({ completed: false, reason: "gate" }); // unproven + in-policy → refused
+    });
   });
 
   it("an optional membership discount does not, by itself, gate the demo path", async () => {

@@ -16,6 +16,7 @@ import request from "supertest";
 import { mountCeremony, type CeremonySeams } from "../mount.js";
 import { MemoryVerificationStore } from "../../store.js";
 import type { Credential } from "../../types.js";
+import { defineCredential, dcql, gate } from "../../credentials.js";
 import { professionalLicense } from "./__fixtures__/customCredential.js";
 import type { CeremonyCatalog, CeremonyOrder } from "../types.js";
 
@@ -45,10 +46,10 @@ const catalog: CeremonyCatalog = {
 };
 
 // The worked pack (professional-license gate()) comes from the shared fixture (T002).
-function harness() {
+function harness(extra: Credential[] = []) {
   const verificationStore = new MemoryVerificationStore();
   const orders = new Map<string, CeremonyOrder>();
-  const registry = new Map<string, Credential>([[professionalLicense.id, professionalLicense]]);
+  const registry = new Map<string, Credential>([[professionalLicense.id, professionalLicense], ...extra.map((c) => [c.id, c] as const)]);
   const seams: CeremonySeams = {
     verificationStore,
     orderStore: { read: async (id) => orders.get(id) ?? null },
@@ -113,6 +114,38 @@ describe("US1 — verify runs the credential's OWN verify and records verifiedGa
     h.seed("ORD-L", [{ id: "contractor-drill", quantity: 1 }]);
     const res = await request(h.app).post("/credentagent/credential/verify").send({ order: "ORD-L", cred: "professional_license", claims: { some_unrelated: "x" } });
     expect(res.body.verified).toBe(false);
+  });
+});
+
+// #59 finding 5 (DX): the instant-demo button synthesizes boolean-`true` for every requested claim
+// leaf, so it can only prove a credential whose `verify` accepts that. For a credential whose verify
+// checks a NON-boolean claim, the demo silently failed with a bare "not verified". The fix fences the
+// button off and explains why, so the buyer reaches for the real wallet instead of a broken tap.
+describe("US1 — finding 5: the instant-demo is fenced when a credential needs a non-boolean claim", () => {
+  const stringLicense = defineCredential({
+    id: "string_license",
+    request: dcql({ docType: "org.example.license.2", claims: ["license_no"] }),
+    verify: (c) => typeof c.license_no === "string" && c.license_no.length > 0, // NON-boolean claim
+    effect: gate(),
+    appliesTo: (order) => order.lines.some((l) => l.category === "Licensed"),
+    ui: { label: "License number", action: "Enter your license number" },
+  });
+
+  it("disables the demo button with a clear note (a boolean demo can't synthesize a string claim)", async () => {
+    const h = harness([stringLicense]);
+    h.seed("ORD-L", [{ id: "contractor-drill", quantity: 1 }]);
+    const res = await request(h.app).get("/credentagent/credential").query({ order: "ORD-L", cred: "string_license" });
+    expect(res.status).toBe(200);
+    expect(res.text).toMatch(/id="go"[^>]*disabled/); // the instant-demo button is disabled…
+    expect(res.text).toContain("instant demo isn't available"); // …and the page says why
+  });
+
+  it("control: a boolean-claim credential keeps its working instant-demo button (not over-fenced)", async () => {
+    const h = harness();
+    h.seed("ORD-L", [{ id: "contractor-drill", quantity: 1 }]);
+    const res = await request(h.app).get("/credentagent/credential").query({ order: "ORD-L", cred: "professional_license" });
+    expect(res.status).toBe(200);
+    expect(res.text).not.toMatch(/id="go"[^>]*disabled/); // professional_license verifies boolean true → demo works
   });
 });
 

@@ -306,6 +306,19 @@ describe("resolveOrder — re-prices from the catalog, refuses tampered ids (CT3
     expect(order?.discount).toBeCloseTo(12.4);
     expect(order?.total).toBeCloseTo(111.6);
   });
+
+  // #59 finding 3 (fail-OPEN): a custom gate's `appliesTo` keys on a product attribute
+  // (here `requiresRx`). The catalog above re-prices from `{ productId, quantity }` and does NOT
+  // forward `requiresRx` — a lossy host catalog. resolveOrder must re-attach the attribute from
+  // the FAITHFUL stored order line, so the rails + the completion sweep see the SAME field the
+  // manifest resolved against; otherwise a lossy catalog silently re-opens the gate. Deleting the
+  // preserveLineAttributes merge in resolveOrder turns this red (requiresRx becomes undefined).
+  it("re-attaches a custom line attribute the catalog dropped, from the stored order (finding 3)", async () => {
+    const stored = { id: "ORD-1", lines: [{ id: "drill", quantity: 1, lineTotal: 50, requiresRx: true }], subtotal: 50, discount: 0, total: 50, currency: "USD" };
+    const order = await resolveOrder(ctxWithOrder(stored), "ORD-1");
+    expect(order?.total).toBe(50); // price stays catalog-authoritative (invariant 2)
+    expect(order?.lines[0].requiresRx).toBe(true); // attribute the lossy catalog stripped, restored
+  });
 });
 
 // ── FR-007: statelessOrders — reconstruct from a VERIFIED Cart Mandate (US3) ──

@@ -20,6 +20,7 @@ import type {
   SettlementSeam,
 } from "./types.js";
 import { verifyCartMandate } from "./cartMandate.js";
+import { preserveLineAttributes } from "./order-attributes.js";
 import { registerCredentialGate } from "./credential-gate/routes.js";
 import { registerPasskeyGate } from "./passkey/routes.js";
 import { registerDcPaymentGate } from "./dc-payment/routes.js";
@@ -237,9 +238,15 @@ export async function resolveOrder(
   // catalog.
   const verification = await ctx.verificationStore.read(orderId);
   const loyaltyApplied = !!(verification as { loyalty?: { applied?: boolean } } | undefined)?.loyalty?.applied;
-  return ctx.catalog.createOrder(
+  const repriced = ctx.catalog.createOrder(
     stored.lines.map((l) => ({ productId: l.id, quantity: l.quantity })),
     orderId,
     { loyaltyApplied },
   );
+  // #59 finding 3: the stored order is the FAITHFUL, server-side source of a product's
+  // attributes (requiresRx / category / minimumAge) that a custom gate's `appliesTo` keys on.
+  // Re-attach any the host catalog dropped during the re-price, so the order the rails + the
+  // completion sweep see carries the SAME fields the manifest resolved against — a lossy host
+  // `createOrder` cannot silently re-open a gate. Price stays catalog-authoritative (invariant 2).
+  return { ...repriced, lines: preserveLineAttributes(repriced.lines, stored.lines) };
 }
