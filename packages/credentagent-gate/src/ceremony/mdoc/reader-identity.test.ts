@@ -9,9 +9,12 @@
 import { describe, it, expect, vi } from "vitest";
 import * as jose from "jose";
 import * as x509 from "@peculiar/x509";
+import { Encoder, decode as cborDecode, Tag } from "cbor-x";
 import { makeReaderCert } from "./reader.js";
+import { buildMdocRequestParts, buildSessionTranscript } from "./mdoc-iso.js";
 import { buildDcPaymentRequest } from "../dc-payment/request.js";
 import { buildCredentialRequest } from "../credential-gate/request.js";
+import { mdocDocSpec } from "../credential-gate/doc-spec.js";
 import { CredentAgent } from "../../client.js";
 import type { ReaderIdentity } from "../../types.js";
 import type { Origin } from "../origin.js";
@@ -20,6 +23,11 @@ import type { CeremonyOrder } from "../types.js";
 const webcrypto = globalThis.crypto;
 x509.cryptoProvider.set(webcrypto);
 const ALG = { name: "ECDSA", namedCurve: "P-256", hash: "SHA-256" } as const;
+
+// Match the implementation's canonical (deterministic) CBOR so reconstructed
+// reader-auth bytes are byte-identical to what the module signed (see mdoc-iso.ts).
+const canonicalEncoder = new Encoder({ useRecords: false, variableMapSize: true, useTag259ForMaps: false });
+const cborEncode = (value: unknown): Buffer => canonicalEncoder.encode(value);
 
 const SECRET = "stable-test-secret";
 const ORIGIN: Origin = { rpID: "127.0.0.1", origin: "http://127.0.0.1" };
@@ -121,5 +129,88 @@ describe("#51 reader identity — CredentAgent SAN guardrail", () => {
     new CredentAgent({ walletOrigin: "http://127.0.0.1:3000", readerIdentity: identity });
     expect(warn).not.toHaveBeenCalledWith(expect.stringContaining("does not include walletOrigin host"));
     warn.mockRestore();
+  });
+});
+
+// #99 — the iOS / ISO-mdoc (ReaderAuthAll) path presents the stable reader identity
+// too, mirroring the Android/Chrome path #84 wired above. The identity's cert must
+// ride in x5chain (COSE label 33) AND the ReaderAuthAll COSE_Sign1 must be signed by
+// the identity's key. These are BYPASS tests: revert `makeMdocReaderCert` to always
+// self-mint and the identity assertions fail (the presented leaf is a fresh self-mint,
+// not the demo cert). On-device iOS trust (a wallet holding the RICAL shows the verifier
+// as trusted) is NOT checked here — that is the issue's on-device done-when.
+const MDOC_ORIGIN = "https://shop.example"; // host "shop.example" — the fixture SAN below matches
+const AGE_SPEC = mdocDocSpec("age", 21);
+
+// Pull the ReaderAuthAll COSE_Sign1 + its x5chain out of a built signed DeviceRequest.
+function readerAuthFromParts(parts: { data: { deviceRequest: string } }): {
+  dr: { docRequests: { itemsRequest: Tag }[]; deviceRequestInfo: Tag };
+  ra: unknown[];
+  chain: Uint8Array[];
+} {
+  const dr = cborDecode(Buffer.from(parts.data.deviceRequest, "base64url")) as {
+    docRequests: { itemsRequest: Tag }[]; deviceRequestInfo: Tag; readerAuthAll: unknown[][];
+  };
+  const ra = dr.readerAuthAll[0];
+  const unprotected = ra[1];
+  const chain = (unprotected instanceof Map ? unprotected.get(33) : (unprotected as Record<number, unknown>)[33]) as Uint8Array[];
+  return { dr, ra, chain };
+}
+
+// Rebuild the signed ReaderAuthenticationAll bytes and check the COSE_Sign1 signature
+// against `pub` — the same reconstruction mdoc-iso.test.ts uses.
+async function readerAuthVerifies(
+  parts: { base64EncryptionInfo: string },
+  dr: { docRequests: { itemsRequest: Tag }[]; deviceRequestInfo: Tag },
+  ra: unknown[],
+  origin: string,
+  pub: CryptoKey,
+): Promise<boolean> {
+  const transcript = buildSessionTranscript(parts.base64EncryptionInfo, origin);
+  const itemsTags = dr.docRequests.map((d) => d.itemsRequest);
+  const raaBytes = cborEncode(
+    new Tag(Buffer.from(cborEncode(["ReaderAuthenticationAll", cborDecode(transcript), itemsTags, dr.deviceRequestInfo])), 24),
+  );
+  const sigStructure = cborEncode(["Signature1", Buffer.from(ra[0] as Uint8Array), Buffer.alloc(0), Buffer.from(raaBytes)]);
+  return webcrypto.subtle.verify({ name: "ECDSA", hash: "SHA-256" }, pub, ra[3] as Uint8Array, sigStructure);
+}
+
+describe("#99 reader identity — the iOS / ISO-mdoc (ReaderAuthAll) path presents it", () => {
+  it("presents the identity cert in x5chain AND signs ReaderAuthAll with the identity key", async () => {
+    const { identity, certBase64, publicKey } = await makeFixtureIdentity("shop.example");
+    const parts = await buildMdocRequestParts(AGE_SPEC, MDOC_ORIGIN, true, identity);
+    const { dr, ra, chain } = readerAuthFromParts(parts);
+    // the leaf presented to the wallet is the demo identity cert, not a self-mint
+    expect(Buffer.from(chain[0]).toString("base64")).toBe(certBase64);
+    // and the reader authentication is signed by the identity's key
+    expect(await readerAuthVerifies(parts, dr, ra, MDOC_ORIGIN, publicKey)).toBe(true);
+
+    // control (makes the two assertions load-bearing): with NO identity the leaf is a
+    // DIFFERENT self-minted cert and the signature does NOT verify against the identity key.
+    const noId = await buildMdocRequestParts(AGE_SPEC, MDOC_ORIGIN, true);
+    const bare = readerAuthFromParts(noId);
+    expect(Buffer.from(bare.chain[0]).toString("base64")).not.toBe(certBase64);
+    expect(await readerAuthVerifies(noId, bare.dr, bare.ra, MDOC_ORIGIN, publicKey)).toBe(false);
+  });
+
+  it("includes the optional issuer chain leaf-first in x5chain", async () => {
+    const leaf = await makeFixtureIdentity("shop.example");
+    const root = await makeFixtureIdentity("root.example");
+    const parts = await buildMdocRequestParts(AGE_SPEC, MDOC_ORIGIN, true, { ...leaf.identity, chain: [root.identity.cert] });
+    const { chain } = readerAuthFromParts(parts);
+    expect(chain.map((d) => Buffer.from(d).toString("base64"))).toEqual([leaf.certBase64, root.certBase64]);
+  });
+
+  it("self-mints an origin-bound chain when no identity is given (safe default) — SAN = origin host", async () => {
+    const parts = await buildMdocRequestParts(AGE_SPEC, MDOC_ORIGIN, true);
+    const { dr, ra, chain } = readerAuthFromParts(parts);
+    expect(chain).toHaveLength(2); // [leaf, ca] self-mint structure, unchanged
+    // origin/SAN binding still applies in self-mint mode: the leaf carries DNS SAN = origin host
+    const leaf = new x509.X509Certificate(chain[0]);
+    const san = leaf.getExtension(x509.SubjectAlternativeNameExtension);
+    expect(san?.names.items.some((n) => n.type === "dns" && n.value === "shop.example")).toBe(true);
+    // and the self-minted request is itself valid (signed by its own leaf key)
+    const leafPub = await webcrypto.subtle.importKey("spki", leaf.publicKey.rawData, { name: "ECDSA", namedCurve: "P-256" }, false, ["verify"]);
+    expect(await readerAuthVerifies(parts, dr, ra, MDOC_ORIGIN, leafPub)).toBe(true);
   });
 });

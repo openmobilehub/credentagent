@@ -213,7 +213,7 @@ export const registerCredentialGate: RailRegistrar = (app: CeremonyApp, ctx: Cer
       const docSpec = resolved.credential
         ? mdocDocSpecsFromDcql(resolved.credential.request) // every credential → one iOS doc spec (item 6)
         : mdocDocSpec(resolved.kind, resolved.kind === "age" ? requiredAgeForOrder(order) ?? 21 : 21);
-      const mdoc = await buildMdocRequestParts(docSpec, reqOrigin.origin, signed);
+      const mdoc = await buildMdocRequestParts(docSpec, reqOrigin.origin, signed, ctx.readerIdentity);
       const mdocContextToken = await sealMdocContext(
         { readerPrivateJwk: mdoc.readerPrivateJwk, base64EncryptionInfo: mdoc.base64EncryptionInfo },
         ctx.signingKey,
