@@ -2,6 +2,7 @@ import type { McpUiHostContext } from "@modelcontextprotocol/ext-apps";
 import { useApp } from "@modelcontextprotocol/ext-apps/react";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { StrictMode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 import { createRoot } from "react-dom/client";
 import {
   CART_META_KEY,
@@ -480,12 +481,18 @@ function Picker({ products, cart, insets, setQuantity, checkout, openLink, confi
   }, [checkout, cart.itemCount]);
 
   const mainStyle = useMemo(
-    () => ({
-      paddingTop: insets?.top,
-      paddingRight: insets?.right,
-      paddingBottom: insets?.bottom,
-      paddingLeft: insets?.left,
-    }),
+    () =>
+      ({
+        // Top/side insets pad the shell directly. The bottom inset is handed to
+        // the footer as a CSS variable (see .footer in app.module.css) so the
+        // footer's background reaches under the home indicator while its content
+        // clears it — rather than padding the whole shell and leaving a bare gap
+        // below the footer.
+        paddingTop: insets?.top,
+        paddingRight: insets?.right,
+        paddingLeft: insets?.left,
+        "--safe-area-bottom": insets?.bottom != null ? `${insets.bottom}px` : undefined,
+      }) as CSSProperties,
     [insets],
   );
 

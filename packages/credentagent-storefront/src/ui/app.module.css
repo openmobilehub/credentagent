@@ -95,6 +95,11 @@
 .grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  /* Size rows to their content, not the grid's height. Once the shell is bounded
+     (global.css height chain), the default `auto` rows STRETCH to fill this flex
+     item and squash the cards — clipping their bodies — instead of overflowing.
+     `min-content` keeps cards at natural height so `overflow-y: auto` scrolls. */
+  grid-auto-rows: min-content;
   gap: 12px;
   padding: 16px;
   overflow-y: auto;
@@ -220,7 +225,10 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 12px 16px;
+  /* Bottom padding carries the host's safe-area inset (set as --safe-area-bottom
+     on the shell in app.tsx) so the footer background reaches under the phone's
+     home indicator while the Checkout button clears it. Falls back to 0 (no inset). */
+  padding: 12px 16px calc(12px + var(--safe-area-bottom, 0px));
   border-top: 1px solid light-dark(#e2e2e2, #3a3a3a);
   background: light-dark(#fafafa, #181818);
 }
@@ -258,6 +266,33 @@
   vertical-align: middle;
 }
 .discountRow { color: #0a7f2e; font-size: 0.85rem; }
+
+/* Phones (portrait): the desktop auto-fill grid collapses to a single, very tall
+   column on a ~360px screen. The height fix above already keeps Checkout reachable
+   at any list length; this just makes the list less needlessly tall to scroll —
+   two tighter columns and a shorter card below 480px (issue #108). */
+@media (max-width: 480px) {
+  .grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    padding: 12px;
+  }
+
+  .thumb {
+    aspect-ratio: 3 / 2;
+  }
+
+  .cardBody {
+    padding: 8px 10px;
+  }
+
+  .desc {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+}
 .gateBtn {
   font-size: 0.9rem;
   padding: 0.5rem 0.8rem;
