@@ -248,24 +248,43 @@ The cert's SubjectAltName must cover the `walletOrigin` host or the wallet rejec
 ### Real trust: delegate to an external verifier (`verifier`)
 
 The built-in rails lack an issuer/device **trust anchor** — that is what keeps them
-`presence-only-demo`. Pass a `verifier` seam and the gate serves a **delegated ceremony**: the same
+`presence-only-demo`. Pass a `verifier` seam and the gate serves a **delegated ceremony**: your same
 `gate()` policy runs a real, issuer-trust-verified, amount-bound payment through an external
 verifier/processor (e.g. a Multipaz verifier + a UPay-style processor), **inside** the mounted
 ceremony instead of around it. Your policy and storefront are unchanged — only the backend moves in.
 
-```ts
-credentagent.mount(app, { ...seams, verifier });   // the only new thing
-```
-
-The seam is three methods, mirroring what a real verifier/processor already splits:
+**1. The adapter you write.** A plain object with three methods, each a thin wrapper over a
+verifier/processor you already have — in plain words:
 
 ```ts
 interface DelegatedVerifier {
-  buildRequest(x): DelegatedHandoff;   // mint the verifier request from the gate's re-derived binding
-  consume(x):     DelegatedVerdict;    // fetch the verified presentment by reference — trust, NO settlement
-  settle?(x):     SettlementRecordLike // commit — called by the gate ONLY after its re-checks pass
+  // "Tell the checker: verify these credentials, bound to exactly $124 payable to me."
+  buildRequest(x): DelegatedHandoff;
+  // "Fetch the checker's verdict, server-to-server, by reference — no money moves here."
+  consume(x):     DelegatedVerdict;
+  // "Charge. The gate calls this ONLY after its own re-checks pass."
+  settle?(x):     SettlementRecordLike;
 }
 ```
+
+`settle` is **optional**: an identity-only gate (age, a licence, membership) completes without it —
+there is nothing to charge.
+
+**2. Plugging it in.** One option, your policy untouched — either path works:
+
+```ts
+// with the storefront
+const store = createStorefront({ verifier });
+new CredentAgent().mount(store.app);            // zero-arg — picks the verifier off app.locals
+
+// or storefront-less
+credentagent.mount(app, { ...seams, verifier });
+```
+
+**3. What happens at runtime.** Checkout → one **delegated** approve link → the wallet ceremony runs
+with the checker → the browser returns **only a sealed, order-bound reference** (never the result, so
+it cannot forge an approval) → the gate re-prices from the catalog, re-runs *your* policy over the
+disclosed claims, **then** authorizes `settle` → the order is recorded with the checker's `trust_level`.
 
 The one rule that makes delegation safe: **trust is delegable, binding is not.**
 
@@ -277,9 +296,14 @@ The one rule that makes delegation safe: **trust is delegable, binding is not.**
   check never satisfies `age.over(21)`), and only **then** authorizes `settle`. A verifier that
   approves the wrong amount — or a stricter-than-the-merchant age — is refused before any money moves.
 
-The verdict travels **server-to-server by reference**: the browser carries only a sealed, order-bound
-handle, never the result, so it cannot forge an approval. The concrete verifier is a **host-side
-adapter** — no processor-specific symbol lives in this package.
+The concrete verifier is a **host-side adapter** — no processor-specific symbol lives in this package.
+
+> **No real adapter ships yet.** This package defines the *interface*; the concrete Multipaz-verifier +
+> UPay-processor adapter is the downstream integration (**S6**, tracked in `multipaz-utopia#16`). Today
+> the only way to run the delegated rail is a **stand-in** like the scripted verifier in
+> [`examples/delegated-verifier/`](../../examples/delegated-verifier) — a test double, never shipped, and
+> deliberately kept out of the runnable `run-storefront` example. Stating this plainly is the honesty
+> fence working, not a gap.
 
 > **A refused tool call is a protocol, not a wall.** For a page-less tool, `gated()` returns a typed
 > **`verification_required`** envelope the agent *drives* (which credential, a per-order approve link,
