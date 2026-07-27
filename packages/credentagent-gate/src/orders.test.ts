@@ -81,8 +81,11 @@ describe("credentagent.orders", () => {
     expect(seen).toEqual([id]);
   });
 
-  it("retrieve of an unknown id is a typed refusal, not a throw", async () => {
+  it("retrieve of an unknown id is a typed refusal (code: OrderDoorCode), not a throw", async () => {
     const ca = new CredentAgent({ walletOrigin: "https://shop.example" });
+    // Runtime: the refusal carries the union's only current member. The COMPILE-TIME guard that
+    // `code` is the typed OrderDoorCode (not `string`) lives in types.test-d.ts — the one file
+    // `tsc -p tsconfig.test.json` type-checks (this .test.ts is transpiled without type-checking).
     expect(await ca.orders.retrieve("ord_nope")).toMatchObject({ ok: false, code: "not-found" });
   });
 });

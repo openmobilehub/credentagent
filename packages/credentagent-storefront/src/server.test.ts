@@ -852,3 +852,20 @@ describe("live cross-device status mirror (#73)", () => {
     expect(after).not.toBe(before);
   });
 });
+
+// #120 — browse-products must be legible to a HEADLESS agent (no widget, no human watching the
+// grid). The ids have to be in the TEXT the agent reads, not only in structuredContent, or it
+// can't call add-to-cart and dead-ends. Load-bearing: drop the id line and this fails.
+describe("browse-products is agent-legible (#120)", () => {
+  it("puts the product ids + age flags in the TEXT, while still telling the agent not to re-list to a present user", async () => {
+    const c = await connect(createStorefront());
+    const res = await c.callTool({ name: "browse-products", arguments: {} });
+    const text = (res.content as any[]).filter((b) => b.type === "text").map((b) => b.text).join("");
+    // Every catalog id an agent needs to act on must appear in the text (not just structuredContent).
+    for (const id of ["oak-whiskey", "drift-mouse", "aurora-headphones"]) {
+      expect(text, `browse-products text must expose ${id} to a headless agent`).toContain(id);
+    }
+    expect(text).toContain("21+"); // the age flag rides along so the agent knows what's restricted
+    expect(text.toLowerCase()).toContain("do not re-list"); // but don't spam a user who sees the grid
+  });
+});

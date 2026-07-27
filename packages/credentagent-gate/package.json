@@ -1,6 +1,6 @@
 {
   "name": "@openmobilehub/credentagent-gate",
-  "version": "0.2.0",
+  "version": "0.3.1",
   "description": "The consent layer for AI agents — require a verifiable credential from the user's wallet before a consequential MCP tool completes. Identity leads; payments is one application.",
   "license": "Apache-2.0",
   "author": "Open Mobile Hub (Linux Foundation)",

@@ -13,6 +13,9 @@ Each is runnable against the two `@openmobilehub/credentagent-*` packages (build
 **Gating patterns** (identity-first, beyond commerce)
 - [`gate-any-action.mjs`](#gate-any-actionmjs--gate-a-non-commerce-action-identity-first-no-checkout) — gate a non-commerce action, no checkout
 
+**See it work — one page, click through it** (demo)
+- [`demo-hub/`](demo-hub/) — a single page that drives the real checkout AND shows the signed webhook arrive + get verified in a live feed. Start here to *see* the product. Plain-English guarantees + one-command proofs in [`demo-hub/GUARANTEES.md`](demo-hub/GUARANTEES.md).
+
 **Orders — checkout in one call** (009)
 - [`orders-checkout/`](orders-checkout/) — the real `credentagent.orders` API: `orders.serve(app)` wires the whole checkout, `orders.create()` returns a link, `order.settled` fires when it's paid
 
@@ -22,8 +25,10 @@ Each is runnable against the two `@openmobilehub/credentagent-*` packages (build
 **Cart Mandate / stateless** (004)
 - [`stateless-orders/`](stateless-orders/) — the created order rides in a signed Cart Mandate on the link
 
-**Human-not-present** (005, preview)
-- [`hnp-draws/`](hnp-draws/) — the delegated-draw "doorman": one pre-approval, good + bad draws, all decided server-side
+**Human-not-present** (spec 009 · #104)
+- [`hnp-on-claude/`](hnp-on-claude/) — connect the WHOLE store (checkout + grants) to the Claude app: tunnel it, add /mcp as a custom connector, approve a grant once, then watch Claude spend within your bounds
+- [`grants-proto/`](grants-proto/) — the two-pane `credentagent.grants` demo (REAL API): authorize once, watch the agent's spend loop draw the budget down, revoke
+- [`hnp-draws/`](hnp-draws/) — the lower-level `DelegatedGate` seams reference (superseded for everyday use by `grants` + the demo hub)
 
 ---
 
