@@ -246,8 +246,12 @@ async function buildReaderAuthAll(args: {
   const protectedHeader = cborEncode(new Map<number, number>([[1, -7]])); // {alg: ES256}
   const sigStructure = cborEncode(["Signature1", Buffer.from(protectedHeader), Buffer.alloc(0), Buffer.from(raaBytes)]);
   const signature = new Uint8Array(await webcrypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, args.signingKey, sigStructure));
-  // x5chain (label 33): array of DER certs, leaf first — [leaf, ca].
-  const unprotected = new Map<number, unknown>([[33, args.chainDer.map((d) => Buffer.from(d))]]);
+  // x5chain (label 33, RFC 9360): a LONE certificate is a bare bstr; a chain of 2+
+  // is an array of bstr, leaf first — [leaf, ca]. A strict iOS wallet rejects a
+  // one-element array, so the identity-without-chain default must be a bare bstr.
+  const certs = args.chainDer.map((d) => Buffer.from(d));
+  const x5chain = certs.length === 1 ? certs[0] : certs;
+  const unprotected = new Map<number, unknown>([[33, x5chain]]);
   // COSE_Sign1 = [protected, unprotected, payload(null = detached), signature]
   return [Buffer.from(protectedHeader), unprotected, null, Buffer.from(signature)];
 }

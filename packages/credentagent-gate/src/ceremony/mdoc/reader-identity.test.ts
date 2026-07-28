@@ -143,9 +143,12 @@ const MDOC_ORIGIN = "https://shop.example"; // host "shop.example" — the fixtu
 const AGE_SPEC = mdocDocSpec("age", 21);
 
 // Pull the ReaderAuthAll COSE_Sign1 + its x5chain out of a built signed DeviceRequest.
+// `x5raw` is label 33 EXACTLY as encoded (a bare bstr for a lone cert, an array for a
+// chain — RFC 9360); `chain` normalizes both to a cert list for content assertions.
 function readerAuthFromParts(parts: { data: { deviceRequest: string } }): {
   dr: { docRequests: { itemsRequest: Tag }[]; deviceRequestInfo: Tag };
   ra: unknown[];
+  x5raw: unknown;
   chain: Uint8Array[];
 } {
   const dr = cborDecode(Buffer.from(parts.data.deviceRequest, "base64url")) as {
@@ -153,8 +156,9 @@ function readerAuthFromParts(parts: { data: { deviceRequest: string } }): {
   };
   const ra = dr.readerAuthAll[0];
   const unprotected = ra[1];
-  const chain = (unprotected instanceof Map ? unprotected.get(33) : (unprotected as Record<number, unknown>)[33]) as Uint8Array[];
-  return { dr, ra, chain };
+  const x5raw = unprotected instanceof Map ? unprotected.get(33) : (unprotected as Record<number, unknown>)[33];
+  const chain = (Array.isArray(x5raw) ? x5raw : [x5raw]) as Uint8Array[];
+  return { dr, ra, x5raw, chain };
 }
 
 // Rebuild the signed ReaderAuthenticationAll bytes and check the COSE_Sign1 signature
@@ -179,7 +183,9 @@ describe("#99 reader identity — the iOS / ISO-mdoc (ReaderAuthAll) path presen
   it("presents the identity cert in x5chain AND signs ReaderAuthAll with the identity key", async () => {
     const { identity, certBase64, publicKey } = await makeFixtureIdentity("shop.example");
     const parts = await buildMdocRequestParts(AGE_SPEC, MDOC_ORIGIN, true, identity);
-    const { dr, ra, chain } = readerAuthFromParts(parts);
+    const { dr, ra, x5raw, chain } = readerAuthFromParts(parts);
+    // a lone identity cert (no chain) is a bare COSE bstr, NOT a one-element array (RFC 9360)
+    expect(Array.isArray(x5raw)).toBe(false);
     // the leaf presented to the wallet is the demo identity cert, not a self-mint
     expect(Buffer.from(chain[0]).toString("base64")).toBe(certBase64);
     // and the reader authentication is signed by the identity's key
@@ -197,13 +203,15 @@ describe("#99 reader identity — the iOS / ISO-mdoc (ReaderAuthAll) path presen
     const leaf = await makeFixtureIdentity("shop.example");
     const root = await makeFixtureIdentity("root.example");
     const parts = await buildMdocRequestParts(AGE_SPEC, MDOC_ORIGIN, true, { ...leaf.identity, chain: [root.identity.cert] });
-    const { chain } = readerAuthFromParts(parts);
+    const { x5raw, chain } = readerAuthFromParts(parts);
+    expect(Array.isArray(x5raw)).toBe(true); // 2+ certs → an array (RFC 9360)
     expect(chain.map((d) => Buffer.from(d).toString("base64"))).toEqual([leaf.certBase64, root.certBase64]);
   });
 
   it("self-mints an origin-bound chain when no identity is given (safe default) — SAN = origin host", async () => {
     const parts = await buildMdocRequestParts(AGE_SPEC, MDOC_ORIGIN, true);
-    const { dr, ra, chain } = readerAuthFromParts(parts);
+    const { dr, ra, x5raw, chain } = readerAuthFromParts(parts);
+    expect(Array.isArray(x5raw)).toBe(true); // [leaf, ca] → an array (2 certs)
     expect(chain).toHaveLength(2); // [leaf, ca] self-mint structure, unchanged
     // origin/SAN binding still applies in self-mint mode: the leaf carries DNS SAN = origin host
     const leaf = new x509.X509Certificate(chain[0]);
