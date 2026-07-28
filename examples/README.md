@@ -9,6 +9,7 @@ Each is runnable against the two `@openmobilehub/credentagent-*` packages (build
 - [`with-x402-settlement.mjs`](#with-x402-settlementmjs--settle-payment-on-chain-via-the-settle-seam) — settle payment on-chain via the `settle` seam
 - [`storefront-redis.mjs`](storefront-redis.mjs) / [`storefront-firestore.mjs`](storefront-firestore.mjs) — injectable persistence (Upstash Redis stores / Firestore catalog source)
 - [`run-storefront/`](run-storefront/) — run THIS repo's storefront directly (stateful + stateless side by side)
+- [`delegated-verifier/`](delegated-verifier/) — the delegated-payment rail end-to-end with a LOCAL stand-in verifier (008): click a real delegated checkout, or boot with `VERDICT=wrong-amount|underage|declined` to watch the gate refuse a misbehaving verifier
 
 **Gating patterns** (identity-first, beyond commerce)
 - [`gate-any-action.mjs`](#gate-any-actionmjs--gate-a-non-commerce-action-identity-first-no-checkout) — gate a non-commerce action, no checkout

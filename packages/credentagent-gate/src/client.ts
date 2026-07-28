@@ -49,6 +49,12 @@ export class CredentAgent {
   // exist on this server). `requirements()` then emits approve links that resolve
   // to those mounted routes rather than the legacy `/credential-gate/*` shape.
   private mountedRoutes = false;
+  // True once a `verifier` seam has been wired at mount() (008). `requirements()` then
+  // routes the PAYMENT (authorize) approve link to the single `/credentagent/delegated`
+  // ceremony (the external-verifier round-trip) instead of the built-in dc-payment rail.
+  // Identity gates (age) and a discount stay on the built-in credential rail either way —
+  // the buyer proves age there FIRST, then pays through the delegated ceremony (two-step).
+  private delegated = false;
   // True once `orders.serve(app)` has wired the checkout (idempotent — one serve per client).
   private ordersServed = false;
   // In-process credential registry (id → Credential), populated as `requirements()`
@@ -223,7 +229,7 @@ export class CredentAgent {
     // — from the developer's policy, never the token. Single-process only: a multi-instance completing
     // instance that never ran this falls back to the registry-wide sweep (fail-closed), same as before.
     this.rememberOrderPolicy(order.id, policy.map((step) => step.credential.id));
-    return resolveRequirements(order, policy, { walletOrigin: this.walletOrigin, mountedRoutes: this.mountedRoutes });
+    return resolveRequirements(order, policy, { walletOrigin: this.walletOrigin, mountedRoutes: this.mountedRoutes, delegated: this.delegated });
   }
 
   /**
@@ -282,6 +288,7 @@ export class CredentAgent {
     if (ceremony) {
       mountCeremony(app as CeremonyApp, { ...ceremony, verificationStore: this.store, readerIdentity: this.readerIdentity, credentialRegistry: this.registry, orderPolicies: this.orderPolicies, ...(this.branding ? { branding: this.branding } : {}) });
       this.mountedRoutes = true;
+      if (ceremony.verifier) this.delegated = true;
       // #25 doctor(): a host owns the serving surface here; capture the signing key it supplied via
       // the seams (the verification store is this.store — already reflected in sharedVerificationStore).
       this.composedWithHost = true;
@@ -297,6 +304,9 @@ export class CredentAgent {
     if (locals.orderStore && locals.catalog && locals.completion) {
       mountCeremony(app as CeremonyApp, { readerIdentity: this.readerIdentity, credentialRegistry: this.registry, orderPolicies: this.orderPolicies, ...(this.branding ? { branding: this.branding } : {}), ...(locals.verificationStore ? {} : { verificationStore: this.store }) });
       this.mountedRoutes = true;
+      // The host published a verifier on app.locals (createStorefront({ verifier })): route the
+      // manifest's gate/authorize links to the delegated ceremony (008).
+      if (locals.verifier) this.delegated = true;
       // #25 doctor(): a composed storefront owns the serving surface. Capture the effective signing
       // key + verification store it published on app.locals (e.g. createStorefront({ signingKey,
       // storage })) so a correctly configured composition isn't flagged (PR #134 review).

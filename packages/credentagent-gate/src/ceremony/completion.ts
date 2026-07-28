@@ -5,15 +5,26 @@
 // (no hardcoded demo imports) so dc-payment and passkey reconcile against the same
 // amount-binding logic. Settlement GATES completion: a configured-but-failed
 // settle means authorized-but-not-completed (no record, cart intact — FR-013).
-import type { Credential, GateOrder, VerificationStore } from "../types.js";
+import type { Credential, GateOrder, TrustLevel, VerificationStore } from "../types.js";
 import type { CartItemRef, CeremonyCatalog, CeremonyOrder, CompletionInput, CompletionResult, GateOutcome } from "./types.js";
 import { verifyCartMandate, type CartMandate } from "./cartMandate.js";
 import { reconcileCartPayment } from "./reconciliation.js";
 import { checkDraw, type DrawVerifier } from "./mandate.js";
 import type { RevocationStore } from "./revocation.js";
 import { refusal } from "./refusals.js";
+import { KeyedMutex } from "./keyed-mutex.js";
 import { preserveLineAttributes } from "./order-attributes.js";
 import { RESERVED_CREDENTIAL_IDS } from "../credentials.js";
+
+// Per-order in-process serializer for completion (#103). The idempotency read at the top and
+// the settle + record write near the bottom are not atomic, so two CONCURRENT verifies for one
+// order could both pass "already completed?" and each call the processor's `settle` — a real
+// double-charge on the first path where `settle` moves real money (the delegated rail). Running
+// completion one-at-a-time per order id closes that window: the loser sees the winner's record
+// and takes the idempotent echo, settling nothing. Keyed by order id, so distinct orders never
+// contend; in-process only (see KeyedMutex — a multi-instance deploy also needs an idempotent
+// settle, which `DelegatedVerifier.settle` now documents).
+const completionSerializer = new KeyedMutex();
 
 // One on-chain (demo-mode) settlement backing a completed order. Kept structural
 // so the demo's richer SettlementRecord is assignable without the package taking
@@ -41,6 +52,11 @@ export interface CompletedRecord {
   /** The authorizing Intent Mandate id, when this order completed via a delegated draw
    *  (005) — the audit link from an unattended completion back to its grant. */
   delegationId?: string;
+  /** How strongly this completion was trusted, RELAYED from an external verifier's verdict
+   *  (008). `"issuer-verified"` only when a real trust anchor produced it; the built-in rails
+   *  omit this (their honesty level is the manifest's `presence-only-demo`). Never synthesized
+   *  here — the gate only records a level it received. */
+  trustLevel?: TrustLevel;
 }
 
 export interface CompletedOrderStore {
@@ -136,7 +152,13 @@ function hasUnprovenCustomGate(
   return false;
 }
 
-export async function completeOrder(input: CompletionInput, ctx: CompletionContext): Promise<CompletionResult> {
+export function completeOrder(input: CompletionInput, ctx: CompletionContext): Promise<CompletionResult> {
+  // Serialize per order id so the idempotency check and the settle+record write below run as ONE
+  // critical section against concurrent same-order verifies (#103). Distinct orders don't contend.
+  return completionSerializer.run(input.order.id, () => completeOrderLocked(input, ctx));
+}
+
+async function completeOrderLocked(input: CompletionInput, ctx: CompletionContext): Promise<CompletionResult> {
   // Every deterministic gate must have passed; one failure refuses, recording
   // nothing.
   if (!input.gates.every((g) => g.pass)) return { completed: false, reason: "gates" };
@@ -324,10 +346,17 @@ export async function completeOrder(input: CompletionInput, ctx: CompletionConte
     return { completed: false, reason: "gate" };
   }
 
+  // Settlement runs HERE — after every gate, the re-price, and the age/custom-gate
+  // enforcement above have passed, and just before the record is written — so a refused
+  // order never settles. A per-input `settle` thunk (008: the delegated rail's
+  // gate-authorized `verifier.settle`, bound to the amount THIS path re-derived) takes
+  // precedence over the mount-time `ctx.settle(order)`; both gate completion identically
+  // (a throw ⇒ authorized-but-not-settled, no record — FR-013).
   let settlement: SettlementRecordLike | undefined;
-  if (ctx.settle) {
+  const settleFn = input.settle ?? (ctx.settle ? () => ctx.settle!(input.order) : undefined);
+  if (settleFn) {
     try {
-      settlement = await ctx.settle(input.order);
+      settlement = await settleFn();
     } catch (err) {
       return { completed: false, settlementError: (err as Error).message };
     }
@@ -343,6 +372,7 @@ export async function completeOrder(input: CompletionInput, ctx: CompletionConte
     gates: input.gates,
     completedAt: new Date().toISOString(),
     ...(settlement ? { settlement } : {}),
+    ...(input.trustLevel ? { trustLevel: input.trustLevel } : {}),
   });
   if (ctx.cart) await ctx.cart.clear();
   // Completed purchase: clear this order's age/loyalty verification.

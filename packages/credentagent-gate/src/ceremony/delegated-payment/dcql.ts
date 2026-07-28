@@ -30,13 +30,24 @@ export interface DelegatedDcqlEntry {
   query: DcqlQuery;
 }
 
+/** The merged query PLUS the map from each merged credential id back to the POLICY
+ *  credential it belongs to. `/request` sends the query; `/verify` uses `idMap` to route
+ *  the verifier's disclosed claims (keyed by merged id) back to the right policy
+ *  credential's own `verify` — one definition of the id scheme, so the two cannot drift. */
+export interface MergedDelegatedDcql {
+  query: DcqlQuery;
+  /** merged credential id → policy credential id (e.g. `age_mdl` → `age`, `payment` → `payment`). */
+  idMap: Map<string, string>;
+}
+
 /**
  * Merge per-credential DCQL into one query, namespacing ids and preserving each
  * source query's alternatives as its own `credential_sets` entry.
  */
-export function mergeDelegatedDcql(entries: DelegatedDcqlEntry[]): DcqlQuery {
+export function mergeDelegatedDcql(entries: DelegatedDcqlEntry[]): MergedDelegatedDcql {
   const credentials: DcqlCredentialOption[] = [];
   const credential_sets: DcqlCredentialSet[] = [];
+  const idMap = new Map<string, string>();
 
   for (const { credentialId, query } of entries) {
     // A single-credential query takes the policy id verbatim (`payment`), which reads
@@ -47,6 +58,7 @@ export function mergeDelegatedDcql(entries: DelegatedDcqlEntry[]): DcqlQuery {
     for (const c of query.credentials) {
       const id = single ? credentialId : `${credentialId}_${c.id}`;
       renamed.set(c.id, id);
+      idMap.set(id, credentialId);
       credentials.push({ ...c, id });
     }
     const remap = (ids: string[]): string[] => ids.map((id) => renamed.get(id) ?? id);
@@ -60,7 +72,7 @@ export function mergeDelegatedDcql(entries: DelegatedDcqlEntry[]): DcqlQuery {
     }
   }
 
-  return { credentials, credential_sets };
+  return { query: { credentials, credential_sets }, idMap };
 }
 
 /**
