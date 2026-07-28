@@ -88,10 +88,26 @@ refuses for device grants. Page-mode grants keep `trustLevel: "server-issued-dem
 TYPE carries the difference, so no copy can blur the two. The demo/quickstart story uses
 `signing: "device"`.
 
-**FR-4 — Honesty.** New `trustLevel` value **`"device-signed"`**: the device signature is
-real; the trust anchor is not — the payment credential is a self-minted demo credential and
-the gate performs **no issuer/VICAL verification yet** (that is #14, unchanged). Docs, page
-copy, and release notes must state exactly that. `"issuer-verified"` remains unused.
+**FR-4 — Honesty (two verification backends, provenance always recorded).** The rail's
+`verify` runs through a **seam**, not a hardcoded in-gate check, because the trust ceiling
+differs by who verifies:
+
+- **In-gate verify (v1 default):** new `trustLevel` value **`"device-signed"`** — the device
+  signature is real; the trust anchor is not (the demo `payment.mpzpass` credential, no
+  issuer/VICAL check — that is #14, unchanged). Docs, page copy, and release notes must state
+  exactly that. The gate itself never claims `"issuer-verified"`.
+- **Delegated verify (the #103 `DelegatedVerifier` seam):** the external checker
+  (e.g. the UPay/utopia verifier) verifies a payment credential that is **issuer-backed in its
+  own ecosystem and can settle real value**. The gate **relays the verifier's attested
+  `trust_level` verbatim** — exactly the precedent the delegated-payment rail set in #103 —
+  which may legitimately exceed `"device-signed"`. The mandate record then carries the
+  **attestor's identity** (`verifiedBy`), so a stronger label is always traceable to who
+  vouched for it, never implied to be the gate's own judgment.
+
+Either way the mandate evidence records `{ boundsHash, signedAt, verifiedBy: "gate" | <verifier id>, trustLevel }`.
+v1 implements the in-gate backend + the seam; wiring the UPay verifier end-to-end through it
+is the fast-follow (it also means the SAME credential that signed the intent settles the
+spends — the full signed-authority → settlement chain).
 
 **FR-5 — The spend chain (v1).** Every spend's stored record and `SpendDoor` gains
 `mandate: { id, boundsHash }` referencing the signed Intent Mandate, so a settled purchase
