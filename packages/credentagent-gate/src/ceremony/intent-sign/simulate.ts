@@ -17,7 +17,7 @@ import { Encoder, Tag, decode as cborDecode } from "cbor-x";
 import { webcrypto } from "node:crypto";
 import * as jose from "jose";
 import { coseKeyFromJwk } from "../mdoc/mdoc-iso.js";
-import { buildIntentSessionTranscript } from "./deviceAuth.js";
+import { buildIntentSessionTranscript, jwkThumbprintSha256 } from "./deviceAuth.js";
 import { PAYMENT_CREDENTIAL_DOCTYPE } from "./dcql.js";
 import type { SignedIntentRequest } from "./request.js";
 
@@ -101,7 +101,9 @@ export async function devSimulateWalletSignature(
   // ── deviceSigned: empty device namespaces + the REAL device signature over the
   //    bounds-bound session transcript. ──
   const deviceNameSpaces = new Tag(cbor({}), 24);
-  const transcript = buildIntentSessionTranscript(origin, nonce);
+  // The transcript binds to the response-encryption key's JWK thumbprint (DC API HandoverInfo);
+  // the wallet computes it from the verifier's encryption key advertised in client_metadata.jwks.
+  const transcript = buildIntentSessionTranscript(origin, nonce, jwkThumbprintSha256(encJwk));
   const deviceAuthentication = ["DeviceAuthentication", cborDecode(transcript), docType, deviceNameSpaces];
   const deviceAuthenticationBytes = cbor(new Tag(cbor(deviceAuthentication), 24));
   const deviceSignature = await coseSign1Detached(deviceAuthenticationBytes, deviceKp.privateKey);

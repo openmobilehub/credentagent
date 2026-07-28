@@ -22,7 +22,7 @@ import * as jose from "jose";
 import { openReaderContext } from "../mdoc/readerContext.js";
 import { PAYMENT_CREDENTIAL_DOCTYPE } from "./dcql.js";
 import { boundsHash, deriveNonce, type IntentBoundsInput } from "./bounds.js";
-import { buildIntentSessionTranscript, verifyDeviceAuth } from "./deviceAuth.js";
+import { buildIntentSessionTranscript, jwkThumbprintSha256, verifyDeviceAuth } from "./deviceAuth.js";
 import type { TrustLevel } from "../../types.js";
 
 /** Single-use nonce ledger: `consume` records a nonce and returns true only the FIRST
@@ -158,8 +158,10 @@ export async function verifyIntentPresentation(args: {
   }
   if (!deviceResponseB64url) return { ok: false, reason: "no DeviceResponse in vp_token" };
 
-  // Build the transcript from the bounds-bound nonce and run the trust backend.
-  const sessionTranscript = buildIntentSessionTranscript(origin.origin, nonce);
+  // Build the transcript from the bounds-bound nonce + the response-encryption key's JWK
+  // thumbprint (the DC API HandoverInfo's third element — deviceAuth.ts), then run the backend.
+  const thumbprint = jwkThumbprintSha256(ctx.ecdhPrivateJwk as { crv?: string; x?: string; y?: string });
+  const sessionTranscript = buildIntentSessionTranscript(origin.origin, nonce, thumbprint);
   const verdict = await backend({ deviceResponseB64url, sessionTranscript });
   if (!verdict.ok) return { ok: false, reason: verdict.reason ?? "presentation not verified" };
 

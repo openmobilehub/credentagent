@@ -86,9 +86,21 @@ function asTag24(item: unknown): Tag {
 }
 
 /**
+ * The RFC 7638 SHA-256 JWK thumbprint (raw 32 bytes) of a P-256 EC key. For an EC key
+ * the thumbprint hashes ONLY the required members, in lexicographic order —
+ * `{"crv":..,"kty":"EC","x":..,"y":..}` — so a key JWK carrying extra members (`use`,
+ * `alg`, `kid`, `d`) yields the SAME thumbprint. This is what the OpenID4VP DC API
+ * session transcript binds to (see `buildIntentSessionTranscript`).
+ */
+export function jwkThumbprintSha256(jwk: { crv?: string; x?: string; y?: string }): Uint8Array {
+  const canonical = `{"crv":"${jwk.crv}","kty":"EC","x":"${jwk.x}","y":"${jwk.y}"}`;
+  return new Uint8Array(createHash("sha256").update(canonical).digest());
+}
+
+/**
  * SessionTranscript for the OpenID4VP DC API path, bound to the ceremony nonce:
  *
- *   [ null, null, ["OpenID4VPDCAPIHandover", sha256(CBOR([origin, nonce])) ] ]
+ *   [ null, null, ["OpenID4VPDCAPIHandover", sha256(CBOR([origin, nonce, jwkThumbprint])) ] ]
  *
  * ISO 18013-5 shape (`[DeviceEngagementBytes, EReaderKeyBytes, Handover]`, both
  * engagement slots null for the DC API). The nonce — bound to the grant bounds in
@@ -96,18 +108,19 @@ function asTag24(item: unknown): Tag {
  * transcript covers the bounds. Both the simulated wallet (simulate.ts) and this
  * verifier build it identically, so the in-process flow is fully consistent.
  *
- * NOTE (interop, deferred to the maintainer's on-device test): the exact handover
- * bytes a real Multipaz wallet hashes may differ from this shape — most likely the
- * OpenID4VP 1.0 HandoverInfo is `[origin, nonce, jwk_thumbprint]` (the SHA-256 JWK
- * thumbprint of the response-encryption key), where this rail hashes only
- * `[origin, nonce]`. Align this ONE function with the wallet if the real-phone
- * signature does not verify; nothing else in the rail changes. The predicted
- * mismatches + the exact one-line fixes are mapped in
- * `specs/012-device-signed-grants/on-device-interop.md`; set INTENT_DEBUG_TRANSCRIPT=1
- * to log the bytes this gate hashes.
+ * `jwkThumbprint` is the SHA-256 RFC-7638 thumbprint of the reader's response-encryption
+ * key — the third HandoverInfo element the OpenID4VP 1.0 DC API profile (DRAFT_29) requires
+ * for an ENCRYPTED response (our `response_mode` is `dc_api.jwt`). This matches Multipaz's
+ * `OpenID4VP.kt` DC-API handover (adversarial review of #148, finding 1).
+ *
+ * INTEROP NOTE (confirm on the maintainer's on-device test): an OLDER draft (DRAFT_24) used
+ * `[origin, clientId, nonce]` instead. If a real wallet still rejects the signature after this,
+ * that draft skew is the first thing to try — the exact one-line switch + the full runbook are
+ * in `specs/012-device-signed-grants/on-device-interop.md`. Set INTENT_DEBUG_TRANSCRIPT=1 to log
+ * the bytes this gate hashes.
  */
-export function buildIntentSessionTranscript(origin: string, nonce: string): Uint8Array {
-  const handoverInfo = cbor([origin, nonce]);
+export function buildIntentSessionTranscript(origin: string, nonce: string, jwkThumbprint: Uint8Array): Uint8Array {
+  const handoverInfo = cbor([origin, nonce, Buffer.from(jwkThumbprint)]);
   const handoverHash = createHash("sha256").update(handoverInfo).digest();
   const transcript = cbor([null, null, ["OpenID4VPDCAPIHandover", handoverHash]]);
   // On-device interop debug (off by default — set INTENT_DEBUG_TRANSCRIPT=1). Logs the exact
@@ -117,9 +130,10 @@ export function buildIntentSessionTranscript(origin: string, nonce: string): Uin
   // specs/012-device-signed-grants/on-device-interop.md.
   if (process.env.INTENT_DEBUG_TRANSCRIPT) {
     console.error(
-      "[intent-sign transcript] origin=%j nonce=%j handoverInfo=%s transcript=%s",
+      "[intent-sign transcript] origin=%j nonce=%j thumbprint=%s handoverInfo=%s transcript=%s",
       origin,
       nonce,
+      Buffer.from(jwkThumbprint).toString("hex"),
       Buffer.from(handoverInfo).toString("hex"),
       Buffer.from(transcript).toString("hex"),
     );
