@@ -21,6 +21,7 @@ import { completeOrder, type CompletedRecord, type CompletedOrderStore } from ".
 import { renderRequirements, type RenderOrder } from "./ceremony/checkout-page.js";
 import type { CartItemRef, CeremonyCatalog, CeremonyOrder, CeremonyOrderStore, RepriceOpts } from "./ceremony/types.js";
 import type {
+  Branding,
   Credential,
   GateOrder,
   ReaderIdentity,
@@ -48,6 +49,8 @@ export interface ServeOrdersDeps {
   credentialRegistry: ReadonlyMap<string, Credential>;
   /** Stable reader identity the rails present (omit ⇒ per-request self-signed). */
   readerIdentity?: ReaderIdentity;
+  /** Host brand for the checkout page + rails (omit ⇒ the built-in look). Never brands the footer. */
+  branding?: Branding;
   /** Stable HMAC key for the challenge (survives an instance split). Omit ⇒ ephemeral dev key. */
   signingKey?: string;
 }
@@ -190,13 +193,23 @@ export function serveOrders(app: CeremonyApp, deps: ServeOrdersDeps): void {
   mountCeremony(app, {
     orderStore,
     catalog,
-    completion: (input) => completeOrder(input, { catalog, verificationStore: deps.verificationStore, records, credentialRegistry: deps.credentialRegistry }),
+    // Scope the custom-gate sweep to THIS order's stored policy (#59 finding 2): the credential
+    // registry is process-wide and accumulates a gate from every order's policy, so completion
+    // must enforce only the gates the order actually required — not a gate that belongs to some
+    // other order sitting in the shared registry. The created store IS the per-order policy
+    // carrier (invariant 4), so it survives an instance split when a shared store is injected.
+    completion: async (input) => {
+      const created = await deps.created.read(input.order.id);
+      const scoped = created ? { ...input, policyCredentialIds: created.policy.map((s) => s.credential.id) } : input;
+      return completeOrder(scoped, { catalog, verificationStore: deps.verificationStore, records, credentialRegistry: deps.credentialRegistry });
+    },
     verificationStore: deps.verificationStore,
     credentialRegistry: deps.credentialRegistry,
     // After a rail proves / pays, return the buyer to THIS order's checkout page — not the
     // storefront's `/checkout` default (which the orders interface doesn't serve).
     returnUrl: (id) => `${deps.walletOrigin}/credentagent/orders/${encodeURIComponent(id)}`,
     ...(deps.readerIdentity ? { readerIdentity: deps.readerIdentity } : {}),
+    ...(deps.branding ? { branding: deps.branding } : {}),
     ...(deps.signingKey ? { signingKey: deps.signingKey } : { allowEphemeralKey: true }),
   });
 
@@ -241,7 +254,7 @@ export function serveOrders(app: CeremonyApp, deps: ServeOrdersDeps): void {
           orderToken: id,
         };
     const statusUrl = `/credentagent/orders/${orderQ}/status`;
-    res.type("html").send(renderRequirements(toRenderOrder(order), manifest, verification, { payment, paid, statusUrl }));
+    res.type("html").send(renderRequirements(toRenderOrder(order), manifest, verification, { payment, paid, statusUrl, ...(deps.branding ? { branding: deps.branding } : {}) }));
   };
 
   // Instant-demo completion — UNGATED orders only. A gated order (age / payment) is refused

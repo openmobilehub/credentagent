@@ -177,3 +177,123 @@ describe("credentagent.grants — the approve page (grants.serve, #112 P1)", () 
     expect(res._status).toBe(404);
   });
 });
+
+// ── Ported from the closed PR #106 (issue #104): concurrency + money-boundary coverage the
+// merged suite lacked — which is exactly why the two bugs below shipped. Each BYPASS test goes
+// red if its control is reverted (see the per-test note).
+describe("credentagent.grants — concurrency + money boundary (#104 port-forward)", () => {
+  // BYPASS (#104 fix 1 — per-grant serialization): two same-key spends that overlap in time both
+  // miss the idempotency cache and reach the engine; without the per-grant lock the loser comes
+  // back from the atomic single-use ledger as `consumed` → misreported "revoked"/terminal, even
+  // though nothing was revoked and the purchase succeeded once. Remove `this.locks.run(...)` around
+  // the spend body in grants.ts and this goes red (one result is { ok:false, code:"revoked" }).
+  it("BYPASS: concurrent SAME-key spends collapse to one charge — both ok, one replayed, never a false 'revoked'", async () => {
+    const g = await authorizedGrant(client());
+    const [a, b] = await Promise.all([
+      g.spend({ idempotencyKey: "p1", items: [{ sku: "coffee" }] }),
+      g.spend({ idempotencyKey: "p1", items: [{ sku: "coffee" }] }),
+    ]);
+    expect(a.ok && b.ok).toBe(true); // neither is a spurious refusal
+    expect([a, b].filter((r) => r.ok && r.replayed).length).toBe(1); // exactly one is the replay
+    // ONE charge: a follow-up spend sees 100 − 18 − 18 = 64.
+    expect(await g.spend({ idempotencyKey: "p2", items: [{ sku: "coffee" }] })).toMatchObject({ ok: true, remaining: 64 });
+  });
+
+  // BYPASS (#104 fix 1 — lifecycle serialization): a revoke landing WHILE an authorize is in flight
+  // (its async key-gen not yet resolved) must never leave a spendable grant. Without the lock the
+  // revoke sees no engine yet (skips the ledger) and sets status "revoked", then the in-flight
+  // authorize resolves and overwrites it back to "authorized" with a live, un-revoked engine — a
+  // spendable grant the human tried to kill. Remove the lock on _authorize / revoke and this goes
+  // red (status "authorized", spend ok). Order matters: authorize is started first so it is mid-flight.
+  it("BYPASS: a revoke landing while authorize is in flight never leaves a spendable grant", async () => {
+    const ca = client();
+    const gc = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30 });
+    const g = (await ca.grants.retrieve(gc.id))!;
+    await Promise.all([ca.grants._authorize(gc.id), g.revoke()]); // authorize in flight, revoke lands
+    expect((await ca.grants.retrieve(gc.id))!.status).toBe("revoked");
+    expect((await g.spend({ idempotencyKey: "p1", items: [{ sku: "coffee" }] })).ok).toBe(false);
+  });
+
+  // BYPASS (#104 fix 2 — integer cents): 4.9 + 4.9 + 4.9 === 14.700000000000001 in binary float, so
+  // priced in dollars the third spend is wrongly refused budget-exceeded. Priced in integer cents it
+  // lands exactly on the budget. Revert grants.ts to feed the engine dollars (drop toCents/centsCatalog)
+  // and this goes red (the third spend refuses). (Control now lives in toCents/centsCatalogView.)
+  it("BYPASS: $4.90 × 3 spends exactly to a $14.70 budget without a false refusal", async () => {
+    const ca = new CredentAgent({ walletOrigin: "http://localhost:4000", catalog: { latte: 4.9 } });
+    const gc = await ca.grants.create({ merchant: "utopia", budget: 14.7, perSpend: 4.9 });
+    await ca.grants._authorize(gc.id);
+    const g = (await ca.grants.retrieve(gc.id))!;
+    for (const k of ["a", "b", "c"]) {
+      expect(await g.spend({ idempotencyKey: k, items: [{ sku: "latte" }] })).toMatchObject({ ok: true, amount: 4.9 });
+    }
+    expect(await g.spend({ idempotencyKey: "d", items: [{ sku: "latte" }] })).toMatchObject({ ok: false, code: "budget-exceeded" });
+  });
+
+  // Regression (not a lock bypass — the engine's atomic commit already prevents this): concurrent
+  // DISTINCT-key spends against a budget with room for one must not both settle. Pins that porting
+  // the lock did not weaken the engine's cumulative-cap atomicity.
+  it("concurrent DISTINCT-key spends never exceed the budget (exactly one settles)", async () => {
+    const ca = client();
+    const gc = await ca.grants.create({ merchant: "utopia", budget: 20, perSpend: 20 }); // room for ONE $18
+    await ca.grants._authorize(gc.id);
+    const g = (await ca.grants.retrieve(gc.id))!;
+    const [a, b] = await Promise.all([
+      g.spend({ idempotencyKey: "p1", items: [{ sku: "coffee" }] }),
+      g.spend({ idempotencyKey: "p2", items: [{ sku: "coffee" }] }),
+    ]);
+    expect([a.ok, b.ok].filter(Boolean).length).toBe(1);
+  });
+
+  // Regression: a concurrent double-approve seals one grant and the budget cap still holds (no
+  // rebind to a fresh, empty ledger that would allow 2× the budget).
+  it("a concurrent double-approve seals one grant; the budget cap still holds", async () => {
+    const ca = client();
+    const gc = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30 });
+    await Promise.all([ca.grants._authorize(gc.id), ca.grants._authorize(gc.id)]);
+    const g = (await ca.grants.retrieve(gc.id))!;
+    expect(g.status).toBe("authorized");
+    for (let i = 0; i < 5; i++) expect((await g.spend({ idempotencyKey: `b${i}`, items: [{ sku: "coffee" }] })).ok).toBe(true); // 90 of 100
+    expect(await g.spend({ idempotencyKey: "b5", items: [{ sku: "coffee" }] })).toMatchObject({ ok: false, code: "budget-exceeded" });
+  });
+
+  // BYPASS (#104 Codex P1 — revoke-wins mid-spend): a revoke landing WHILE a spend is in flight
+  // must refuse that spend. The engine's ledger revoke runs OUTSIDE the per-grant queue, so the
+  // in-flight spend's atomic settle-time re-check sees it. Move the ledger revoke back inside the
+  // mutex (behind the spend) and this goes red — the spend settles before revoke commits.
+  it("BYPASS: a revoke while a spend is IN FLIGHT refuses that spend (revoke-wins mid-spend)", async () => {
+    const g = await authorizedGrant(client());
+    const spendP = g.spend({ idempotencyKey: "p1", items: [{ sku: "coffee" }] }); // start, do NOT await
+    await g.revoke(); // lands mid-flight
+    const s = await spendP;
+    expect(s.ok).toBe(false); // ok:true here would mean the spend settled after revoke (the regression)
+    expect(s).toMatchObject({ code: "revoked" });
+  });
+
+  // BYPASS (#104 Codex P1 — live catalog): the engine re-prices per spend from the LIVE catalog,
+  // so an in-memory price change is honoured and the sealed cap is enforced against it. Snapshot
+  // the catalog at engine construction and this goes red (the later spends price at the stale $18).
+  it("BYPASS: prices each spend from the LIVE catalog — a re-price is honoured and the cap enforced against it", async () => {
+    const catalog: Record<string, { price: number; category: string }> = { coffee: { price: 18, category: "Beverages" } };
+    const ca = new CredentAgent({ walletOrigin: "http://localhost:4000", catalog });
+    const gc = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 40 });
+    await ca.grants._authorize(gc.id);
+    const g = (await ca.grants.retrieve(gc.id))!;
+    expect(await g.spend({ idempotencyKey: "p1", items: [{ sku: "coffee" }] })).toMatchObject({ ok: true, amount: 18 });
+    catalog.coffee.price = 25; // host re-prices in memory
+    expect(await g.spend({ idempotencyKey: "p2", items: [{ sku: "coffee" }] })).toMatchObject({ ok: true, amount: 25 }); // NEW price, not a stale $18
+    catalog.coffee.price = 50; // now above the $40 per-spend cap
+    expect(await g.spend({ idempotencyKey: "p3", items: [{ sku: "coffee" }] })).toMatchObject({ ok: false, code: "per-spend-exceeded" }); // cap enforced against the live price
+  });
+
+  // BYPASS (#104 Codex P2 — sub-cent): a value that can't be represented in whole cents is rejected
+  // with a clear error, never silently rounded. Make toCents round instead of throw and both legs
+  // go red (create resolves; the sub-cent price prices as $0.01 instead of throwing).
+  it("BYPASS: rejects sub-cent precision — at config for a cap, and when a sub-cent price is used", async () => {
+    await expect(client().grants.create({ merchant: "utopia", budget: 100, perSpend: 0.006 })).rejects.toThrow(/sub-cent/);
+    const ca = new CredentAgent({ walletOrigin: "http://localhost:4000", catalog: { trinket: 0.006 } });
+    const gc = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30 });
+    await ca.grants._authorize(gc.id);
+    const g = (await ca.grants.retrieve(gc.id))!;
+    await expect(g.spend({ idempotencyKey: "p1", items: [{ sku: "trinket" }] })).rejects.toThrow(/sub-cent/);
+  });
+});

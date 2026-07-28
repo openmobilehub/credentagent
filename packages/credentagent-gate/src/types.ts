@@ -203,6 +203,38 @@ export interface ReaderIdentity {
   chain?: string[];
 }
 
+/**
+ * The brand a host puts on the browser ceremony pages the gate serves (the checkout hub +
+ * the age / payment / credential gate pages, and the "not presentable yet" page). Set it
+ * ONCE on `new CredentAgent({ branding })` and every ceremony page picks it up — no
+ * per-page wiring. Omit it for the built-in look (byte-for-byte unchanged).
+ *
+ * Chrome only, by design: branding styles the wordmark, colour, and logo, but it NEVER
+ * touches the honesty trust footer — the `presence-only-demo` disclosure the pages carry is
+ * fixed no matter what you pass. Every field is sanitized before it reaches the page, so a
+ * host-supplied string cannot inject HTML or CSS onto a consent screen.
+ */
+export interface Branding {
+  /** Replaces the `CREDENTAGENT` wordmark. Rendered as text (HTML-escaped). */
+  wordmark?: string;
+  /**
+   * Primary accent colour — the CTA button, the active progress step, the verified ✓. A hex
+   * (`#7c3aed`) or an `rgb()`/`rgba()`/`hsl()`/`hsla()` value; the hover shade is derived from
+   * it. A value that isn't one of those forms — including a bare word like `teal` or a
+   * misspelling — is ignored (the built-in teal stays), so a malformed accent can never emit
+   * an invalid colour or break the stylesheet.
+   */
+  accent?: string;
+  /**
+   * Optional logo shown instead of the wordmark — a `data:image/…` URI, an `https:`/`http:`
+   * URL, or a root-relative `/path`. Any other value (e.g. a `javascript:` URL) is ignored
+   * and the wordmark stays.
+   */
+  logo?: string;
+  /** Show the `DEMO` pill. Default `true`; set `false` to hide it (e.g. in production). */
+  demoPill?: boolean;
+}
+
 export interface CredentAgentOptions {
   /**
    * Absolute origin the wallet ceremony binds to (e.g. `https://shop.example`).
@@ -211,6 +243,12 @@ export interface CredentAgentOptions {
    * localhost in production. Set it to your public origin for any deployment.
    */
   walletOrigin?: string;
+  /**
+   * Optional brand for the browser ceremony pages — wordmark, accent colour, logo, and the
+   * DEMO-pill toggle. Set once here and every `/credentagent/*` page carries it (see
+   * {@link Branding}). Omit for the built-in look. Never overrides the honesty trust footer.
+   */
+  branding?: Branding;
   /** Per-order verification state; default in-memory, pluggable (Redis). */
   store?: VerificationStore;
   /**
