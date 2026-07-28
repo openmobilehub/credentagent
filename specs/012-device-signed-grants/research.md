@@ -107,7 +107,14 @@ It sets only `displayName` and `identifier`, so the three defaults apply:
 `kbJwtResponseClaimName == mdocRequestInfoKeyName == mdocResponseNamespace ==
 "urn:eudi:sca:payment:1"`. The payload schema is the full EUDI-aligned SCA set —
 `transactionId`, `currency` (ISO-4217), `amount`, `payee {name, id, logo?, website?}`,
-`dateTime`, `pisp`, `executionDate`, `recurrence`, `mitOptions`, … .
+`dateTime`, `pisp`, `executionDate`, `recurrence`, `mitOptions`, … . **The Kotlin
+property names are camelCase, but Multipaz serializes JSON with
+`JsonNamingStrategy.SnakeCase` (`PaymentTransaction.kt`), so the WIRE format is
+snake_case** — `transaction_id`, `date_time`, `credential_ids` — matching Multipaz's own
+`sampleData` (`{ transaction_id, amount, currency, payee: { id, name } }`) and exactly
+what our rail already emits. Only the four required fields (`transaction_id`, `currency`,
+`amount`, `payee`) are non-nullable; the rest default to null, and Multipaz's `sampleData`
+sends only those four.
 
 **This matches our reader byte-for-byte.** Our `extractTransactionDataHash` (mdoc.ts:76–89)
 defaults to `namespace = "urn:eudi:sca:payment:1"`, `element = "transaction_data_hash"` —
@@ -234,18 +241,37 @@ exercises the response side, `dc-payment/presentation.test.ts`, builds a **synth
 DeviceResponse by hand: docType `org.multipaz.payment.sca.1` with a `deviceSigned` namespace
 `urn:eudi:sca:payment:1` carrying `transaction_data_hash` (presentation.test.ts:55–61). It
 models Multipaz's shape (and, per §2.2–2.3, models it correctly) but does not prove a live
-wallet accepts our hand-built payload. Two concrete integration risks that a real wallet
-would surface and our tests cannot:
+wallet accepts our hand-built payload end-to-end.
 
-1. **Payload schema mismatch.** Our payload uses `transaction_id` (snake) and only
-   `{amount, currency, payee}`; Multipaz's `PaymentTransaction.Payload` uses `transactionId`
-   (camel) and may require additional fields (e.g. `dateTime`). If `parseJsonTransactions`
-   validates strictly, the wallet **rejects the request** (§2.6). Must be verified on-device.
-2. **Hash-algorithm negotiation.** Multipaz reports `transaction_data_hash_alg` and can pick
-   SHA-384/512 (COSE `-43`/`-44`); our reader recomputes **SHA-256 only** and ignores the
-   `_alg` element (mdoc.ts:78–86). A wallet that answers in a non-SHA-256 alg would fail our
-   equality check even though the binding is valid. A real integration must read
-   `transaction_data_hash_alg` and match it (or constrain the request to sha-256).
+> **Correction (2026-07-28, source-verified against Multipaz `main`/v0.100.0).** An earlier
+> draft of this section claimed our payload would be *hard-rejected* over a `transaction_id`
+> vs `transactionId` casing mismatch and possibly-missing required fields. That was read off
+> Multipaz's *Kotlin property names* and is **wrong**: Multipaz serializes with
+> `JsonNamingStrategy.SnakeCase` (§2.2), so the wire is snake_case — our `transaction_id`
+> payload is **correct** and maps cleanly onto Multipaz's `JsonData`/`Payload` with all four
+> required fields present and no unknown keys, identical to Multipaz's own `sampleData`. It
+> **decodes fine today**; renaming to `transactionId` would be the actual break (an unknown
+> key its decoder — no `ignoreUnknownKeys` — hard-rejects). The genuinely real gap was
+> **algorithm agility only**, corrected below.
+
+1. **Payload schema — already correct; do NOT change.** Our envelope `{ type, credential_ids,
+   payload: { transaction_id, amount, currency, payee } }` is Multipaz's `JsonData`/`Payload`
+   in snake_case (§2.2). No field-name or missing-field problem exists; the shape is pinned by
+   a test in the dc-payment fix (below).
+2. **Hash-algorithm rigidity — the real gap; fixed for the dc-payment rail in #146 / PR #147.**
+   Multipaz reports `transaction_data_hash_alg` and can pick SHA-384/512 (COSE `-43`/`-44`),
+   and when the request **omits** the algorithm list it defaults to SHA-256 and *omits* the
+   `_alg` element (`mdocPresentment.kt`). The old reader recomputed **SHA-256 only** and
+   ignored `_alg`, so it matched Multipaz's default today but would wrongly **refuse** a valid
+   non-SHA-256 response (fail-closed, not a mis-accept). The fix: the request now declares
+   `transaction_data_hashes_alg: ["sha-256"]` (making the algorithm an explicit contract, not
+   reliance on Multipaz's implicit default), and verify honors the reported `_alg` (COSE
+   `-16`/`-43`/`-44` → SHA-256/384/512; absent ⇒ SHA-256; unknown ⇒ fail closed). The intent-sign
+   rail should reuse the same `txData`/reader helpers.
+
+Net: the payload and the hash *input* were already Multipaz-correct (Multipaz's `computeHash`
+hashes the bytes of the base64url `transaction_data` string — exactly what our reader hashes);
+only algorithm agility and the implicit-default reliance needed fixing.
 
 ---
 
@@ -256,14 +282,15 @@ would surface and our tests cannot:
 - As an **unrelated new top-level field**: yes, ignored (§2.6). But `transaction_data` is a
   *known* field, so this case doesn't apply to it.
 - As a **`transaction_data` array with the registered `urn:eudi:sca:payment:1` type, sent to
-  a Utopia-configured wallet, with a payload that passes `PaymentTransaction`'s schema**:
+  a Utopia-configured wallet, with a schema-valid payload (ours already is — §4)**:
   yes — the wallet renders "• Payment", the device signs the hash, and we can additionally
   verify `transaction_data_hash` in the response.
 - As a **`transaction_data` array with an unregistered type, or a malformed payload, or sent
   to a wallet without `PaymentTransaction` registered**: **no — hard rejection** (§2.6).
 
-So the answer is registration- and schema-dependent, and must be proven on-device (§4). It
-is not a free, universally-ignored addition.
+So the answer is **registration-dependent** — the wallet must have `PaymentTransaction`
+registered (the Utopia universe does). Our payload itself is schema-valid (§4); the addition
+is not a free, universally-ignored one, and must still be proven on-device (§4).
 
 ---
 
@@ -309,7 +336,13 @@ that can show the human the actual bounds.
 
 ---
 
-## 7. Ready-to-file follow-up issue
+## 7. Follow-up issue (now filed)
+
+*Filed as **#145** (adopt `transaction_data` on the intent-sign rail) and **#146** (the
+dc-payment-rail hardening this spike surfaced — fixed in **PR #147**: explicit
+`transaction_data_hashes_alg` request + response-`_alg`-honoring, fail-closed on unknown).
+The text below is the original proposal, with its acceptance items corrected to match the
+source-verified schema truth (§4).*
 
 > **Title:** Adopt OpenID4VP `transaction_data` on the intent-sign rail (additive, after
 > device-signed grants v1)
@@ -335,11 +368,14 @@ that can show the human the actual bounds.
 >
 > **Scope / acceptance:**
 > 1. Emit a `transaction_data` entry (type `urn:eudi:sca:payment:1`) on the intent-sign
->    request whose payload **matches `PaymentTransaction.Payload` exactly** (fix
->    `transaction_id`→`transactionId`; include any required fields such as `dateTime`).
-> 2. On verify, extract `transaction_data_hash` from the `deviceSigned` namespace **and read
->    `transaction_data_hash_alg`** — recompute with the reported algorithm rather than
->    assuming SHA-256 (today's reader hardcodes SHA-256, `mdoc.ts:78`).
+>    request by **reusing dc-payment's `txData` helper** — the payload shape is already
+>    correct (snake_case `{ transaction_id, amount, currency, payee }`, §4); do **not**
+>    rename to camelCase (that would be the break, §2.6). Only the payload *values* differ
+>    (grant bounds vs a single amount).
+> 2. On verify, extract `transaction_data_hash` from the `deviceSigned` namespace **and honor
+>    `transaction_data_hash_alg`** — reuse the dc-payment reader delivered in #146 / PR #147
+>    (COSE `-16`/`-43`/`-44` → SHA-256/384/512; absent ⇒ SHA-256; unknown ⇒ fail closed);
+>    do not re-derive a SHA-256-only reader.
 > 3. Keep the nonce-binding; require **both** to agree (belt-and-suspenders).
 > 4. **On-device gate:** prove the round-trip against a Utopia-configured Multipaz wallet —
 >    a mismatched type/payload is **hard-rejected** by Multipaz's request parser
