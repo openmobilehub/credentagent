@@ -41,10 +41,11 @@ sealed reader context server-side (FR-7 guidance: keep the request conservative)
 
 ### 1.2 The session transcript
 
-`deviceAuth.ts:105–124`, `buildIntentSessionTranscript(origin, nonce)`:
+`deviceAuth.ts`, `buildIntentSessionTranscript(origin, nonce, jwkThumbprint)` — **updated to the
+DRAFT_29 3-element HandoverInfo in commit `86da8d1`** (adversarial-review finding 1):
 
 ```
-HandoverInfo            = CBOR([ origin (tstr), nonce (tstr) ])
+HandoverInfo            = CBOR([ origin (tstr), nonce (tstr), jwkThumbprint (bstr) ])
 HandoverInfoHash        = SHA-256( HandoverInfo )                      # raw 32-byte digest
 SessionTranscript       = CBOR([ null, null,
                                  [ "OpenID4VPDCAPIHandover", HandoverInfoHash (bstr) ] ])
@@ -52,6 +53,10 @@ SessionTranscript       = CBOR([ null, null,
 
 - `origin` = `Origin.origin` from `deriveOrigin` (`ceremony/origin.ts:20–25`) —
   `` `${proto}://${host}` `` built from the request's `Host` (or `x-forwarded-host`) header.
+- `jwkThumbprint` = `jwkThumbprintSha256(...)` — the RFC 7638 SHA-256 thumbprint of the
+  reader's response-encryption key (raw 32-byte digest). `verify.ts` derives it from the sealed
+  `ecdhPrivateJwk`; `simulate.ts` derives it from the request's advertised `encJwk` — the same
+  key, so both sides produce identical bytes.
 - CBOR is canonical/deterministic (cbor-x, `useRecords:false, variableMapSize:true,
   useTag259ForMaps:false` — `deviceAuth.ts:26–29`), matching ISO 18013-5 §9.1.1.
 
@@ -110,12 +115,17 @@ where (OpenID4VP 1.0 Appendix B + RFC 7638):
   the request advertises in `client_metadata.jwks` — our `encJwk`). When the response is
   **unencrypted**, this element is `null`.
 
-**UNVERIFIED — confirm on device / against Multipaz source.** The exact handover *label*
-string and element layout have churned across OpenID4VP drafts, and ISO 18013-7:2025
-presentment landed in Multipaz 0.98.0 (research.md §2). Our FR-7 research did not read
-Multipaz's transcript/handover builder (`OpenID4VP.kt` / the DC-API presentment path). Treat
-the structure above as the **spec's** definition and confirm Multipaz emits exactly it —
-especially the `jwk_thumbprint` element and the literal `"OpenID4VPDCAPIHandover"` label.
+**Status: applied in commit `86da8d1`.** The adversarial review of PR #148 confirmed this
+against Multipaz's `OpenID4VP.kt` (lines 657–681, the DRAFT_29 DC-API branch), and the rail now
+builds exactly the 3-element HandoverInfo above (§1.2). **Still to confirm on device** — the
+review is a source read, not a phone round-trip.
+
+**The remaining draft-skew caveat (the first fallback to try on device).** The handover shape has
+churned across OpenID4VP drafts: **DRAFT_29** is `[origin, nonce, jwk_thumbprint]` (what we ship);
+**DRAFT_24** is `[origin, clientId, nonce]`. If a real wallet still rejects the signature, the
+wallet build may be on the older draft — the one-line switch is in §4.4 (Fix A′). Also still
+**UNVERIFIED**: the exact `jwk_thumbprint` encoding (raw bstr vs base64url tstr) and the literal
+`"OpenID4VPDCAPIHandover"` label — confirm both against the wallet's build.
 
 ---
 
@@ -125,8 +135,8 @@ especially the `jwk_thumbprint` element and the literal `"OpenID4VPDCAPIHandover
 |---|---|---|---|---|---|
 | 1 | `SessionTranscript` outer | `[null, null, Handover]` | `[null, null, Handover]` | **MATCH** | — |
 | 2 | Handover tuple | `["OpenID4VPDCAPIHandover", hash]` | `["OpenID4VPDCAPIHandover", hash]` | **LIKELY-MATCH** | wrong label/shape ⇒ total transcript mismatch |
-| 3 | **HandoverInfo elements** | `[origin, nonce]` (2) | `[origin, nonce, jwk_thumbprint]` (3) | **LIKELY-MISMATCH** | **the #1 suspect** — different array ⇒ different hash ⇒ signature fails |
-| 4 | `jwk_thumbprint` | absent | SHA-256 thumbprint of `encJwk` (encrypted response) | **LIKELY-MISMATCH** | as #3 |
+| 3 | **HandoverInfo elements** | `[origin, nonce, jwk_thumbprint]` (3) — **fixed in `86da8d1`** | `[origin, nonce, jwk_thumbprint]` (DRAFT_29) | **MATCH (pending device)** | draft skew (DRAFT_24 = `[origin, clientId, nonce]`) ⇒ Fix A′ |
+| 4 | `jwk_thumbprint` value | RFC-7638 SHA-256 of `encJwk`, raw bstr | RFC-7638 SHA-256, raw bstr | **MATCH (pending device)** | encoding skew (bstr vs base64url tstr) ⇒ Fix A″ |
 | 5 | `origin` string | `` `${proto}://${host}` `` from `Host` header | canonical browser Web Origin | **UNKNOWN** | port/case/`x-forwarded` drift ⇒ different bytes |
 | 6 | `nonce` string | our request `nonce`, verbatim | request `nonce`, verbatim | **MATCH** | — (the wallet echoes the request nonce) |
 | 7 | HandoverInfoHash alg | SHA-256 | SHA-256 (fixed) | **MATCH** | — |
@@ -137,9 +147,10 @@ especially the `jwk_thumbprint` element and the literal `"OpenID4VPDCAPIHandover
 | 12 | COSE protected header / alg | the wallet's own bytes | the wallet's own | **MATCH (by construction)** | — |
 | 13 | Device key source | MSO `deviceKeyInfo.deviceKey` | MSO `deviceKeyInfo.deviceKey` | **MATCH** | (anchor unverified — by design, #14) |
 
-Everything the device signs *except the session transcript* either matches the ISO structure
-or is echoed from the wallet's own presentation. **The entire interop risk collapses onto the
-transcript (rows 2–8), and within that onto the HandoverInfo (rows 3–5).**
+The #1 predicted mismatch (rows 3–4) is now **fixed in code** (`86da8d1`); everything the device
+signs *except the session transcript* either matches the ISO structure or is echoed from the
+wallet's own presentation. **The residual on-device risk is now the draft/encoding skew (rows 3–4,
+Fixes A′/A″) and the origin canonicalization (row 5).**
 
 ---
 
@@ -175,7 +186,7 @@ transcript (rows 2–8), and within that onto the HandoverInfo (rows 3–5).**
 
 | `/sign/verify` reason | Meaning | First fix to try |
 |---|---|---|
-| `device signature does not verify` | **the transcript mismatch** (the expected failure) | Apply **Fix A** (add `jwk_thumbprint`), redeploy, retry. Then **Fix B** (origin), then **Fix C** (label). |
+| `device signature does not verify` | **the transcript mismatch** (the expected failure; the #1 suspect is already fixed in `86da8d1`) | Try **Fix A′** (DRAFT_24 handover), then **Fix A″** (thumbprint encoding), then **Fix B** (origin), then **Fix C** (label). |
 | `no device key in MSO` / `unparseable DeviceResponse` | the presented credential's MSO shape differs from what `parseDeviceResponse` expects | capture the raw DeviceResponse (§5) and compare the issuerAuth/MSO CBOR; adjust `unwrap24`/`coseKeyToJwk` if the nesting differs |
 | `wrong credential: expected org.openwallet.payment.1` | the wallet presented a different doctype | check the imported `payment.mpzpass` doctype vs the DCQL (`dcql.ts` / `payment.in`) |
 | `payment credential did not disclose an account` | no `account` element disclosed (or a different element id) | check the credential's namespace/element ids; adjust the requested claim leaf |
@@ -184,31 +195,38 @@ transcript (rows 2–8), and within that onto the HandoverInfo (rows 3–5).**
 
 ### 4.4 The exact one-line-ish fixes (do NOT apply pre-emptively — apply on failure, on-device)
 
-**Fix A — add the response-key JWK thumbprint to the HandoverInfo (row 3/4; the #1 suspect).**
-This is the interop-correct construction for an encrypted DC API response. It touches three
-spots so both sides and the wallet agree:
+The #1 suspect — **Fix A: add the response-key JWK thumbprint to the HandoverInfo** — is
+**already applied** in commit `86da8d1` (§1.2): `buildIntentSessionTranscript` hashes
+`[origin, nonce, jwkThumbprint]`, `verify.ts` derives the thumbprint from the sealed
+`ecdhPrivateJwk`, and `simulate.ts` from the request `encJwk` (`jwkThumbprintSha256`). So the
+on-device loop starts at the fallbacks below.
 
-1. In `request.ts`, compute `jwkThumbprint = SHA-256(RFC7638-canonical(encJwk))` (raw bytes)
-   and seal it in the reader context alongside the nonce.
-2. In `deviceAuth.ts`, change `buildIntentSessionTranscript(origin, nonce, jwkThumbprint?)`
-   to hash `CBOR([origin, nonce, jwkThumbprint ?? null])`.
-3. In `verify.ts`, pass the sealed thumbprint through; in `simulate.ts`, compute the same
-   thumbprint from `encJwk` so the in-process tests stay green.
+**Fix A′ — DRAFT_24 handover shape (row 3).** If the wallet build is on the older OpenID4VP
+draft, its HandoverInfo is `[origin, clientId, nonce]` (not `[origin, nonce, jwkThumbprint]`).
+One-line switch in `buildIntentSessionTranscript`: change `cbor([origin, nonce,
+Buffer.from(jwkThumbprint)])` to `cbor([origin, clientId, nonce])`, where `clientId` is
+`x509_san_dns:${rpID}` (the request's `client_id`). Mirror it in `simulate.ts`. (Prefer probing
+the wallet's OpenID4VP version first — DRAFT_29 is the current shape.)
 
-The RFC 7638 thumbprint for an EC key is `SHA-256` of
-`{"crv":"P-256","kty":"EC","x":"<b64url>","y":"<b64url>"}` (members sorted, no whitespace).
+**Fix A″ — thumbprint encoding (row 4).** If the wallet encodes the thumbprint as a base64url
+**string** rather than a raw **bstr**, change the third element to
+`Buffer.from(jwkThumbprint).toString("base64url")` in both `buildIntentSessionTranscript` and
+`simulate.ts`.
 
 **Fix B — canonicalize the origin (row 5).** Ensure the `origin` string equals the browser's
 Web Origin exactly: lowercase scheme+host, drop default ports, no path/slash. If the dev-twin
 sits behind a proxy, confirm `deriveOrigin` reads `x-forwarded-host`/`x-forwarded-proto`
 correctly (it does — `origin.ts:21–22`) and that the value has no port when it shouldn't.
 
-**Fix C — the handover label/shape (row 2).** If A+B don't fix it, the Multipaz build may use
-a different handover identifier or the `response_uri`-style `OID4VPHandover`
+**Fix C — the handover label/shape (row 2).** If the above don't fix it, the Multipaz build may
+use a different handover identifier or the `response_uri`-style `OID4VPHandover`
 (`[clientIdHash, responseUriHash, nonce]`). Read Multipaz's DC-API presentment/handover
-builder (`OpenID4VP.kt`) and match `buildIntentSessionTranscript` to it byte-for-byte.
+builder (`OpenID4VP.kt`, ~lines 657–681) and match `buildIntentSessionTranscript` to it
+byte-for-byte.
 
-Each fix is a redeploy-and-retry with the debug log confirming the gate side changed.
+Each fix is a redeploy-and-retry with the debug log (§5) confirming the gate side changed.
+Whichever fix lands, keep the simulated wallet (`simulate.ts`) in lockstep so the in-process
+suite stays green.
 
 ---
 
@@ -218,15 +236,14 @@ Each fix is a redeploy-and-retry with the debug log confirming the gate side cha
 `INTENT_DEBUG_TRANSCRIPT` is set:
 
 ```
-[intent-sign transcript] origin="https://…" nonce="…" handoverInfo=<hex> transcript=<hex>
+[intent-sign transcript] origin="https://…" nonce="…" thumbprint=<hex> handoverInfo=<hex> transcript=<hex>
 ```
 
 It fires twice in an in-process run (the simulated wallet build + the verify build — they must
 be identical) and once per verify on-device. It is **pure observability**: it does not change
 the returned bytes or the verification outcome, and it is off unless the env var is set — so
 it never touches the security surface. Use it on-device to capture the exact bytes the gate
-hashes, then compare against the OpenID4VP 1.0 construction in §2 (add the `jwk_thumbprint`
-mentally / with Fix A) to see which field diverged.
+hashes, then compare against the OpenID4VP 1.0 construction in §2 to see which field diverged.
 
 To also see what the *wallet* sent, temporarily log the decrypted `vp_token` DeviceResponse
 in `verify.ts` and decode it (`cbor-x`) — note the transcript itself is **not** in the
@@ -237,17 +254,24 @@ the spec + the debug log, not read off the wire.
 
 ## 6. Predicted mismatches, ranked
 
-1. **Missing `jwk_thumbprint` in the HandoverInfo (HIGH).** Our response is encrypted
-   (`dc_api.jwt`), so OpenID4VP 1.0 requires the HandoverInfo to be
-   `[origin, nonce, jwk_thumbprint]`; we hash `[origin, nonce]`. Different array ⇒ different
-   hash ⇒ different transcript ⇒ `device signature does not verify`. **Fix A.**
-2. **Origin string canonicalization (MEDIUM).** The wallet uses the browser's canonical Web
+0. **~~Missing `jwk_thumbprint` in the HandoverInfo~~ — RESOLVED IN CODE (`86da8d1`), confirm on
+   device.** This was the #1 predicted mismatch and the adversarial review's finding 1: our
+   encrypted (`dc_api.jwt`) response requires the DRAFT_29 HandoverInfo
+   `[origin, nonce, jwk_thumbprint]`, and we now build exactly that (§1.2). Fixed in code; the
+   phone round-trip has not yet confirmed it.
+
+The **residual** on-device risks, ranked:
+
+1. **Origin string canonicalization (MEDIUM).** The wallet uses the browser's canonical Web
    Origin; we build the origin from the `Host` header. A port, a casing difference, or a
    proxy header drift changes the bytes. **Fix B.**
+2. **Draft / encoding skew of the (now-present) thumbprint element (MEDIUM).** DRAFT_24 uses
+   `[origin, clientId, nonce]` instead of the DRAFT_29 shape we ship, and a wallet might encode
+   the thumbprint as a base64url string rather than a raw bstr. **Fix A′ / A″.**
 3. **Handover label / shape churn (MEDIUM-LOW).** We believe Multipaz uses the
-   `"OpenID4VPDCAPIHandover"` DC-API handover, but the FR-7 research did not confirm the
-   transcript builder, and OpenID4VP drafts have used other shapes. **Fix C** (confirm
-   against `OpenID4VP.kt`).
+   `"OpenID4VPDCAPIHandover"` DC-API handover, but the FR-7 research did not read the transcript
+   builder, and OpenID4VP drafts have used other shapes. **Fix C** (confirm against
+   `OpenID4VP.kt` ~657–681).
 
 Everything else the device signs is either ISO-standard or echoed from the wallet's own
 presentation, so it matches by construction — the transcript is the whole ballgame.
