@@ -96,16 +96,35 @@ function asTag24(item: unknown): Tag {
  * transcript covers the bounds. Both the simulated wallet (simulate.ts) and this
  * verifier build it identically, so the in-process flow is fully consistent.
  *
- * NOTE (interop, deferred to the maintainer's on-device test — FR-7): the exact
- * handover bytes a specific wallet build (Multipaz / `utopia.multipaz.org`) hashes
- * may differ from this shape as the OpenID4VP DC API session-transcript definition
- * settles. Align this ONE function with the wallet if the real-phone signature does
- * not verify; nothing else in the rail changes.
+ * NOTE (interop, deferred to the maintainer's on-device test): the exact handover
+ * bytes a real Multipaz wallet hashes may differ from this shape — most likely the
+ * OpenID4VP 1.0 HandoverInfo is `[origin, nonce, jwk_thumbprint]` (the SHA-256 JWK
+ * thumbprint of the response-encryption key), where this rail hashes only
+ * `[origin, nonce]`. Align this ONE function with the wallet if the real-phone
+ * signature does not verify; nothing else in the rail changes. The predicted
+ * mismatches + the exact one-line fixes are mapped in
+ * `specs/012-device-signed-grants/on-device-interop.md`; set INTENT_DEBUG_TRANSCRIPT=1
+ * to log the bytes this gate hashes.
  */
 export function buildIntentSessionTranscript(origin: string, nonce: string): Uint8Array {
   const handoverInfo = cbor([origin, nonce]);
   const handoverHash = createHash("sha256").update(handoverInfo).digest();
-  return cbor([null, null, ["OpenID4VPDCAPIHandover", handoverHash]]);
+  const transcript = cbor([null, null, ["OpenID4VPDCAPIHandover", handoverHash]]);
+  // On-device interop debug (off by default — set INTENT_DEBUG_TRANSCRIPT=1). Logs the exact
+  // handover inputs + bytes this gate hashes, so a maintainer can diff them against what a real
+  // Multipaz wallet signed when a real-phone signature fails to verify. Pure observability: it
+  // does NOT change the returned bytes or the verification outcome. See
+  // specs/012-device-signed-grants/on-device-interop.md.
+  if (process.env.INTENT_DEBUG_TRANSCRIPT) {
+    console.error(
+      "[intent-sign transcript] origin=%j nonce=%j handoverInfo=%s transcript=%s",
+      origin,
+      nonce,
+      Buffer.from(handoverInfo).toString("hex"),
+      Buffer.from(transcript).toString("hex"),
+    );
+  }
+  return transcript;
 }
 
 /** A COSE_Key (EC2 / P-256) → public JWK, or null when it is not a P-256 EC key. */
