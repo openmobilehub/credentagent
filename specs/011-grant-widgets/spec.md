@@ -36,15 +36,17 @@ import { GrantCard, grantViews, defineGrantView } from "./grants";   // storefro
 // 2) Choose explicitly, or reorder preference:
 <GrantCard grant={grant} views={[grantViews.budgetMeter]} />          // compact, inline
 
-// 3) Extend — a custom view is the SAME contract the stock gallery uses:
+// 3) Extend — a custom view is the SAME contract the stock gallery uses.
+//    Views receive the INERT GrantViewData projection — never the live Grant handle —
+//    so a custom view structurally cannot call spend()/revoke() (UX review, A1):
 const wineClubRow = defineGrantView({
   id: "wine-club-row",
-  fits: (g) => g.allow?.categories?.includes("Wine") ?? false,        // when it can render
-  body: ({ grant, tokens }) => (                                       // body ONLY —
-    <WineRow remaining={grant.remaining} cap={grant.perSpend} />       // the frame (chrome +
-  ),                                                                   // trust line) is owned
-});                                                                    // by defineGrantView
-<GrantCard grant={grant} views={[wineClubRow, ...grantViews.all]} />
+  fits: (g) => (g.allow?.categories?.includes("Wine") ? 30 : false),   // specificity score,
+  body: ({ grant, tokens }) => (                                       // not bare boolean (A3)
+    <WineRow remaining={grant.remaining} cap={grant.perSpend} />       // body ONLY — the frame
+  ),                                                                   // (chrome + trust line)
+});                                                                    // is owned by define…
+<GrantCard grant={grantData} views={[wineClubRow, ...grantViews.all]} />
 ```
 
 The host/agent side needs **no new API**: the existing grant tools' results carry the widget
@@ -55,10 +57,13 @@ resource, exactly as the shopping tools do today.
 **FR-1 — `GrantViewData`: one JSON-safe projection, server-derived.** The widget renders a
 plain-data snapshot the server emits (via the grant tools' structured content): `id`,
 `merchant`, `status`, `budget`, `spent`, `remaining`, `perSpend`, `allow` (`skus` +
-`categories`), `description`, `presence`, `trustLevel`, and — for SKU-bounded grants — the
+`categories`), `description`, `presence`, `trustLevel`, a server-derived **`lifecycle`**
+(`pending | active | low | exhausted | revoked | denied` — so `fits` and the frame never
+re-derive "low"/"exhausted" independently; UX A2), and — for SKU-bounded grants — the
 **resolved product details** (name, price, category, and image when the catalog carries one).
 Money values arrive computed from the server; the widget never re-derives amounts
-(invariant 2 discipline applied to display).
+(invariant 2 discipline applied to display). **Views receive ONLY this projection, never the
+live `Grant` handle** — display-only by construction, not by convention (UX A1).
 
 **FR-2 — The gallery (stock views), each selected by a declared `fits(grant)`:**
 
@@ -71,13 +76,18 @@ Money values arrive computed from the server; the widget never re-derives amount
 | `budgetMeter` | any active grant | compact one-line meter for dense layouts |
 | terminal states | `revoked` / `denied` / exhausted | unambiguous closed-state card, no live affordances |
 
-Selection: first fitting view wins, most-specific ordered first; `views` prop overrides.
+Selection: `fits(data)` returns a **specificity score** (or `false`); the highest-scoring
+fitting view wins — explicit, not array-order magic (UX A3). The `views` prop overrides the
+candidate set.
 
 **FR-3 — Extensibility contract.** `defineGrantView({ id, fits, body })` is the only way to
 add a view; the returned object is what the gallery itself is built from (stock views are not
-special). `body` receives `{ grant, tokens, slots }`. `tokens` are the design tokens (accent,
-radius, spacing) sourced from the ceremony design system and the host `branding` option
-(#132) so custom views theme with the host brand for free.
+special). `body` receives `{ grant, tokens, slots }` where `grant` is the `GrantViewData` projection
+(FR-1). `tokens` expose the full role set — accent, radius, spacing, AND the **fixed status
+colors** (low-budget amber, exhausted/revoked red), which are never host-themed: a brand can
+color money-you-have, never money-warnings (UX design §meter). The validated
+**`<BudgetMeter/>` primitive is exported** so custom views reuse the accessible meter (cap
+bracket, `role="meter"`, severity behavior) instead of rebuilding it (UX A4).
 
 **FR-4 — Honesty frame (load-bearing, bypass-tested).** `defineGrantView` composes every
 `body` into the shared **frame**: card chrome + status treatment + the trust line
@@ -91,9 +101,15 @@ deep-links to the server ceremony or calls to the existing grant tools; the card
 from tool results / a `retrieve` refresh (the checkout widget's poll pattern). A stale card
 can never unlock anything — it only ever *shows*.
 
-**FR-6 — Customization without forking.** `slots` (e.g. `headerExtra`, `footerExtra` — extras
-render *above* the trust line, never below/instead of it), density (`card` | `row`), and the
-token theme. Nothing else is configurable on stock views; a need beyond that is a custom view.
+**FR-6 — Customization without forking.** `slots` are named for their finality:
+**`topSlot`** and **`bottomSlot`**, where `bottomSlot` renders *above the always-last trust
+line* — the trust line's position is legible in the API, not discovered (UX A5). Density
+(`card` | `row`) is a **frame** layout: a card-only view asked to render `row` delegates to
+`budgetMeter` (UX A6). In dense multi-grant layouts (≥3), `budgetMeter` is the default and
+the full trust sentence de-duplicates to the list container while each row keeps the literal
+`delegated-demo` token — repetition must not train the eye to skip the honesty line (UX A7;
+the bypass test covers both layouts). The token theme is the only other customization; a
+need beyond these is a custom view.
 
 ## Non-goals (v1)
 
