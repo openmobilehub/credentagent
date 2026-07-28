@@ -252,6 +252,23 @@ describe("redisStorage.fromEnv — storage from standard deployment env (issue #
     expect(built).toEqual([{ url: KV.KV_REST_API_URL, token: KV.KV_REST_API_TOKEN }]);
   });
 
+  it("never mixes providers: a stale KV url + a COMPLETE Upstash pair selects Upstash atomically (#128 review)", async () => {
+    const { load, built } = recordingBackend();
+    // The KV url is set but its token is NOT — only the Upstash pair is complete.
+    const provider = redisStorage.fromEnv({ _env: { KV_REST_API_URL: KV.KV_REST_API_URL, ...UPSTASH }, _load: load });
+
+    await provider!.cartStore.read("sess-1");
+    // The complete Upstash pair is used — the Vercel url is NOT Frankensteined onto the Upstash
+    // token. FAILS if url/token are picked independently (that would build { url: KV url, token:
+    // Upstash token } — a credential sent to the wrong endpoint).
+    expect(built).toEqual([{ url: UPSTASH.UPSTASH_REDIS_REST_URL, token: UPSTASH.UPSTASH_REDIS_REST_TOKEN }]);
+  });
+
+  it("returns undefined when only cross-provider halves are set (no complete pair)", () => {
+    // A KV url + an Upstash token are two halves of different pairs → nothing complete.
+    expect(redisStorage.fromEnv({ _env: { KV_REST_API_URL: KV.KV_REST_API_URL, UPSTASH_REDIS_REST_TOKEN: UPSTASH.UPSTASH_REDIS_REST_TOKEN } })).toBeUndefined();
+  });
+
   it("returns undefined when no env pair is set — the in-memory zero-config default", () => {
     expect(redisStorage.fromEnv({ _env: {} })).toBeUndefined();
   });

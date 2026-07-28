@@ -190,14 +190,20 @@ export function redisStorage(options: RedisStorageOptions): StorageProvider {
 }
 
 // The standard connection-env pairs a deployment already sets, in precedence order: Vercel KV
-// first, then Upstash. Read per-field with the same `??` the quickstart hand-wrote, so
-// `fromEnv()` is a drop-in for that plumbing.
-const ENV_URL = ["KV_REST_API_URL", "UPSTASH_REDIS_REST_URL"] as const;
-const ENV_TOKEN = ["KV_REST_API_TOKEN", "UPSTASH_REDIS_REST_TOKEN"] as const;
+// first, then Upstash. A pair is selected ATOMICALLY — the url AND token must come from the
+// SAME provider — so a stale/partial higher-precedence var can never be mixed with a complete
+// lower-precedence pair (e.g. a Vercel url with an Upstash token, which would send the
+// credential to the wrong endpoint). Pick the first COMPLETE pair, or none.
+const ENV_PAIRS = [
+  { url: "KV_REST_API_URL", token: "KV_REST_API_TOKEN" }, // Vercel KV
+  { url: "UPSTASH_REDIS_REST_URL", token: "UPSTASH_REDIS_REST_TOKEN" }, // Upstash
+] as const;
 
-function firstSet(env: Record<string, string | undefined>, names: readonly string[]): string | undefined {
-  for (const name of names) {
-    if (env[name]) return env[name];
+function firstCompletePair(env: Record<string, string | undefined>): { url: string; token: string } | undefined {
+  for (const pair of ENV_PAIRS) {
+    const url = env[pair.url];
+    const token = env[pair.token];
+    if (url && token) return { url, token };
   }
   return undefined;
 }
@@ -218,21 +224,21 @@ export namespace redisStorage {
    */
   export function fromEnv(options: RedisStorageFromEnvOptions = {}): StorageProvider | undefined {
     const env = options._env ?? process.env;
-    const url = firstSet(env, ENV_URL);
-    const token = firstSet(env, ENV_TOKEN);
-    if (!url || !token) {
+    const pair = firstCompletePair(env);
+    if (!pair) {
       if (options.required) {
         throw new Error(
-          "redisStorage.fromEnv({ required: true }): no Redis connection found in the environment. Set " +
-            "KV_REST_API_URL + KV_REST_API_TOKEN (Vercel KV) or UPSTASH_REDIS_REST_URL + " +
-            "UPSTASH_REDIS_REST_TOKEN (Upstash), or drop `required` to fall back to in-memory.",
+          "redisStorage.fromEnv({ required: true }): no COMPLETE Redis connection pair found in the " +
+            "environment. Set BOTH KV_REST_API_URL + KV_REST_API_TOKEN (Vercel KV) or BOTH " +
+            "UPSTASH_REDIS_REST_URL + UPSTASH_REDIS_REST_TOKEN (Upstash), or drop `required` to fall " +
+            "back to in-memory. (A url from one provider + a token from the other is ignored, never mixed.)",
         );
       }
       return undefined;
     }
     return redisStorage({
-      url,
-      token,
+      url: pair.url,
+      token: pair.token,
       ...(options.namespace ? { namespace: options.namespace } : {}),
       ...(options._load ? { _load: options._load } : {}),
     });
