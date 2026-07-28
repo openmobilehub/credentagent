@@ -45,7 +45,7 @@ sealed reader context server-side (FR-7 guidance: keep the request conservative)
 DRAFT_29 3-element HandoverInfo in commit `86da8d1`** (adversarial-review finding 1):
 
 ```
-HandoverInfo            = CBOR([ origin (tstr), nonce (tstr), jwkThumbprint (bstr) ])
+HandoverInfo            = CBOR([ origin (tstr), nonce (tstr), jwkThumbprint (tstr) ])
 HandoverInfoHash        = SHA-256( HandoverInfo )                      # raw 32-byte digest
 SessionTranscript       = CBOR([ null, null,
                                  [ "OpenID4VPDCAPIHandover", HandoverInfoHash (bstr) ] ])
@@ -53,10 +53,13 @@ SessionTranscript       = CBOR([ null, null,
 
 - `origin` = `Origin.origin` from `deriveOrigin` (`ceremony/origin.ts:20–25`) —
   `` `${proto}://${host}` `` built from the request's `Host` (or `x-forwarded-host`) header.
-- `jwkThumbprint` = `jwkThumbprintSha256(...)` — the RFC 7638 SHA-256 thumbprint of the
-  reader's response-encryption key (raw 32-byte digest). `verify.ts` derives it from the sealed
-  `ecdhPrivateJwk`; `simulate.ts` derives it from the request's advertised `encJwk` — the same
-  key, so both sides produce identical bytes.
+- `jwkThumbprint` = the RFC 7638 SHA-256 thumbprint of the reader's response-encryption key, as a
+  **base64url (no-pad) string**, computed with **jose's `calculateJwkThumbprint(jwk, "sha256")`**
+  — NOT a hand-rolled canonical JSON, so the required-member canonicalization matches the wallet
+  exactly (a hand-rolled member order both our sides agree on would pass our tests yet still
+  mismatch a real wallet). `verify.ts` computes it from the sealed `ecdhPrivateJwk`; `simulate.ts`
+  from the request's advertised `encJwk` — the same key, and `calculateJwkThumbprint` hashes only
+  the required EC members, so both produce the identical string.
 - CBOR is canonical/deterministic (cbor-x, `useRecords:false, variableMapSize:true,
   useTag259ForMaps:false` — `deviceAuth.ts:26–29`), matching ISO 18013-5 §9.1.1.
 
@@ -111,9 +114,10 @@ where (OpenID4VP 1.0 Appendix B + RFC 7638):
   no trailing slash), e.g. `https://credentagent-demo-dev.vercel.app`.
 - `nonce` — the request's `nonce` string, verbatim.
 - `jwk_thumbprint` — when the response is **encrypted**, the **RFC 7638 SHA-256 JWK
-  thumbprint** (raw 32-byte bstr) of the verifier's response-encryption public key (the JWK
-  the request advertises in `client_metadata.jwks` — our `encJwk`). When the response is
-  **unencrypted**, this element is `null`.
+  thumbprint** of the verifier's response-encryption public key (the JWK the request advertises
+  in `client_metadata.jwks` — our `encJwk`). We carry it as the base64url (no-pad) string jose's
+  `calculateJwkThumbprint` returns; a wallet that uses the raw 32-byte digest (bstr) instead is
+  Fix A″. When the response is **unencrypted**, this element is `null`.
 
 **Status: applied in commit `86da8d1`.** The adversarial review of PR #148 confirmed this
 against Multipaz's `OpenID4VP.kt` (lines 657–681, the DRAFT_29 DC-API branch), and the rail now
@@ -136,7 +140,7 @@ wallet build may be on the older draft — the one-line switch is in §4.4 (Fix 
 | 1 | `SessionTranscript` outer | `[null, null, Handover]` | `[null, null, Handover]` | **MATCH** | — |
 | 2 | Handover tuple | `["OpenID4VPDCAPIHandover", hash]` | `["OpenID4VPDCAPIHandover", hash]` | **LIKELY-MATCH** | wrong label/shape ⇒ total transcript mismatch |
 | 3 | **HandoverInfo elements** | `[origin, nonce, jwk_thumbprint]` (3) — **fixed in `86da8d1`** | `[origin, nonce, jwk_thumbprint]` (DRAFT_29) | **MATCH (pending device)** | draft skew (DRAFT_24 = `[origin, clientId, nonce]`) ⇒ Fix A′ |
-| 4 | `jwk_thumbprint` value | RFC-7638 SHA-256 of `encJwk`, raw bstr | RFC-7638 SHA-256, raw bstr | **MATCH (pending device)** | encoding skew (bstr vs base64url tstr) ⇒ Fix A″ |
+| 4 | `jwk_thumbprint` value | RFC-7638 SHA-256 of `encJwk`, base64url string (jose) | RFC-7638 SHA-256 | **MATCH (pending device)** | encoding skew (base64url tstr vs raw bstr) ⇒ Fix A″ |
 | 5 | `origin` string | `` `${proto}://${host}` `` from `Host` header | canonical browser Web Origin | **UNKNOWN** | port/case/`x-forwarded` drift ⇒ different bytes |
 | 6 | `nonce` string | our request `nonce`, verbatim | request `nonce`, verbatim | **MATCH** | — (the wallet echoes the request nonce) |
 | 7 | HandoverInfoHash alg | SHA-256 | SHA-256 (fixed) | **MATCH** | — |
@@ -196,22 +200,24 @@ Fixes A′/A″) and the origin canonicalization (row 5).**
 ### 4.4 The exact one-line-ish fixes (do NOT apply pre-emptively — apply on failure, on-device)
 
 The #1 suspect — **Fix A: add the response-key JWK thumbprint to the HandoverInfo** — is
-**already applied** in commit `86da8d1` (§1.2): `buildIntentSessionTranscript` hashes
-`[origin, nonce, jwkThumbprint]`, `verify.ts` derives the thumbprint from the sealed
-`ecdhPrivateJwk`, and `simulate.ts` from the request `encJwk` (`jwkThumbprintSha256`). So the
-on-device loop starts at the fallbacks below.
+**already applied** in commit `86da8d1` (thumbprint computation hardened to jose's
+`calculateJwkThumbprint` in the follow-up, §1.2): `buildIntentSessionTranscript` hashes
+`[origin, nonce, jwkThumbprint]`, `verify.ts` computes the thumbprint from the sealed
+`ecdhPrivateJwk` and `simulate.ts` from the request `encJwk`. So the on-device loop starts at the
+fallbacks below.
 
 **Fix A′ — DRAFT_24 handover shape (row 3).** If the wallet build is on the older OpenID4VP
 draft, its HandoverInfo is `[origin, clientId, nonce]` (not `[origin, nonce, jwkThumbprint]`).
-One-line switch in `buildIntentSessionTranscript`: change `cbor([origin, nonce,
-Buffer.from(jwkThumbprint)])` to `cbor([origin, clientId, nonce])`, where `clientId` is
-`x509_san_dns:${rpID}` (the request's `client_id`). Mirror it in `simulate.ts`. (Prefer probing
-the wallet's OpenID4VP version first — DRAFT_29 is the current shape.)
+One-line switch in `intentHandoverInfo` (`deviceAuth.ts`): change `cbor([origin, nonce,
+jwkThumbprint])` to `cbor([origin, clientId, nonce])`, where `clientId` is
+`x509_san_dns:${rpID}` (the request's `client_id`); thread `clientId` through the two call sites.
+(Prefer probing the wallet's OpenID4VP version first — DRAFT_29 is the current shape.)
 
-**Fix A″ — thumbprint encoding (row 4).** If the wallet encodes the thumbprint as a base64url
-**string** rather than a raw **bstr**, change the third element to
-`Buffer.from(jwkThumbprint).toString("base64url")` in both `buildIntentSessionTranscript` and
-`simulate.ts`.
+**Fix A″ — thumbprint encoding (row 4).** We carry the thumbprint as a base64url **string**
+(jose's `calculateJwkThumbprint` output). If the wallet instead uses the raw 32-byte digest as a
+**bstr**, change the third element to `Buffer.from(jwkThumbprint, "base64url")` in
+`intentHandoverInfo` (so it encodes as a bstr). The value is the same digest — only the CBOR
+major type differs.
 
 **Fix B — canonicalize the origin (row 5).** Ensure the `origin` string equals the browser's
 Web Origin exactly: lowercase scheme+host, drop default ports, no path/slash. If the dev-twin

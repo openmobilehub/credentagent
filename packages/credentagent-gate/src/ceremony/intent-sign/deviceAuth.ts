@@ -86,15 +86,12 @@ function asTag24(item: unknown): Tag {
 }
 
 /**
- * The RFC 7638 SHA-256 JWK thumbprint (raw 32 bytes) of a P-256 EC key. For an EC key
- * the thumbprint hashes ONLY the required members, in lexicographic order —
- * `{"crv":..,"kty":"EC","x":..,"y":..}` — so a key JWK carrying extra members (`use`,
- * `alg`, `kid`, `d`) yields the SAME thumbprint. This is what the OpenID4VP DC API
- * session transcript binds to (see `buildIntentSessionTranscript`).
+ * The bytes hashed into the DC API handover: `CBOR([origin, nonce, jwkThumbprint])`.
+ * Exposed so a test can decode it and pin the 3-element shape (the thumbprint in
+ * position 3). `jwkThumbprint` is a base64url string (RFC 7638; see the caller).
  */
-export function jwkThumbprintSha256(jwk: { crv?: string; x?: string; y?: string }): Uint8Array {
-  const canonical = `{"crv":"${jwk.crv}","kty":"EC","x":"${jwk.x}","y":"${jwk.y}"}`;
-  return new Uint8Array(createHash("sha256").update(canonical).digest());
+export function intentHandoverInfo(origin: string, nonce: string, jwkThumbprint: string): Uint8Array {
+  return cbor([origin, nonce, jwkThumbprint]);
 }
 
 /**
@@ -108,19 +105,23 @@ export function jwkThumbprintSha256(jwk: { crv?: string; x?: string; y?: string 
  * transcript covers the bounds. Both the simulated wallet (simulate.ts) and this
  * verifier build it identically, so the in-process flow is fully consistent.
  *
- * `jwkThumbprint` is the SHA-256 RFC-7638 thumbprint of the reader's response-encryption
- * key — the third HandoverInfo element the OpenID4VP 1.0 DC API profile (DRAFT_29) requires
- * for an ENCRYPTED response (our `response_mode` is `dc_api.jwt`). This matches Multipaz's
- * `OpenID4VP.kt` DC-API handover (adversarial review of #148, finding 1).
+ * `jwkThumbprint` is the RFC 7638 SHA-256 JWK thumbprint of the reader's
+ * response-encryption key (base64url, no padding) — the third HandoverInfo element the
+ * OpenID4VP 1.0 DC API profile (DRAFT_29) requires for an ENCRYPTED response (our
+ * `response_mode` is `dc_api.jwt`), matching Multipaz's `OpenID4VP.kt` DC-API handover
+ * (adversarial review of #148, finding 1). The callers compute it with jose's
+ * `calculateJwkThumbprint` (RFC 7638), NOT a hand-rolled canonical JSON — a hand-rolled
+ * member order both sides happen to agree on would pass our tests yet still mismatch the wallet.
  *
  * INTEROP NOTE (confirm on the maintainer's on-device test): an OLDER draft (DRAFT_24) used
- * `[origin, clientId, nonce]` instead. If a real wallet still rejects the signature after this,
- * that draft skew is the first thing to try — the exact one-line switch + the full runbook are
- * in `specs/012-device-signed-grants/on-device-interop.md`. Set INTENT_DEBUG_TRANSCRIPT=1 to log
+ * `[origin, clientId, nonce]` instead, and a wallet might carry the thumbprint as a raw bstr
+ * rather than this base64url string. If a real wallet still rejects the signature after this,
+ * those are the first things to try — the exact one-line switches + the full runbook are in
+ * `specs/012-device-signed-grants/on-device-interop.md`. Set INTENT_DEBUG_TRANSCRIPT=1 to log
  * the bytes this gate hashes.
  */
-export function buildIntentSessionTranscript(origin: string, nonce: string, jwkThumbprint: Uint8Array): Uint8Array {
-  const handoverInfo = cbor([origin, nonce, Buffer.from(jwkThumbprint)]);
+export function buildIntentSessionTranscript(origin: string, nonce: string, jwkThumbprint: string): Uint8Array {
+  const handoverInfo = intentHandoverInfo(origin, nonce, jwkThumbprint);
   const handoverHash = createHash("sha256").update(handoverInfo).digest();
   const transcript = cbor([null, null, ["OpenID4VPDCAPIHandover", handoverHash]]);
   // On-device interop debug (off by default — set INTENT_DEBUG_TRANSCRIPT=1). Logs the exact
@@ -130,10 +131,10 @@ export function buildIntentSessionTranscript(origin: string, nonce: string, jwkT
   // specs/012-device-signed-grants/on-device-interop.md.
   if (process.env.INTENT_DEBUG_TRANSCRIPT) {
     console.error(
-      "[intent-sign transcript] origin=%j nonce=%j thumbprint=%s handoverInfo=%s transcript=%s",
+      "[intent-sign transcript] origin=%j nonce=%j thumbprint=%j handoverInfo=%s transcript=%s",
       origin,
       nonce,
-      Buffer.from(jwkThumbprint).toString("hex"),
+      jwkThumbprint,
       Buffer.from(handoverInfo).toString("hex"),
       Buffer.from(transcript).toString("hex"),
     );

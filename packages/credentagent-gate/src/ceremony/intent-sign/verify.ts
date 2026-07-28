@@ -22,7 +22,7 @@ import * as jose from "jose";
 import { openReaderContext } from "../mdoc/readerContext.js";
 import { PAYMENT_CREDENTIAL_DOCTYPE } from "./dcql.js";
 import { boundsHash, deriveNonce, type IntentBoundsInput } from "./bounds.js";
-import { buildIntentSessionTranscript, jwkThumbprintSha256, verifyDeviceAuth } from "./deviceAuth.js";
+import { buildIntentSessionTranscript, verifyDeviceAuth } from "./deviceAuth.js";
 import type { TrustLevel } from "../../types.js";
 
 /** Single-use nonce ledger: `consume` records a nonce and returns true only the FIRST
@@ -60,7 +60,14 @@ export interface IntentTrustVerdict {
 }
 
 /** The verify seam: given the wallet's DeviceResponse + the transcript the gate
- *  re-derived, decide trust. Swappable per FR-4 (in-gate default; delegated later). */
+ *  re-derived, decide trust. Swappable per FR-4 (in-gate default; delegated later).
+ *
+ *  CONTRACT — a backend MUST verify the holder's DeviceAuth signature over
+ *  `sessionTranscript` itself (the in-gate default does). The gate always re-checks the
+ *  bounds/binding regardless of backend, but the PROOF-OF-SIGNATURE travels WITH the backend:
+ *  "delegation moves trust, not binding" must NOT be read to exclude the signature. A permissive
+ *  stub that returns `{ ok: true }` without verifying the signature would accept a presentation
+ *  whose DeviceAuth does not verify — so a real delegated verifier is responsible for that check. */
 export type IntentVerifyBackend = (args: {
   deviceResponseB64url: string;
   sessionTranscript: Uint8Array;
@@ -159,8 +166,10 @@ export async function verifyIntentPresentation(args: {
   if (!deviceResponseB64url) return { ok: false, reason: "no DeviceResponse in vp_token" };
 
   // Build the transcript from the bounds-bound nonce + the response-encryption key's JWK
-  // thumbprint (the DC API HandoverInfo's third element — deviceAuth.ts), then run the backend.
-  const thumbprint = jwkThumbprintSha256(ctx.ecdhPrivateJwk as { crv?: string; x?: string; y?: string });
+  // thumbprint (the DC API HandoverInfo's third element — deviceAuth.ts). RFC 7638 via jose's
+  // calculateJwkThumbprint (NOT hand-rolled) so the member canonicalization matches the wallet;
+  // it hashes only the required EC members, so passing the sealed private JWK is fine.
+  const thumbprint = await jose.calculateJwkThumbprint(ctx.ecdhPrivateJwk, "sha256");
   const sessionTranscript = buildIntentSessionTranscript(origin.origin, nonce, thumbprint);
   const verdict = await backend({ deviceResponseB64url, sessionTranscript });
   if (!verdict.ok) return { ok: false, reason: verdict.reason ?? "presentation not verified" };
