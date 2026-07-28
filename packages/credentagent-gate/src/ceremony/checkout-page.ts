@@ -64,10 +64,25 @@ export interface RenderPaid {
   amount: number;
   currency: string;
   method?: string;
+  /**
+   * The settlement backing this order, when one was recorded. The banner DERIVES
+   * everything it shows from this record (never a hardcoded rail): the backend name
+   * from `provider` (falling back to `network`), and the payer / txn / explorer
+   * fragments only when the record carries them. A blockchain settlement (x402 on a
+   * testnet) has a chain `payer.accountId` and a `hashscanUrl`; an external-processor
+   * settlement (e.g. a card processor) has a `txId` but no chain account or explorer —
+   * so those fields are optional and rendered conditionally.
+   */
   settlement?: {
     network: string;
-    payer: { accountId: string };
-    hashscanUrl: string;
+    /** Human backend name the receipt shows ("x402", "UPay"); falls back to `network`. */
+    provider?: string;
+    /** The settlement transaction id, when the backend supplies one. */
+    txId?: string;
+    /** On-chain payer, when the backend settles on a chain. */
+    payer?: { accountId: string };
+    /** Block-explorer link, when the backend settles on a chain. */
+    hashscanUrl?: string;
   } | null;
 }
 
@@ -462,15 +477,39 @@ function renderPollScript(statusUrl: string, revision?: string): string {
   </script>`;
 }
 
-// The paid banner shown when revisiting an already-completed order. Settlement
-// details (when present) carry the public on-chain proof.
+// The paid banner shown when revisiting an already-completed order. Everything about
+// the settlement is DERIVED from the recorded settlement record — never assumed — so a
+// receipt describes only what actually happened (the honesty rule): a blockchain
+// settlement names its chain + explorer, an external-processor settlement names its
+// processor + txn, and a method that settled nothing says exactly that.
 function renderPaid(paid: RenderPaid): string {
-  const via = paid.settlement ? " via x402" : paid.method === "passkey" ? " via passkey" : "";
+  const s = paid.settlement;
+  // Name the backend from the record: the adapter-supplied `provider` ("x402", "UPay"),
+  // falling back to the network. No hardcoded rail — the label follows the record.
+  const backend = s ? (s.provider ?? s.network) : null;
+  const via = backend ? ` via ${escapeHtml(backend)}` : paid.method === "passkey" ? " via passkey" : "";
   // The order is complete — lead with the prominent handoff (close the window, the
-  // agent polls order-status and continues), then the on-chain proof below.
+  // agent polls order-status and continues), then the settlement proof below.
   const banner = `<div class="complete-banner"><div class="big">✓ Order paid · ${formatMoney(paid.amount, paid.currency)}${via}</div><div class="sub">You can <strong>close this window</strong> and continue in your agent — it has your order and will pick up from here.</div></div>`;
-  const detail = paid.settlement
-    ? `<p class="small" style="margin:0;">Settled on ${escapeHtml(paid.settlement.network)} · paid from ${escapeHtml(paid.settlement.payer.accountId)} · <a href="${escapeHtml(paid.settlement.hashscanUrl)}" target="_blank" rel="noopener">View on HashScan</a></p>`
-    : `<p class="small" style="margin:0;">No on-chain settlement for this payment method.</p>`;
+  // Render only the fragments the record actually carries. A processor settlement has a
+  // txn but no chain account / explorer; an on-chain one has both — each shows what it has.
+  let detail: string;
+  if (s) {
+    // Lead with the settlement network when the record carries one AND it adds information
+    // beyond the backend label — so an on-chain settlement still discloses testnet vs
+    // mainnet (network "hedera-testnet" ≠ provider "x402"), but a processor whose network
+    // merely repeats its provider ("upay" / "UPay") doesn't render a redundant "on upay".
+    const showNetwork = !!s.network && s.network.toLowerCase() !== (s.provider ?? "").toLowerCase();
+    const lead = showNetwork ? `Settled on ${escapeHtml(s.network)}` : "Settled";
+    const parts: string[] = [];
+    if (s.payer?.accountId) parts.push(`paid from ${escapeHtml(s.payer.accountId)}`);
+    if (s.txId) parts.push(`txn ${escapeHtml(s.txId)}`);
+    if (s.hashscanUrl) parts.push(`<a href="${escapeHtml(s.hashscanUrl)}" target="_blank" rel="noopener">View on HashScan</a>`);
+    detail = parts.length
+      ? `<p class="small" style="margin:0;">${lead} · ${parts.join(" · ")}</p>`
+      : `<p class="small" style="margin:0;">${lead}.</p>`;
+  } else {
+    detail = `<p class="small" style="margin:0;">No settlement recorded for this payment method.</p>`;
+  }
   return banner + detail;
 }
