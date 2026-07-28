@@ -9,6 +9,7 @@
 // resolved to data by `requirements()` (the code→data boundary). Nothing here
 // crosses the wire.
 
+import { createHash } from "node:crypto";
 import type { Credential, DcqlQuery, Effect, GateOrder, Step } from "./types.js";
 import { ageDcql } from "./envelope.js";
 
@@ -40,7 +41,7 @@ export function dcql(spec: { docType: string; claims: string[]; id?: string }): 
   return {
     credentials: [
       {
-        id: spec.id ?? dcqlIdFromDocType(spec.docType),
+        id: spec.id !== undefined ? assertValidDcqlId(spec.id) : dcqlIdFromDocType(spec.docType),
         format: "mso_mdoc",
         meta: { doctype_value: spec.docType },
         claims: spec.claims.map((leaf) => ({ path: [spec.docType, leaf], intent_to_retain: false })),
@@ -49,17 +50,49 @@ export function dcql(spec: { docType: string; claims: string[]; id?: string }): 
   };
 }
 
+/** DCQL credential ids are a non-empty string of `[A-Za-z0-9_-]` (OpenID4VP). */
+const DCQL_ID = /^[A-Za-z0-9_-]+$/;
+
+/**
+ * Validate an explicit `id` override at construction — one error door. A caller can pass
+ * any string through the public type, but an empty or dotted value (e.g. `"payment.v1"`)
+ * would ride verbatim into the signed request and a conforming wallet would reject it.
+ * Fail fast with a clear message instead (#90 review).
+ */
+function assertValidDcqlId(id: string): string {
+  if (!DCQL_ID.test(id)) {
+    throw new Error(
+      `dcql(): id ${JSON.stringify(id)} is not a valid DCQL credential id — it must be a ` +
+        `non-empty string of [A-Za-z0-9_-] (OpenID4VP). Omit \`id\` to derive one from the doctype.`,
+    );
+  }
+  return id;
+}
+
 /**
  * A stable, unique, DCQL-valid credential id derived from the FULL doctype.
  *
  * The last segment alone is NOT unique: mdoc doctypes are conventionally
  * version-suffixed, so `org.openwallet.payment.1` and `org.multipaz.loyalty.1`
  * both end in `"1"` and would collide (#90). The full doctype IS unique per
- * credential. DCQL ids are restricted to `[A-Za-z0-9_-]` (OpenID4VP), so the
- * dots become `_`: `org.openwallet.payment.1` → `org_openwallet_payment_1`.
+ * credential. DCQL ids are restricted to `[A-Za-z0-9_-]` (OpenID4VP), so any
+ * character outside that set becomes `_`: `org.openwallet.payment.1` →
+ * `org_openwallet_payment_1`.
+ *
+ * That replacement is collision-resistant, not merely readable. Among doctypes drawn
+ * only from `[A-Za-z0-9.-]` (every real mdoc doctype — dotted, versioned), mapping `.`→`_`
+ * is INJECTIVE: such a doctype has no `_`, so every `_` in the result came from a `.` and
+ * the original is recoverable. A doctype containing any OTHER character (a literal `_`,
+ * `:`, …) COULD alias a dotted one after sanitization (`org.a.b` vs `org_a.b` → `org_a_b`),
+ * so it gets a short deterministic digest of the FULL doctype appended to stay unique.
+ * Real doctypes keep the readable id; only pathological ones grow a suffix. (For any case,
+ * pass an explicit `id` to name it yourself.)
  */
 function dcqlIdFromDocType(docType: string): string {
-  return docType.replace(/[^A-Za-z0-9_-]/g, "_");
+  const sanitized = docType.replace(/[^A-Za-z0-9_-]/g, "_");
+  if (/^[A-Za-z0-9.-]+$/.test(docType)) return sanitized;
+  const digest = createHash("sha256").update(docType).digest("hex").slice(0, 8);
+  return `${sanitized}_${digest}`;
 }
 
 /**

@@ -89,6 +89,30 @@ describe("dcql() derives a unique credential id per doctype (#90)", () => {
     const defaulted = dcql({ docType: "org.openwallet.payment.1", claims: ["account"] });
     expect(defaulted.credentials[0].id).toBe("org_openwallet_payment_1");
   });
+
+  // #90 review (Codex P2): an explicit override that isn't a valid DCQL id would ride
+  // verbatim into the signed request and a conforming wallet would reject it. Validate it
+  // at construction (one error door) rather than emit a bad request.
+  it("REJECTS an invalid explicit `id` (empty or outside [A-Za-z0-9_-]) at construction", () => {
+    expect(() => dcql({ docType: "org.openwallet.payment.1", claims: ["account"], id: "" })).toThrow(/valid DCQL/i);
+    expect(() => dcql({ docType: "org.openwallet.payment.1", claims: ["account"], id: "payment.v1" })).toThrow(/valid DCQL/i);
+    expect(() => dcql({ docType: "org.openwallet.payment.1", claims: ["account"], id: "a b" })).toThrow(/valid DCQL/i);
+    // a valid override is untouched
+    expect(dcql({ docType: "x.y.1", claims: ["a"], id: "pay-1_A" }).credentials[0].id).toBe("pay-1_A");
+  });
+
+  // #90 review (Codex P2): the default derivation is collision-resistant, not just readable.
+  // Two doctypes that differ only by a "." vs "_" at the same position both sanitize to the
+  // same base — the pathological one (containing "_") gets a digest suffix so it stays unique.
+  it("keeps the default id unique for doctypes that differ only by . vs _", () => {
+    const a = dcql({ docType: "org.example.foo.bar", claims: ["x"] }).credentials[0].id;
+    const b = dcql({ docType: "org.example.foo_bar", claims: ["x"] }).credentials[0].id;
+    expect(a).toBe("org_example_foo_bar"); // the clean dotted doctype keeps the readable id
+    expect(b).not.toBe(a); // the one with a literal "_" is disambiguated (digest suffix)
+    expect(b).toMatch(/^[A-Za-z0-9_-]+$/); // still DCQL-valid
+    // deterministic: the same doctype always derives the same id
+    expect(dcql({ docType: "org.example.foo_bar", claims: ["x"] }).credentials[0].id).toBe(b);
+  });
 });
 
 // Regression (PR #42 review — finding 1). A custom credential whose id collides with a reserved

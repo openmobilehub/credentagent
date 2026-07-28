@@ -225,16 +225,23 @@ const prescription = defineCredential({
 ### `dcql(spec)`
 
 ```ts
-dcql(spec: { docType: string; claims: string[] }): DcqlQuery
+dcql(spec: { docType: string; claims: string[]; id?: string }): DcqlQuery
 ```
 
 Concise sugar for a single-mdoc DCQL query: name the `docType` and claim leaves, get back
 a verifier-shaped `DcqlQuery` (`format: "mso_mdoc"`, selective disclosure with
-`intent_to_retain: false` by default). The credential `id` is the last dotted segment of
-`docType`.
+`intent_to_retain: false` by default).
+
+The credential `id` (the key `credential_sets` references, and the key the wallet echoes
+each presentation back under) defaults to the **full doctype**, sanitized to DCQL's
+`[A-Za-z0-9_-]` (OpenID4VP) — so `org.openwallet.payment.1` → `org_openwallet_payment_1`.
+The full doctype keeps ids unique across credentials; the old last-segment derivation
+collided (every version-suffixed doctype ended in `1`). Pass an explicit `id` to name it
+yourself (it must be a non-empty `[A-Za-z0-9_-]` string, or `dcql()` throws).
 
 ```ts
-dcql({ docType: "org.hl7.prescription.1", claims: ["rx_valid"] });
+dcql({ docType: "org.hl7.prescription.1", claims: ["rx_valid"] });        // id → org_hl7_prescription_1
+dcql({ docType: "org.hl7.prescription.1", claims: ["rx_valid"], id: "rx" }); // id → rx
 ```
 
 ### Effect builders
