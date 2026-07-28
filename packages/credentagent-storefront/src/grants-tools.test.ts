@@ -12,6 +12,8 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createStorefront } from "./server.js";
 import type { Product } from "./index.js";
+import { SAMPLE_CATALOG } from "./index.js";
+import { projectGrantView } from "./grant-project.js";
 import { CredentAgent } from "@openmobilehub/credentagent-gate";
 
 // The gate's priced catalog (dollars): whiskey is age-restricted → non-delegable. Ids/prices match
@@ -184,6 +186,41 @@ describe("grant tools — GrantViewData projection (spec 011)", () => {
     const second = await c.callTool({ name: "spend-from-grant", arguments: { grantId: g.id, productId: "drift-mouse", idempotencyKey: "b" } });
     expect(door(second)).toMatchObject({ ok: true, remaining: 2 });
     expect(sc(second).lifecycle).toBe("low");
+  });
+
+  // MONEY-ORIGIN (spec 011 FR-1 / invariant-2 discipline for display): the money the card shows
+  // is the ENGINE's value, never a widget-side re-derivation. The projection's `remaining` after a
+  // spend must equal the authoritative spend door's `remaining`; delete the server projection and
+  // let the widget subtract prices itself and this goes red.
+  it("money-origin: the projection's remaining IS the spend door's engine value, not a re-derivation", async () => {
+    const ca = new CredentAgent({ walletOrigin: "http://localhost:3005", catalog: GATE_CATALOG });
+    const c = await client(ca);
+    const g = sc(await c.callTool({ name: "create-spending-grant", arguments: { budget: 200, perSpend: 60, products: ["drift-mouse"] } }));
+    await ca.grants._authorize(g.id);
+    const r = await c.callTool({ name: "spend-from-grant", arguments: { grantId: g.id, productId: "drift-mouse", idempotencyKey: "m1" } });
+    expect(door(r)).toMatchObject({ ok: true, remaining: 151 }); // 200 − 49 (the catalog price), from the engine
+    expect(sc(r).remaining).toBe(door(r).remaining);             // the projection re-reads the SAME engine value
+    expect(sc(r).spent).toBe(sc(r).budget - sc(r).remaining);    // spent + remaining == budget, all server-derived
+  });
+
+  // A1 STRUCTURAL (spec amendment A1): a view body receives the INERT projection — no methods, so it
+  // physically cannot call spend()/revoke(). Assert projectGrantView emits plain data with NO
+  // function anywhere and none of the live handle's methods leaked onto it.
+  it("A1 structural: projectGrantView emits inert plain data — no functions, no live-handle methods", async () => {
+    const ca = new CredentAgent({ walletOrigin: "http://localhost:3005", catalog: GATE_CATALOG });
+    const grant = await ca.grants.create({ merchant: "Utopia", budget: 200, perSpend: 60, allow: { skus: ["drift-mouse"] } });
+    await ca.grants._authorize(grant.id);
+    const live = (await ca.grants.retrieve(grant.id))!;
+    const view = await projectGrantView(live, { catalog: SAMPLE_CATALOG });
+    const assertInert = (o: unknown, path = "$"): void => {
+      expect(typeof o, `${path} must not be a function`).not.toBe("function");
+      if (o && typeof o === "object") for (const [k, v] of Object.entries(o)) assertInert(v, `${path}.${k}`);
+    };
+    assertInert(view);
+    const asRecord = view as unknown as Record<string, unknown>;
+    expect(asRecord.spend).toBeUndefined();   // the live grant's methods must NOT have leaked
+    expect(asRecord.revoke).toBeUndefined();
+    expect(asRecord.usage).toBeUndefined();
   });
 });
 
