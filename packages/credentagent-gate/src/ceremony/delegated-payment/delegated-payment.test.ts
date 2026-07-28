@@ -142,17 +142,18 @@ describe("delegated rail — reference token binding (invariant 4)", () => {
 // ── DCQL merge ──────────────────────────────────────────────────────────────
 
 describe("delegated rail — combined DCQL merge", () => {
-  it("namespaces ids by policy credential, so payment and membership no longer collide (#90)", () => {
-    // Both builders derive the DCQL id from the doctype's last segment → "1" for each.
-    expect(payment.in("usd").request.credentials[0].id).toBe(membership.discount(10).request.credentials[0].id);
-
+  it("re-ids each credential under its policy id (payment, membership) — unique and readable", () => {
+    // dcql() now derives a unique id per doctype (#90 fixed), but the merge still renames
+    // every entry to its POLICY id, so the combined query reads like the reference ceremony
+    // (`payment`, not `org_openwallet_payment_1`) and stays unique even if two policy
+    // credentials happened to share a doctype.
     const { query, idMap } = mergeDelegatedDcql([
       { credentialId: "payment", query: payment.in("usd").request },
       { credentialId: "membership", query: membership.discount(10).request },
     ]);
     const ids = query.credentials.map((c) => c.id);
     expect(ids).toEqual(["payment", "membership"]);
-    expect(new Set(ids).size).toBe(ids.length); // unique — the property #90 breaks
+    expect(new Set(ids).size).toBe(ids.length); // unique
     // The id map routes each merged id back to its policy credential (used at /verify).
     expect(idMap.get("payment")).toBe("payment");
     expect(idMap.get("membership")).toBe("membership");

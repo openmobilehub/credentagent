@@ -55,6 +55,66 @@ describe("CT5 — custom credential via defineCredential (appliesTo)", () => {
   });
 });
 
+// Regression (#90). `dcql()` used to derive the credential id from the doctype's LAST
+// segment (`docType.split(".").pop()`). mdoc doctypes are version-suffixed by convention,
+// so `org.openwallet.payment.1` and `org.multipaz.loyalty.1` both collapsed to "1" — the
+// DEFAULT collided across essentially every credential. The id is the key
+// `credential_sets` references and the key a wallet echoes each presentation back under,
+// so a collision makes any query containing both credentials ambiguous. The fix derives
+// the id from the FULL doctype (sanitized to DCQL's `[A-Za-z0-9_-]`), with an optional
+// caller-supplied `id` override.
+describe("dcql() derives a unique credential id per doctype (#90)", () => {
+  it("two dcql() credentials with different doctypes never share an id", () => {
+    // Under the reverted `docType.split(".").pop()` derivation these version-suffixed
+    // doctypes ALL collapse to "1" — this assertion then fails (Set size 1, not 4).
+    const doctypes = [
+      "org.openwallet.payment.1", // payment built-in
+      "org.multipaz.loyalty.1", // membership built-in
+      "org.hl7.prescription.1", // custom
+      "com.acme.license.1", // custom
+    ];
+    const ids = doctypes.map((docType) => dcql({ docType, claims: ["x"] }).credentials[0].id);
+    expect(new Set(ids).size).toBe(doctypes.length); // all distinct — no collision
+  });
+
+  it("derives from the FULL doctype (dots → underscores), not just the last segment", () => {
+    const id = dcql({ docType: "org.openwallet.payment.1", claims: ["account"] }).credentials[0].id;
+    expect(id).toBe("org_openwallet_payment_1"); // full doctype, sanitized — not "1"
+    expect(id).toMatch(/^[A-Za-z0-9_-]+$/); // DCQL ids are [A-Za-z0-9_-] (OpenID4VP)
+  });
+
+  it("accepts an explicit `id` override, and keeps the safe default when omitted", () => {
+    const named = dcql({ docType: "org.openwallet.payment.1", claims: ["account"], id: "pay" });
+    expect(named.credentials[0].id).toBe("pay");
+    const defaulted = dcql({ docType: "org.openwallet.payment.1", claims: ["account"] });
+    expect(defaulted.credentials[0].id).toBe("org_openwallet_payment_1");
+  });
+
+  // #90 review (Codex P2): an explicit override that isn't a valid DCQL id would ride
+  // verbatim into the signed request and a conforming wallet would reject it. Validate it
+  // at construction (one error door) rather than emit a bad request.
+  it("REJECTS an invalid explicit `id` (empty or outside [A-Za-z0-9_-]) at construction", () => {
+    expect(() => dcql({ docType: "org.openwallet.payment.1", claims: ["account"], id: "" })).toThrow(/valid DCQL/i);
+    expect(() => dcql({ docType: "org.openwallet.payment.1", claims: ["account"], id: "payment.v1" })).toThrow(/valid DCQL/i);
+    expect(() => dcql({ docType: "org.openwallet.payment.1", claims: ["account"], id: "a b" })).toThrow(/valid DCQL/i);
+    // a valid override is untouched
+    expect(dcql({ docType: "x.y.1", claims: ["a"], id: "pay-1_A" }).credentials[0].id).toBe("pay-1_A");
+  });
+
+  // #90 review (Codex P2): the default derivation is collision-resistant, not just readable.
+  // Two doctypes that differ only by a "." vs "_" at the same position both sanitize to the
+  // same base — the pathological one (containing "_") gets a digest suffix so it stays unique.
+  it("keeps the default id unique for doctypes that differ only by . vs _", () => {
+    const a = dcql({ docType: "org.example.foo.bar", claims: ["x"] }).credentials[0].id;
+    const b = dcql({ docType: "org.example.foo_bar", claims: ["x"] }).credentials[0].id;
+    expect(a).toBe("org_example_foo_bar"); // the clean dotted doctype keeps the readable id
+    expect(b).not.toBe(a); // the one with a literal "_" is disambiguated (digest suffix)
+    expect(b).toMatch(/^[A-Za-z0-9_-]+$/); // still DCQL-valid
+    // deterministic: the same doctype always derives the same id
+    expect(dcql({ docType: "org.example.foo_bar", claims: ["x"] }).credentials[0].id).toBe(b);
+  });
+});
+
 // Regression (PR #42 review — finding 1). A custom credential whose id collides with a reserved
 // built-in (age/membership/payment) is silently shadowed: resolveCred routes it to the built-in
 // path and the completion sweep skips it (RESERVED_CREDENTIAL_IDS), so a declared hard `gate()`
