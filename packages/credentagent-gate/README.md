@@ -56,6 +56,35 @@ the widget shows the confirmation. Add the headphones instead and the age gate d
 > predicate keys off the cart's lines — e.g. `order.lines.some((l) => l.minimumAge != null)`.
 > For a deployment pass your public origin: `new CredentAgent({ walletOrigin: "https://shop.example" })`.
 
+### Branding the ceremony pages
+
+The buyer proves their credential on pages the gate serves during **your** checkout, so those
+pages can carry **your** brand. Set `branding` **once** on the constructor and every ceremony page
+— the checkout hub and the age / payment / credential gate pages — picks it up. No per-page wiring:
+
+```ts
+const credentagent = new CredentAgent({
+  walletOrigin: "https://shop.acme.example",
+  branding: {
+    wordmark: "ACME",          // replaces the "CREDENTAGENT" wordmark
+    accent: "#7c3aed",         // primary colour (button, active step, ✓); hover derived
+    logo: "data:image/svg+xml;base64,…", // optional; shown instead of the wordmark
+    demoPill: false,           // hide the DEMO pill (e.g. in production)
+  },
+});
+credentagent.mount(store.app); // every /credentagent/* page now carries ACME's brand
+```
+
+- **Zero-config default** — omit `branding` and the pages render exactly as before.
+- **Chrome only, by design.** Branding never touches the honesty trust footer: the
+  `presence-only-demo` disclosure (see [Honest status](#honest-status)) is the same on every page,
+  branded or not. Nothing you pass can alter or remove it.
+- **Safe by construction.** Every field is sanitized where it's used — the wordmark is HTML-escaped,
+  the `accent` must be a hex or `rgb()`/`hsl()` colour (anything else — including a bare word like
+  `teal` — is ignored, keeping the built-in teal), and `logo` accepts only a `data:image/…` URI, an
+  `https:`/`http:` URL, or a root-relative `/path`. A host-supplied string can't inject markup or CSS
+  onto a consent screen.
+
 ## Orders — a checkout without a storefront
 
 Don't have (or want) the MCP storefront? Drive the checkout yourself with `credentagent.orders`.
@@ -102,6 +131,38 @@ the age threshold are re-derived from the order you stored server-side — never
 (invariant 2), and a gated order can only complete through the wallet ceremony, never a shortcut
 (invariant 1). Runnable: [`examples/orders-checkout/`](https://github.com/openmobilehub/credentagent/tree/main/examples/orders-checkout).
 
+### Preflight — did I configure this right? (`doctor()`)
+
+Those deployment knobs — a stable `gateSecret`, a public `walletOrigin`, shared stores — are easy to
+forget, and a missing one fails at the worst time (a buyer mid-checkout, on the one instance that never
+saw the proof). Call `credentagent.doctor()` once at startup for a config check. It returns typed plain
+data, and **never throws or touches the network** — it reads your config plus `process.env` for
+deployment signals:
+
+```ts
+const report = credentagent.doctor();
+if (!report.ok) {                                            // ok === no error-level findings
+  for (const f of report.findings) console.error(`[${f.level}] ${f.message}\n  fix: ${f.fix}`);
+  process.exit(1);                                           // fail the boot rather than serve a broken deploy
+}
+
+// …or one line that prints a human-readable summary AND returns the same report:
+credentagent.doctor({ print: true });
+```
+
+Each finding is `{ level: "error" | "warn", code, message, fix }`. It checks the config you passed to
+`new CredentAgent(...)`:
+
+| `code` | fires when | `fix` |
+| --- | --- | --- |
+| `ephemeral-gate-secret` | no `gateSecret` on a deployment (serverless ⇒ error, else warn) | set `GATE_SECRET` — `openssl rand -hex 32` — and pass `{ gateSecret }` |
+| `localhost-wallet-origin` | `walletOrigin` is localhost on a deployment | pass your public `https` origin |
+| `in-memory-verification-store` | the default in-memory `store` on a deployment | inject a shared `{ store }` (Redis/Upstash) |
+| `in-memory-order-store` | the default in-memory order stores on a deployment | inject `{ orderStore, completedOrderStore }` |
+
+In plain local dev — no deployment env signals (`VERCEL`, `AWS_LAMBDA_*`, `NODE_ENV=production`, …) — it
+reports nothing, so the zero-config quickstart stays quiet.
+
 ### Webhooks — tell a *different* service when an order settles
 
 `on("order.settled", …)` only fires in the process that settled the order. When fulfillment runs
@@ -129,6 +190,61 @@ order. Endpoint URLs must be **https** (http only for localhost dev — enforced
 redirects are never followed, and each attempt is bounded by a timeout (`timeoutMs`, default 10s).
 `verifyEvent(...)` is the never-throws verdict door if you prefer a result to a try/catch. Runnable:
 [`examples/order-webhooks/`](https://github.com/openmobilehub/credentagent/tree/main/examples/order-webhooks).
+
+## Bring your own host — mount on YOUR MCP server
+
+`createStorefront()` is one host; the product promise is "mount the gate on **any** app." If you
+have your own Express + MCP server, your own catalog/pricing, and your own order store, wire the
+gate over them with **`defineHost(...)`** — you should never call the low-level `completeOrder` by
+hand or reach into `app.locals` yourself.
+
+Give `defineHost` three things — how you **price** an order, how you **read** a created order, and
+where **completed** orders go — and it builds the shared completion for you, owns the per-order
+verification store, and publishes every seam. Then `mount(app)` serves the proof pages over them:
+
+```ts
+import { CredentAgent, defineHost, age, payment, required } from "@openmobilehub/credentagent-gate";
+
+const host = defineHost({
+  catalog: { createOrder: (items, orderId) => priceFromMyCatalog(items, orderId) }, // amount source of truth
+  orderStore: { read: (orderId) => myOrders.get(orderId) ?? null },                 // your created order
+  records: { read: (id) => myCompleted.get(id), write: (rec) => myCompleted.set(rec.orderId, rec) },
+  signingKey: process.env.GATE_SECRET, // stable across instances; or { allowEphemeralKey: true } for dev
+  returnUrl: (id) => `/checkout/${id}`, // your checkout route — where a rail returns the buyer after a proof
+});
+
+host.publish(app);                                     // publish the seams onto your app
+new CredentAgent({ walletOrigin }).mount(app);         // serve the /credentagent/* proof pages over them
+
+// Your OWN place-order / MCP tool calls host.complete(...), so the gates run server-side on YOUR
+// completion path too (not just in a rendered page — Security invariant 1). Typed plain data back:
+app.post("/checkout/:id", async (req, res) => {
+  const order = priceFromMyCatalog([{ productId: "wine", quantity: 1 }], req.params.id);
+  const result = await host.complete({ order, mandateId: `demo-${order.id}`, amount: order.total, currency: "USD", method: "demo", gates: [{ gate: "demo", pass: true, detail: "" }] });
+  res.status(result.completed ? 200 : 402).json(result); // { completed:false, reason:"age" } until proven
+});
+```
+
+- **`host.complete(input)`** is the same shared completion the rails use — one choke point, no second
+  weaker path. It re-prices from your catalog (never the token), runs the age + any custom `gate()`
+  credentials, settles, and records idempotently, returning `{ completed, reason? }`.
+- **`returnUrl`** is where a rail sends the buyer back after they prove. Set it to your own checkout
+  route — otherwise the rails default to `/checkout?order=<id>`, which a non-storefront host does not
+  serve, and the buyer lands on a dead link.
+- **`host.verificationStore`** is the per-order proof store (default in-memory; inject a shared store
+  — e.g. Redis — for a multi-instance deploy). The rails write it when the buyer proves; your
+  completion reads it.
+- **Fail-closed like `mount()`:** `defineHost` throws at construction on an incomplete or contradictory
+  seam set (missing `catalog`/`orderStore`, both `records` and a `completion`, or neither a `signingKey`
+  nor `allowEphemeralKey`).
+- **Advanced:** pass your own `completion` seam instead of `records` if you'd rather bind `completeOrder`
+  yourself. Runnable end-to-end:
+  [`examples/bring-your-own-host.mjs`](https://github.com/openmobilehub/credentagent/blob/main/examples/bring-your-own-host.mjs).
+
+> Still storefront-only (not yet in `defineHost`): the catalog-injected MCP shopping tools, the widget
+> bundle, and the `?cart=` stateless-order transport wiring — `createStorefront()` remains the batteries-
+> included host. `defineHost` covers the seam contract (pricing, orders, completion, verification), which
+> is what a custom host actually needs.
 
 ## The three execution contexts
 
@@ -385,9 +501,10 @@ provide those are later increments.
 ```ts
 // Client (configure once, then declarative calls)
 class CredentAgent {
-  constructor(opts?: { walletOrigin?: string; store?: VerificationStore; credentials?: Credential[] });
+  constructor(opts?: { walletOrigin?: string; store?: VerificationStore; credentials?: Credential[]; branding?: Branding });
   requirements(order: GateOrder, policy: Step[]): VerificationManifestEntry[];   // Context 1
   mount(app: ExpressApp, ceremony?: MountCeremony): void;                        // Context 2
+  doctor(opts?: { print?: boolean }): DoctorReport;                              // config preflight (#25)
 }
 
 // Policy builders + extensibility
@@ -398,6 +515,10 @@ dcql({ docType, claims })  ·  gate()  ·  discount({ percent?, amount? })  ·  
 
 // Stores + host-side composition seam
 MemoryVerificationStore  ·  completeOrder(input, ctx)
+
+// Bring your own host — the typed seam contract (builds completion + publishes the seams)
+defineHost({ catalog, orderStore, records | completion, signingKey | allowEphemeralKey })
+  → { verificationStore, publish(app), complete(input) → { completed, reason? } }
 
 // Delegated draws (HNP, 005 preview) — the Stripe-grade facade + the underlying seams
 DelegatedGate  ·  gate.preApprove(bounds) → DelegatedGrant  ·  grant.spend(purchase) → SpendResult  ·  grant.revoke()

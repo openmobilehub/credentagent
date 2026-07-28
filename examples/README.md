@@ -17,6 +17,9 @@ Each is runnable against the two `@openmobilehub/credentagent-*` packages (build
 **See it work — one page, click through it** (demo)
 - [`demo-hub/`](demo-hub/) — a single page that drives the real checkout AND shows the signed webhook arrive + get verified in a live feed. Start here to *see* the product. Plain-English guarantees + one-command proofs in [`demo-hub/GUARANTEES.md`](demo-hub/GUARANTEES.md).
 
+**Bring your own host — mount on your own server** (024)
+- [`bring-your-own-host.mjs`](bring-your-own-host.mjs) — not `createStorefront`: `defineHost({ catalog, orderStore, records, signingKey })` builds the shared completion + publishes the seams, then `credentagent.mount(app)` serves the proof pages. `host.complete(...)` enforces the gate server-side on your own completion path
+
 **Orders — checkout in one call** (009)
 - [`orders-checkout/`](orders-checkout/) — the real `credentagent.orders` API: `orders.serve(app)` wires the whole checkout, `orders.create()` returns a link, `order.settled` fires when it's paid
 

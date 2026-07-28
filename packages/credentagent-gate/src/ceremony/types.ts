@@ -126,6 +126,17 @@ export interface CompletionInput {
    *  verifier's verdict. The gate never synthesizes it — only records a level it received.
    *  Absent ⇒ the record omits it (the built-in rails' honesty level stays the manifest's). */
   trustLevel?: import("../types.js").TrustLevel;
+  /**
+   * The custom-credential ids in THIS order's resolved policy (007 / #59 finding 2). The
+   * completion sweep enforces a custom `gate()` only when its id is in this set — so a gate
+   * that belongs to a DIFFERENT order's policy but happens to sit in the shared, process-wide
+   * credential registry (register-on-resolve accumulates across orders) cannot block an order
+   * that never required it (the over-enforcement DEADLOCK — invariant 4, scope state per order).
+   * Absent ⇒ the sweep falls back to the whole registry (unchanged, fail-closed default for a
+   * raw `completeOrder` call that carries no per-order policy); `orders.serve` supplies it from
+   * the created order's stored policy.
+   */
+  policyCredentialIds?: readonly string[];
 }
 
 export interface CompletionResult {
