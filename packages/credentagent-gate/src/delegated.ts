@@ -46,6 +46,13 @@ export interface PreApproveOptions {
   description?: string;
   /** Who delegated — informational in v0.1 (an audit key; not yet an enforced identity). */
   subject?: string;
+  /** Honesty override (spec 012): how consent happened / how strongly it is bound. Default
+   *  "delegated-demo" / "server-issued-demo" (the demo approve page). A device-signed grant
+   *  passes "delegated" / "device-signed" so the SEALED bounds carry the real trust level —
+   *  honesty lives in the content-addressed record, not just the handle. Additive: page-mode
+   *  callers pass neither and the sealed bounds are byte-identical to today. */
+  presence?: "delegated" | "delegated-demo";
+  trustLevel?: string;
 }
 
 export interface Purchase {
@@ -136,8 +143,8 @@ export class DelegatedGate {
       totalAmount: opts.total,
       subject: opts.subject,
       delegate,
-      presence: "delegated-demo",
-      trust_level: "server-issued-demo",
+      presence: opts.presence ?? "delegated-demo",
+      trust_level: opts.trustLevel ?? "server-issued-demo",
     });
     return new DelegatedGrant(grant, privateKey, this.catalog, this.ctx);
   }
