@@ -24,16 +24,21 @@ const PORT = Number(process.env.PORT) || 3006;
 const MODE = process.env.VERDICT || "ok"; // ok | wrong-amount | underage | declined
 
 // ── The local stand-in verifier (dev-only) ──────────────────────────────────
-// It captures the amount the GATE priced at buildRequest and echoes it back at consume —
-// exactly as a real adapter binds to what the gate sent. `settle` simulates the processor.
+// It records the amount the GATE priced at buildRequest, keyed by the reference it hands
+// back, and looks it up again at consume({ reference }) — exactly the shape a real adapter
+// uses (buildRequest creates a transaction row; consume fetches it BY REFERENCE, server-to-
+// server). A real adapter's "map" is the processor's own transaction store, so it works
+// across instances; this one is an in-memory Map because the stand-in has no processor.
 function standInVerifier(mode) {
-  let captured;
+  const presentments = new Map();
   return {
     async buildRequest({ binding }) {
-      captured = { amount: binding.amount, currency: binding.currency, payee: { id: binding.payee.id } };
-      return { reference: `dev-${Date.now()}`, handoff: { note: "LOCAL STAND-IN — no external verifier is contacted" } };
+      const reference = `dev-${Date.now()}`;
+      presentments.set(reference, { amount: binding.amount, currency: binding.currency, payee: { id: binding.payee.id } });
+      return { reference, handoff: { note: "LOCAL STAND-IN — no external verifier is contacted" } };
     },
-    async consume() {
+    async consume({ reference }) {
+      const captured = presentments.get(reference);
       const verdict = {
         approved: true,
         // Honest: a local stand-in is NOT a real issuer/device trust anchor.

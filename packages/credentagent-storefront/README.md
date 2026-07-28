@@ -179,11 +179,12 @@ leaves the cart intact.
 ### Real payments: the `verifier` seam
 
 Pass a `verifier` and the **same** `store.gate(...)` policy runs a real, issuer-trust-verified,
-amount-bound payment through an external verifier/processor (e.g. a Multipaz verifier + a UPay-style
-processor) — only the backend moves in:
+amount-bound payment through an external verifier/processor — only the backend moves in. The first real
+adapter lives host-side in [`openwallet-foundation/multipaz-utopia`](https://github.com/openwallet-foundation/multipaz-utopia)
+(tracked in [multipaz-utopia#16](https://github.com/openwallet-foundation/multipaz-utopia/issues/16)):
 
 ```ts
-const store = createStorefront({ verifier });   // e.g. a Multipaz/UPay adapter
+const store = createStorefront({ verifier });   // e.g. the multipaz-utopia adapter, once it lands
 new CredentAgent().mount(store.app);             // zero-arg — picks the verifier up from app.locals
 ```
 

@@ -375,13 +375,16 @@ verifier/processor you already have — in plain words:
 ```ts
 interface DelegatedVerifier {
   // "Tell the checker: verify these credentials, bound to exactly $124 payable to me."
-  buildRequest(x): DelegatedHandoff;
+  buildRequest(input: { order, dcql, binding, origin }): DelegatedHandoff;
   // "Fetch the checker's verdict, server-to-server, by reference — no money moves here."
-  consume(x):     DelegatedVerdict;
+  consume(input: { reference, order }): DelegatedVerdict;
   // "Charge. The gate calls this ONLY after its own re-checks pass."
-  settle?(x):     SettlementRecordLike;
+  settle?(input: { reference, order, amount, currency }): SettlementRecordLike;
 }
 ```
+
+Type your adapter with `import type { DelegatedVerifier } from "@openmobilehub/credentagent-gate"` and
+let the compiler guide you through each method's exact input/output shape.
 
 `settle` is **optional**: an identity-only gate (age, a licence, membership) completes without it —
 there is nothing to charge.
@@ -414,9 +417,10 @@ The one rule that makes delegation safe: **trust is delegable, binding is not.**
 
 The concrete verifier is a **host-side adapter** — no processor-specific symbol lives in this package.
 
-> **No real adapter ships yet.** This package defines the *interface*; the concrete Multipaz-verifier +
-> UPay-processor adapter is the downstream integration (**S6**, tracked in `multipaz-utopia#16`). Today
-> the only way to run the delegated rail is a **stand-in** like the scripted verifier in
+> **No real adapter ships yet.** This package defines the *interface*; the first real adapter lives
+> host-side in [`openwallet-foundation/multipaz-utopia`](https://github.com/openwallet-foundation/multipaz-utopia)
+> (**S6**, tracked in [multipaz-utopia#16](https://github.com/openwallet-foundation/multipaz-utopia/issues/16)).
+> Today the only way to run the delegated rail is a **stand-in** like the scripted verifier in
 > [`examples/delegated-verifier/`](../../examples/delegated-verifier) — a test double, never shipped, and
 > deliberately kept out of the runnable `run-storefront` example. Stating this plainly is the honesty
 > fence working, not a gap.
@@ -536,6 +540,7 @@ ageDcql()  ·  ENVELOPE_VERSION  ·  ENVELOPE_SENTINEL
 //        VerificationManifestEntry, VerificationStore, VerificationRecord,
 //        TrustLevel, DcqlQuery, DcqlClaim, DcqlCredentialOption, ExpressApp,
 //        CompletionSeam / SettlementSeam / CeremonyOrder (host composition)
+//        DelegatedVerifier / DelegatedVerdict / DelegatedHandoff / SettlementRecordLike (delegated seam)
 ```
 
 Full, compiler-checked contract: [`specs/001-attesto-sdk/`](https://github.com/openmobilehub/mcp-apps-shopping-demo/tree/main/specs/001-attesto-sdk/) (the

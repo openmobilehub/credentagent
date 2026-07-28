@@ -267,7 +267,7 @@ sweep reads).
 | **S3** — verify + the non-delegable re-checks (security core) | #87 | `feat/008-delegated-verify` |
 | **S4** — manifest routing + honesty plumbing | #88 | `feat/008-delegated-verify` |
 | **S5** — storefront wiring + scripted verifier + docs | #89 | `feat/008-delegated-verify` |
-| **S6** — rework multipaz-utopia#15 onto the seam | multipaz-utopia#16 | downstream repo |
+| **S6** — rework multipaz-utopia#15 onto the seam | [multipaz-utopia#16](https://github.com/openwallet-foundation/multipaz-utopia/issues/16) | [openwallet-foundation/multipaz-utopia](https://github.com/openwallet-foundation/multipaz-utopia) |
 
 S1+S2 landed together (PR #91): an interface with no caller cannot be judged against the "example IS
 the DX test" rule. That PR flagged `consume()` / `DelegatedVerdict` as **provisional** — S3 exercised
