@@ -1,0 +1,13 @@
+{
+  "name": "credentagent-demo-pki-site",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Build-only tooling for the demo-PKI tester front door (tools/demo-pki/site). NOT a published package — the QR encoder is a site-local devDependency, vendored into vendor/ at build time.",
+  "license": "Apache-2.0",
+  "scripts": {
+    "build": "python3 build_site.py"
+  },
+  "devDependencies": {
+    "qrcode-generator": "1.4.4"
+  }
+}
