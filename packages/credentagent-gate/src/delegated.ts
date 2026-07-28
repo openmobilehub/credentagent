@@ -141,6 +141,25 @@ export class DelegatedGate {
     });
     return new DelegatedGrant(grant, privateKey, this.catalog, this.ctx);
   }
+
+  /**
+   * Reconstruct a grant to a KNOWN cumulative spend — the durable-store rehydration seam (the
+   * #104 follow-up: a serverless instance that never saw `preApprove()` still spends faithfully
+   * against a shared store). Re-seals the intent from the stored bounds (a NEW delegate key) and
+   * seeds the ledger with synthetic committed draws summing to `spentCents` (chunked ≤ the
+   * per-order cap, mirroring how the real draws landed), so the reconstructed grant's `remaining`
+   * AND its cumulative-budget enforcement are faithful — a rehydrated grant can't over-spend the
+   * budget just because a fresh instance's ledger started empty.
+   *
+   * HONESTY: this re-seals a DEV-signed intent — it does NOT reconstruct cryptographic continuity
+   * with the human's original consent (there is no wallet key to re-bind to). It stays squarely
+   * within trust_level "server-issued-demo"; do NOT read it as signed persistence.
+   */
+  async rehydrate(opts: PreApproveOptions, spentCents: number): Promise<DelegatedGrant> {
+    const grant = await this.preApprove(opts);
+    if (spentCents > 0) await grant.seedSpent(spentCents);
+    return grant;
+  }
 }
 
 /**
@@ -221,6 +240,34 @@ export class DelegatedGrant {
     const committed = await this.ctx.revocation!.priorDraws(this.grant.intentId);
     const spent = committed.reduce((sum, d) => sum + d.amount, 0);
     return { spent, remaining: this.grant.totalAmount - spent };
+  }
+
+  /**
+   * @internal Seed the ledger with committed draws summing to `spentCents`, each ≤ the per-order
+   * cap, so a REHYDRATED grant's remaining + cumulative-budget enforcement reflect prior spend.
+   * Called only by {@link DelegatedGate.rehydrate}. It is NOT a new consent — see that method's
+   * honesty note. Chunking mirrors the real draws (each was ≤ the per-order cap); the synthetic
+   * pspTransactionIds are unique per chunk so `commitDraw` accepts them, and the cumulative cap
+   * still holds (a stored spend over the budget throws rather than silently seeding a bad ledger).
+   */
+  async seedSpent(spentCents: number): Promise<void> {
+    const perOrder = this.grant.maxAmount;
+    let remaining = spentCents;
+    let n = 0;
+    while (remaining > 0) {
+      const amount = perOrder > 0 ? Math.min(remaining, perOrder) : remaining;
+      const res = await this.ctx.revocation!.commitDraw(
+        this.grant.intentId,
+        { amount, pspTransactionId: `rehydrate:${this.grant.intentId}:${n++}` },
+        { totalAmount: this.grant.totalAmount, ...(this.grant.subject ? { subject: this.grant.subject } : {}) },
+      );
+      if (!res.ok) {
+        throw new Error(
+          `[credentagent] grant rehydration could not seed prior spend (${res.reason}); the stored spend $${spentCents / 100} may exceed the sealed budget.`,
+        );
+      }
+      remaining -= amount;
+    }
   }
 
   /** Revoke the grant — the very next spend is refused, fail-closed. Async so a remote
