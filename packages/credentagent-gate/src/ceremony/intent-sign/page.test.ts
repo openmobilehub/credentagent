@@ -50,4 +50,15 @@ describe("intent-sign page — honesty (FR-4)", () => {
     expect(html).toContain("Beverages");
     expect(html).toContain("Sign with your wallet");
   });
+
+  // A grant is scoped to one merchant; "who am I authorizing spend to" is consent-tier and must
+  // render even without a description. This pins the always-visible structured bound set so the
+  // guarantee never depends on the caller passing a description sentence.
+  it("ALWAYS renders merchant + budget + per-purchase for a grant with NO description", () => {
+    const html = renderIntentSignPage({ grantId: "grant_y", merchant: "utopia", budget: 200, perSpend: 130 });
+    expect(html).not.toContain("undefined");
+    expect(html).toContain("utopia"); // the merchant — who is being authorized
+    expect(html).toContain("$200"); // total budget
+    expect(html).toContain("$130"); // per-purchase cap
+  });
 });

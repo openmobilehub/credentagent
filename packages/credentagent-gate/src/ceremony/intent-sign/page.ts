@@ -34,14 +34,19 @@ function escapeHtml(s: string): string {
 export function renderIntentSignPage(args: IntentSignPageArgs): string {
   const title = "Sign this spending grant";
   const bounds = [
+    // WHO you are authorizing spend to is consent-tier — always shown, first, alongside the
+    // amounts and item bounds. This structured set renders even when `description` is absent, so
+    // the human never signs without seeing the full merchant + budget + per-purchase + allow set.
+    `to <strong>${escapeHtml(args.merchant)}</strong>`,
     `up to <strong>$${args.budget}</strong> total`,
     `max <strong>$${args.perSpend}</strong> per purchase`,
     ...(args.allow?.categories?.length ? [`only <strong>${escapeHtml(args.allow.categories.join(", "))}</strong>`] : []),
     ...(args.allow?.skus?.length ? [`only these items: <strong>${escapeHtml(args.allow.skus.join(", "))}</strong>`] : []),
   ].join(" · ");
+  // The description is a nice-to-have lede; the structured bounds above carry the guarantee.
   const lede = args.description
     ? escapeHtml(args.description)
-    : `An AI agent asks to spend on your behalf at <strong>${escapeHtml(args.merchant)}</strong> while you're away. Sign this with your wallet to authorize exactly these bounds — nothing more.`;
+    : `An AI agent asks to spend on your behalf while you're away. Sign this with your wallet to authorize exactly the bounds below — nothing more.`;
 
   const extraCss = `
   .bounds { margin:12px 0; padding:12px 14px; background:var(--surface-2, #f6f7f9); border-radius:12px; font-size:.95rem; }
