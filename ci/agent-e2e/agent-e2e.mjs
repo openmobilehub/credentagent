@@ -1,7 +1,7 @@
 // Agent-in-the-loop E2E — a REAL Claude agent drives the deployed MCP storefront, unaided.
 //
 //   ANTHROPIC_API_KEY=... node ci/agent-e2e/agent-e2e.mjs
-//   MCP_URL=https://credentagent-demo.vercel.app/mcp   # override the target (default: prod demo)
+//   E2E_MCP_URL=https://credentagent-demo-dev.vercel.app/mcp   # aim at the dev twin (default: prod demo)
 //
 // Why this exists: the deterministic smokes call known endpoints with known payloads. They can
 // never catch the failure class that matters most for an MCP product — "an agent can no longer
@@ -16,7 +16,10 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { runAssertions } from "./assertions.mjs";
 
-const MCP_URL = process.env.MCP_URL ?? "https://credentagent-demo.vercel.app/mcp";
+// Target the deployed MCP storefront. `E2E_MCP_URL` is the override (e.g. the dev twin at
+// credentagent-demo-dev running main's unpublished source); `MCP_URL` stays accepted for
+// back-compat; default is the prod demo, so the nightly workflow needs no env at all.
+const MCP_URL = process.env.E2E_MCP_URL ?? process.env.MCP_URL ?? "https://credentagent-demo.vercel.app/mcp";
 const MODEL = "claude-opus-4-8";
 const MAX_CONTINUATIONS = 5;
 

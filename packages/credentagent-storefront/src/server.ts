@@ -60,6 +60,7 @@ import {
   decodeCartMandateParam,
   renderRequirements,
   MemoryVerificationStore,
+  type Branding,
   type CartItemRef,
   type Credential,
   type Grants,
@@ -70,6 +71,7 @@ import {
   type CompletionInput,
   type CompletionResult,
   type RepriceOpts,
+  type RenderPaid,
   type RenderVerification,
   type VerificationManifestEntry,
   type VerificationRecord,
@@ -875,7 +877,12 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
     // Pass this order's proven custom gates (007) so the hub reflects a proven custom
     // gate and unlocks payment — without it, a proven license loops back to a locked page.
     const verification: RenderVerification = { ageVerified, loyaltyApplied, ...(v.verifiedGates ? { verifiedGates: v.verifiedGates } : {}) };
-    const paid = done ? { amount: done.amount, currency: done.currency, method: done.method } : null;
+    // Forward the settlement record so the paid banner can show what actually settled
+    // (#107). Dropping it here made EVERY completed order — even a real x402 or processor
+    // settlement — render "no settlement", the receipt-honesty bug this fixes.
+    const paid = done
+      ? { amount: done.amount, currency: done.currency, method: done.method, ...(done.settlement ? { settlement: done.settlement as RenderPaid["settlement"] } : {}) }
+      : null;
 
     // An UNGATED storefront has no payment gate, so the manifest carries no
     // `authorize` entry the renderer could derive a Pay CTA from — keep a simple
@@ -911,7 +918,11 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
     // #73: bake THIS order's current verification signature so a standing tab reloads when a
     // step is made elsewhere (age verified, loyalty applied), not only on final completion.
     const statusRevision = verificationRevision(v);
-    res.type("html").send(renderRequirements(order, requires, verification, { ...(payment ? { payment } : {}), paid, statusUrl, statusRevision }));
+    // Carry the host brand onto the checkout hub too, so it matches the linked gate pages
+    // (issue #61). `credentagent.mount(store.app)` publishes it here alongside the other seams;
+    // read it at request time (mount runs after this route is defined).
+    const branding = (app.locals.credentagent as { branding?: Branding } | undefined)?.branding;
+    res.type("html").send(renderRequirements(order, requires, verification, { ...(payment ? { payment } : {}), paid, statusUrl, statusRevision, ...(branding ? { branding } : {}) }));
   });
   app.post("/checkout/place-order", async (req: Request, res: Response) => {
     // statelessOrders: reconstruct + verify from the body's `cart` mandate; else the store.

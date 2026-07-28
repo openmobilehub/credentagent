@@ -42,6 +42,7 @@ import { CipherSuite, DhkemP256HkdfSha256, HkdfSha256, Aes128Gcm } from "@hpke/c
 import * as jose from "jose";
 import * as x509 from "@peculiar/x509";
 import { decodeVpToken, type DisclosedEntry } from "./mdoc.js";
+import type { ReaderIdentity } from "../../types.js";
 
 x509.cryptoProvider.set(globalThis.crypto);
 const READER_SIGN_ALG = { name: "ECDSA", namedCurve: "P-256", hash: "SHA-256" } as const;
@@ -56,19 +57,42 @@ export interface MdocDocSpec {
 
 // Reader-authentication certificate chain following the ISO/IEC 18013-5 reader
 // profile. Apple validates the *whole chain* on a signed request, so a single
-// self-signed cert is rejected (idcsInvalidReaderAuthSignature). We mint the
-// exact structure verifier.multipaz.org uses: a self-signed Reader CA root
-// (basicConstraints CA:true) and a leaf signed by it carrying the reader-auth
-// EKUs and a DNS SAN matching the request origin. The reader auth is signed with
-// the leaf key; x5chain = [leaf, ca].
+// self-signed cert is rejected (idcsInvalidReaderAuthSignature).
 //
-// NOTE: this iOS ReaderAuthAll path always self-mints. The stable `readerIdentity`
-// (CredentAgentOptions) is applied on the OpenID4VP (Android/Chrome) path only —
-// presenting it here (so an iOS wallet's RICAL matches) is a follow-up (#51).
+// Two reader identities, mirroring the Android/Chrome path's `makeReaderCert`:
+//   • WITH a stable `identity` ({ key, cert, chain? }) — present it: sign the
+//     ReaderAuthAll with the provided leaf key and set x5chain = [leaf, ...chain]
+//     from the identity, so an iOS wallet trusting it via a RICAL shows the
+//     verifier as trusted (#99). Its SAN/origin binding is the caller's (the
+//     client warns at construction if the cert SAN doesn't cover walletOrigin).
+//   • WITHOUT — self-mint the structure verifier.multipaz.org uses: a self-signed
+//     Reader CA root (basicConstraints CA:true) and a leaf signed by it carrying
+//     the reader-auth EKUs and a DNS SAN matching the request origin. The reader
+//     auth is signed with the leaf key; x5chain = [leaf, ca]. (Safe default.)
+//
+// Origin binding holds either way: the ReaderAuthAll signs over the session
+// transcript, which is bound to this exact origin regardless of which cert signs.
 async function makeMdocReaderCert(
   origin: string,
   host: string,
+  identity?: ReaderIdentity,
 ): Promise<{ chainDer: Uint8Array[]; leafKey: NodeWebCrypto.CryptoKey }> {
+  if (identity) {
+    // Stable identity: sign with the provided key; present [leaf, ...chain] as DER.
+    // The COSE_Sign1 is signed with webcrypto.subtle.sign, so the PEM PKCS8 key is
+    // imported as a webcrypto CryptoKey (not a jose KeyObject like the Android path).
+    const keyDer = x509.PemConverter.decode(identity.key)[0];
+    const leafKey = (await webcrypto.subtle.importKey(
+      "pkcs8",
+      keyDer,
+      { name: "ECDSA", namedCurve: "P-256" },
+      false,
+      ["sign"],
+    )) as unknown as NodeWebCrypto.CryptoKey;
+    const chainPem = [identity.cert, ...(identity.chain ?? [])];
+    const chainDer = chainPem.map((pem) => new Uint8Array(new x509.X509Certificate(pem).rawData));
+    return { chainDer, leafKey };
+  }
   const now = Date.now();
   // ── Reader CA (self-signed root) ──
   const caKeys = await webcrypto.subtle.generateKey(READER_SIGN_ALG, true, ["sign", "verify"]);
@@ -222,8 +246,12 @@ async function buildReaderAuthAll(args: {
   const protectedHeader = cborEncode(new Map<number, number>([[1, -7]])); // {alg: ES256}
   const sigStructure = cborEncode(["Signature1", Buffer.from(protectedHeader), Buffer.alloc(0), Buffer.from(raaBytes)]);
   const signature = new Uint8Array(await webcrypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, args.signingKey, sigStructure));
-  // x5chain (label 33): array of DER certs, leaf first — [leaf, ca].
-  const unprotected = new Map<number, unknown>([[33, args.chainDer.map((d) => Buffer.from(d))]]);
+  // x5chain (label 33, RFC 9360): a LONE certificate is a bare bstr; a chain of 2+
+  // is an array of bstr, leaf first — [leaf, ca]. A strict iOS wallet rejects a
+  // one-element array, so the identity-without-chain default must be a bare bstr.
+  const certs = args.chainDer.map((d) => Buffer.from(d));
+  const x5chain = certs.length === 1 ? certs[0] : certs;
+  const unprotected = new Map<number, unknown>([[33, x5chain]]);
   // COSE_Sign1 = [protected, unprotected, payload(null = detached), signature]
   return [Buffer.from(protectedHeader), unprotected, null, Buffer.from(signature)];
 }
@@ -264,6 +292,7 @@ export async function buildMdocRequestParts(
   specs: MdocDocSpec | MdocDocSpec[],
   origin: string,
   signed = true,
+  readerIdentity?: ReaderIdentity,
 ): Promise<MdocRequestParts> {
   const { coseKey, privateJwk } = await generateReaderKey();
   const nonce = randomBytes(16);
@@ -271,10 +300,11 @@ export async function buildMdocRequestParts(
   let deviceRequest: Uint8Array;
   if (signed) {
     // The reader auth signs over the session transcript, which binds the request
-    // to this exact origin — so the device request must be built with it.
+    // to this exact origin — so the device request must be built with it. A stable
+    // `readerIdentity` (#99), when supplied, is presented instead of a self-mint.
     const sessionTranscript = buildSessionTranscript(base64EncryptionInfo, origin);
     const host = new URL(origin).host.split(":")[0];
-    const { chainDer, leafKey } = await makeMdocReaderCert(origin, host);
+    const { chainDer, leafKey } = await makeMdocReaderCert(origin, host, readerIdentity);
     deviceRequest = await buildSignedDeviceRequest(specs, sessionTranscript, leafKey, chainDer);
   } else {
     deviceRequest = buildDeviceRequest(specs); // unsigned (diagnostic A/B)

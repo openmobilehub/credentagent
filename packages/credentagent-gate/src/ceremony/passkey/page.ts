@@ -13,13 +13,14 @@
 // → resolveOrder), so the amount shown and bound comes from the catalog, never the
 // order id/token (invariant 2).
 import type { CeremonyOrder } from "../types.js";
+import type { Branding } from "../../types.js";
 import { pageHead, brandHeader, orderSummaryCard, trustFooter, settlingBar, completionHandoffBanner, railCompleteScript } from "../theme.js";
 
 function money(amount: number, currency: string): string {
   return new Intl.NumberFormat("en-US", { style: "currency", currency }).format(amount);
 }
 
-export function renderPasskeyPage(args: { order: CeremonyOrder; crossDevice?: boolean; returnUrl?: string; cart?: string; rail?: string }): string {
+export function renderPasskeyPage(args: { order: CeremonyOrder; crossDevice?: boolean; returnUrl?: string; cart?: string; rail?: string; branding?: Branding }): string {
   const { order, crossDevice = false } = args;
   // Where the completed receipt links back to — the checkout hub, which then renders
   // the paid state (a forward, fresh GET — so the buyer never browser-backs onto a
@@ -62,10 +63,10 @@ export function renderPasskeyPage(args: { order: CeremonyOrder; crossDevice?: bo
 
   return `<!doctype html>
 <html lang="en">
-${pageHead(`Authorize payment · ${order.id}`, extraCss)}
+${pageHead(`Authorize payment · ${order.id}`, extraCss, args.branding)}
 <body>
   <div class="wrap">
-  ${brandHeader({ h1: "Authorize payment", tagline })}
+  ${brandHeader({ h1: "Authorize payment", tagline }, args.branding)}
   ${rail}
   ${summary}
   <div class="card">

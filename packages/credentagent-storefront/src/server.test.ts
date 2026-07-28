@@ -10,7 +10,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { AddressInfo } from "node:net";
 import { readFileSync } from "node:fs";
-import { createStorefront, originFromRequest, verificationRevision, bundleVersion, type Storefront } from "./server.js";
+import { createStorefront, originFromRequest, verificationRevision, bundleVersion, type Storefront, type CompletedOrderRecord } from "./server.js";
 import { redisStorage, type RedisLike } from "./redis.js";
 import { firestoreCatalog, type FirestoreLike } from "./firestore.js";
 import { MemoryOrderStore } from "./state.js";
@@ -263,6 +263,21 @@ describe("GET /checkout — the shared three-gate page (renderRequirements)", ()
     expect(res.text).toContain("presence-only-demo");
   });
 
+  it("carries the host brand onto the checkout hub — wordmark replaces the default, honesty footer unchanged (issue #61)", async () => {
+    const store = createStorefront();
+    const credentagent = new CredentAgent({ branding: { wordmark: "ACME", accent: "#7c3aed" } });
+    credentagent.mount(store.app); // publishes branding onto app.locals; the /checkout handler reads it
+    const orderId = await checkoutId(await connect(store), "drift-mouse");
+    const res = await request(store.app).get(`/checkout?order=${orderId}`);
+    expect(res.status).toBe(200);
+    // The hub now carries the host brand — matching the linked gate pages (the #132 P1 gap).
+    expect(res.text).toContain(`<span class="wordmark">ACME</span>`);
+    expect(res.text).toContain("--accent:#7c3aed"); // the accent override reached the hub's <head>
+    expect(res.text).not.toContain("CREDENTAGENT"); // the default wordmark is gone on the hub too
+    // The honesty footer is NEVER branded — byte-identical to the default render (FR-011).
+    expect(res.text).toContain("🔒 presence-only-demo · secured by CredentAgent · the wire crypto is real; issuer trust anchor is not");
+  });
+
   it("once age is proven, the gated order offers the mounted payment rail as the Pay CTA (still no bypass)", async () => {
     const store = gatedStore();
     const orderId = await checkoutId(await connect(store), "oak-whiskey");
@@ -301,6 +316,29 @@ describe("GET /checkout — the shared three-gate page (renderRequirements)", ()
     const res = await request(store.app).get(`/checkout?order=${orderId}`);
     expect(res.text).toContain("Order paid");
     expect(res.text).not.toContain("/checkout/order-status");
+  });
+
+  // #107 — the receipt settlement honesty bug (Cause 1). completeOrder DOES persist the
+  // settlement onto the completed-order record, but GET /checkout rebuilt its `paid`
+  // object and dropped it, so EVERY paid order rendered "no settlement" — even one that
+  // really settled. This forwards it. Deleting the `settlement` pass-through turns this red.
+  it("a completed order's settlement record surfaces on the paid revisit (#107 cause 1)", async () => {
+    const orders = new MemoryOrderStore<CompletedOrderRecord>();
+    const store = createStorefront({ orderStore: orders }); // ungated
+    const orderId = await checkoutId(await connect(store), "drift-mouse");
+    // A real settlement recorded for THIS order, exactly as completeOrder writes it.
+    await orders.write(orderId, {
+      orderId,
+      amount: 74,
+      currency: "USD",
+      method: "dc-payment",
+      completedAt: new Date().toISOString(),
+      settlement: { network: "upay", provider: "UPay", txId: "ccOuvUeikyv22XIn", status: "settled" },
+    });
+    const res = await request(store.app).get(`/checkout?order=${orderId}`);
+    expect(res.text).toContain("via UPay"); // the backend that actually settled
+    expect(res.text).toContain("ccOuvUeikyv22XIn"); // its real transaction id
+    expect(res.text).not.toContain("No settlement recorded"); // money moved — don't deny it
   });
 
   // BYPASS (Security invariant 1, load-bearing): the instant-demo place-order path
