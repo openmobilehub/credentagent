@@ -5,14 +5,26 @@
 // (no hardcoded demo imports) so dc-payment and passkey reconcile against the same
 // amount-binding logic. Settlement GATES completion: a configured-but-failed
 // settle means authorized-but-not-completed (no record, cart intact — FR-013).
-import type { Credential, GateOrder, VerificationStore } from "../types.js";
+import type { Credential, GateOrder, TrustLevel, VerificationStore } from "../types.js";
 import type { CartItemRef, CeremonyCatalog, CeremonyOrder, CompletionInput, CompletionResult, GateOutcome } from "./types.js";
 import { verifyCartMandate, type CartMandate } from "./cartMandate.js";
 import { reconcileCartPayment } from "./reconciliation.js";
 import { checkDraw, type DrawVerifier } from "./mandate.js";
 import type { RevocationStore } from "./revocation.js";
 import { refusal } from "./refusals.js";
+import { KeyedMutex } from "./keyed-mutex.js";
+import { preserveLineAttributes } from "./order-attributes.js";
 import { RESERVED_CREDENTIAL_IDS } from "../credentials.js";
+
+// Per-order in-process serializer for completion (#103). The idempotency read at the top and
+// the settle + record write near the bottom are not atomic, so two CONCURRENT verifies for one
+// order could both pass "already completed?" and each call the processor's `settle` — a real
+// double-charge on the first path where `settle` moves real money (the delegated rail). Running
+// completion one-at-a-time per order id closes that window: the loser sees the winner's record
+// and takes the idempotent echo, settling nothing. Keyed by order id, so distinct orders never
+// contend; in-process only (see KeyedMutex — a multi-instance deploy also needs an idempotent
+// settle, which `DelegatedVerifier.settle` now documents).
+const completionSerializer = new KeyedMutex();
 
 // One on-chain (demo-mode) settlement backing a completed order. Kept structural
 // so the demo's richer SettlementRecord is assignable without the package taking
@@ -40,6 +52,11 @@ export interface CompletedRecord {
   /** The authorizing Intent Mandate id, when this order completed via a delegated draw
    *  (005) — the audit link from an unattended completion back to its grant. */
   delegationId?: string;
+  /** How strongly this completion was trusted, RELAYED from an external verifier's verdict
+   *  (008). `"issuer-verified"` only when a real trust anchor produced it; the built-in rails
+   *  omit this (their honesty level is the manifest's `presence-only-demo`). Never synthesized
+   *  here — the gate only records a level it received. */
+  trustLevel?: TrustLevel;
 }
 
 export interface CompletedOrderStore {
@@ -91,15 +108,30 @@ export interface CompletionContext {
  * the RE-PRICED order (invariant 2) against the full line (never a lossy projection). Absent
  * registry / no custom gates ⇒ false (additive — unchanged for hosts that don't wire it).
  */
-function hasUnprovenCustomGate(ctx: CompletionContext, repriced: CeremonyOrder, verification: unknown): boolean {
+function hasUnprovenCustomGate(
+  ctx: CompletionContext,
+  repriced: CeremonyOrder,
+  verification: unknown,
+  policyCredentialIds: readonly string[] | undefined,
+): boolean {
   if (!ctx.credentialRegistry) return false;
+  // Scope the sweep to THIS order's policy (#59 finding 2). The registry is process-wide and
+  // register-on-resolve ACCUMULATES a credential from every order's policy — so a `gate()` that
+  // one order required (especially one with no `appliesTo`, which "applies to all") would block
+  // a LATER order that never surfaced it (unprovable → permanent fail-closed DEADLOCK). When the
+  // completion path carries the order's policy ids, keep only those; a raw call without them
+  // falls back to the whole registry (the prior fail-closed default — see CompletionInput).
+  const policyScope = policyCredentialIds ? new Set(policyCredentialIds) : undefined;
   // Pre-filter to the custom `gate()` credentials ONCE (#64 item 2). The common case is a
   // registry of only reserved built-ins (age/membership/payment), which the loop below skips
   // anyway — so building `gateOrder` (which clones every re-priced line) and iterating would
   // be pure waste. Skip both entirely when the custom set is empty. Same predicate as the
   // loop's per-cred skips, so behavior is unchanged: an empty set could never return true.
   const customGates = [...ctx.credentialRegistry.values()].filter(
-    (cred) => !RESERVED_CREDENTIAL_IDS.has(cred.id) && cred.effect.kind === "gate",
+    (cred) =>
+      !RESERVED_CREDENTIAL_IDS.has(cred.id) &&
+      cred.effect.kind === "gate" &&
+      (!policyScope || policyScope.has(cred.id)),
   );
   if (customGates.length === 0) return false;
   // Evaluate `appliesTo` against the FULL re-priced line — spread every field, never a
@@ -120,7 +152,13 @@ function hasUnprovenCustomGate(ctx: CompletionContext, repriced: CeremonyOrder, 
   return false;
 }
 
-export async function completeOrder(input: CompletionInput, ctx: CompletionContext): Promise<CompletionResult> {
+export function completeOrder(input: CompletionInput, ctx: CompletionContext): Promise<CompletionResult> {
+  // Serialize per order id so the idempotency check and the settle+record write below run as ONE
+  // critical section against concurrent same-order verifies (#103). Distinct orders don't contend.
+  return completionSerializer.run(input.order.id, () => completeOrderLocked(input, ctx));
+}
+
+async function completeOrderLocked(input: CompletionInput, ctx: CompletionContext): Promise<CompletionResult> {
   // Every deterministic gate must have passed; one failure refuses, recording
   // nothing.
   if (!input.gates.every((g) => g.pass)) return { completed: false, reason: "gates" };
@@ -162,9 +200,20 @@ export async function completeOrder(input: CompletionInput, ctx: CompletionConte
   // higher and is refused.
   const verification = await ctx.verificationStore.read(input.order.id);
   const loyaltyApplied = !!(verification as { loyalty?: { applied?: boolean } } | undefined)?.loyalty?.applied;
+  // Scope the custom-gate sweep to THIS order's policy (#59 finding 2). The mounted ceremony seam
+  // enriches `input.policyCredentialIds` for every rail (mount.ts, from the client's per-order
+  // policy) and `orders.serve` sets it from the stored created order; absent ⇒ the sweep stays
+  // registry-wide (fail-closed). Always server-side state — never the order token.
+  const policyCredentialIds = input.policyCredentialIds;
   const items: CartItemRef[] = input.order.lines.map((l) => ({ productId: l.id, quantity: l.quantity }));
-  const repriced = ctx.catalog.createOrder(items, input.order.id, { loyaltyApplied });
-  if (repriced.total !== input.order.total) return { completed: false, reason: "reprice" };
+  const repricedRaw = ctx.catalog.createOrder(items, input.order.id, { loyaltyApplied });
+  if (repricedRaw.total !== input.order.total) return { completed: false, reason: "reprice" };
+  // #59 finding 3: re-attach any product attribute the (possibly lossy) host catalog dropped
+  // during the re-price, from the faithful order the rail already resolved — so a custom gate's
+  // `appliesTo` (requiresRx / category / minimumAge) sees the SAME fields the manifest did and a
+  // lossy catalog cannot skip a gate (fail-OPEN). Price is untouched (invariant 2 — the re-price
+  // total was already checked against the token above).
+  const repriced: CeremonyOrder = { ...repricedRaw, lines: preserveLineAttributes(repricedRaw.lines, input.order.lines) };
 
   // Invariant 3: when a signed Cart Mandate AND a signed Payment Mandate are both
   // present, the two envelopes must tell ONE story before completing — same order,
@@ -210,7 +259,7 @@ export async function completeOrder(input: CompletionInput, ctx: CompletionConte
     // is a completion path, so an applicable custom gate (prescription, license, …) with no
     // proof for THIS order must step up to a live human — the draw path must NOT skip the sweep
     // the HP path runs by returning early below.
-    if (hasUnprovenCustomGate(ctx, repriced, verification))
+    if (hasUnprovenCustomGate(ctx, repriced, verification, policyCredentialIds))
       return { completed: false, reason: "draw", refusals: [refusal("step-up", { cause: "custom-gate" })] };
 
     // Revocation + prior draws — fail-closed if the store errors (never fail-open).
@@ -293,14 +342,21 @@ export async function completeOrder(input: CompletionInput, ctx: CompletionConte
   // so the two completion paths cannot drift. `gate()` is the hard-block effect, enforced
   // whenever it applies (required/optional flag ignored); applicability is re-derived from the
   // RE-PRICED order (invariant 2) against the full line. Absent registry ⇒ no-op (additive).
-  if (hasUnprovenCustomGate(ctx, repriced, verification)) {
+  if (hasUnprovenCustomGate(ctx, repriced, verification, policyCredentialIds)) {
     return { completed: false, reason: "gate" };
   }
 
+  // Settlement runs HERE — after every gate, the re-price, and the age/custom-gate
+  // enforcement above have passed, and just before the record is written — so a refused
+  // order never settles. A per-input `settle` thunk (008: the delegated rail's
+  // gate-authorized `verifier.settle`, bound to the amount THIS path re-derived) takes
+  // precedence over the mount-time `ctx.settle(order)`; both gate completion identically
+  // (a throw ⇒ authorized-but-not-settled, no record — FR-013).
   let settlement: SettlementRecordLike | undefined;
-  if (ctx.settle) {
+  const settleFn = input.settle ?? (ctx.settle ? () => ctx.settle!(input.order) : undefined);
+  if (settleFn) {
     try {
-      settlement = await ctx.settle(input.order);
+      settlement = await settleFn();
     } catch (err) {
       return { completed: false, settlementError: (err as Error).message };
     }
@@ -316,6 +372,7 @@ export async function completeOrder(input: CompletionInput, ctx: CompletionConte
     gates: input.gates,
     completedAt: new Date().toISOString(),
     ...(settlement ? { settlement } : {}),
+    ...(input.trustLevel ? { trustLevel: input.trustLevel } : {}),
   });
   if (ctx.cart) await ctx.cart.clear();
   // Completed purchase: clear this order's age/loyalty verification.

@@ -158,6 +158,22 @@ export function defineCredential(c: {
         `Choose a different id — a custom credential cannot reuse a built-in's id.`,
     );
   }
+  // Only `gate()` is wired end-to-end for a CUSTOM credential today (the completion sweep
+  // enforces it; the credential-gate rail proves it). A custom `authorize()` or `discount()`
+  // is accepted but NEVER honored — authorize() is surfaced yet never enforced (fail-OPEN:
+  // the order completes unproven), and discount() verifies but applies no price change (inert).
+  // Reject both at construction — the SAME fail-fast posture as the reserved-id guard above —
+  // rather than accept a policy the seam can't honor (#59 findings 1 + 4; Principle III / IV).
+  // The built-ins that DO use these effects (payment → authorize, membership → discount) keep
+  // their own order-parameterized paths and never pass through defineCredential, so they are
+  // unaffected. Lift this guard once custom authorize/discount are wired through completion.
+  if (c.effect.kind === "authorize" || c.effect.kind === "discount") {
+    throw new Error(
+      `defineCredential: a custom "${c.effect.kind}" effect is not supported yet — only gate() is enforced ` +
+        `for a custom credential. Use effect: gate() to hard-block completion until the credential is proven. ` +
+        `(A custom ${c.effect.kind} would ${c.effect.kind === "authorize" ? "complete unproven (fail-open)" : "apply no discount (inert)"}.)`,
+    );
+  }
   return makeCredential({
     id: c.id,
     request: c.request,

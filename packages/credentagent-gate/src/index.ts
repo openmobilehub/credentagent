@@ -16,6 +16,10 @@
 export { CredentAgent } from "./client.js";
 export type { ExpressApp } from "./client.js";
 
+// ── Config preflight (#25) — `credentagent.doctor()` validates a deployment's config in
+// one place and returns typed plain data `{ ok, findings: [{ level, code, message, fix }] }`.
+export type { DoctorReport, DoctorFinding, DoctorLevel } from "./doctor.js";
+
 // ── Policy builders + extensibility ────────────────────────────────────────
 export { age, membership, payment, required, optional, defineCredential, dcql, gate, discount, authorize } from "./credentials.js";
 
@@ -50,6 +54,16 @@ export type { WebhookEvent, WebhookEndpoint, WebhookOptions, WebhookVerdict, Web
 // SAME shared path every rail uses (FR-008). The ceremony entity types let the host
 // type those seam adapters without re-declaring them.
 export { completeOrder } from "./ceremony/completion.js";
+
+// ── defineHost — the typed "bring your own host" seam contract ──────────────
+// The ergonomic facade over the above: give it your catalog + order store + completed-order
+// store and it BUILDS the shared completion, owns the per-order verification store, and
+// publishes every seam onto `app.locals.credentagent` — so a non-storefront host wires the
+// gate in three lines, with no `completeOrder` by hand and no raw `app.locals` plumbing.
+//   const host = defineHost({ catalog, orderStore, records, signingKey });
+//   host.publish(app); new CredentAgent({ walletOrigin }).mount(app);
+export { defineHost } from "./host.js";
+export type { DefineHostSpec, Host, HostApp } from "./host.js";
 
 // ── Cart Mandate (ap2.CartMandate) — signed, tamper-evident cart envelope ────
 // Additive + fail-closed: `issueCartMandate` seals a server-priced cart with the host's
@@ -143,8 +157,8 @@ export type {
 // catalog and re-checks the verdict against it, then re-runs its OWN policy over the
 // disclosed claims. An adapter that approves the wrong amount is still refused.
 //
-// This is the INTERFACE; a concrete adapter (Multipaz/UPay, @auth0/mdl, …) is host-side —
-// no processor-specific symbol lives in this package.
+// This is the INTERFACE — processor-agnostic by design; ANY external verifier + settlement
+// processor is a host-side adapter, and no processor-specific symbol lives in this package.
 export type { DelegatedVerifier, DelegatedVerdict, DelegatedHandoff } from "./ceremony/types.js";
 // The parameter types a host needs to implement `DelegatedVerifier`: `BindingFields` is the
 // SAME catalog-derived amount binding the dc-payment rail binds on (one definition, no drift).
@@ -154,6 +168,7 @@ export type { Origin, RequestLike } from "./ceremony/origin.js";
 // ── Public types ───────────────────────────────────────────────────────────
 export type {
   CredentAgentOptions,
+  Branding,
   ReaderIdentity,
   GateOrder,
   OrderLine,

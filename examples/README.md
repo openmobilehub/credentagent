@@ -9,12 +9,16 @@ Each is runnable against the two `@openmobilehub/credentagent-*` packages (build
 - [`with-x402-settlement.mjs`](#with-x402-settlementmjs--settle-payment-on-chain-via-the-settle-seam) — settle payment on-chain via the `settle` seam
 - [`storefront-redis.mjs`](storefront-redis.mjs) / [`storefront-firestore.mjs`](storefront-firestore.mjs) — injectable persistence (Upstash Redis stores / Firestore catalog source)
 - [`run-storefront/`](run-storefront/) — run THIS repo's storefront directly (stateful + stateless side by side)
+- [`delegated-verifier/`](delegated-verifier/) — the delegated-payment rail end-to-end with a LOCAL stand-in verifier (008): click a real delegated checkout, or boot with `VERDICT=wrong-amount|underage|declined` to watch the gate refuse a misbehaving verifier
 
 **Gating patterns** (identity-first, beyond commerce)
 - [`gate-any-action.mjs`](#gate-any-actionmjs--gate-a-non-commerce-action-identity-first-no-checkout) — gate a non-commerce action, no checkout
 
 **See it work — one page, click through it** (demo)
 - [`demo-hub/`](demo-hub/) — a single page that drives the real checkout AND shows the signed webhook arrive + get verified in a live feed. Start here to *see* the product. Plain-English guarantees + one-command proofs in [`demo-hub/GUARANTEES.md`](demo-hub/GUARANTEES.md).
+
+**Bring your own host — mount on your own server** (024)
+- [`bring-your-own-host.mjs`](bring-your-own-host.mjs) — not `createStorefront`: `defineHost({ catalog, orderStore, records, signingKey })` builds the shared completion + publishes the seams, then `credentagent.mount(app)` serves the proof pages. `host.complete(...)` enforces the gate server-side on your own completion path
 
 **Orders — checkout in one call** (009)
 - [`orders-checkout/`](orders-checkout/) — the real `credentagent.orders` API: `orders.serve(app)` wires the whole checkout, `orders.create()` returns a link, `order.settled` fires when it's paid
