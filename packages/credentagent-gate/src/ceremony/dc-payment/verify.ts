@@ -22,9 +22,9 @@ import * as jose from "jose";
 import { buildBindingFields, DEFAULT_LOYALTY_DISCOUNT_PCT } from "../mandate.js";
 import type { CeremonyOrder } from "../types.js";
 import type { Origin } from "../origin.js";
-import { buildTransactionData, decodeTransactionData, encodeTransactionData, hashTransactionData } from "./txData.js";
+import { buildTransactionData, decodeTransactionData, encodeTransactionData, hashTransactionData, txHashNameFromCose } from "./txData.js";
 import { openReaderContext } from "../mdoc/readerContext.js";
-import { decodeVpToken, extractTransactionDataHash, inspectAuthBlocks } from "../mdoc/mdoc.js";
+import { decodeVpToken, extractTransactionDataHash, extractTransactionDataHashAlg, inspectAuthBlocks } from "../mdoc/mdoc.js";
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
@@ -67,6 +67,12 @@ export interface DcMandate {
      * the wallet actually authorized THIS amount/payee.
      */
     transactionDataHash: string | null;
+    /**
+     * The COSE hash-algorithm id the wallet reported in `transaction_data_hash_alg`
+     * (e.g. -16 SHA-256, -43 SHA-384). Null ⇒ the wallet used Multipaz's SHA-256
+     * default and omitted the element. Gate 1 recomputes the hash with this algorithm.
+     */
+    transactionDataHashAlg?: number | null;
     /** Presence-only: the instrument was disclosed but not cryptographically verified. */
     presented: boolean;
     /**
@@ -148,8 +154,14 @@ export function runDcGates(mandate: DcMandate, origin: Origin, opts: { loyaltyDi
   const discount = cart.discount ?? 0;
   const discountOk = discount === 0 || discount === round2(lineSum * (pct / 100));
   const payable = round2(lineSum - discount);
-  const recomputed = hashTransactionData(ua.transactionData);
-  const hashOk = ua.transactionDataHash === recomputed;
+  // Honor the wallet's declared hash algorithm before comparing. A null/absent id ⇒
+  // Multipaz's SHA-256 default; a known COSE id ⇒ that hash; an UNKNOWN id ⇒ `nodeAlg`
+  // is null so we do NOT recompute and hashOk stays false (fail closed rather than
+  // silently assume SHA-256). The wallet's device-signed hash must equal our recompute
+  // over the exact transaction_data we sent, with the same algorithm.
+  const nodeAlg = txHashNameFromCose(ua.transactionDataHashAlg);
+  const recomputed = nodeAlg ? hashTransactionData(ua.transactionData, nodeAlg) : null;
+  const hashOk = nodeAlg !== null && ua.transactionDataHash === recomputed;
   const txd = decodeTransactionData(ua.transactionData);
   const amountOk = discountOk && payable === cart.total && payable === mandate.payment.amount && Number(txd.payload.amount) === payable;
   const currencyOk = txd.payload.currency === cart.currency;
@@ -160,7 +172,7 @@ export function runDcGates(mandate: DcMandate, origin: Origin, opts: { loyaltyDi
   results.push({
     gate: "Amount binding",
     pass: hashOk && amountOk && currencyOk && payeeOk,
-    detail: `hash ${hashOk ? "✓" : "✗"} · amount ${amountOk ? "✓" : "✗"} (${txd.payload.amount}/${mandate.payment.amount} vs ${payable}) · currency ${currencyOk ? "✓" : "✗"} · payee ${payeeOk ? "✓" : "✗"} (${txd.payload.payee?.id} vs ${expectedPayee})`,
+    detail: `hash ${hashOk ? "✓" : "✗"} (${nodeAlg ?? "unknown-alg"}) · amount ${amountOk ? "✓" : "✗"} (${txd.payload.amount}/${mandate.payment.amount} vs ${payable}) · currency ${currencyOk ? "✓" : "✗"} · payee ${payeeOk ? "✓" : "✗"} (${txd.payload.payee?.id} vs ${expectedPayee})`,
   });
 
   // Gate 2 — authorization present. On the REAL path, the wallet's mdoc carries
@@ -240,6 +252,8 @@ export function buildDcMandateFromPresentation(args: {
       transactionData: transactionDataB64,
       // The wallet's signed hash — re-checked in Gate 1 against our recomputed hash.
       transactionDataHash: extractTransactionDataHash(vpStr),
+      // The algorithm the wallet used, so Gate 1 recomputes with it (null ⇒ SHA-256).
+      transactionDataHashAlg: extractTransactionDataHashAlg(vpStr),
       presented: true,
       vpToken: vpStr,
       authBlocks: { hasIssuerAuth: blocks.hasIssuerAuth, hasDeviceAuth: blocks.hasDeviceAuth },
