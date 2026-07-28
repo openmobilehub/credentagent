@@ -132,20 +132,36 @@ class KeyedMutex {
 /** Convert plain dollars to integer cents (issue #104, fix 2). The public API stays plain
  *  dollars; internally the catalog + per-grant caps are cents, so every engine comparison is
  *  exact integers and an exact-budget spend on non-round prices ($4.90 × 3 == $14.70) is not
- *  lost to binary float drift (14.700000000000001 > 14.7). */
-function toCents(dollars: number): number {
-  return Math.round(dollars * 100);
+ *  lost to binary float drift (14.700000000000001 > 14.7). A genuinely sub-cent input (e.g.
+ *  $0.006, $1.005) is REJECTED with a clear error rather than silently rounded to a different
+ *  value (Codex P2): the smallest representable unit is one cent. The `1e-6` tolerance absorbs
+ *  the float noise `× 100` introduces on representable amounts (4.9 → 490.00000000000006). */
+function toCents(dollars: number, what = "amount"): number {
+  const cents = dollars * 100;
+  if (!Number.isFinite(cents) || Math.abs(cents - Math.round(cents)) > 1e-6) {
+    throw new Error(
+      `[credentagent] grants: ${what} $${dollars} has sub-cent precision; the smallest unit is one cent (round it, or use whole cents).`,
+    );
+  }
+  return Math.round(cents);
 }
 
-/** Re-price the plain-dollar catalog into integer cents for the engine. The engine is
- *  unit-agnostic (integer math on whatever unit it's handed), so feeding it cents keeps
- *  delegated.ts untouched; category is preserved for the `allow` bounds, which read dollars. */
-function centsCatalog(catalog: Record<string, CatalogEntry>): Record<string, CatalogEntry> {
-  const out: Record<string, CatalogEntry> = {};
-  for (const [sku, entry] of Object.entries(catalog)) {
-    out[sku] = typeof entry === "number" ? toCents(entry) : { ...entry, price: toCents(entry.price) };
-  }
-  return out;
+/** A LIVE cents view over the plain-dollar catalog (issue #104 fix 2; Codex P1). The engine
+ *  reads each item on demand, so WRAPPING the catalog (rather than snapshotting it) preserves
+ *  the pre-#135 per-read behaviour: a host that re-prices an item in memory, or adds one, is
+ *  honoured at the very next spend — and the sealed per-grant cap is enforced against the LIVE
+ *  price, not a stale one. Category is preserved for the `allow` bounds (which read the dollar
+ *  catalog directly). A sub-cent price throws when it is priced, the same class as an unknown item. */
+function centsCatalogView(catalog: Record<string, CatalogEntry>): Record<string, CatalogEntry> {
+  return new Proxy(catalog, {
+    get(target, prop, receiver) {
+      if (typeof prop !== "string") return Reflect.get(target, prop, receiver);
+      const entry = target[prop];
+      if (entry === undefined) return undefined;
+      const priced = (p: number) => toCents(p, `price of "${prop}"`);
+      return typeof entry === "number" ? priced(entry) : { ...entry, price: priced(entry.price) };
+    },
+  });
 }
 
 export class Grants {
@@ -162,9 +178,11 @@ export class Grants {
         "[credentagent] grants needs a priced catalog: new CredentAgent({ catalog: { coffee: 18, wine: { price: 21, minAge: 21 } } })",
       );
     }
-    // The engine runs in integer cents (fix 2): re-price the catalog once here, convert the
-    // per-grant caps at authorize, and convert each spend's amount back to dollars for the door.
-    this.gate ??= new DelegatedGate({ catalog: centsCatalog(this.deps.catalog) });
+    // The engine runs in integer cents (fix 2) via a LIVE cents view — not a snapshot — so a host
+    // that re-prices an item in memory is honoured at the next spend and the sealed cap is enforced
+    // against the live price (Codex P1). Per-grant caps convert at authorize (the sealed bounds
+    // don't move); each spend's amount converts back to dollars for the door.
+    this.gate ??= new DelegatedGate({ catalog: centsCatalogView(this.deps.catalog) });
     return this.gate;
   }
 
@@ -182,6 +200,10 @@ export class Grants {
   /** Open a grant awaiting the human's one-time approval. Returns immediately (status "pending"). */
   async create(opts: CreateGrantOptions): Promise<Grant> {
     this.engineGate(); // fail fast on a missing catalog at create, not first spend
+    // Reject sub-cent caps at configuration — the earliest + clearest point (Codex P2); never
+    // silently round the very amount the human is about to approve.
+    toCents(opts.budget, "budget");
+    toCents(opts.perSpend, "perSpend");
     const id = genGrantId();
     // SNAPSHOT + FREEZE the bounds at create (a P1 on #112): the record and the exposed handle
     // share this immutable copy, so neither a caller mutating `grant.allow` nor the original
@@ -306,13 +328,20 @@ export class Grants {
       presence: rec.engine?.presence ?? "delegated-demo",
       trustLevel: rec.engine?.trustLevel ?? "server-issued-demo",
       spend,
-      revoke: async () =>
-        // Serialized per grant (fix 1): a revoke racing an authorize never leaves a spendable
-        // grant — whichever takes the lock first wins, and the other sees the updated status.
-        this.locks.run(rec.id, async () => {
+      revoke: async () => {
+        // Revoke the engine's ledger IMMEDIATELY — OUTSIDE the per-grant queue — so a spend
+        // already in flight sees it at its atomic settle-time re-check and is refused: revoke
+        // wins even mid-spend (spec 009 FR §136–140; Codex P1). Holding the mutex across the
+        // in-flight spend and revoking inside it would queue the revoke behind that spend and let
+        // it settle first. Ledger `revoke()` is idempotent, so the serialized re-revoke is safe.
+        if (rec.engine) await rec.engine.revoke();
+        // Flip status + catch an authorize that raced us (it may seal a NEW engine after the line
+        // above) — serialized against _authorize so a revoked grant is never left spendable.
+        await this.locks.run(rec.id, async () => {
           if (rec.engine) await rec.engine.revoke();
           rec.status = "revoked";
-        }),
+        });
+      },
     };
   }
 }

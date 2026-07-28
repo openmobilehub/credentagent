@@ -217,7 +217,7 @@ describe("credentagent.grants — concurrency + money boundary (#104 port-forwar
   // BYPASS (#104 fix 2 — integer cents): 4.9 + 4.9 + 4.9 === 14.700000000000001 in binary float, so
   // priced in dollars the third spend is wrongly refused budget-exceeded. Priced in integer cents it
   // lands exactly on the budget. Revert grants.ts to feed the engine dollars (drop toCents/centsCatalog)
-  // and this goes red (the third spend refuses).
+  // and this goes red (the third spend refuses). (Control now lives in toCents/centsCatalogView.)
   it("BYPASS: $4.90 × 3 spends exactly to a $14.70 budget without a false refusal", async () => {
     const ca = new CredentAgent({ walletOrigin: "http://localhost:4000", catalog: { latte: 4.9 } });
     const gc = await ca.grants.create({ merchant: "utopia", budget: 14.7, perSpend: 4.9 });
@@ -254,5 +254,46 @@ describe("credentagent.grants — concurrency + money boundary (#104 port-forwar
     expect(g.status).toBe("authorized");
     for (let i = 0; i < 5; i++) expect((await g.spend({ idempotencyKey: `b${i}`, items: [{ sku: "coffee" }] })).ok).toBe(true); // 90 of 100
     expect(await g.spend({ idempotencyKey: "b5", items: [{ sku: "coffee" }] })).toMatchObject({ ok: false, code: "budget-exceeded" });
+  });
+
+  // BYPASS (#104 Codex P1 — revoke-wins mid-spend): a revoke landing WHILE a spend is in flight
+  // must refuse that spend. The engine's ledger revoke runs OUTSIDE the per-grant queue, so the
+  // in-flight spend's atomic settle-time re-check sees it. Move the ledger revoke back inside the
+  // mutex (behind the spend) and this goes red — the spend settles before revoke commits.
+  it("BYPASS: a revoke while a spend is IN FLIGHT refuses that spend (revoke-wins mid-spend)", async () => {
+    const g = await authorizedGrant(client());
+    const spendP = g.spend({ idempotencyKey: "p1", items: [{ sku: "coffee" }] }); // start, do NOT await
+    await g.revoke(); // lands mid-flight
+    const s = await spendP;
+    expect(s.ok).toBe(false); // ok:true here would mean the spend settled after revoke (the regression)
+    expect(s).toMatchObject({ code: "revoked" });
+  });
+
+  // BYPASS (#104 Codex P1 — live catalog): the engine re-prices per spend from the LIVE catalog,
+  // so an in-memory price change is honoured and the sealed cap is enforced against it. Snapshot
+  // the catalog at engine construction and this goes red (the later spends price at the stale $18).
+  it("BYPASS: prices each spend from the LIVE catalog — a re-price is honoured and the cap enforced against it", async () => {
+    const catalog: Record<string, { price: number; category: string }> = { coffee: { price: 18, category: "Beverages" } };
+    const ca = new CredentAgent({ walletOrigin: "http://localhost:4000", catalog });
+    const gc = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 40 });
+    await ca.grants._authorize(gc.id);
+    const g = (await ca.grants.retrieve(gc.id))!;
+    expect(await g.spend({ idempotencyKey: "p1", items: [{ sku: "coffee" }] })).toMatchObject({ ok: true, amount: 18 });
+    catalog.coffee.price = 25; // host re-prices in memory
+    expect(await g.spend({ idempotencyKey: "p2", items: [{ sku: "coffee" }] })).toMatchObject({ ok: true, amount: 25 }); // NEW price, not a stale $18
+    catalog.coffee.price = 50; // now above the $40 per-spend cap
+    expect(await g.spend({ idempotencyKey: "p3", items: [{ sku: "coffee" }] })).toMatchObject({ ok: false, code: "per-spend-exceeded" }); // cap enforced against the live price
+  });
+
+  // BYPASS (#104 Codex P2 — sub-cent): a value that can't be represented in whole cents is rejected
+  // with a clear error, never silently rounded. Make toCents round instead of throw and both legs
+  // go red (create resolves; the sub-cent price prices as $0.01 instead of throwing).
+  it("BYPASS: rejects sub-cent precision — at config for a cap, and when a sub-cent price is used", async () => {
+    await expect(client().grants.create({ merchant: "utopia", budget: 100, perSpend: 0.006 })).rejects.toThrow(/sub-cent/);
+    const ca = new CredentAgent({ walletOrigin: "http://localhost:4000", catalog: { trinket: 0.006 } });
+    const gc = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30 });
+    await ca.grants._authorize(gc.id);
+    const g = (await ca.grants.retrieve(gc.id))!;
+    await expect(g.spend({ idempotencyKey: "p1", items: [{ sku: "trinket" }] })).rejects.toThrow(/sub-cent/);
   });
 });
