@@ -178,6 +178,11 @@ export async function completeOrder(input: CompletionInput, ctx: CompletionConte
   // higher and is refused.
   const verification = await ctx.verificationStore.read(input.order.id);
   const loyaltyApplied = !!(verification as { loyalty?: { applied?: boolean } } | undefined)?.loyalty?.applied;
+  // Scope the custom-gate sweep to THIS order's policy (#59 finding 2). The mounted ceremony seam
+  // enriches `input.policyCredentialIds` for every rail (mount.ts, from the client's per-order
+  // policy) and `orders.serve` sets it from the stored created order; absent ⇒ the sweep stays
+  // registry-wide (fail-closed). Always server-side state — never the order token.
+  const policyCredentialIds = input.policyCredentialIds;
   const items: CartItemRef[] = input.order.lines.map((l) => ({ productId: l.id, quantity: l.quantity }));
   const repricedRaw = ctx.catalog.createOrder(items, input.order.id, { loyaltyApplied });
   if (repricedRaw.total !== input.order.total) return { completed: false, reason: "reprice" };
@@ -232,7 +237,7 @@ export async function completeOrder(input: CompletionInput, ctx: CompletionConte
     // is a completion path, so an applicable custom gate (prescription, license, …) with no
     // proof for THIS order must step up to a live human — the draw path must NOT skip the sweep
     // the HP path runs by returning early below.
-    if (hasUnprovenCustomGate(ctx, repriced, verification, input.policyCredentialIds))
+    if (hasUnprovenCustomGate(ctx, repriced, verification, policyCredentialIds))
       return { completed: false, reason: "draw", refusals: [refusal("step-up", { cause: "custom-gate" })] };
 
     // Revocation + prior draws — fail-closed if the store errors (never fail-open).
@@ -315,7 +320,7 @@ export async function completeOrder(input: CompletionInput, ctx: CompletionConte
   // so the two completion paths cannot drift. `gate()` is the hard-block effect, enforced
   // whenever it applies (required/optional flag ignored); applicability is re-derived from the
   // RE-PRICED order (invariant 2) against the full line. Absent registry ⇒ no-op (additive).
-  if (hasUnprovenCustomGate(ctx, repriced, verification, input.policyCredentialIds)) {
+  if (hasUnprovenCustomGate(ctx, repriced, verification, policyCredentialIds)) {
     return { completed: false, reason: "gate" };
   }
 

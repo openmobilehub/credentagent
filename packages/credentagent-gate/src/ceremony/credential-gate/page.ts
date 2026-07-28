@@ -116,7 +116,6 @@ ${pageHead(title, extraCss)}
     ${totalLine}
     <button id="go-dc" class="btn btn-primary">${escapeHtml(cta)}</button>
     <button id="go" class="btn btn-secondary"${demoAvailable ? "" : " disabled"}>${escapeHtml(demoCta)}</button>
-    ${demoAvailable ? "" : `<p class="small">The instant demo isn't available for this credential — it checks a claim the demo can't synthesize (only simple yes/no claims are supported). Prove it with your wallet using the button above.</p>`}
     <div id="log"></div>
   </div>
   <div id="done">✓ Done — returning to checkout… <a id="back" href="${escapeHtml(returnUrl)}">continue now ›</a></div>
@@ -128,6 +127,9 @@ ${pageHead(title, extraCss)}
     // store-less server can reconstruct THIS order on verify.
     const CART = new URLSearchParams(location.search).get("cart");
     const DEMO_CLAIMS = ${JSON.stringify(demoClaims)};
+    // Whether the instant-demo button can actually prove this credential (#59 finding 5). Drives
+    // the coherent unsupported-browser guidance below so we never point at a disabled button (#131).
+    const DEMO_AVAILABLE = ${demoAvailable};
     const RETURN_URL = ${JSON.stringify(returnUrl)};
     const log = document.getElementById("log");
     const goDc = document.getElementById("go-dc");
@@ -154,9 +156,22 @@ ${pageHead(title, extraCss)}
       fetch("/credentagent/credential/request" + location.search).then((r) => r.json()).then((d) => { reqData = d; }).catch(() => {});
     }
 
-    if (!navigator.credentials || !navigator.credentials.get) {
+    // One coherent recovery message for every combination of wallet support × demo availability —
+    // never disable both buttons and then point each at the other (#131 review). The wallet
+    // ceremony needs the Digital Credentials API; the instant demo needs a boolean-claim credential.
+    const DC_API = !!(navigator.credentials && navigator.credentials.get);
+    if (!DC_API && !DEMO_AVAILABLE) {
+      // Neither path works on this device. Direct the buyer to a supported one, not a dead button.
+      goDc.disabled = true;
+      notice("This credential needs a digital wallet on a supported device — Chrome 141+ on Android, or iOS 18+. This browser can't run the wallet ceremony, and the instant demo can't prove this credential. Open this page on a supported device to continue.");
+    } else if (!DC_API) {
+      // Wallet ceremony unavailable, but the instant demo can stand in.
       goDc.disabled = true;
       notice("This browser doesn't support the Digital Credentials API (needs Chrome 141+/Android or iOS 18+). Use the <strong>instant demo</strong> button.");
+    } else if (!DEMO_AVAILABLE) {
+      // The instant demo can't prove this credential, but the wallet button works — point there.
+      notice("The instant demo isn't available for this credential — use the <strong>wallet</strong> button above.");
+      prefetch();
     } else {
       prefetch();
     }

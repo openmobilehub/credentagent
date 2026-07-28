@@ -147,6 +147,26 @@ describe("US1 — finding 5: the instant-demo is fenced when a credential needs 
     expect(res.status).toBe(200);
     expect(res.text).not.toMatch(/id="go"[^>]*disabled/); // professional_license verifies boolean true → demo works
   });
+
+  // PR #131 review (P2): when the demo is fenced AND the browser lacks the Digital Credentials API,
+  // both buttons are disabled — the page must NOT tell the user to use the other (disabled) button.
+  // The unsupported-browser guidance is driven by DEMO_AVAILABLE, which the page wires per credential.
+  it("#131: the demo-fenced page wires DEMO_AVAILABLE=false so an unsupported browser gets a coherent path", async () => {
+    const h = harness([stringLicense]);
+    h.seed("ORD-L", [{ id: "contractor-drill", quantity: 1 }]);
+    const res = await request(h.app).get("/credentagent/credential").query({ order: "ORD-L", cred: "string_license" });
+    expect(res.status).toBe(200);
+    expect(res.text).toContain("const DEMO_AVAILABLE = false"); // drives the no-wallet + no-demo branch
+    // The coherent recovery message points at a supported DEVICE, never at the disabled demo button.
+    expect(res.text).toContain("Open this page on a supported device");
+  });
+
+  it("control: a boolean-claim credential wires DEMO_AVAILABLE=true (the demo stays a valid fallback)", async () => {
+    const h = harness();
+    h.seed("ORD-L", [{ id: "contractor-drill", quantity: 1 }]);
+    const res = await request(h.app).get("/credentagent/credential").query({ order: "ORD-L", cred: "professional_license" });
+    expect(res.text).toContain("const DEMO_AVAILABLE = true");
+  });
 });
 
 describe("US1 — an unregistered or reserved credential id is refused (FR-013)", () => {

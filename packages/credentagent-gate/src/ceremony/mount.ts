@@ -78,6 +78,12 @@ export interface CeremonySeams {
    *  `app.locals.credentagent` so the host's `completion` seam can hand it to
    *  `completeOrder` for the custom-gate sweep. Holds CODE (never the wire). */
   credentialRegistry?: ReadonlyMap<string, Credential>;
+  /** Per-order resolved policy (order id → the policy's custom-credential ids), remembered by
+   *  `requirements()` and passed by `CredentAgent.mount()` (#59 finding 2 / PR #131). When present,
+   *  `mountCeremony` enriches every rail's completion call with `policyCredentialIds` from it, so
+   *  the custom-gate sweep is scoped to THIS order's policy under the plain `mount(app, ceremony)`
+   *  path — not only via `orders.serve`. Absent / order missing ⇒ the registry-wide sweep (fail-closed). */
+  orderPolicies?: ReadonlyMap<string, readonly string[]>;
   /** Where a rail returns the buyer after they prove (the "continue to checkout" link +
    *  the post-proof redirect). Absent ⇒ each rail's default `/checkout?order=<id>` (the
    *  storefront's route). A host that serves its checkout elsewhere — e.g. `orders.serve`
@@ -106,6 +112,9 @@ export interface CeremonyContext {
   /** The gate's credential registry (007) — the rails read it to serve a custom
    *  credential's own request/verify. Absent when no CredentAgent registry was passed. */
   credentialRegistry?: ReadonlyMap<string, Credential>;
+  /** Per-order resolved policy (#59 finding 2 / PR #131) — `mountCeremony` uses it to scope the
+   *  completion sweep to THIS order's policy. Absent ⇒ the sweep stays registry-wide (fail-closed). */
+  orderPolicies?: ReadonlyMap<string, readonly string[]>;
   /** Build the buyer's return-to-checkout URL for an order (absent ⇒ the rail default). */
   returnUrl?: (orderId: string) => string;
 }
@@ -141,6 +150,7 @@ export function mountCeremony(app: CeremonyApp, options: Partial<CeremonySeams> 
   const statelessOrders = options.statelessOrders ?? locals.statelessOrders ?? false;
   const readerIdentity = options.readerIdentity ?? locals.readerIdentity;
   const credentialRegistry = options.credentialRegistry ?? locals.credentialRegistry;
+  const orderPolicies = options.orderPolicies ?? locals.orderPolicies;
   const returnUrl = options.returnUrl ?? locals.returnUrl;
   let signingKey = options.signingKey ?? locals.signingKey;
 
@@ -171,15 +181,32 @@ export function mountCeremony(app: CeremonyApp, options: Partial<CeremonySeams> 
     signingKey = randomBytes(32).toString("hex");
   }
 
+  // Scope the completion sweep to THIS order's policy under the mounted path (#59 finding 2 /
+  // PR #131). requirements() remembers each order's policy in `orderPolicies`; wrap the host's
+  // completion seam so EVERY rail's `ctx.completion(input)` carries `policyCredentialIds` — the
+  // passkey/dc-payment rails can't set it themselves. Never overrides an explicit one (orders.serve
+  // sets it from the stored created order); an order the map never saw falls back to the whole
+  // registry (fail-closed). Purely additive when no `orderPolicies` was passed.
+  const baseCompletion = completion as CompletionSeam;
+  const scopedCompletion: CompletionSeam = orderPolicies
+    ? (input) =>
+        baseCompletion(
+          input.policyCredentialIds !== undefined
+            ? input
+            : { ...input, policyCredentialIds: orderPolicies.get(input.order.id) },
+        )
+    : baseCompletion;
+
   const ctx: CeremonyContext = {
     verificationStore: verificationStore as VerificationStore,
     orderStore: orderStore as CeremonyOrderStore,
     catalog: catalog as CeremonyCatalog,
-    completion: completion as CompletionSeam,
+    completion: scopedCompletion,
     signingKey,
     origin,
     statelessOrders,
     ...(credentialRegistry ? { credentialRegistry } : {}),
+    ...(orderPolicies ? { orderPolicies } : {}),
     ...(settlement ? { settlement } : {}),
     ...(verifier ? { verifier } : {}),
     ...(readerIdentity ? { readerIdentity } : {}),

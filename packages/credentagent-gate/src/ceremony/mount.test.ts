@@ -7,7 +7,7 @@
 import { describe, it, expect } from "vitest";
 import { CredentAgent } from "../client.js";
 import { MemoryVerificationStore } from "../store.js";
-import { required } from "../credentials.js";
+import { required, defineCredential, dcql, gate } from "../credentials.js";
 import type { Credential } from "../types.js";
 import { professionalLicense } from "./credential-gate/__fixtures__/customCredential.js";
 import { mountCeremony, resolveOrder, type CeremonyApp, type CeremonyContext, type CeremonySeams } from "./mount.js";
@@ -174,6 +174,66 @@ describe("CredentAgent.mount — publishes the registry so completion enforces c
     await h.credentagent.store.write("ORD-L", { verifiedGates: { professional_license: true } });
     const res = await h.completion(orderInput());
     expect(res.completed).toBe(true);
+  });
+});
+
+// PR #131 review (P1): under the plain mount(app, ceremony) path the passkey/dc-payment rails call
+// completion WITHOUT policyCredentialIds, so before this fix a no-appliesTo custom gate that ANY
+// order registered would permanently deadlock a LATER order whose policy omitted it (the F2 bug,
+// but only for orders.serve was it scoped). mount() now remembers each order's policy and the
+// mounted ceremony seam sets input.policyCredentialIds from it — so the sweep is scoped for the
+// mounted path too. These go through the WRAPPED seam mount() publishes on app.locals.
+describe("CredentAgent.mount — the ceremony seam scopes the sweep to THIS order's policy (#131)", () => {
+  const globalGate = defineCredential({
+    id: "global_gate",
+    request: dcql({ docType: "org.example.global.1", claims: ["ok"] }),
+    verify: (c) => c.ok === true,
+    effect: gate(), // NO appliesTo → "applies to all" in the registry-wide sweep
+    ui: { label: "Global gate", action: "Prove" },
+  });
+  const plainOrder = (id: string) => ({ id, total: 199, currency: "USD", lines: [{ id: "aurora-headphones", quantity: 1, unitPrice: 199 }] });
+
+  function wiredWithGlobalGate() {
+    const app = { locals: {} as Record<string, unknown> };
+    const credentagent = new CredentAgent({ walletOrigin: "https://shop.example" });
+    const records = new Map<string, CompletedRecord>();
+    const completion = (i: CompletionInput) =>
+      completeOrder(i, {
+        catalog,
+        verificationStore: credentagent.store,
+        records: { read: async (id) => records.get(id), write: async (rec) => void records.set(rec.orderId, rec) },
+        cart: { clear: async () => {} },
+        credentialRegistry: (app.locals.credentagent as { credentialRegistry?: ReadonlyMap<string, Credential> } | undefined)?.credentialRegistry,
+      });
+    credentagent.mount(app, { orderStore: { read: async () => null }, catalog, completion, signingKey: "k" });
+    credentagent.requirements(plainOrder("ORD-A"), [required(globalGate)]); // registers global_gate (registry + policy[A])
+    credentagent.requirements(plainOrder("ORD-B"), []); // B's policy OMITS it
+    return { app, credentagent, completion, records };
+  }
+
+  const inputFor = (id: string): CompletionInput => {
+    const order = catalog.createOrder([{ productId: "aurora-headphones", quantity: 1 }], id);
+    return { order, mandateId: "m", amount: order.total, currency: "USD", method: "test", gates: [{ gate: "g", pass: true, detail: "" }] };
+  };
+  const wrappedSeam = (app: { locals: Record<string, unknown> }) =>
+    (app.locals.credentagent as { completion: (i: CompletionInput) => Promise<{ completed: boolean; reason?: string }> }).completion;
+
+  it("the MOUNTED (wrapped) seam scopes order B to its own policy → it completes (no cross-order deadlock)", async () => {
+    const h = wiredWithGlobalGate();
+    const res = await wrappedSeam(h.app)(inputFor("ORD-B"));
+    expect(res).toMatchObject({ completed: true }); // B never required global_gate
+  });
+
+  it("BYPASS: the RAW (unwrapped) host seam sweeps registry-wide → order B deadlocks (proves the wrap is the fix)", async () => {
+    const h = wiredWithGlobalGate();
+    const res = await h.completion(inputFor("ORD-B")); // the same seam, but WITHOUT the mount-path scoping
+    expect(res).toMatchObject({ completed: false, reason: "gate" });
+  });
+
+  it("control: order A (whose policy DID require the gate) is still refused through the mounted seam", async () => {
+    const h = wiredWithGlobalGate();
+    const res = await wrappedSeam(h.app)(inputFor("ORD-A"));
+    expect(res).toMatchObject({ completed: false, reason: "gate" }); // scoping didn't disable in-policy enforcement
   });
 });
 
