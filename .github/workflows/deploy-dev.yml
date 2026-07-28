@@ -21,6 +21,14 @@ on:
     branches: [main]
   workflow_dispatch: {}
 
+# Serialize runs: two quick merges to main must deploy in order, or an OLDER run
+# finishing last would silently move the dev endpoint back to its commit (and the
+# smoke would test whichever deploy won, not its own). Queue, don't cancel — a
+# cancelled run's `vercel deploy` can still complete server-side and race anyway.
+concurrency:
+  group: deploy-dev
+  cancel-in-progress: false
+
 env:
   # Identifiers, not credentials: which Vercel team/project `vercel deploy` targets.
   VERCEL_ORG_ID: team_hJvCfLus8Jc0Q77qB5bOi6gP # dfzuluagas-projects
