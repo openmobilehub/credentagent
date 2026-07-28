@@ -147,4 +147,25 @@ describe("device-signed grants — FR-3/6 controls", () => {
     const res = await request(app).get(`/credentagent/grants/${g.id}/sign/request`).set("Host", HOST);
     expect(res.status).toBe(404);
   });
+
+  // FR-4 provenance: a device grant reports the trust level its VERIFY BACKEND attested, with the
+  // attestor recorded — the gate never upgrades or rewrites it. The in-gate backend attests
+  // "device-signed" / "gate"; a delegated backend (fast-follow) would attest a stronger, issuer-backed
+  // level, relayed verbatim. This pins _authorizeDevice to relay whatever evidence it is handed.
+  it("_authorizeDevice relays the attested trustLevel + verifiedBy VERBATIM (no self-judgment)", async () => {
+    const ca = makeAgent();
+    // In-gate evidence.
+    const gate = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30, signing: "device" });
+    await ca.grants._authorizeDevice(gate.id, { boundsHash: "h1", signedAt: "2026-07-28T00:00:00Z", credentialDoctype: "org.openwallet.payment.1", verifiedBy: "gate", trustLevel: "device-signed" });
+    const gateAuthed = (await ca.grants.retrieve(gate.id))!;
+    expect(gateAuthed.trustLevel).toBe("device-signed");
+    expect(gateAuthed.mandate?.verifiedBy).toBe("gate");
+
+    // A stronger, issuer-backed level from an external verifier is relayed verbatim WITH its id.
+    const delegated = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30, signing: "device" });
+    await ca.grants._authorizeDevice(delegated.id, { boundsHash: "h2", signedAt: "2026-07-28T00:00:00Z", credentialDoctype: "org.openwallet.payment.1", verifiedBy: "upay-verifier", trustLevel: "issuer-verified" });
+    const delegatedAuthed = (await ca.grants.retrieve(delegated.id))!;
+    expect(delegatedAuthed.trustLevel).toBe("issuer-verified"); // relayed, not the gate's own claim
+    expect(delegatedAuthed.mandate?.verifiedBy).toBe("upay-verifier");
+  });
 });

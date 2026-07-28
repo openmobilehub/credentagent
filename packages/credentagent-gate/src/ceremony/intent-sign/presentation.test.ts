@@ -11,7 +11,7 @@
 // trust anchor: the device key rides in a self-minted MSO (no VICAL check — #14).
 import { describe, it, expect } from "vitest";
 import { buildIntentSignRequest } from "./request.js";
-import { verifyIntentPresentation, memoryNonceGuard } from "./verify.js";
+import { verifyIntentPresentation, memoryNonceGuard, type IntentVerifyBackend } from "./verify.js";
 import { devSimulateWalletSignature } from "./simulate.js";
 import { boundsHash, type IntentBoundsInput } from "./bounds.js";
 import type { Origin } from "../origin.js";
@@ -128,5 +128,54 @@ describe("intent-sign REAL device-signed presentation", () => {
     const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, nonceGuard: memoryNonceGuard() });
     expect(out.ok).toBe(false);
     if (!out.ok) expect(out.reason).toMatch(/account/);
+  });
+});
+
+// FR-4 — the verify SEAM: honesty is whatever the BACKEND attests, recorded with provenance.
+// The gate never judges trust itself — the in-gate backend can only ever say "device-signed",
+// and a stronger level must come from (and be traceable to) an external verifier.
+describe("intent-sign verify seam (FR-4) — no self-upgrade, verbatim relay", () => {
+  it("BYPASS: the in-gate backend NEVER emits a trustLevel above device-signed (no self-upgrade)", async () => {
+    const b = bounds();
+    const { req, result } = await signFor(b); // default backend = in-gate
+    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, nonceGuard: memoryNonceGuard() });
+    expect(out.ok).toBe(true);
+    if (out.ok) {
+      expect(out.trustLevel).toBe("device-signed");
+      expect(out.trustLevel).not.toBe("issuer-verified"); // the gate cannot vouch for an anchor it never checked
+      expect(out.verifiedBy).toBe("gate");
+    }
+  });
+
+  it("relays a delegated backend's attested trustLevel + verifiedBy VERBATIM (never upgrades or rewrites)", async () => {
+    const b = bounds();
+    const { req, result } = await signFor(b);
+    // A stub for the #103-style external checker: it attests an issuer-backed level. It runs only
+    // AFTER the transport checks (decrypt, bounds equality, nonce) pass — so the presentation is real;
+    // only the TRUST decision is delegated.
+    const delegated: IntentVerifyBackend = async () => ({
+      ok: true,
+      trustLevel: "issuer-verified",
+      verifiedBy: "upay-verifier",
+      docType: "org.openwallet.payment.1",
+      disclosed: { account: "acct_delegated" },
+    });
+    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, nonceGuard: memoryNonceGuard(), backend: delegated });
+    expect(out.ok).toBe(true);
+    if (out.ok) {
+      expect(out.trustLevel).toBe("issuer-verified"); // relayed verbatim — a stronger label
+      expect(out.verifiedBy).toBe("upay-verifier"); // …always traceable to WHO attested it
+    }
+  });
+
+  it("still enforces the gate's OWN checks even under a delegated backend (bounds equality holds)", async () => {
+    const b = bounds({ budget: 200 });
+    const { req, result } = await signFor(b);
+    const delegated: IntentVerifyBackend = async () => ({ ok: true, trustLevel: "issuer-verified", verifiedBy: "upay-verifier", docType: "org.openwallet.payment.1", disclosed: { account: "x" } });
+    // A tampered record (2000 vs the sealed 200) is refused BEFORE the backend runs — delegation
+    // moves TRUST, never BINDING (the gate still re-derives boundsHash and requires equality).
+    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: bounds({ budget: 2000 }), origin: ORIGIN, nonceGuard: memoryNonceGuard(), backend: delegated });
+    expect(out.ok).toBe(false);
+    if (!out.ok) expect(out.reason).toMatch(/bounds mismatch/);
   });
 });
