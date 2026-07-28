@@ -15,6 +15,7 @@
 // crypto is real; the wallet's device/issuer trust anchor is not — never a real safety
 // control. Self-contained: takes the re-priced amount + lines, not a demo Order type.
 
+import type { Branding } from "../../types.js";
 import { pageHead, brandHeader, orderSummaryCard, trustFooter, settlingBar, completionHandoffBanner, railCompleteScript } from "../theme.js";
 
 export interface DcPaymentLine {
@@ -39,6 +40,8 @@ export interface DcPaymentPageArgs {
   /** The order-derived progress rail HTML (from `checkoutRail`), built by the route which
    *  holds the full re-priced order. Absent ⇒ no rail (never a hardcoded one). */
   rail?: string;
+  /** Host brand for this page (from `ctx.branding`). Absent ⇒ the built-in look. */
+  branding?: Branding;
 }
 
 // The canonical disclosed instrument the instant-demo button presents — it goes
@@ -76,10 +79,10 @@ export function renderDcPaymentPage(args: DcPaymentPageArgs): string {
   .gate.pass { color: var(--success); } .gate.fail { color: var(--danger); }`;
   return `<!doctype html>
 <html lang="en">
-${pageHead(`Authorize payment (cross-device) · ${order}`, extraCss)}
+${pageHead(`Authorize payment (cross-device) · ${order}`, extraCss, args.branding)}
 <body>
   <div class="wrap">
-  ${brandHeader({ h1: "Authorize payment", tagline: "Authorize from your wallet" })}
+  ${brandHeader({ h1: "Authorize payment", tagline: "Authorize from your wallet" }, args.branding)}
   ${rail}
   ${summary}
   <div class="card">

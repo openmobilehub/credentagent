@@ -60,6 +60,7 @@ import {
   decodeCartMandateParam,
   renderRequirements,
   MemoryVerificationStore,
+  type Branding,
   type CartItemRef,
   type Credential,
   type Grants,
@@ -894,7 +895,11 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
     // #73: bake THIS order's current verification signature so a standing tab reloads when a
     // step is made elsewhere (age verified, loyalty applied), not only on final completion.
     const statusRevision = verificationRevision(v);
-    res.type("html").send(renderRequirements(order, requires, verification, { ...(payment ? { payment } : {}), paid, statusUrl, statusRevision }));
+    // Carry the host brand onto the checkout hub too, so it matches the linked gate pages
+    // (issue #61). `credentagent.mount(store.app)` publishes it here alongside the other seams;
+    // read it at request time (mount runs after this route is defined).
+    const branding = (app.locals.credentagent as { branding?: Branding } | undefined)?.branding;
+    res.type("html").send(renderRequirements(order, requires, verification, { ...(payment ? { payment } : {}), paid, statusUrl, statusRevision, ...(branding ? { branding } : {}) }));
   });
   app.post("/checkout/place-order", async (req: Request, res: Response) => {
     // statelessOrders: reconstruct + verify from the body's `cart` mandate; else the store.

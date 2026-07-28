@@ -37,15 +37,27 @@
   .body { padding:16px 18px 20px; display:flex; flex-direction:column; gap:8px; }
   .body h3 { margin:0; font-size:18px; }
   .body p { margin:0; color:var(--muted); font-size:14px; }
-  .dl { align-self:flex-start; margin-top:6px; background:linear-gradient(135deg,var(--accent),var(--accent2));
+  .cardfoot { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:6px; }
+  .dl { align-self:flex-start; background:linear-gradient(135deg,var(--accent),var(--accent2));
     color:#0a0e1c; font-weight:700; text-decoration:none; padding:9px 14px; border-radius:10px; font-size:14px; }
   .dl.off { background:#232a44; color:var(--muted); font-weight:600; cursor:not-allowed; }
-  .trow .dl { white-space:nowrap; }
+  .trow .dl { white-space:nowrap; margin-top:6px; }
+  .qr { width:96px; height:96px; flex:none; background:#fff; border-radius:8px; padding:6px; }
+  .qr svg { display:block; width:100%; height:100%; }
+  .qr:empty { display:none; }
+  .cardfoot .qr { width:72px; height:72px; }
+  details.certs { margin-top:14px; color:var(--muted); font-size:14px; }
+  details.certs summary { cursor:pointer; color:var(--ink); }
+  details.certs p { margin:8px 0; }
+  details.certs ul { margin:6px 0 0; padding-left:18px; }
+  details.certs li { margin:5px 0; }
   ol.steps { color:var(--muted); padding-left:20px; }
   ol.steps li { margin:6px 0; }
   ol.steps b { color:var(--ink); }
+  .adb { color:var(--muted); font-size:13px; margin-top:10px; }
+  .adb code { font-size:12px; }
   footer { margin-top:40px; color:var(--muted); font-size:13px; border-top:1px solid var(--line); padding-top:16px; }
-  @media (max-width:640px) { .grid { grid-template-columns:1fr; } .trow { flex-direction:column; align-items:flex-start; } }
+  @media (max-width:640px) { .grid { grid-template-columns:1fr; } }
 </style>
 </head>
 <body>
@@ -54,34 +66,46 @@
     <h1>CredentAgent — Demo Wallet Credentials</h1>
     <p class="lede">Load these into a Multipaz wallet on your phone to satisfy the
       CredentAgent consent gates cross-device. Import the trust lists first, then
-      the credentials.</p>
+      the credentials. On a phone, scan a QR; on a laptop, use the download link.</p>
   </header>
 
   <div class="banner">
     <b>Demo trust only.</b> These credentials are signed by a self-generated demo
     PKI (dev IACA / document signer), not a real issuer. The wire crypto is real;
-    the <b>trust anchor is not</b>. Do not treat a passing gate as a real safety
-    or payment control.
+    the <b>trust anchor is not</b> (trust level: presence-only-demo). Do not treat a
+    passing gate as a real safety or payment control.
   </div>
 
-  <h2>1 · Trust setup — import first</h2>
+  <h2>1 · Trust setup — add these first</h2>
+  <p class="lede" style="margin-top:-4px">Import both lists before the credentials,
+    so nothing shows a red "unknown issuer" or "unknown verifier" warning.</p>
   <div class="trust">
       <div class="trow">
         <div class="tmeta">
           <div class="tname">Issuer trust list (VICAL)</div>
           <div class="tdesc">Signed VICAL wrapping the Utopia demo IACA. Import this so the wallet trusts credentials issued under it.</div>
           <code>utopia.vical</code>
+          <a class="dl" href="./trust/utopia.vical" download>&#8681; Download</a>
         </div>
-        <a class="dl" href="./trust/utopia.vical" download>&#8681; Download</a>
+        <div class="qr" data-qr="./trust/utopia.vical" aria-label="QR code to open on a phone"></div>
       </div>
       <div class="trow">
         <div class="tmeta">
           <div class="tname">Reader trust list (RICAL)</div>
           <div class="tdesc">Signed RICAL wrapping the Utopia demo reader certificate, so a ceremony from this reader shows as a trusted verifier.</div>
           <code>utopia.rical</code>
+          <a class="dl" href="./trust/utopia.rical" download>&#8681; Download</a>
         </div>
-        <a class="dl" href="./trust/utopia.rical" download>&#8681; Download</a>
+        <div class="qr" data-qr="./trust/utopia.rical" aria-label="QR code to open on a phone"></div>
       </div></div>
+  
+    <details class="certs">
+      <summary>Raw certificates (fallback)</summary>
+      <p>The PEM certificates the signed lists above wrap. You don't need these
+        for the normal import — use them only to inspect a certificate or import
+        an anchor by hand if a device rejects the signed list.</p>
+      <ul><li><a href="./certs/iaca-cert.pem"><code>iaca-cert.pem</code></a> — Issuer root (IACA) — the anchor inside the VICAL.</li><li><a href="./certs/ds-cert.pem"><code>ds-cert.pem</code></a> — Document signer that signs each credential (chains to the IACA).</li><li><a href="./certs/reader-cert.pem"><code>reader-cert.pem</code></a> — Reader leaf the gate presents — the anchor inside the RICAL.</li><li><a href="./certs/reader-root-cert.pem"><code>reader-root-cert.pem</code></a> — Reader root the reader leaf chains to.</li><li><a href="./certs/list-signer-cert.pem"><code>list-signer-cert.pem</code></a> — Signs the VICAL and RICAL themselves.</li></ul>
+    </details>
 
   <h2>2 · Credentials</h2>
   <div class="grid">
@@ -91,7 +115,10 @@
           <h3>Driver License (mDL)</h3>
           <p>ISO mobile driving licence. Carries age_over_21=true and age_over_65=true, so one card satisfies both age gates.</p>
           <code>org.iso.18013.5.1.mDL</code>
-          <a class="dl" href="./credentials/mdl.mpzpass" download>&#8681; Download .mpzpass</a>
+          <div class="cardfoot">
+            <a class="dl" href="./credentials/mdl.mpzpass" download>&#8681; Download .mpzpass</a>
+            <div class="qr" data-qr="./credentials/mdl.mpzpass" aria-label="QR code to open on a phone"></div>
+          </div>
         </div>
       </article>
       <article class="card">
@@ -100,7 +127,10 @@
           <h3>Digital Payment</h3>
           <p>Payment instrument for the amount-bound dc-payment gate. Carries the issuer-signed instrument claims; the amount is bound live at ceremony time by the wallet's device signature.</p>
           <code>org.multipaz.payment.sca.1</code>
-          <a class="dl" href="./credentials/payment.mpzpass" download>&#8681; Download .mpzpass</a>
+          <div class="cardfoot">
+            <a class="dl" href="./credentials/payment.mpzpass" download>&#8681; Download .mpzpass</a>
+            <div class="qr" data-qr="./credentials/payment.mpzpass" aria-label="QR code to open on a phone"></div>
+          </div>
         </div>
       </article>
       <article class="card">
@@ -109,7 +139,10 @@
           <h3>Membership</h3>
           <p>Utopia loyalty membership (membership_number + tier) for the membership gate.</p>
           <code>org.multipaz.loyalty.1</code>
-          <a class="dl" href="./credentials/membership.mpzpass" download>&#8681; Download .mpzpass</a>
+          <div class="cardfoot">
+            <a class="dl" href="./credentials/membership.mpzpass" download>&#8681; Download .mpzpass</a>
+            <div class="qr" data-qr="./credentials/membership.mpzpass" aria-label="QR code to open on a phone"></div>
+          </div>
         </div>
       </article>
       <article class="card">
@@ -118,23 +151,47 @@
           <h3>Professional License</h3>
           <p>Licensed-trade credential (license_active=true).</p>
           <code>org.example.license.1</code>
-          <a class="dl" href="./credentials/professional-license.mpzpass" download>&#8681; Download .mpzpass</a>
+          <div class="cardfoot">
+            <a class="dl" href="./credentials/professional-license.mpzpass" download>&#8681; Download .mpzpass</a>
+            <div class="qr" data-qr="./credentials/professional-license.mpzpass" aria-label="QR code to open on a phone"></div>
+          </div>
         </div>
       </article></div>
 
-  <h2>3 · How to import</h2>
+  <h2>3 · How to import (phone-first)</h2>
   <ol class="steps">
-    <li>On the phone, open this page in the browser and download the <b>VICAL</b>
-      and <b>RICAL</b> from section 1.</li>
-    <li>Import them into the Multipaz wallet's trust settings so the demo issuer
-      and reader are trusted.</li>
-    <li>Download each <b>.mpzpass</b> and open it with the Multipaz wallet to add
-      the credential.</li>
-    <li>Run a CredentAgent ceremony; the matching card should satisfy the gate
-      with no red trust warning.</li>
+    <li>On the phone, open this page and — from section 1 — open the <b>VICAL</b>
+      and <b>RICAL</b> (tap the QR target or the download link). Choose
+      <b>Open with Multipaz Wallet</b> so the demo issuer and reader become trusted.</li>
+    <li>Back here, open each <b>.mpzpass</b> the same way and confirm the card is
+      added to the wallet.</li>
+    <li>Run a CredentAgent ceremony; the matching card should satisfy the gate with
+      no red trust warning.</li>
   </ol>
+  <p class="adb"><b>adb fallback</b> (edge cases — a browser that won't hand the file
+    to the wallet, or a headless test device): pull the file to the phone and open it
+    explicitly, e.g. <code>adb push utopia.vical /sdcard/Download/</code> then open it
+    from Files with the Multipaz wallet, or drive the wallet's import intent directly
+    with <code>adb shell am start</code>.</p>
 
-  <footer>Built 2026-07-11 16:12 UTC. Part of Open Mobile Hub · demo PKI, presence-only trust level.</footer>
+  <footer>Built 2026-07-26 19:09 UTC. Part of Open Mobile Hub · demo PKI, presence-only trust level.</footer>
 </div>
+
+<!-- QR codes are rendered client-side so index.html stays deployment-agnostic:
+     the phone-scannable URL is resolved from THIS page's origin at load time. -->
+<script src="./vendor/qrcode.js"></script>
+<script>
+  (function () {
+    if (typeof qrcode !== "function") return; // links still work without the QR enhancement
+    document.querySelectorAll("[data-qr]").forEach(function (el) {
+      var abs = new URL(el.getAttribute("data-qr"), window.location.href).href;
+      var qr = qrcode(0, "M");           // auto version, medium error correction
+      qr.addData(abs);
+      qr.make();
+      el.innerHTML = qr.createSvgTag({ cellSize: 4, margin: 1, scalable: true });
+      el.setAttribute("title", abs);      // hover shows the exact absolute URL
+    });
+  })();
+</script>
 </body>
 </html>
