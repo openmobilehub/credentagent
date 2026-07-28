@@ -138,6 +138,56 @@ const store = createStorefront({
    ceremony's shared `completeOrder` records the order (re-priced, age re-enforced, cart cleared), it
    reflects the completed — discounted — total.
 
+## Grant widgets — a visual card for a spending grant
+
+A **spending grant** is a bounded authority the human approves ONCE so their AI agent can buy
+**while they're away** — a total budget, a per-purchase cap, and optionally which products or
+categories are allowed (the `create-spending-grant` / `get-grant-status` / `spend-from-grant` /
+`revoke-grant` tools, registered when you pass `grants` to `createStorefront`). Instead of describing
+that grant to the human as a sentence, the four grant tools render it as a **grant card** — a visual
+**MCP App** (an interactive widget the model host shows inline in the conversation, the same mechanism
+as the shopping picker): a budget bar that depletes as the agent spends, the per-purchase cap as a
+marker, the allowed products/categories as tiles/chips, and the lifecycle (needs-approval → active →
+running-low → spent / revoked / declined).
+
+**Nothing changes for the host or the agent** — the grant tools already carry the widget resource,
+exactly as the shopping tools do. The card is a **display, never a control**: every limit is enforced
+server-side (the widget only ever *shows* the server's state, so a stale card can never unlock
+anything), and every card — stock or custom — carries the honest trust line through a frame the public
+API cannot omit.
+
+Inside the widget (own-the-code, `src/ui/grants/`):
+
+```tsx
+import { GrantCard, grantViews, defineGrantView, BudgetMeter } from "./grants";
+
+// Zero-config: picks the most specific fitting view automatically — a single-SKU grant renders the
+// flagship product card (name/price/image + "up to 3 per purchase"), a category grant renders chips,
+// a pending grant renders the Approve/Decline consent card, a spent/revoked grant renders a closed
+// card with no live buttons.
+<GrantCard grant={grant} />
+
+// Choose or reorder the candidate views (e.g. the compact one-line meter for a dense list):
+<GrantCard grant={grant} views={[grantViews.budgetMeter]} />
+
+// Extend WITHOUT forking — a custom view is the SAME contract the stock gallery is built from. Its
+// body receives ONLY the inert GrantViewData projection (never a live grant handle, so it structurally
+// cannot spend or revoke), plus the token set; reuse the exported <BudgetMeter/> for the validated,
+// accessible meter. The frame (chrome + the non-omittable trust line) is applied for you.
+const wineClubRow = defineGrantView({
+  id: "wine-club-row",
+  fits: (g) => (g.allow.categories.includes("Wine") ? 60 : false),   // a specificity score, or false
+  body: ({ grant }) => <BudgetMeter grant={grant} />,
+});
+<GrantCard grant={grant} views={[wineClubRow, ...grantViews.all]} accent={branding?.accent} />
+```
+
+`grant` here is the server-derived **`GrantViewData`** projection the grant tools emit as their
+structured content — plain, JSON-safe data with the money **already computed server-side** (the widget
+never re-derives an amount). The host's `branding.accent` themes the healthy budget fill and links;
+the running-low amber and spent-out red are **fixed** status colors a brand can never recolor. Consent
+still happens on the server-rendered approval page the card deep-links to — never inside the widget.
+
 ## Pure pricing model (no server)
 
 The `.` entry point is the pure, catalog-injected pricing core — useful standalone or to fork:
