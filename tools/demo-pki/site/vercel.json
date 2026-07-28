@@ -21,6 +21,13 @@
         { "key": "Content-Type", "value": "application/cbor" },
         { "key": "Content-Disposition", "value": "attachment" }
       ]
+    },
+    {
+      "source": "/certs/(.*).pem",
+      "headers": [
+        { "key": "Content-Type", "value": "application/x-pem-file; charset=utf-8" },
+        { "key": "Content-Disposition", "value": "inline" }
+      ]
     }
   ]
 }

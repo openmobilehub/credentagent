@@ -12,6 +12,7 @@
 // Credentials API the page points the buyer at the instant-demo button. Every surface
 // states trust_level "presence-only-demo" (CT11 / Principle VII / FR-011): the wire
 // crypto is real; the issuer trust anchor is not — never a real safety control.
+import type { Branding } from "../../types.js";
 import { pageHead, brandHeader, trustFooter } from "../theme.js";
 
 export interface CredentialPageArgs {
@@ -34,6 +35,13 @@ export interface CredentialPageArgs {
    *  presents (derived from the credential's requested claim leaves → true). Goes
    *  through the SAME server-side `verify` as a real wallet presentation. */
   demoClaims?: Record<string, unknown>;
+  /** Whether the instant-demo button can actually satisfy this credential's `verify`
+   *  (#59 finding 5). The demo synthesizes boolean-`true` for every requested claim leaf;
+   *  a credential whose `verify` checks a NON-boolean claim (e.g. `typeof license_no ===
+   *  "string"`) can't be proven that way. Default true; the credential-gate route sets it
+   *  false for such a credential so the page disables the demo button with a clear note
+   *  instead of offering a tap that silently fails. */
+  demoAvailable?: boolean;
   /**
    * Where to send the buyer after this gate succeeds — the checkout hub, so the
    * sequence flows (hub → gate → back to hub with this gate ✓ → next gate).
@@ -46,6 +54,8 @@ export interface CredentialPageArgs {
   /** The order-derived progress rail HTML (from `checkoutRail`), built by the route which
    *  holds the full re-priced order. Absent ⇒ no rail (never a hardcoded one). */
   rail?: string;
+  /** Host brand for this page (from `ctx.branding`). Absent ⇒ the built-in look. */
+  branding?: Branding;
 }
 
 function escapeHtml(s: string): string {
@@ -58,6 +68,9 @@ export function renderCredentialPage(args: CredentialPageArgs): string {
   const isAge = args.kind === "age";
   const isMembership = args.kind === "membership";
   const isCustom = !isAge && !isMembership; // 007: any non-built-in credential id
+  // #59 finding 5: a built-in demo always synthesizes a passing claim; a CUSTOM credential's
+  // demo works only when the route confirmed the synthesized boolean claim satisfies its verify.
+  const demoAvailable = args.demoAvailable ?? true;
   const customLabel = args.label ?? args.kind;
   const title = isAge
     ? `Verify your age (${minimumAge}+)`
@@ -96,16 +109,16 @@ export function renderCredentialPage(args: CredentialPageArgs): string {
 
   return `<!doctype html>
 <html lang="en">
-${pageHead(title, extraCss)}
+${pageHead(title, extraCss, args.branding)}
 <body>
   <div class="wrap">
-  ${brandHeader({ h1: title, tagline })}
+  ${brandHeader({ h1: title, tagline }, args.branding)}
   ${rail}
   <div class="card">
     <p class="lede">${escapeHtml(lede)}</p>
     ${totalLine}
     <button id="go-dc" class="btn btn-primary">${escapeHtml(cta)}</button>
-    <button id="go" class="btn btn-secondary">${escapeHtml(demoCta)}</button>
+    <button id="go" class="btn btn-secondary"${demoAvailable ? "" : " disabled"}>${escapeHtml(demoCta)}</button>
     <div id="log"></div>
   </div>
   <div id="done">✓ Done — returning to checkout… <a id="back" href="${escapeHtml(returnUrl)}">continue now ›</a></div>
@@ -117,6 +130,9 @@ ${pageHead(title, extraCss)}
     // store-less server can reconstruct THIS order on verify.
     const CART = new URLSearchParams(location.search).get("cart");
     const DEMO_CLAIMS = ${JSON.stringify(demoClaims)};
+    // Whether the instant-demo button can actually prove this credential (#59 finding 5). Drives
+    // the coherent unsupported-browser guidance below so we never point at a disabled button (#131).
+    const DEMO_AVAILABLE = ${demoAvailable};
     const RETURN_URL = ${JSON.stringify(returnUrl)};
     const log = document.getElementById("log");
     const goDc = document.getElementById("go-dc");
@@ -143,9 +159,22 @@ ${pageHead(title, extraCss)}
       fetch("/credentagent/credential/request" + location.search).then((r) => r.json()).then((d) => { reqData = d; }).catch(() => {});
     }
 
-    if (!navigator.credentials || !navigator.credentials.get) {
+    // One coherent recovery message for every combination of wallet support × demo availability —
+    // never disable both buttons and then point each at the other (#131 review). The wallet
+    // ceremony needs the Digital Credentials API; the instant demo needs a boolean-claim credential.
+    const DC_API = !!(navigator.credentials && navigator.credentials.get);
+    if (!DC_API && !DEMO_AVAILABLE) {
+      // Neither path works on this device. Direct the buyer to a supported one, not a dead button.
+      goDc.disabled = true;
+      notice("This credential needs a digital wallet on a supported device — Chrome 141+ on Android, or iOS 18+. This browser can't run the wallet ceremony, and the instant demo can't prove this credential. Open this page on a supported device to continue.");
+    } else if (!DC_API) {
+      // Wallet ceremony unavailable, but the instant demo can stand in.
       goDc.disabled = true;
       notice("This browser doesn't support the Digital Credentials API (needs Chrome 141+/Android or iOS 18+). Use the <strong>instant demo</strong> button.");
+    } else if (!DEMO_AVAILABLE) {
+      // The instant demo can't prove this credential, but the wallet button works — point there.
+      notice("The instant demo isn't available for this credential — use the <strong>wallet</strong> button above.");
+      prefetch();
     } else {
       prefetch();
     }
@@ -181,6 +210,7 @@ ${pageHead(title, extraCss)}
     });
 
     go.addEventListener("click", async () => {
+      if (go.disabled) return; // #59 finding 5: demo fenced off for a non-boolean-claim credential
       go.disabled = true;
       try {
         step("→ verify (presence-only)");

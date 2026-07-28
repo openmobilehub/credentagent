@@ -5,8 +5,8 @@ Release checklist for the two npm packages extracted from this repo:
 - **`@openmobilehub/credentagent-gate`** — the credential/payment Gate (`new CredentAgent()`, `credentagent.mount(app)`).
 - **`@openmobilehub/credentagent-storefront`** — the reference storefront (`createStorefront()`).
 
-Both are at `0.2.0`, Apache-2.0, ESM, ship their own types, and declare `publishConfig.access: public`
-(required for a scoped public package).
+Both version in lockstep (bump them together), Apache-2.0, ESM, ship their own types, and declare
+`publishConfig.access: public` (required for a scoped public package).
 
 ## Pre-flight (verified by the pre-publish audit)
 
@@ -22,22 +22,38 @@ Both are at `0.2.0`, Apache-2.0, ESM, ship their own types, and declare `publish
 - [x] LICENSE + README present in both packages and in `files`.
 - [x] Full suite green (`npm test`) including the security bypass tests.
 
-## Publish order (load-bearing)
+## How a release ships (the GitHub release IS the publish trigger)
 
-`@openmobilehub/credentagent-storefront` depends on `@openmobilehub/credentagent-gate` via a semver range
-(`^0.2.0`, **not** `workspace:*`), so it only resolves once the gate is on the registry:
+`.github/workflows/publish.yml` publishes **both** packages to npm when a GitHub release is
+**published** — gate first, then storefront (load-bearing: the storefront depends on the gate
+via a semver range, `^x.y.z` and **not** `workspace:*`, which only resolves once the gate is on
+the registry; the workflow encodes that order and uses the repo's `NPM_TOKEN` secret).
 
-1. Publish **`@openmobilehub/credentagent-gate@0.2.0`** first.
-2. Then publish **`@openmobilehub/credentagent-storefront@0.2.0`**.
+**Never run `npm publish` by hand.** A manual publish makes the release-triggered run fail on
+the already-published versions — exactly what happened with v0.3.1: published manually
+2026-07-26, release created after, and the `publish` run went red on the duplicate. The manual
+path also skips the record: 0.3.0/0.3.1 shipped tagless and had to be backfilled.
 
-```bash
-npm run build                                            # build both workspaces' dist/
-npm publish -w @openmobilehub/credentagent-gate --access public
-npm publish -w @openmobilehub/credentagent-storefront --access public
-```
+1. **Version bump** — bump both packages together (lockstep) in a PR; merge it.
+2. **Tag + release — this is the publish.** One lightweight tag per release on the merged bump
+   commit (lockstep versions ⇒ one tag marks both), then publish the release:
 
-> Requires `@openmobilehub` org publish rights on npm (`npm whoami` / `npm login`). This is a
-> maintainer action — CI does not publish.
+   ```bash
+   PUBLISHED_COMMIT=abc1234        # <- substitute the merged bump commit, then run:
+   git tag vX.Y.Z "$PUBLISHED_COMMIT" && git push origin vX.Y.Z
+   gh release create vX.Y.Z --title "vX.Y.Z — a plain-language headline" --notes-file notes.md --latest
+   ```
+
+3. **Verify** — watch the `publish` run go green and `npm view` show the new versions, then open
+   the **quickstart catch-up PR** (bump `examples/quickstart` to the new versions): that PR's
+   `quickstart-smoke` is the real post-publish check — a clean install of the PUBLISHED
+   packages — and `deployed-smoke` re-runs the same assertions against the live demo once the
+   merge deploys.
+
+Release notes are **public copy, written for someone who didn't follow development**: plain
+language, each feature stated by what it does for the integrator, and the honesty gate (below)
+applies to them exactly as it does to the READMEs — never let notes present a presence-only gate
+as a real safety control.
 
 ## Optional polish (non-blocking, deferred)
 

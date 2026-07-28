@@ -7,6 +7,18 @@
   box-sizing: border-box;
 }
 
+/* The widget is an app shell: a scrolling product list with a pinned footer
+   (see app.module.css — .main / .grid / .footer). That shell's `height: 100%`
+   only resolves if every ancestor has a definite height. Without it the shell
+   collapses to content height, the grid's `overflow-y: auto` never engages, and
+   the footer (with Checkout) is pushed below the height the host clips to — on a
+   phone that makes Checkout unreachable (issue #108). Establish the chain here. */
+html,
+body,
+#root {
+  height: 100%;
+}
+
 body {
   margin: 0;
   background: transparent;

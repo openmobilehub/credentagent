@@ -15,9 +15,13 @@ import { MemoryVerificationStore } from "../../store.js";
 import { age, payment, membership, defineCredential, gate, dcql } from "../../credentials.js";
 import type { Credential } from "../../types.js";
 import { mountCeremony, type CeremonyApp, type CeremonySeams } from "../mount.js";
-import type { CeremonyCatalog, DelegatedVerifier } from "../types.js";
+import type { CeremonyCatalog, CeremonyOrderStore, CompletionInput, CompletionResult, DelegatedVerdict, DelegatedVerifier } from "../types.js";
+import { completeOrder, type CompletedRecord } from "../completion.js";
 import { sealReference, openReference } from "./referenceToken.js";
 import { mergeDelegatedDcql, delegatedPolicyEntries } from "./dcql.js";
+import { issueCartMandate } from "../cartMandate.js";
+import { renderDelegatedPage } from "./page.js";
+import { buildDelegatedRequest } from "./request.js";
 
 const SECRET = "stable-test-secret";
 
@@ -142,35 +146,41 @@ describe("delegated rail — combined DCQL merge", () => {
     // Both builders derive the DCQL id from the doctype's last segment → "1" for each.
     expect(payment.in("usd").request.credentials[0].id).toBe(membership.discount(10).request.credentials[0].id);
 
-    const merged = mergeDelegatedDcql([
+    const { query, idMap } = mergeDelegatedDcql([
       { credentialId: "payment", query: payment.in("usd").request },
       { credentialId: "membership", query: membership.discount(10).request },
     ]);
-    const ids = merged.credentials.map((c) => c.id);
+    const ids = query.credentials.map((c) => c.id);
     expect(ids).toEqual(["payment", "membership"]);
     expect(new Set(ids).size).toBe(ids.length); // unique — the property #90 breaks
+    // The id map routes each merged id back to its policy credential (used at /verify).
+    expect(idMap.get("payment")).toBe("payment");
+    expect(idMap.get("membership")).toBe("membership");
   });
 
   it("preserves a source query's alternatives as its own credential_set, remapped", () => {
     // age.over(21) is mDL OR EU-PID — that OR must survive the merge, or the wallet is
     // asked to hold BOTH.
-    const merged = mergeDelegatedDcql([
+    const { query, idMap } = mergeDelegatedDcql([
       { credentialId: "age", query: age.over(21).request },
       { credentialId: "payment", query: payment.in("usd").request },
     ]);
-    expect(merged.credentials.map((c) => c.id)).toEqual(["age_mdl", "age_eupid", "payment"]);
-    expect(merged.credential_sets).toEqual([
+    expect(query.credentials.map((c) => c.id)).toEqual(["age_mdl", "age_eupid", "payment"]);
+    expect(query.credential_sets).toEqual([
       { options: [["age_mdl"], ["age_eupid"]] }, // still an OR
       { options: [["payment"]] },                 // explicit, not implicit AND
     ]);
+    // Both age documents map back to the ONE policy credential `age`.
+    expect(idMap.get("age_mdl")).toBe("age");
+    expect(idMap.get("age_eupid")).toBe("age");
   });
 
   it("always emits credential_sets — never leaves the implicit AND-everything default", () => {
     // Without sets, DCQL requires EVERY entry; a merged query that omitted them would
     // silently demand the wallet hold every credential at once.
-    const merged = mergeDelegatedDcql([{ credentialId: "payment", query: payment.in("usd").request }]);
-    expect(merged.credential_sets).toBeDefined();
-    expect(merged.credential_sets!.length).toBeGreaterThan(0);
+    const { query } = mergeDelegatedDcql([{ credentialId: "payment", query: payment.in("usd").request }]);
+    expect(query.credential_sets).toBeDefined();
+    expect(query.credential_sets!.length).toBeGreaterThan(0);
   });
 });
 
@@ -218,19 +228,13 @@ describe("delegated rail — registration is opt-in", () => {
     expect(app.routes.filter((r) => r.includes("/credentagent/delegated"))).toEqual([]);
   });
 
-  it("registers the page + request routes when a verifier IS configured", () => {
+  it("registers the page + request + verify routes when a verifier IS configured", () => {
     const app = routeApp();
     mountCeremony(app, seams({ verifier: stubVerifier() }));
     expect(app.routes).toContain("GET /credentagent/delegated");
     expect(app.routes).toContain("GET /credentagent/delegated/request");
-  });
-
-  it("does NOT register a verify route yet — an unenforcing completion path must not exist (#87)", () => {
-    const app = routeApp();
-    mountCeremony(app, seams({ verifier: stubVerifier() }));
-    // Fail-closed by absence: until the non-delegable re-checks land, a POST /verify
-    // that recorded a completion would be a fail-open surface.
-    expect(app.routes).not.toContain("POST /credentagent/delegated/verify");
+    // The verify route now exists (#87) — and carries the non-delegable re-checks below.
+    expect(app.routes).toContain("POST /credentagent/delegated/verify");
   });
 });
 
@@ -282,5 +286,339 @@ describe("delegated rail — GET /request", () => {
       res,
     );
     expect(out.code).toBe(404);
+  });
+});
+
+// ── S3 (#87): the completion leg — the non-delegable re-checks ────────────────
+//
+// These run POST /verify through the REAL `completeOrder`, so the enforcement is the
+// production path, not a stand-in. The bypass tests each PROVE the gate refuses a
+// MISBEHAVING verifier — which is only expressible because the seam is injectable (a
+// correct verifier never returns a wrong-amount approval). Crucially, every refusal also
+// asserts `verifier.settle` was NOT called: money must not move when the gate refuses.
+
+/** A verifier whose verdict + settlement are fully controllable, with spies so a test can
+ *  assert what the gate did and did NOT call. The default is a valid whiskey verdict. */
+function verifierReturning(over: Partial<DelegatedVerdict> = {}, settleImpl?: () => unknown): DelegatedVerifier {
+  return {
+    buildRequest: vi.fn(async () => ({ reference: "ref-1", handoff: {} })),
+    consume: vi.fn(
+      async (): Promise<DelegatedVerdict> => ({
+        approved: true,
+        trust_level: "issuer-verified",
+        claims: { age_mdl: { age_over_21: true }, payment: { issuer_name: "Bank", holder_name: "Jo" } },
+        binding: { amount: 124, currency: "USD", payee: { id: "shop.example" } },
+        ...over,
+      }),
+    ),
+    settle: vi.fn(async () => (settleImpl ? (settleImpl() as { network: string; txId: string; status: string }) : { network: "test-processor", txId: "tx_1", status: "settled" })),
+  };
+}
+
+const tokenFor = (orderId: string, reference = "ref-1") => sealReference({ reference, orderId }, SECRET);
+
+interface CompletingHarness {
+  verify(body: Record<string, unknown>): Promise<{ code: number; body?: unknown }>;
+  records: Map<string, CompletedRecord>;
+  verification: MemoryVerificationStore;
+  verifier: DelegatedVerifier;
+}
+
+/** Wire POST /verify to the REAL completeOrder over in-memory stores + the given policy.
+ *  `stateless: true` mounts FR-007 mode with an order store that THROWS on read, so any
+ *  test that passes also proves the order came from the signed cart mandate alone. */
+function harness(
+  policy: Credential[],
+  verifier: DelegatedVerifier,
+  items: { productId: string; quantity: number }[] = [{ productId: "oak-whiskey", quantity: 1 }],
+  opts: { stateless?: boolean } = {},
+): CompletingHarness {
+  const verification = new MemoryVerificationStore();
+  const records = new Map<string, CompletedRecord>();
+  const registry = new Map(policy.map((c) => [c.id, c] as const));
+  const orderStore: CeremonyOrderStore = opts.stateless
+    ? { read: async () => { throw new Error("orderStore must NOT be read under statelessOrders"); } }
+    : { read: async (id) => catalog.createOrder(items, id) };
+  const completion = (input: CompletionInput): Promise<CompletionResult> =>
+    completeOrder(input, {
+      catalog,
+      verificationStore: verification,
+      records: { read: (id) => records.get(id), write: (r) => void records.set(r.orderId, r) },
+      credentialRegistry: registry,
+      signingKey: SECRET,
+    });
+  const app = routeApp();
+  mountCeremony(app, { verificationStore: verification, orderStore, catalog, completion, signingKey: SECRET, credentialRegistry: registry, verifier, ...(opts.stateless ? { statelessOrders: true } : {}) });
+  const handler = app.handlers.get("POST /credentagent/delegated/verify")!;
+  return {
+    records,
+    verification,
+    verifier,
+    async verify(body) {
+      const { res, out } = resDouble();
+      await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(
+        { query: {}, headers: { host: "shop.example" }, protocol: "https", body },
+        res,
+      );
+      return out;
+    },
+  };
+}
+
+describe("delegated rail — POST /verify happy path", () => {
+  it("approved + correct binding + age_over_21 + payment → records, relays trust, settles once", async () => {
+    const verifier = verifierReturning();
+    const h = harness([payment.in("usd"), age.over(21)], verifier);
+    const out = await h.verify({ order: "ORD-1", referenceToken: tokenFor("ORD-1") });
+    const body = out.body as { completed: boolean; trust_level: string; settlement?: unknown };
+    expect(body.completed).toBe(true);
+    expect(body.trust_level).toBe("issuer-verified");
+    expect(verifier.settle).toHaveBeenCalledTimes(1); // settlement is gate-authorized, and it fired
+    const rec = h.records.get("ORD-1")!;
+    expect(rec.method).toBe("delegated");
+    expect(rec.amount).toBe(124);
+    expect(rec.trustLevel).toBe("issuer-verified"); // relayed onto the record (FR-008)
+    expect(rec.settlement).toBeTruthy();
+    // per-order verification cleared on completion (invariant 4)
+    expect(await h.verification.read("ORD-1")).toBeUndefined();
+  });
+});
+
+describe("delegated rail — POST /verify bypass tests (each refusal must also NOT settle)", () => {
+  it("REFUSES a verdict binding the WRONG AMOUNT — money does not move (invariant 2/3)", async () => {
+    const verifier = verifierReturning({ binding: { amount: 1, currency: "USD", payee: { id: "shop.example" } } });
+    const h = harness([payment.in("usd"), age.over(21)], verifier);
+    const out = await h.verify({ order: "ORD-1", referenceToken: tokenFor("ORD-1") });
+    expect((out.body as { completed: boolean }).completed).toBe(false);
+    expect(h.records.get("ORD-1")).toBeUndefined();
+    expect(verifier.settle).not.toHaveBeenCalled();
+  });
+
+  it("REFUSES a verdict binding a FOREIGN PAYEE (invariant 6)", async () => {
+    const verifier = verifierReturning({ binding: { amount: 124, currency: "USD", payee: { id: "attacker.example" } } });
+    const h = harness([payment.in("usd"), age.over(21)], verifier);
+    const out = await h.verify({ order: "ORD-1", referenceToken: tokenFor("ORD-1") });
+    expect((out.body as { completed: boolean }).completed).toBe(false);
+    expect(verifier.settle).not.toHaveBeenCalled();
+  });
+
+  it("REFUSES when the verifier APPROVED but only 18+ was disclosed on a 21+ cart (invariant 1/5)", async () => {
+    // The killer case, and the whole reason settlement is gate-authorized: the reference
+    // verifier's own age rule passes at 18+, so it can APPROVE what our 21+ policy rejects.
+    const verifier = verifierReturning({ approved: true, claims: { age_mdl: { age_over_18: true }, payment: {} } });
+    const h = harness([payment.in("usd"), age.over(21)], verifier);
+    const out = await h.verify({ order: "ORD-1", referenceToken: tokenFor("ORD-1") });
+    const body = out.body as { completed: boolean; reason?: string };
+    expect(body.completed).toBe(false);
+    expect(body.reason).toBe("age");
+    expect(verifier.settle).not.toHaveBeenCalled(); // refused BEFORE settlement
+    // Control: the SAME shape but proving 21+ completes — so the refusal above was the age
+    // policy, not an unrelated failure.
+    const ok = harness([payment.in("usd"), age.over(21)], verifierReturning());
+    expect(((await ok.verify({ order: "ORD-2", referenceToken: tokenFor("ORD-2") })).body as { completed: boolean }).completed).toBe(true);
+  });
+
+  it("REFUSES when the verifier did NOT approve", async () => {
+    const verifier = verifierReturning({ approved: false, reason: "card not from a trusted issuer" });
+    const h = harness([payment.in("usd"), age.over(21)], verifier);
+    const out = await h.verify({ order: "ORD-1", referenceToken: tokenFor("ORD-1") });
+    expect((out.body as { completed: boolean }).completed).toBe(false);
+    expect(verifier.settle).not.toHaveBeenCalled();
+  });
+
+  // BYPASS (invariant 5 — load-bearing): a REFUSED verdict must write NO verification state.
+  // A realistic adapter parses the disclosed claims BEFORE its trust check (Multipaz parses,
+  // then TrustManager.verify fails), so `approved: false` can still carry `age_over_21: true`
+  // — exactly what this fixture's default claims do. That state is read by EVERY completion
+  // path (completeOrder's age sweep), so writing it here would leave the order marked
+  // age-verified: the delegated verify is correctly refused, but the buyer could then complete
+  // the SAME order through the passkey / place-order path on the strength of a claim the
+  // verifier explicitly refused to vouch for. Delete the `verdict.approved === true` guard in
+  // routes.ts and this goes red.
+  it("writes NO age proof when the verifier did not approve (no cross-path bleed)", async () => {
+    const verifier = verifierReturning({ approved: false, reason: "card not from a trusted issuer" });
+    const h = harness([payment.in("usd"), age.over(21)], verifier);
+    const out = await h.verify({ order: "ORD-1", referenceToken: tokenFor("ORD-1") });
+    expect((out.body as { completed: boolean }).completed).toBe(false);
+    // The refused presentment's claims must never become this order's age proof.
+    expect((await h.verification.read("ORD-1"))?.ageVerified).not.toBe(true);
+  });
+
+  it("REFUSES (400) a reference token minted for ANOTHER order — never even fetches a verdict (invariant 4)", async () => {
+    const verifier = verifierReturning();
+    const h = harness([payment.in("usd"), age.over(21)], verifier);
+    const out = await h.verify({ order: "ORD-1", referenceToken: tokenFor("ORD-OTHER") });
+    expect(out.code).toBe(400);
+    expect(verifier.consume).not.toHaveBeenCalled();
+    expect(verifier.settle).not.toHaveBeenCalled();
+  });
+
+  it("REFUSES an age-restricted order whose policy carries no age credential — no age proof written", async () => {
+    // Payment-only policy on a 21+ cart: applyDelegatedPolicy writes no ageVerified, so the
+    // shared age sweep refuses. Guards against the delegated path skipping the age gate.
+    const verifier = verifierReturning({ claims: { payment: {} } });
+    const h = harness([payment.in("usd")], verifier);
+    const out = await h.verify({ order: "ORD-1", referenceToken: tokenFor("ORD-1") });
+    expect((out.body as { completed: boolean; reason?: string }).reason).toBe("age");
+    expect(verifier.settle).not.toHaveBeenCalled();
+  });
+
+  it("enforces a custom gate() credential over the disclosed claims (invariant 1)", async () => {
+    const rx = defineCredential({
+      id: "prescription",
+      request: dcql({ docType: "org.example.rx.1", claims: ["rx_valid"] }),
+      verify: (c) => c.rx_valid === true,
+      effect: gate(),
+      ui: { label: "Prescription", action: "Present your prescription" },
+    });
+    const items = [{ productId: "aurora-headphones", quantity: 1 }]; // no age, isolates the custom gate
+    const bindingHp = { amount: 199, currency: "USD", payee: { id: "shop.example" } };
+    // rx not disclosed → refused with reason "gate", no settle
+    const bad = verifierReturning({ binding: bindingHp, claims: { payment: {} } });
+    const h1 = harness([payment.in("usd"), rx], bad, items);
+    expect(((await h1.verify({ order: "ORD-1", referenceToken: tokenFor("ORD-1") })).body as { reason?: string }).reason).toBe("gate");
+    expect(bad.settle).not.toHaveBeenCalled();
+    // rx_valid disclosed true → completes
+    const good = verifierReturning({ binding: bindingHp, claims: { prescription: { rx_valid: true }, payment: {} } });
+    const h2 = harness([payment.in("usd"), rx], good, items);
+    expect(((await h2.verify({ order: "ORD-2", referenceToken: tokenFor("ORD-2") })).body as { completed: boolean }).completed).toBe(true);
+  });
+});
+
+describe("delegated rail — settlement gating + trust honesty", () => {
+  it("a settlement failure is authorized-but-not-settled: no record (FR-013)", async () => {
+    const verifier = verifierReturning({}, () => { throw new Error("processor down"); });
+    const h = harness([payment.in("usd"), age.over(21)], verifier);
+    const out = await h.verify({ order: "ORD-1", referenceToken: tokenFor("ORD-1") });
+    const body = out.body as { completed: boolean; settlementError?: string };
+    expect(body.completed).toBe(false);
+    expect(body.settlementError).toContain("processor down");
+    expect(h.records.get("ORD-1")).toBeUndefined();
+  });
+
+  it("relays the verdict's trust_level VERBATIM — never upgrades it (Principle VII)", async () => {
+    const verifier = verifierReturning({ trust_level: "presence-only-demo" });
+    const h = harness([payment.in("usd"), age.over(21)], verifier);
+    const out = await h.verify({ order: "ORD-1", referenceToken: tokenFor("ORD-1") });
+    expect((out.body as { trust_level: string }).trust_level).toBe("presence-only-demo");
+    expect(h.records.get("ORD-1")!.trustLevel).toBe("presence-only-demo");
+  });
+
+  it("an identity-only delegated gate (no payment) completes with NO settlement call", async () => {
+    // age-only policy on a non-age item so the age sweep is the only gate; nothing to settle.
+    const verifier = verifierReturning({ binding: { amount: 199, currency: "USD", payee: { id: "shop.example" } }, claims: { age_mdl: { age_over_21: true } } });
+    const h = harness([age.over(21)], verifier, [{ productId: "aurora-headphones", quantity: 1 }]);
+    const out = await h.verify({ order: "ORD-1", referenceToken: tokenFor("ORD-1") });
+    expect((out.body as { completed: boolean }).completed).toBe(true);
+    expect(verifier.settle).not.toHaveBeenCalled(); // no authorize() credential ⇒ no settlement
+  });
+});
+
+// ── statelessOrders (FR-007) — the ?cart passthrough must survive the verify POST ────────
+// With no order store to fall back on, the signed cart mandate IS the order transport, and
+// routes.ts promises it "survives every hop". The verify POST used to send only
+// { order, referenceToken }, so `resolveOrder` found nothing and EVERY stateless delegated
+// checkout 400'd with "missing or invalid order". The other e2e tests all use the stateful
+// store, which is why nothing caught it.
+
+const cartParam = (mandate: unknown): string => Buffer.from(JSON.stringify(mandate)).toString("base64url");
+
+describe("delegated rail — statelessOrders passthrough", () => {
+  it("the approve page forwards `cart` on the verify POST (the hop that dropped it)", () => {
+    const html = renderDelegatedPage({
+      order: "ORD-S1",
+      total: 199,
+      currency: "USD",
+      lines: [{ name: "Aurora", quantity: 1, lineTotal: 199, currency: "USD" }],
+      cart: "CART-MANDATE",
+    });
+    // Read off the live URL (same as the dc-payment rail) and included in the verify body.
+    expect(html).toContain('new URLSearchParams(location.search).get("cart")');
+    expect(html).toContain("cart: CART");
+  });
+
+  it("completes from the signed cart mandate alone — the order store is never read", async () => {
+    const verifier = verifierReturning({
+      claims: { payment: { issuer_name: "Bank" } },
+      binding: { amount: 199, currency: "USD", payee: { id: "shop.example" } },
+    });
+    const h = harness([payment.in("usd")], verifier, [{ productId: "aurora-headphones", quantity: 1 }], { stateless: true });
+    const mandate = issueCartMandate(
+      { orderId: "ORD-S1", lines: [{ id: "aurora-headphones", quantity: 1, unitPrice: 199, lineTotal: 199 }], currency: "USD", total: 199 },
+      SECRET,
+    );
+    // Exactly what the page posts: `cart` = base64url(JSON(mandate)). The harness's order
+    // store THROWS, so completing at all proves the mandate carried the order.
+    const out = await h.verify({ order: "ORD-S1", cart: cartParam(mandate), referenceToken: tokenFor("ORD-S1") });
+    expect((out.body as { completed: boolean }).completed).toBe(true);
+    expect(h.records.get("ORD-S1")?.amount).toBe(199); // reconstructed + re-priced from the mandate
+  });
+});
+
+// ── Reflected XSS on the refusal path (the `cart` param is caller-supplied) ──────────────
+// The approve page is served on the MERCHANT'S PAYMENT ORIGIN, so markup injected here runs
+// with that origin's privileges. `cart` rides the ceremony URL untrusted; it used to land
+// UNENCODED in the default returnUrl, and the refusal/error branches then concatenated that
+// URL into `innerHTML` — so `?cart="><img src=x onerror=…>` executed on any refusal.
+describe("delegated rail — approve page escapes the untrusted cart param", () => {
+  const XSS = '"><img src=x onerror=alert(1)>';
+  const page = () =>
+    renderDelegatedPage({
+      order: "ORD-X",
+      total: 10,
+      currency: "USD",
+      lines: [{ name: "Item", quantity: 1, lineTotal: 10, currency: "USD" }],
+      cart: XSS,
+    });
+
+  it("percent-encodes a crafted cart so no raw markup survives into the page", () => {
+    const html = page();
+    expect(html).not.toContain("onerror=alert(1)"); // encoded → onerror%3Dalert(1)
+    expect(html).not.toContain("<img src=x");
+  });
+
+  it("builds the refusal return link via DOM, never by concatenating the URL into innerHTML", () => {
+    const html = page();
+    // The old sink. innerHTML PARSES markup; setAttribute/textContent cannot.
+    expect(html).not.toContain(`'<a class="ret" href="' + RETURN_URL`);
+    expect(html).toContain("createElement(\"a\")");
+  });
+});
+
+// ── The gate must name NO verifier (#88 honesty) ─────────────────────────────────────────
+// types.ts and index.ts both promise "nothing here names a specific verifier or processor".
+// The approve page used to bake in `window.multipazVerifyCredentials` + the
+// `/verify_credentials.js` filename, so a second adapter could not use this rail without
+// shipping a script that impersonated Multipaz's global — and the promise was simply false.
+// The adapter now declares its own contract via `clientScript` + `clientEntry`.
+describe("delegated rail — the gate names no verifier", () => {
+  it("the approve page carries no vendor symbol, and drives whatever the handoff declares", () => {
+    const html = renderDelegatedPage({
+      order: "ORD-V",
+      total: 10,
+      currency: "USD",
+      lines: [{ name: "Item", quantity: 1, lineTotal: 10, currency: "USD" }],
+    });
+    expect(html).not.toMatch(/multipaz/i); // no vendor global, no vendor script name
+    expect(html).not.toContain("verify_credentials.js");
+    expect(html).not.toContain("verifierBase");
+    // Driven entirely by what the adapter declared.
+    expect(html).toContain("data.clientScript");
+    expect(html).toContain("window[data.clientEntry]");
+  });
+
+  it("forwards the adapter's declared client contract through /request", async () => {
+    const verifier = verifierReturning();
+    verifier.buildRequest = vi.fn(async () => ({
+      reference: "ref-1",
+      handoff: { anything: "opaque" },
+      clientScript: "https://verifier.example/acme.js",
+      clientEntry: "acmeVerifyCredentials",
+    }));
+    const order = catalog.createOrder([{ productId: "oak-whiskey", quantity: 1 }], "ORD-V1");
+    const ctx = { verifier, signingKey: SECRET, credentialRegistry: new Map([["payment", payment.in("usd")]]) };
+    const out = await buildDelegatedRequest(ctx as never, order, { rpID: "shop.example", origin: "https://shop.example" });
+    expect(out.clientScript).toBe("https://verifier.example/acme.js");
+    expect(out.clientEntry).toBe("acmeVerifyCredentials");
   });
 });

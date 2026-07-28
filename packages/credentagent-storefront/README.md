@@ -184,10 +184,30 @@ the catalog; unknown ids are collected (`unknownIds`), not thrown.
   edit products with no redeploy; loaded + cached server-side, fail-closed.
 
 `createStorefront()` accepts `{ catalog, reviews, baseUrl, cartStore, orderStore, createdOrderStore,
-verificationStore, storage, signingKey, allowEphemeralKey, settle }`. `catalog` is a `Product[]` (static)
-or a `CatalogSource` (dynamic, e.g. `firestoreCatalog(...)`). The optional `settle` seam (e.g.
-on-chain) **gates** completion: a configured-but-failed settle records nothing and leaves the cart
-intact.
+verificationStore, storage, signingKey, allowEphemeralKey, settle, verifier }`. `catalog` is a
+`Product[]` (static) or a `CatalogSource` (dynamic, e.g. `firestoreCatalog(...)`). The optional
+`settle` seam (e.g. on-chain) **gates** completion: a configured-but-failed settle records nothing and
+leaves the cart intact.
+
+### Real payments: the `verifier` seam
+
+Pass a `verifier` and the **same** `store.gate(...)` policy runs a real, issuer-trust-verified,
+amount-bound payment through an external verifier/processor — only the backend moves in. The first real
+adapter lives host-side in [`openwallet-foundation/multipaz-utopia`](https://github.com/openwallet-foundation/multipaz-utopia)
+(tracked in [multipaz-utopia#16](https://github.com/openwallet-foundation/multipaz-utopia/issues/16)):
+
+```ts
+const store = createStorefront({ verifier });   // e.g. the multipaz-utopia adapter, once it lands
+new CredentAgent().mount(store.app);             // zero-arg — picks the verifier up from app.locals
+```
+
+The gate still owns pricing and binding: it re-derives the amount/payee from the catalog, re-runs your
+policy over the disclosed claims, and only then authorizes settlement — so a verifier that approves the
+wrong amount, or a laxer-than-your age check, is refused before any money moves. The completed order
+relays the verdict's `trust_level` (`issuer-verified` with a real anchor). Omit `verifier` and the
+built-in presence-only rails serve, unchanged. The concrete adapter is host-side — no
+processor-specific dependency in these packages. See the gate README's *"Real trust: delegate to an
+external verifier"* for the seam contract.
 
 ## Honest status
 

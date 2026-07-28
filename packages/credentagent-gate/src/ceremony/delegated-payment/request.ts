@@ -27,6 +27,10 @@ export interface DelegatedRequestResult {
   handoff: unknown;
   /** Sealed `{ reference, orderId }` the browser carries back to /verify. */
   referenceToken: string;
+  /** The adapter-declared browser contract, forwarded verbatim: the URL of the verifier's
+   *  own client script and the global entry point it defines. Absent ⇒ no browser step. */
+  clientScript?: string;
+  clientEntry?: string;
   /** The combined query handed to the adapter (echoed for callers/tests). */
   dcql_query: DcqlQuery;
   // Deliberately NO `trust_level` here, unlike the sibling rails. At request time the
@@ -51,9 +55,9 @@ export async function buildDelegatedRequest(
   // Invariant 2/6: amount + currency + payee re-derived server-side from the
   // catalog-priced order and THIS request's origin — never from the token or the adapter.
   const binding = buildBindingFields(order, origin);
-  const dcql = mergeDelegatedDcql(delegatedPolicyEntries(ctx.credentialRegistry, order));
+  const { query: dcql } = mergeDelegatedDcql(delegatedPolicyEntries(ctx.credentialRegistry, order));
 
-  const { reference, handoff } = await verifier.buildRequest({ order, dcql, binding, origin });
+  const { reference, handoff, clientScript, clientEntry } = await verifier.buildRequest({ order, dcql, binding, origin });
 
   return {
     protocol: "delegated-openid4vp",
@@ -61,5 +65,9 @@ export async function buildDelegatedRequest(
     // Bind the adapter's handle to THIS order before it touches the browser.
     referenceToken: sealReference({ reference, orderId: order.id }, ctx.signingKey),
     dcql_query: dcql,
+    // Forwarded verbatim so the page can drive ANY verifier's browser step; the gate
+    // interprets these two fields only as "a script URL" and "a function name".
+    ...(clientScript ? { clientScript } : {}),
+    ...(clientEntry ? { clientEntry } : {}),
   };
 }
