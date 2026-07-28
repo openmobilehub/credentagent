@@ -4,11 +4,9 @@
 // productGrantCard — "buy me THIS one thing while I'm away" — so it scores highest among the
 // active cards; the approvalCard (the consent moment) and terminalCard outrank the active cards.
 
-import type { MouseEvent } from "react";
 import type { GrantViewData, GrantViewProduct } from "./types";
 import { defineGrantView } from "./frame";
 import { BudgetMeter } from "./BudgetMeter";
-import { useGrantActions } from "./actions";
 import { usd } from "./shared";
 import styles from "./grants.module.css";
 
@@ -56,36 +54,9 @@ function ScopeChips({ categories, skus }: { categories: string[]; skus: string[]
   );
 }
 
-function AgencyLine({ text, grantId }: { text: string; grantId: string }) {
-  const actions = useGrantActions();
-  return (
-    <div className={styles.agency}>
-      <span>{text}</span>
-      <button type="button" className={styles.revoke} onClick={() => actions.revoke?.(grantId)}>Revoke</button>
-    </div>
-  );
-}
-
-function ApprovalActions({ approveUrl }: { approveUrl: string }) {
-  const actions = useGrantActions();
-  // Both buttons open the CredentAgent approval page — consent happens there, never in the widget
-  // (design §4.4 / FR-5 non-goal). Equal weight, Approve first by reading order (anti-dark-pattern).
-  const open = (e: MouseEvent) => {
-    if (actions.openLink) {
-      e.preventDefault();
-      void actions.openLink(approveUrl);
-    }
-  };
-  return (
-    <>
-      <div className={styles.btnRow}>
-        <a className={`${styles.btn} ${styles.btnApprove}`} href={approveUrl} onClick={open}>Approve</a>
-        <a className={`${styles.btn} ${styles.btnDecline}`} href={approveUrl} onClick={open}>Decline</a>
-      </div>
-      <div className={styles.deeplink}>Opens the CredentAgent approval page ↗</div>
-    </>
-  );
-}
+// The Revoke / Approve / Decline affordances are NOT here — they are FRAME-OWNED (see ActionFooter
+// in frame.tsx), so a view body receives only the inert `{ grant, tokens, slots }` and can never
+// wire an action (spec A1 / design §9.1). Bodies below are pure display.
 
 // ── stock views ──────────────────────────────────────────────────────────────
 
@@ -101,7 +72,6 @@ export const productGrantCard = defineGrantView({
         <div className={styles.scopeLede}>{grant.allow.skus[0]}</div>
       )}
       <BudgetMeter grant={grant} />
-      <AgencyLine text={`Spends at ${grant.merchant} while you're away`} grantId={grant.id} />
     </>
   ),
 });
@@ -117,7 +87,6 @@ export const categoryGrantCard = defineGrantView({
       </div>
       <ScopeChips categories={grant.allow.categories} skus={grant.allow.skus} />
       <BudgetMeter grant={grant} />
-      <AgencyLine text={`Spends at ${grant.merchant} while you're away`} grantId={grant.id} />
     </>
   ),
 });
@@ -131,7 +100,6 @@ export const openGrantCard = defineGrantView({
       <div className={styles.scopeLede}>🏬 Anything at {grant.merchant}</div>
       <div className={styles.scopeSub}>No product limits on this grant — the budget and per-purchase cap carry all the limits.</div>
       <BudgetMeter grant={grant} />
-      <AgencyLine text={`Spends at ${grant.merchant} while you're away`} grantId={grant.id} />
     </>
   ),
 });
@@ -171,7 +139,6 @@ export const approvalCard = defineGrantView({
         <div className={styles.sbLabel}>Who</div>
         <div className={styles.whoText}>Your agent spends <b>unattended</b> until the budget runs out — or you revoke it.</div>
       </div>
-      <ApprovalActions approveUrl={grant.approveUrl} />
     </>
   ),
 });
