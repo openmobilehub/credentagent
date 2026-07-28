@@ -37,23 +37,31 @@ export interface DoctorReport {
 export interface DoctorInput {
   /** The origin the client resolved to (already defaulted to localhost when omitted). */
   walletOrigin: string;
-  /** Did the caller set a stable `gateSecret`? (Absent ⇒ orders.serve uses an ephemeral key.) */
+  /** Is a stable signing key EFFECTIVELY set — from `new CredentAgent({ gateSecret })` OR captured
+   *  from the mounted ceremony seams / composed storefront? (Absent ⇒ orders.serve uses an ephemeral key.) */
   hasGateSecret: boolean;
-  /** Was a `store` injected (not the in-memory default `MemoryVerificationStore`)? */
+  /** Is the EFFECTIVE verification store shared (survives an instance split) — a non-in-memory
+   *  `store` from the constructor OR one the composed host published via mount()? */
   sharedVerificationStore: boolean;
-  /** Were BOTH `orderStore` and `completedOrderStore` injected (not the in-memory defaults)? */
+  /** Were BOTH `orderStore` and `completedOrderStore` injected as non-in-memory stores? Only the
+   *  `orders.serve()` surface uses them (a composed host owns its own order persistence). */
   sharedOrderStores: boolean;
+  /** Is this client COMPOSED with a host that owns the serving surface — `mount(app, ceremony)`
+   *  seams, or `createStorefront(...) + mount(store.app)`? Then the signing key / stores may come
+   *  from seams doctor only partially sees: the order-store check is skipped (the host owns order
+   *  persistence) and a residual secret/store finding is annotated rather than asserted hard. */
+  composedWithHost?: boolean;
   /** Environment to read deployment signals from. Defaults to `process.env`; injected in tests. */
   env?: Record<string, string | undefined>;
 }
 
-/** The env vars each serverless platform sets — presence of any ⇒ a multi-instance runtime. */
+/** The env vars each serverless platform sets ONLY when hosted — presence of any ⇒ a
+ *  multi-instance runtime. (Azure is handled separately: its worker-runtime var is set locally too.) */
 const SERVERLESS_ENV_VARS: ReadonlyArray<readonly [string, string]> = [
   ["VERCEL", "Vercel"],
   ["AWS_LAMBDA_FUNCTION_NAME", "AWS Lambda"],
   ["LAMBDA_TASK_ROOT", "AWS Lambda"],
   ["K_SERVICE", "Cloud Run"],
-  ["FUNCTIONS_WORKER_RUNTIME", "Azure Functions"],
   ["NETLIFY", "Netlify"],
 ];
 
@@ -69,7 +77,11 @@ function classifyEnv(env: Record<string, string | undefined>): {
   deployment: boolean;
   platform?: string;
 } {
-  const hit = SERVERLESS_ENV_VARS.find(([name]) => env[name]);
+  let hit = SERVERLESS_ENV_VARS.find(([name]) => env[name]);
+  // Azure Functions sets FUNCTIONS_WORKER_RUNTIME LOCALLY too (it selects the worker language), so
+  // its presence alone is not a hosted signal. Only treat it as serverless when paired with an
+  // instance id Azure App Service sets ONLY when hosted — so `func start` local dev stays quiet.
+  if (!hit && env.FUNCTIONS_WORKER_RUNTIME && env.WEBSITE_INSTANCE_ID) hit = ["FUNCTIONS_WORKER_RUNTIME", "Azure Functions"];
   const serverless = hit !== undefined;
   const production = env.NODE_ENV === "production";
   return { serverless, production, deployment: serverless || production, ...(hit ? { platform: hit[1] } : {}) };
@@ -93,6 +105,14 @@ export function runDoctor(input: DoctorInput): DoctorReport {
   // ANY deployment (a phone can't reach it), so it stays error-level either way.
   const multiInstanceLevel: DoctorLevel = env.serverless ? "error" : "warn";
   const where = env.platform ? `a ${env.platform} deployment` : "a multi-instance deployment";
+  // When the client is composed with a host that owns the serving surface (mount(app, ceremony)
+  // seams, or createStorefront(...) + mount(store.app)), the signing key / store may be supplied
+  // through those seams — which doctor only partially sees. It captures what it can (see client.ts);
+  // for a finding it still can't rule out, annotate rather than assert a hard error so a correctly
+  // configured composition isn't told it's broken (a preflight that cries wolf gets deleted).
+  const seamNote = input.composedWithHost
+    ? " If you configure this through mounted ceremony seams or a composed storefront (e.g. createStorefront({ signingKey, storage })), doctor may not see it — pass it to new CredentAgent(...) to silence this, or ignore it."
+    : "";
 
   if (env.deployment && !input.hasGateSecret) {
     findings.push({
@@ -100,7 +120,8 @@ export function runDoctor(input: DoctorInput): DoctorReport {
       code: "ephemeral-gate-secret",
       message:
         `No gateSecret is set, so orders.serve() signs its wallet challenges with an ephemeral per-process key. ` +
-        `On ${where} a challenge issued on one instance won't verify on another — the ceremony fails.`,
+        `On ${where} a challenge issued on one instance won't verify on another — the ceremony fails.` +
+        seamNote,
       fix: "Set a stable secret — generate one with: openssl rand -hex 32 — and pass { gateSecret: process.env.GATE_SECRET }.",
     });
   }
@@ -122,12 +143,16 @@ export function runDoctor(input: DoctorInput): DoctorReport {
       code: "in-memory-verification-store",
       message:
         `Verification state uses the default in-memory store, which doesn't survive an instance split: a proof ` +
-        `recorded on one instance is invisible to the instance that completes the order.`,
+        `recorded on one instance is invisible to the instance that completes the order.` +
+        seamNote,
       fix: "Inject a shared { store } (a VerificationStore backed by Redis/Upstash) for multi-instance deploys.",
     });
   }
 
-  if (env.deployment && !input.sharedOrderStores) {
+  // Order stores are ONLY the `orders.serve()` persistence path. A client COMPOSED with a host
+  // (mount(app, ceremony) / a storefront) persists orders through the host's own completion seam,
+  // which doctor can't see — so skip this check for composed clients rather than cry wolf.
+  if (env.deployment && !input.sharedOrderStores && !input.composedWithHost) {
     findings.push({
       level: multiInstanceLevel,
       code: "in-memory-order-store",

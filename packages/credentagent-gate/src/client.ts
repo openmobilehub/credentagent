@@ -60,6 +60,14 @@ export class CredentAgent {
   private readonly hasGateSecret: boolean;
   private readonly sharedVerificationStore: boolean;
   private readonly sharedOrderStores: boolean;
+  // #25 doctor() — EFFECTIVE config captured at mount() (PR #134 review). When the client is
+  // composed with a host — `mount(app, ceremony)` seams, or `createStorefront(...) + mount(store.app)`
+  // — the signing key / verification store can come from those seams, which doctor's constructor-only
+  // flags would miss. Capture what's visible so a correctly configured composition isn't flagged, and
+  // record that a host owns the serving surface (its order persistence lives in its completion seam).
+  private mountSigningKey = false;
+  private mountSharedStore = false;
+  private composedWithHost = false;
 
   constructor(opts: CredentAgentOptions = {}) {
     let origin = opts.walletOrigin?.trim();
@@ -88,7 +96,10 @@ export class CredentAgent {
     // #25 doctor(): remember what was configured — an injected store is "shared" (survives an
     // instance split); the default MemoryVerificationStore is not. A non-empty gateSecret makes
     // orders.serve's challenge HMAC stable across instances.
-    this.sharedVerificationStore = opts.store !== undefined;
+    // #25 doctor(): an injected store counts as "shared" only if it survives an instance split —
+    // explicitly passing the EXPORTED in-memory implementation is still process-local, so it does
+    // NOT count (PR #134 review). A non-empty gateSecret makes the challenge HMAC stable.
+    this.sharedVerificationStore = opts.store !== undefined && !(opts.store instanceof MemoryVerificationStore);
     this.hasGateSecret = typeof opts.gateSecret === "string" && opts.gateSecret.length > 0;
     this.readerIdentity = opts.readerIdentity;
     // Honesty / fail-fast: a reader cert whose SAN doesn't cover the origin host is
@@ -109,7 +120,9 @@ export class CredentAgent {
     const createdStore = opts.orderStore ?? new MemoryOrderStore<CreatedOrder>();
     const completedStore = opts.completedOrderStore ?? new MemoryOrderStore<CompletedOrder>();
     // #25 doctor(): orders.serve survives an instance split only when BOTH order stores are shared.
-    this.sharedOrderStores = opts.orderStore !== undefined && opts.completedOrderStore !== undefined;
+    this.sharedOrderStores =
+      opts.orderStore !== undefined && !(opts.orderStore instanceof MemoryOrderStore) &&
+      opts.completedOrderStore !== undefined && !(opts.completedOrderStore instanceof MemoryOrderStore);
     // The outbound HTTP webhook sender (spec 010). Zero endpoints ⇒ inert (additive, zero-cost).
     this.webhooks = new Webhooks(opts.webhooks ?? {});
     // The delegated-spend resource (spec 009): needs the priced catalog to bound + price spends.
@@ -200,9 +213,11 @@ export class CredentAgent {
   doctor(opts: { print?: boolean } = {}): DoctorReport {
     const report = runDoctor({
       walletOrigin: this.walletOrigin,
-      hasGateSecret: this.hasGateSecret,
-      sharedVerificationStore: this.sharedVerificationStore,
+      // Effective config: the constructor value OR what a mounted host/composed storefront supplied.
+      hasGateSecret: this.hasGateSecret || this.mountSigningKey,
+      sharedVerificationStore: this.sharedVerificationStore || this.mountSharedStore,
       sharedOrderStores: this.sharedOrderStores,
+      composedWithHost: this.composedWithHost,
       env: process.env,
     });
     if (opts.print) {
@@ -232,6 +247,10 @@ export class CredentAgent {
     if (ceremony) {
       mountCeremony(app as CeremonyApp, { ...ceremony, verificationStore: this.store, readerIdentity: this.readerIdentity, credentialRegistry: this.registry });
       this.mountedRoutes = true;
+      // #25 doctor(): a host owns the serving surface here; capture the signing key it supplied via
+      // the seams (the verification store is this.store — already reflected in sharedVerificationStore).
+      this.composedWithHost = true;
+      if (typeof ceremony.signingKey === "string" && ceremony.signingKey.length > 0) this.mountSigningKey = true;
       return;
     }
     // Zero-arg compose (the quickstart): a host (e.g. credentagent-storefront) has
@@ -243,6 +262,12 @@ export class CredentAgent {
     if (locals.orderStore && locals.catalog && locals.completion) {
       mountCeremony(app as CeremonyApp, { readerIdentity: this.readerIdentity, credentialRegistry: this.registry, ...(locals.verificationStore ? {} : { verificationStore: this.store }) });
       this.mountedRoutes = true;
+      // #25 doctor(): a composed storefront owns the serving surface. Capture the effective signing
+      // key + verification store it published on app.locals (e.g. createStorefront({ signingKey,
+      // storage })) so a correctly configured composition isn't flagged (PR #134 review).
+      this.composedWithHost = true;
+      if (typeof locals.signingKey === "string" && locals.signingKey.length > 0) this.mountSigningKey = true;
+      if (locals.verificationStore && !(locals.verificationStore instanceof MemoryVerificationStore)) this.mountSharedStore = true;
       return;
     }
     // Legacy (no seams): expose the per-order store so a host's existing
