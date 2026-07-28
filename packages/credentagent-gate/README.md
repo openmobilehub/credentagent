@@ -80,9 +80,10 @@ credentagent.mount(store.app); // every /credentagent/* page now carries ACME's 
   `presence-only-demo` disclosure (see [Honest status](#honest-status)) is the same on every page,
   branded or not. Nothing you pass can alter or remove it.
 - **Safe by construction.** Every field is sanitized where it's used — the wordmark is HTML-escaped,
-  the `accent` must be a valid CSS colour (anything else is ignored, keeping the built-in teal), and
-  `logo` accepts only a `data:image/…` URI, an `https:`/`http:` URL, or a root-relative `/path`. A
-  host-supplied string can't inject markup or CSS onto a consent screen.
+  the `accent` must be a hex or `rgb()`/`hsl()` colour (anything else — including a bare word like
+  `teal` — is ignored, keeping the built-in teal), and `logo` accepts only a `data:image/…` URI, an
+  `https:`/`http:` URL, or a root-relative `/path`. A host-supplied string can't inject markup or CSS
+  onto a consent screen.
 
 ## Orders — a checkout without a storefront
 

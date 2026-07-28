@@ -36,15 +36,17 @@ function money(amount: number, currency: string): string {
 
 // A CSS colour we will drop verbatim into a stylesheet. The grammars admit only characters
 // that cannot escape a CSS value or the surrounding <style> (no `<`, `>`, `"`, `;`, `{`, `}`):
-// a hex colour, a numeric rgb()/hsl() functional colour, or a bare named colour.
+// a hex colour or a numeric rgb()/hsl() functional colour. We do NOT accept a bare word — a
+// misspelled "purpel" is not a real colour and would emit an INVALID `var(--accent)` instead
+// of falling back to the built-in teal, breaking the allowlist-and-drop promise. Hosts that
+// want a named colour can pass its hex.
 const HEX_COLOR = /^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
 const FUNC_COLOR = /^(?:rgb|rgba|hsl|hsla)\(\s*[0-9.,%\s/]+\)$/i;
-const NAMED_COLOR = /^[a-zA-Z]{1,20}$/;
 
 /** Return the accent only if it is a recognized, injection-safe CSS colour; else undefined. */
 function safeAccent(accent: string): string | undefined {
   const a = accent.trim();
-  return HEX_COLOR.test(a) || FUNC_COLOR.test(a) || NAMED_COLOR.test(a) ? a : undefined;
+  return HEX_COLOR.test(a) || FUNC_COLOR.test(a) ? a : undefined;
 }
 
 /** Derive a slightly darker hover shade. A 3/6-digit hex is darkened numerically (max browser
@@ -278,11 +280,13 @@ export function brandHeader(opts: { h1?: string; tagline?: string } = {}, brandi
     opts.h1 != null
       ? `<div class="head"><h1>${escapeHtml(opts.h1)}</h1>${opts.tagline != null ? `<p class="tagline">${escapeHtml(opts.tagline)}</p>` : ""}</div>`
       : "";
-  const wordmark = branding?.wordmark ? escapeHtml(branding.wordmark) : "CREDENTAGENT";
+  // Kept RAW and escaped at each interpolation point (the module's escape-once-at-use rule),
+  // so neither the alt attribute nor the wordmark span can double-escape a value like "A&B".
+  const wordmark = branding?.wordmark || "CREDENTAGENT";
   const logo = branding?.logo ? safeLogo(branding.logo) : undefined;
   const brandLeft = logo
-    ? `<img class="brand-logo" src="${escapeHtml(logo)}" alt="${wordmark}" />`
-    : `<span class="wordmark">${wordmark}</span>`;
+    ? `<img class="brand-logo" src="${escapeHtml(logo)}" alt="${escapeHtml(wordmark)}" />`
+    : `<span class="wordmark">${escapeHtml(wordmark)}</span>`;
   const pill = branding?.demoPill === false ? "" : `<span class="demo-pill">DEMO</span>`;
   return `<div class="brand">${brandLeft}${pill}</div>${heading}`;
 }

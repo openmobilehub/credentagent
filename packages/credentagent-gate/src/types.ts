@@ -218,10 +218,11 @@ export interface Branding {
   /** Replaces the `CREDENTAGENT` wordmark. Rendered as text (HTML-escaped). */
   wordmark?: string;
   /**
-   * Primary accent colour — the CTA button, the active progress step, the verified ✓. Any
-   * valid CSS colour: a hex (`#7c3aed`), an `rgb()`/`hsl()` value, or a named colour; the
-   * hover shade is derived from it. A value that isn't a recognized colour is ignored (the
-   * built-in teal stays), so a malformed accent can never break the stylesheet.
+   * Primary accent colour — the CTA button, the active progress step, the verified ✓. A hex
+   * (`#7c3aed`) or an `rgb()`/`rgba()`/`hsl()`/`hsla()` value; the hover shade is derived from
+   * it. A value that isn't one of those forms — including a bare word like `teal` or a
+   * misspelling — is ignored (the built-in teal stays), so a malformed accent can never emit
+   * an invalid colour or break the stylesheet.
    */
   accent?: string;
   /**

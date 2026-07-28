@@ -140,6 +140,23 @@ describe("INJECTION — a hostile branding value is escaped or dropped, never li
     expect(h).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
   });
 
+  it("escapes the wordmark exactly ONCE in the logo alt text (no double-encode of A&B)", () => {
+    const h = brandHeader({}, { wordmark: "A&B", logo: "https://cdn.example/logo.png" });
+    expect(h).toContain(`alt="A&amp;B"`); // single-escaped → the DOM alt renders "A&B"
+    expect(h).not.toContain("A&amp;amp;B"); // never double-escaped
+  });
+
+  it("drops a bare-word accent that is not a real colour (misspelled named colour)", () => {
+    // "purpel" would otherwise emit an INVALID var(--accent); it must be dropped so the
+    // built-in teal stays (the allowlist-and-drop promise). Named colours are not supported —
+    // even a valid one like "teal" is dropped; pass its hex instead.
+    expect(pageHead("T", "", { accent: "purpel" })).not.toContain(":root{--accent:");
+    expect(pageHead("T", "", { accent: "teal" })).not.toContain(":root{--accent:");
+    // A real hex / functional colour still applies.
+    expect(pageHead("T", "", { accent: "#7c3aed" })).toContain(":root{--accent:#7c3aed");
+    expect(pageHead("T", "", { accent: "rgb(124, 58, 237)" })).toContain(":root{--accent:rgb(124, 58, 237)");
+  });
+
   it("drops an accent that tries to break out of the <style> block", () => {
     const head = pageHead("T", "", { accent: "red;} </style><script>alert(1)</script>" });
     expect(head).not.toContain("<script>"); // the payload never reaches the page
