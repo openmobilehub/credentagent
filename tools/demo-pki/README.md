@@ -53,7 +53,10 @@ the gate** → re-import on the phone.
   with `OPENSSL=…`. Runs on both macOS (`date -v`) and Linux (`date -d`) — auto-detected.
 - For minting: the Multipaz repo checked out locally (the jvmTests compile against
   the `multipaz` module) — see [`mint/README.md`](mint/README.md).
-- Python 3 (stdlib only) for `cardart/make_cards.py` and `site/build_site.py`.
+- Python 3 (stdlib only) for `cardart/make_cards.py` and `site/build_site.py`. The
+  site build also copies a QR encoder from `site/node_modules/`, so run `npm install`
+  in `site/` once first — it's a site-local devDependency (`qrcode-generator`), NOT a
+  dependency of the published `@openmobilehub/credentagent-*` packages.
 
 ## 1. Generate the PKI — `gen-pki.sh`
 
@@ -127,13 +130,19 @@ DEMO_PKI=/path/to/credentagent/tools/demo-pki ./gradlew :multipaz:jvmTest \
 ## 4. Build + deploy the download site
 
 `build_site.py` stages the `out/` artifacts into `site/credentials/` +
-`site/trust/` (both gitignored) and renders `index.html`, then `vercel` deploys.
-The `vercel.json` sets `Content-Type: application/vnd.multipaz.mpzpass` on the
-credentials and `application/cbor` on the trust lists so the phone offers
-"Open with Multipaz Wallet".
+`site/trust/`, the raw `certs/` PEMs into `site/certs/`, and vendors the QR
+encoder into `site/vendor/` (all gitignored build outputs), then renders
+`index.html`, and `vercel` deploys. Each trust list and credential gets a
+scannable QR plus a download link; the QRs are rendered **client-side** from the
+page's own origin, so `index.html` is deployment-agnostic (no origin baked in —
+deploy the same build to any host). The `vercel.json` sets
+`Content-Type: application/vnd.multipaz.mpzpass` on the credentials,
+`application/cbor` on the trust lists, and `application/x-pem-file` on the raw
+certs, so the phone offers "Open with Multipaz Wallet".
 
 ```bash
 cd site
+npm install                                    # once — the site-local QR encoder devDependency
 python3 build_site.py                          # re-run before every deploy (staging is gitignored)
 vercel deploy --prod --yes --scope <your-scope>
 ```

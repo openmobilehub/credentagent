@@ -96,6 +96,7 @@ export const registerDcPaymentGate: RailRegistrar = (app: CeremonyApp, ctx: Cere
         cart: typeof req.query.cart === "string" ? req.query.cart : undefined,
         rail,
         returnUrl: ctx.returnUrl?.(order.id),
+        branding: ctx.branding,
       }),
     );
   });

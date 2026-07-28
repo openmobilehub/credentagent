@@ -3,19 +3,20 @@
 // gated/ungated), CT5 (ui resource + the 6/3 UI-linked split), CT6 (state
 // isolation), CT9/FR-014 (the ChatGPT widget meta — widgetAccessible).
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import request from "supertest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { AddressInfo } from "node:net";
 import { readFileSync } from "node:fs";
-import { createStorefront, originFromRequest, verificationRevision, type Storefront } from "./server.js";
+import { createStorefront, originFromRequest, verificationRevision, bundleVersion, type Storefront, type CompletedOrderRecord } from "./server.js";
 import { redisStorage, type RedisLike } from "./redis.js";
 import { firestoreCatalog, type FirestoreLike } from "./firestore.js";
 import { MemoryOrderStore } from "./state.js";
 import type { Order } from "./index.js";
 import { CredentAgent, age, membership, payment, required, optional, defineCredential, dcql, gate, MemoryVerificationStore } from "@openmobilehub/credentagent-gate";
+import type { DelegatedVerifier } from "@openmobilehub/credentagent-gate";
 import type { Request } from "express";
 
 // A Map-backed RedisLike fake so a `redisStorage(...)` provider can be exercised through
@@ -137,6 +138,41 @@ describe("CT5 — the widget ui:// resource is registered", () => {
   });
 });
 
+describe("#55 — a missing widget bundle fails loudly (never falls back to 'dev')", () => {
+  // A missing bundle is always a packaging/deploy defect. The retired "dev" fallback
+  // stamped ui://product-picker/mcp-app-dev.html, which poisoned connected clients'
+  // cached resource URIs so the widget 404'd even after the bundle was restored.
+  // `candidates` is the resolver's test seam — production reads bundleCandidates().
+  const missing = ["/no/such/dir/ui/mcp-app.html"];
+
+  it("bundleVersion throws (naming the file + likely cause) instead of returning 'dev'", () => {
+    // Bypass guard: if the fail-fast throw is removed and the "dev" fallback restored,
+    // bundleVersion(missing) returns "dev" and both assertions below fail.
+    expect(() => bundleVersion(missing)).toThrow(/widget bundle dist\/ui\/mcp-app\.html not found/);
+    expect(() => bundleVersion(missing)).toThrow(/includeFiles/);
+  });
+
+  it("produces no version for a missing bundle, so no mcp-app-dev.html URI is ever formed", () => {
+    let version: string | undefined;
+    try {
+      version = bundleVersion(missing);
+    } catch {
+      /* fail-fast: expected */
+    }
+    expect(version).toBeUndefined(); // threw — no version, so `mcp-app-${version}.html` is never advertised
+  });
+
+  it("the real storefront advertises content-hashed ui:// URIs, never a 'dev' one", async () => {
+    const c = await connect(createStorefront());
+    const uris = (await c.listResources()).resources.map((r) => r.uri).filter((u) => u.startsWith("ui://"));
+    expect(uris.length).toBeGreaterThan(0);
+    for (const u of uris) {
+      expect(u).toMatch(/mcp-app-[0-9a-f]{8}\./); // an 8-hex content hash, not "dev"
+      expect(u).not.toContain("mcp-app-dev");
+    }
+  });
+});
+
 describe("checkout completion round-trip — the HTTP form post the widget poll depends on", () => {
   it("place-order (urlencoded form) records completion that order-status then reports", async () => {
     const store = createStorefront(); // app + mcpServer share the same closure stores
@@ -228,6 +264,21 @@ describe("GET /checkout — the shared three-gate page (renderRequirements)", ()
     expect(res.text).toContain("presence-only-demo");
   });
 
+  it("carries the host brand onto the checkout hub — wordmark replaces the default, honesty footer unchanged (issue #61)", async () => {
+    const store = createStorefront();
+    const credentagent = new CredentAgent({ branding: { wordmark: "ACME", accent: "#7c3aed" } });
+    credentagent.mount(store.app); // publishes branding onto app.locals; the /checkout handler reads it
+    const orderId = await checkoutId(await connect(store), "drift-mouse");
+    const res = await request(store.app).get(`/checkout?order=${orderId}`);
+    expect(res.status).toBe(200);
+    // The hub now carries the host brand — matching the linked gate pages (the #132 P1 gap).
+    expect(res.text).toContain(`<span class="wordmark">ACME</span>`);
+    expect(res.text).toContain("--accent:#7c3aed"); // the accent override reached the hub's <head>
+    expect(res.text).not.toContain("CREDENTAGENT"); // the default wordmark is gone on the hub too
+    // The honesty footer is NEVER branded — byte-identical to the default render (FR-011).
+    expect(res.text).toContain("🔒 presence-only-demo · secured by CredentAgent · the wire crypto is real; issuer trust anchor is not");
+  });
+
   it("once age is proven, the gated order offers the mounted payment rail as the Pay CTA (still no bypass)", async () => {
     const store = gatedStore();
     const orderId = await checkoutId(await connect(store), "oak-whiskey");
@@ -266,6 +317,29 @@ describe("GET /checkout — the shared three-gate page (renderRequirements)", ()
     const res = await request(store.app).get(`/checkout?order=${orderId}`);
     expect(res.text).toContain("Order paid");
     expect(res.text).not.toContain("/checkout/order-status");
+  });
+
+  // #107 — the receipt settlement honesty bug (Cause 1). completeOrder DOES persist the
+  // settlement onto the completed-order record, but GET /checkout rebuilt its `paid`
+  // object and dropped it, so EVERY paid order rendered "no settlement" — even one that
+  // really settled. This forwards it. Deleting the `settlement` pass-through turns this red.
+  it("a completed order's settlement record surfaces on the paid revisit (#107 cause 1)", async () => {
+    const orders = new MemoryOrderStore<CompletedOrderRecord>();
+    const store = createStorefront({ orderStore: orders }); // ungated
+    const orderId = await checkoutId(await connect(store), "drift-mouse");
+    // A real settlement recorded for THIS order, exactly as completeOrder writes it.
+    await orders.write(orderId, {
+      orderId,
+      amount: 74,
+      currency: "USD",
+      method: "dc-payment",
+      completedAt: new Date().toISOString(),
+      settlement: { network: "upay", provider: "UPay", txId: "ccOuvUeikyv22XIn", status: "settled" },
+    });
+    const res = await request(store.app).get(`/checkout?order=${orderId}`);
+    expect(res.text).toContain("via UPay"); // the backend that actually settled
+    expect(res.text).toContain("ccOuvUeikyv22XIn"); // its real transaction id
+    expect(res.text).not.toContain("No settlement recorded"); // money moved — don't deny it
   });
 
   // BYPASS (Security invariant 1, load-bearing): the instant-demo place-order path
@@ -850,6 +924,106 @@ describe("live cross-device status mirror (#73)", () => {
     await vstore.write(orderId, { ageVerified: true });
     const after = (await request(store.app).get(`/checkout/order-status?orderId=${orderId}`)).body.revision;
     expect(after).not.toBe(before);
+  });
+});
+
+// 008 (#89, S5): a REAL delegated ceremony runs end-to-end through the storefront's mounted
+// rail — same gate() policy, only the verification/settlement backend moved in. The verifier
+// here is a test double (never shipped): it is the only way to drive completion before the
+// real Multipaz/UPay adapter (S6, downstream) exists, and it captures the gate's minted
+// binding and echoes it, exactly as a real adapter binds to what the gate sent.
+describe("008 — delegated ceremony completes through the storefront (S5)", () => {
+  function scriptedVerifier() {
+    let captured: { amount: number; currency: string; payee: { id: string } } | undefined;
+    const settle = vi.fn(async () => ({ network: "test", txId: "tx_e2e", status: "settled" }));
+    const verifier: DelegatedVerifier = {
+      buildRequest: async ({ binding }) => {
+        captured = { amount: binding.amount, currency: binding.currency, payee: { id: binding.payee.id } };
+        return { reference: "ref-e2e", handoff: { verifierUrl: "https://verifier.test" } };
+      },
+      // A real adapter re-fetches the verified presentment by reference; the double echoes the
+      // captured binding + a 21+ disclosure so the gate's own re-checks all pass.
+      consume: async () => ({
+        approved: true,
+        trust_level: "issuer-verified",
+        claims: { age_mdl: { age_over_21: true }, payment: { issuer_name: "TestBank", holder_name: "Jo" } },
+        binding: { amount: captured!.amount, currency: captured!.currency, payee: { id: captured!.payee.id } },
+      }),
+      settle,
+    };
+    return { verifier, settle };
+  }
+
+  function delegatedStore() {
+    const { verifier, settle } = scriptedVerifier();
+    const store = createStorefront({ verifier });
+    const credentagent = new CredentAgent();
+    credentagent.mount(store.app); // zero-arg — picks up the verifier from app.locals
+    store.gate((order) =>
+      credentagent.requirements(order, [
+        required(age.over(21).when((o: { lines: { minimumAge?: number }[] }) => o.lines.some((l) => l.minimumAge != null))),
+        required(payment.in("usd")),
+      ]),
+    );
+    return { store, settle };
+  }
+
+  it("a real delegated payment completes the order through the mounted rail, relaying issuer-verified trust", async () => {
+    const { store, settle } = delegatedStore();
+    const c = await connect(store);
+    const sc = (await c.callTool({ name: "checkout", arguments: { items: [{ productId: "oak-whiskey", quantity: 1 }] } })).structuredContent as any;
+    const orderId = sc.orderId as string;
+
+    // The manifest routes the blocking gates to the ONE delegated ceremony (S4).
+    const approve = (sc.requires as { credential: string; approveUrl?: string }[]).find((e) => e.credential === "payment")!.approveUrl!;
+    expect(approve).toContain("/credentagent/delegated?order=");
+
+    // 1. Fetch the handoff + the sealed, order-bound reference.
+    const reqRes = await request(store.app).get(`/credentagent/delegated/request?order=${orderId}`);
+    expect(reqRes.status).toBe(200);
+    const referenceToken = reqRes.body.referenceToken as string;
+    expect(referenceToken).toBeTruthy();
+
+    // 2. Complete via the verify leg — the browser carries ONLY the reference.
+    const verifyRes = await request(store.app).post("/credentagent/delegated/verify").send({ order: orderId, referenceToken });
+    expect(verifyRes.status).toBe(200);
+    expect(verifyRes.body.completed).toBe(true);
+    expect(verifyRes.body.trust_level).toBe("issuer-verified"); // relayed from the verdict, not synthesized
+    expect(settle).toHaveBeenCalledTimes(1); // gate-authorized settlement fired
+
+    // 3. The shared completion recorded it — the widget poll now sees the order paid.
+    const status = await request(store.app).get(`/checkout/order-status?orderId=${orderId}`);
+    expect(status.body.completed).toBe(true);
+    expect(status.body.order?.orderId).toBe(orderId);
+  });
+
+  it("a wrong-amount verdict is refused end-to-end and the order stays unpaid", async () => {
+    // A misbehaving verifier that binds a cheaper amount than the gate priced — the shared
+    // seam refuses and nothing settles or records (the storefront-level proof of invariant 2).
+    const settle = vi.fn(async () => ({ network: "test", txId: "x", status: "settled" }));
+    const verifier: DelegatedVerifier = {
+      buildRequest: async () => ({ reference: "r", handoff: {} }),
+      consume: async ({ order }) => ({
+        approved: true,
+        trust_level: "issuer-verified",
+        claims: { age_mdl: { age_over_21: true } },
+        binding: { amount: 1, currency: order.currency, payee: { id: "shop.example" } },
+      }),
+      settle,
+    };
+    const store = createStorefront({ verifier });
+    const credentagent = new CredentAgent();
+    credentagent.mount(store.app);
+    store.gate((order) => credentagent.requirements(order, [required(age.over(21).when((o: { lines: { minimumAge?: number }[] }) => o.lines.some((l) => l.minimumAge != null))), required(payment.in("usd"))]));
+    const c = await connect(store);
+    const sc = (await c.callTool({ name: "checkout", arguments: { items: [{ productId: "oak-whiskey", quantity: 1 }] } })).structuredContent as any;
+    const orderId = sc.orderId as string;
+    const referenceToken = (await request(store.app).get(`/credentagent/delegated/request?order=${orderId}`)).body.referenceToken as string;
+    const verifyRes = await request(store.app).post("/credentagent/delegated/verify").send({ order: orderId, referenceToken });
+    expect(verifyRes.body.completed).toBe(false);
+    expect(settle).not.toHaveBeenCalled();
+    const status = await request(store.app).get(`/checkout/order-status?orderId=${orderId}`);
+    expect(status.body.completed).toBe(false);
   });
 });
 

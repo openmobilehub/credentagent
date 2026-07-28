@@ -60,6 +60,7 @@ import {
   decodeCartMandateParam,
   renderRequirements,
   MemoryVerificationStore,
+  type Branding,
   type CartItemRef,
   type Credential,
   type Grants,
@@ -69,7 +70,9 @@ import {
   type CompletedRecord,
   type CompletionInput,
   type CompletionResult,
+  type DelegatedVerifier,
   type RepriceOpts,
+  type RenderPaid,
   type RenderVerification,
   type VerificationManifestEntry,
   type VerificationRecord,
@@ -167,6 +170,14 @@ export interface StorefrontOptions {
    */
   settle?: (order: CeremonyOrder) => Promise<Record<string, unknown> & { network: string; txId: string; status: string }>;
   /**
+   * Optional external verifier/processor (008, #60). Pass one — e.g. a Multipaz-verifier +
+   * UPay adapter — and `new CredentAgent().mount(store.app)` serves the delegated ceremony:
+   * the SAME `gate()` policy runs a real, issuer-trust-verified, amount-bound payment, with
+   * only the verification/settlement backend moved in. Published on `app.locals.credentagent`
+   * so the zero-arg `mount()` picks it up. Omit ⇒ the built-in presence-only rails, unchanged.
+   */
+  verifier?: DelegatedVerifier;
+  /**
    * The human-NOT-present resource (spec 009): pass `credentagent.grants` (a client constructed
    * with a priced `catalog`) and the server additionally registers the four grant tools —
    * `create-spending-grant`, `get-grant-status`, `spend-from-grant`, `revoke-grant` — so an AI
@@ -224,28 +235,45 @@ function bundleCandidates(): string[] {
   return [join(import.meta.dirname, "ui", "mcp-app.html"), join(process.cwd(), "dist", "ui", "mcp-app.html")];
 }
 
-// Stamp the resource URI with a short hash of the bundle so hosts re-fetch exactly
-// when the widget changes (they cache by URI). "dev" until the bundle is on disk.
-function bundleVersion(): string {
-  for (const c of bundleCandidates()) {
+// A missing widget bundle is ALWAYS a packaging/deploy defect: the built
+// dist/ui/mcp-app.html ships with the package (package.json `files`) and, on a serverless
+// deploy, must be listed in the function's `includeFiles`. Say exactly what's wrong and the
+// likely cause so the fix is obvious. Shared by bundleVersion (startup) and loadBundle (read).
+function bundleMissingError(candidates: string[]): Error {
+  return new Error(
+    "credentagent-storefront: widget bundle dist/ui/mcp-app.html not found — the package was built " +
+      "without its UI (run `npm run build`) or the deploy's includeFiles is missing it. " +
+      `Looked in: ${[...new Set(candidates)].join(", ")}.`,
+  );
+}
+
+// Stamp the resource URI with a short hash of the bundle so hosts re-fetch exactly when the
+// widget changes (they cache by URI). A MISSING bundle THROWS (fail fast at createStorefront()
+// startup) — it must NEVER fall back to a "dev" version, which would stamp
+// ui://product-picker/mcp-app-dev.html and poison connected clients' cached resource URIs, so
+// the widget 404s even after the bundle is restored (#55). `candidates` is a seam for the
+// missing-bundle test; production always uses bundleCandidates().
+export function bundleVersion(candidates: string[] = bundleCandidates()): string {
+  for (const c of candidates) {
     try {
       return createHash("sha256").update(readFileSync(c)).digest("hex").slice(0, 8);
     } catch {
       /* try next */
     }
   }
-  return "dev";
+  throw bundleMissingError(candidates);
 }
 
 async function loadBundle(): Promise<string> {
-  for (const c of bundleCandidates()) {
+  const candidates = bundleCandidates();
+  for (const c of candidates) {
     try {
       return await readFile(c, "utf-8");
     } catch {
       /* try next */
     }
   }
-  throw new Error(`credentagent-storefront: widget bundle not found (looked in: ${bundleCandidates().join(", ")})`);
+  throw bundleMissingError(candidates);
 }
 
 // Derive this server's public origin from the incoming request. Proxies (Vercel,
@@ -448,6 +476,9 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
     ...(signingKey ? { signingKey } : {}),
     allowEphemeralKey: opts.allowEphemeralKey ?? !signingKey,
     statelessOrders,
+    // 008: hand the external verifier to the zero-arg `mount()` (it reads app.locals). The
+    // delegated rail only registers when this is present — otherwise the built-in rails serve.
+    ...(opts.verifier ? { verifier: opts.verifier } : {}),
   };
 
   // ── cart logic (per-session over the catalog source + the cart store) ─────
@@ -858,7 +889,12 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
     // Pass this order's proven custom gates (007) so the hub reflects a proven custom
     // gate and unlocks payment — without it, a proven license loops back to a locked page.
     const verification: RenderVerification = { ageVerified, loyaltyApplied, ...(v.verifiedGates ? { verifiedGates: v.verifiedGates } : {}) };
-    const paid = done ? { amount: done.amount, currency: done.currency, method: done.method } : null;
+    // Forward the settlement record so the paid banner can show what actually settled
+    // (#107). Dropping it here made EVERY completed order — even a real x402 or processor
+    // settlement — render "no settlement", the receipt-honesty bug this fixes.
+    const paid = done
+      ? { amount: done.amount, currency: done.currency, method: done.method, ...(done.settlement ? { settlement: done.settlement as RenderPaid["settlement"] } : {}) }
+      : null;
 
     // An UNGATED storefront has no payment gate, so the manifest carries no
     // `authorize` entry the renderer could derive a Pay CTA from — keep a simple
@@ -874,6 +910,15 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
           ],
           placeOrderPath: "/checkout/place-order",
           orderToken: order.id,
+        }
+      : opts.verifier
+      ? // A GATED order with a delegated verifier configured (008): route the checkout page's Pay
+        // CTA to the mounted delegated ceremony, so the real external-verifier rail — not the
+        // built-in presence-only passkey/dc-payment rails — completes the payment.
+        {
+          methods: [
+            { value: "delegated", name: "Pay with your wallet", desc: "Authorize with a credential from your phone wallet — verification and settlement run through the configured external verifier.", href: withCart(`/credentagent/delegated?order=${orderQ}`, statelessOrders ? cartRaw : null), checked: true },
+          ],
         }
       : // A GATED order: offer the same payment methods the demo does — the headline
         // passkey rail (authorize on-device; settles on-chain via x402 on Hedera) and
@@ -894,7 +939,11 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
     // #73: bake THIS order's current verification signature so a standing tab reloads when a
     // step is made elsewhere (age verified, loyalty applied), not only on final completion.
     const statusRevision = verificationRevision(v);
-    res.type("html").send(renderRequirements(order, requires, verification, { ...(payment ? { payment } : {}), paid, statusUrl, statusRevision }));
+    // Carry the host brand onto the checkout hub too, so it matches the linked gate pages
+    // (issue #61). `credentagent.mount(store.app)` publishes it here alongside the other seams;
+    // read it at request time (mount runs after this route is defined).
+    const branding = (app.locals.credentagent as { branding?: Branding } | undefined)?.branding;
+    res.type("html").send(renderRequirements(order, requires, verification, { ...(payment ? { payment } : {}), paid, statusUrl, statusRevision, ...(branding ? { branding } : {}) }));
   });
   app.post("/checkout/place-order", async (req: Request, res: Response) => {
     // statelessOrders: reconstruct + verify from the body's `cart` mandate; else the store.

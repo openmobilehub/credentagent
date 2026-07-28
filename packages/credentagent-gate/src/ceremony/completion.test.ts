@@ -134,6 +134,49 @@ describe("completeOrder — core controls (direct seam tests)", () => {
   });
 });
 
+// ── Concurrent double-settle (#103) — the first path where settle moves REAL money (the
+// delegated rail). BYPASS: remove the per-order serialization in completion.ts and this goes red —
+// two overlapping verifies for the SAME order each pass the "already completed?" check before
+// either writes its record, so `settle` fires TWICE (a double-charge) while one record is written.
+describe("completeOrder — concurrent same-order verifies settle EXACTLY once (#103)", () => {
+  it("two overlapping completions → settle called once, one record, both responses completed", async () => {
+    // A slow settle widens the window so both requests would overlap inside it without the lock.
+    const settle = vi.fn(async () => {
+      await new Promise((r) => setTimeout(r, 5));
+      return { network: "processor", txId: "tx_1", status: "settled" } as SettlementRecordLike;
+    });
+    const h = harness();
+    // The delegated money path settles via input.settle (the gate-authorized verifier.settle thunk).
+    const mk = () => h.input([{ productId: "widget", quantity: 1 }], { settle });
+
+    const [a, b] = await Promise.all([completeOrder(mk(), h.ctx), completeOrder(mk(), h.ctx)]);
+
+    expect(settle).toHaveBeenCalledTimes(1); // ← the control: the processor is charged exactly once
+    expect(h.records.size).toBe(1); // one order id → one completed record
+    expect(a.completed).toBe(true);
+    expect(b.completed).toBe(true);
+    // The loser took the idempotent echo of the SAME settlement, not a second settle.
+    expect(a.settlement?.txId).toBe("tx_1");
+    expect(b.settlement?.txId).toBe("tx_1");
+  });
+
+  it("distinct orders are NOT serialized against each other (the lock is per order id)", async () => {
+    const settle = vi.fn(async () => {
+      await new Promise((r) => setTimeout(r, 5));
+      return { network: "processor", txId: "tx", status: "settled" } as SettlementRecordLike;
+    });
+    const h = harness();
+    const [a, b] = await Promise.all([
+      completeOrder(h.input([{ productId: "widget", quantity: 1 }], { settle, order: { id: "ORD-A" } as CompletionInput["order"] }), h.ctx),
+      completeOrder(h.input([{ productId: "widget", quantity: 1 }], { settle, order: { id: "ORD-B" } as CompletionInput["order"] }), h.ctx),
+    ]);
+    expect(a.completed).toBe(true);
+    expect(b.completed).toBe(true);
+    expect(settle).toHaveBeenCalledTimes(2); // two different orders each settle once
+    expect(h.records.size).toBe(2);
+  });
+});
+
 // ── HNP delegated-draw branch (005 FR-006/009) — bypass tests, each control-dependent.
 import { MemoryRevocationStore } from "./revocation.js";
 import { sealIntent, signDraw, generateDelegate, type IntentBounds, type Draw } from "./mandate.js";
@@ -355,6 +398,11 @@ describe("completeOrder — custom gate() enforcement (007, US2 / invariant 1)",
     expect(res.completed).toBe(true);
   });
 });
+
+// PR #131 review (P1): the mount() path scoping is exercised end-to-end in mount.test.ts (the
+// mounted ceremony seam sets input.policyCredentialIds from the client's per-order policy). At the
+// completeOrder level the explicit `policyCredentialIds` input is already pinned by the F2 repro
+// (pr42-findings.repro.test.ts) and the orders-serve integration test.
 
 // ── Draw-path hardening (PR #41 review): the delegated-draw branch must run the SAME custom-
 // gate sweep as the HP path, bind currency to the order, and echo delegationId on replay. ──

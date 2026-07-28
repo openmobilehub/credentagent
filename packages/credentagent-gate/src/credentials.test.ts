@@ -4,7 +4,7 @@
 
 import { describe, it, expect } from "vitest";
 import { CredentAgent } from "./client.js";
-import { defineCredential, dcql, gate, required, optional, age, membership, payment } from "./credentials.js";
+import { defineCredential, dcql, gate, authorize, discount, required, optional, age, membership, payment } from "./credentials.js";
 import type { GateOrder } from "./types.js";
 
 const credentagent = new CredentAgent({ walletOrigin: "https://shop.example" });
@@ -134,6 +134,38 @@ describe("defineCredential rejects a reserved built-in id (finding 1 — fail-op
       ).toThrow(/reserved/i);
     });
   }
+});
+
+// Regression (#59 findings 1 + 4 — custom-effect fail-open/inert). Only `gate()` is wired
+// end-to-end for a CUSTOM credential: the completion sweep enforces it and the credential-gate
+// rail proves it. A custom `authorize()` is surfaced but never enforced (the order completes
+// UNPROVEN — fail-OPEN), and a custom `discount()` verifies but applies no price change (inert).
+// defineCredential rejects both at construction — the SAME fail-fast posture as the reserved-id
+// guard — until they are wired. The built-ins that DO use these effects (payment → authorize,
+// membership → discount) never pass through defineCredential, so they are unaffected.
+describe("defineCredential rejects a custom authorize()/discount() effect (findings 1 + 4)", () => {
+  const base = {
+    request: dcql({ docType: "org.example.x.1", claims: ["ok"] }),
+    verify: () => true,
+    ui: { label: "Custom", action: "Prove" },
+  };
+
+  it('throws on a custom authorize() — it would complete unproven (fail-open)', () => {
+    expect(() => defineCredential({ id: "approval", ...base, effect: authorize() })).toThrow(/authorize/i);
+  });
+
+  it('throws on a custom discount() — it would apply no discount (inert)', () => {
+    expect(() => defineCredential({ id: "member_x", ...base, effect: discount({ percent: 10 }) })).toThrow(/discount/i);
+  });
+
+  it("still accepts a custom gate() — the one effect wired end-to-end", () => {
+    expect(() => defineCredential({ id: "prescription_x", ...base, effect: gate() })).not.toThrow();
+  });
+
+  it("does NOT regress the built-ins that use these effects (they bypass defineCredential)", () => {
+    expect(() => payment.in("usd")).not.toThrow(); // authorize
+    expect(() => membership.discount(10)).not.toThrow(); // discount
+  });
 });
 
 // Regression (PR #42 review — item 4). required()/optional() must reject a policy the ceremony
