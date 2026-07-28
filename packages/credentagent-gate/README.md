@@ -149,6 +149,7 @@ const host = defineHost({
   orderStore: { read: (orderId) => myOrders.get(orderId) ?? null },                 // your created order
   records: { read: (id) => myCompleted.get(id), write: (rec) => myCompleted.set(rec.orderId, rec) },
   signingKey: process.env.GATE_SECRET, // stable across instances; or { allowEphemeralKey: true } for dev
+  returnUrl: (id) => `/checkout/${id}`, // your checkout route — where a rail returns the buyer after a proof
 });
 
 host.publish(app);                                     // publish the seams onto your app
@@ -166,6 +167,9 @@ app.post("/checkout/:id", async (req, res) => {
 - **`host.complete(input)`** is the same shared completion the rails use — one choke point, no second
   weaker path. It re-prices from your catalog (never the token), runs the age + any custom `gate()`
   credentials, settles, and records idempotently, returning `{ completed, reason? }`.
+- **`returnUrl`** is where a rail sends the buyer back after they prove. Set it to your own checkout
+  route — otherwise the rails default to `/checkout?order=<id>`, which a non-storefront host does not
+  serve, and the buyer lands on a dead link.
 - **`host.verificationStore`** is the per-order proof store (default in-memory; inject a shared store
   — e.g. Redis — for a multi-instance deploy). The rails write it when the buyer proves; your
   completion reads it.

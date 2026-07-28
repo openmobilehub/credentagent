@@ -43,6 +43,7 @@ const host = defineHost({
   catalog: { createOrder: (items, orderId) => priceOrder(items, orderId) },
   orderStore: { read: (orderId) => created.get(orderId) ?? null },
   records: { read: (id) => completed.get(id), write: (rec) => { completed.set(rec.orderId, rec); } }, // where completed orders go
+  returnUrl: (id) => `/checkout/${id}`, // YOUR checkout route — where a rail returns the buyer after a proof
   allowEphemeralKey: true, // single-process dev; a deployment passes { signingKey: process.env.GATE_SECRET }
 });
 const credentagent = new CredentAgent({ walletOrigin: `http://localhost:${PORT}` });

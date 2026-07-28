@@ -66,6 +66,12 @@ export interface DefineHostSpec {
   cart?: ClearableCart;
   /** Optional demo-mode settlement; throwing GATES completion (records nothing). */
   settle?: CompletionContext["settle"];
+  /**
+   * Where a rail returns the buyer after they prove — YOUR checkout route, e.g.
+   * `(id) => \`/checkout/${id}\``. Absent ⇒ each rail's default `/checkout?order=<id>`, which a
+   * non-storefront host usually does not serve (the buyer would be bounced to a dead link).
+   */
+  returnUrl?: (orderId: string) => string;
   /** Opt-in: treat a verified Cart Mandate as the created-order transport (FR-007). Default off. */
   statelessOrders?: boolean;
 }
@@ -124,12 +130,18 @@ export function defineHost(spec: DefineHostSpec): Host {
 
   const verificationStore = spec.verificationStore ?? new MemoryVerificationStore();
 
-  // The app `publish()` binds to, so the built completion can read the credential registry
-  // `mount()` injects onto app.locals LAZILY (mount runs after publish) — the same lazy read
-  // the storefront does, so an applicable custom gate() is enforced on the completion path.
+  // The app `publish()` binds to, so the built completion can read — LAZILY, at call time —
+  // the seams `mount()` injects onto app.locals AFTER publish. Same lazy read the storefront
+  // does for the registry; here also for the resolved signing key.
   let boundApp: HostApp | undefined;
-  const registryOf = (): ReadonlyMap<string, Credential> | undefined =>
-    (boundApp?.locals.credentagent as { credentialRegistry?: ReadonlyMap<string, Credential> } | undefined)?.credentialRegistry;
+  const localsOf = (): { credentialRegistry?: ReadonlyMap<string, Credential>; signingKey?: string } | undefined =>
+    boundApp?.locals.credentagent as { credentialRegistry?: ReadonlyMap<string, Credential>; signingKey?: string } | undefined;
+  const registryOf = (): ReadonlyMap<string, Credential> | undefined => localsOf()?.credentialRegistry;
+  // The key completion verifies a Cart Mandate with MUST be the one the rails signed it with.
+  // On the `allowEphemeralKey` path mount GENERATES the key and republishes it here, so
+  // forwarding `spec.signingKey` (undefined) would skip signature + reconciliation entirely —
+  // a tampered/replayed cart mandate would pass. Read the resolved key from the bound app.
+  const signingKeyOf = (): string | undefined => localsOf()?.signingKey ?? spec.signingKey;
 
   // Build the shared completion over the host's stores (unless the host brought its own).
   const complete: CompletionSeam =
@@ -141,7 +153,7 @@ export function defineHost(spec: DefineHostSpec): Host {
         records: spec.records!,
         ...(spec.cart ? { cart: spec.cart } : {}),
         ...(spec.settle ? { settle: spec.settle } : {}),
-        ...(spec.signingKey ? { signingKey: spec.signingKey } : {}),
+        ...(signingKeyOf() ? { signingKey: signingKeyOf() } : {}),
         // Read at CALL time (mount injects the registry after publish) so a custom gate() is
         // enforced here, not only in the rendered page (invariant 1). Absent ⇒ sweep skipped.
         ...(registryOf() ? { credentialRegistry: registryOf() } : {}),
@@ -163,6 +175,9 @@ export function defineHost(spec: DefineHostSpec): Host {
         // opted in (or supplied no stable key on a single-process server).
         allowEphemeralKey: spec.allowEphemeralKey ?? !spec.signingKey,
         ...(spec.statelessOrders ? { statelessOrders: spec.statelessOrders } : {}),
+        // A non-storefront host serves its checkout at its OWN route; publish it so the rails
+        // return the buyer there after a proof, not to the default /checkout?order=<id>.
+        ...(spec.returnUrl ? { returnUrl: spec.returnUrl } : {}),
       };
     },
   };

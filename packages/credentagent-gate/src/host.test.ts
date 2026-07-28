@@ -7,6 +7,7 @@ import { describe, it, expect } from "vitest";
 import { defineHost, type HostApp } from "./host.js";
 import { CredentAgent } from "./client.js";
 import { completeOrder, type CompletedRecord } from "./ceremony/completion.js";
+import { issueCartMandate } from "./ceremony/cartMandate.js";
 import { MemoryVerificationStore } from "./store.js";
 import { professionalLicense } from "./ceremony/credential-gate/__fixtures__/customCredential.js";
 import type { CartItemRef, CeremonyCatalog, CeremonyOrder, CeremonyOrderStore, CompletionInput } from "./ceremony/types.js";
@@ -162,5 +163,49 @@ describe("defineHost — behaviorally identical to hand-wired seams (no weaker p
     const res = await host.complete(inputFor([{ productId: "widget", quantity: 1 }]));
     expect(called).toBe(true);
     expect(res.completed).toBe(true);
+  });
+});
+
+describe("defineHost — BYPASS: host.complete verifies a cart mandate with the RESOLVED ephemeral key", () => {
+  function mandateFor(o: CeremonyOrder, key: string) {
+    return issueCartMandate(
+      { orderId: o.id, lines: o.lines.map((l) => ({ id: l.id, quantity: l.quantity, unitPrice: l.unitPrice ?? 0, lineTotal: l.lineTotal, ...(l.minimumAge ? { minimumAge: l.minimumAge } : {}) })), currency: o.currency, total: o.total },
+      key,
+    );
+  }
+
+  it("refuses a tampered cart mandate on the ephemeral-key path (skipped if it forwarded undefined spec.signingKey)", async () => {
+    const s = stores();
+    const host = defineHost({ catalog, orderStore: s.orderStore, records: s.records, allowEphemeralKey: true }); // no signingKey → ephemeral
+    const app: HostApp = { locals: {} };
+    host.publish(app);
+    new CredentAgent({ walletOrigin: "https://shop.example" }).mount(app);
+
+    // mount GENERATED the ephemeral key and republished it; the rails sign cart mandates with it.
+    const key = (app.locals.credentagent as { signingKey?: string }).signingKey;
+    expect(typeof key).toBe("string");
+
+    // A valid mandate verifies + completes — proving host.complete actually USES the resolved key.
+    const good = catalog.createOrder([{ productId: "widget", quantity: 2 }], "ORD-OK");
+    const okRes = await host.complete({ order: good, mandateId: "m", amount: good.total, currency: good.currency, method: "demo", gates: [{ gate: "demo", pass: true, detail: "" }], cartMandate: mandateFor(good, key!) });
+    expect(okRes.completed).toBe(true);
+
+    // A tampered mandate (edited total, stale signature) is REFUSED. This assertion FAILS if the
+    // signing key reverts to spec.signingKey (undefined) — verification would be skipped entirely.
+    const bad = catalog.createOrder([{ productId: "widget", quantity: 2 }], "ORD-BAD");
+    const tampered = { ...mandateFor(bad, key!), total: 1 };
+    const badRes = await host.complete({ order: bad, mandateId: "m2", amount: bad.total, currency: bad.currency, method: "demo", gates: [{ gate: "demo", pass: true, detail: "" }], cartMandate: tampered });
+    expect(badRes).toMatchObject({ completed: false, reason: "cart-mandate" });
+  });
+});
+
+describe("defineHost — returnUrl seam (a non-storefront checkout route)", () => {
+  it("publishes returnUrl so the rails return the buyer to the host's own checkout, not the dead default", () => {
+    const s = stores();
+    const host = defineHost({ catalog, orderStore: s.orderStore, records: s.records, allowEphemeralKey: true, returnUrl: (id) => `/checkout/${id}` });
+    const app: HostApp = { locals: {} };
+    host.publish(app);
+    const returnUrl = (app.locals.credentagent as { returnUrl?: (id: string) => string }).returnUrl;
+    expect(returnUrl?.("ORD-9")).toBe("/checkout/ORD-9");
   });
 });
