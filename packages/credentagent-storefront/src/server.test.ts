@@ -10,7 +10,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { AddressInfo } from "node:net";
 import { readFileSync } from "node:fs";
-import { createStorefront, originFromRequest, verificationRevision, type Storefront, type CompletedOrderRecord } from "./server.js";
+import { createStorefront, originFromRequest, verificationRevision, bundleVersion, type Storefront, type CompletedOrderRecord } from "./server.js";
 import { redisStorage, type RedisLike } from "./redis.js";
 import { firestoreCatalog, type FirestoreLike } from "./firestore.js";
 import { MemoryOrderStore } from "./state.js";
@@ -135,6 +135,41 @@ describe("CT5 — the widget ui:// resource is registered", () => {
     expect(uris.some((u) => u.startsWith("ui://"))).toBe(true);
     // (Reading the bundle exercises loadBundle from dist/ui at runtime; the build
     // produces it and the manual host check (T031) confirms it renders.)
+  });
+});
+
+describe("#55 — a missing widget bundle fails loudly (never falls back to 'dev')", () => {
+  // A missing bundle is always a packaging/deploy defect. The retired "dev" fallback
+  // stamped ui://product-picker/mcp-app-dev.html, which poisoned connected clients'
+  // cached resource URIs so the widget 404'd even after the bundle was restored.
+  // `candidates` is the resolver's test seam — production reads bundleCandidates().
+  const missing = ["/no/such/dir/ui/mcp-app.html"];
+
+  it("bundleVersion throws (naming the file + likely cause) instead of returning 'dev'", () => {
+    // Bypass guard: if the fail-fast throw is removed and the "dev" fallback restored,
+    // bundleVersion(missing) returns "dev" and both assertions below fail.
+    expect(() => bundleVersion(missing)).toThrow(/widget bundle dist\/ui\/mcp-app\.html not found/);
+    expect(() => bundleVersion(missing)).toThrow(/includeFiles/);
+  });
+
+  it("produces no version for a missing bundle, so no mcp-app-dev.html URI is ever formed", () => {
+    let version: string | undefined;
+    try {
+      version = bundleVersion(missing);
+    } catch {
+      /* fail-fast: expected */
+    }
+    expect(version).toBeUndefined(); // threw — no version, so `mcp-app-${version}.html` is never advertised
+  });
+
+  it("the real storefront advertises content-hashed ui:// URIs, never a 'dev' one", async () => {
+    const c = await connect(createStorefront());
+    const uris = (await c.listResources()).resources.map((r) => r.uri).filter((u) => u.startsWith("ui://"));
+    expect(uris.length).toBeGreaterThan(0);
+    for (const u of uris) {
+      expect(u).toMatch(/mcp-app-[0-9a-f]{8}\./); // an 8-hex content hash, not "dev"
+      expect(u).not.toContain("mcp-app-dev");
+    }
   });
 });
 

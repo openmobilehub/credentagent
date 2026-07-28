@@ -235,28 +235,45 @@ function bundleCandidates(): string[] {
   return [join(import.meta.dirname, "ui", "mcp-app.html"), join(process.cwd(), "dist", "ui", "mcp-app.html")];
 }
 
-// Stamp the resource URI with a short hash of the bundle so hosts re-fetch exactly
-// when the widget changes (they cache by URI). "dev" until the bundle is on disk.
-function bundleVersion(): string {
-  for (const c of bundleCandidates()) {
+// A missing widget bundle is ALWAYS a packaging/deploy defect: the built
+// dist/ui/mcp-app.html ships with the package (package.json `files`) and, on a serverless
+// deploy, must be listed in the function's `includeFiles`. Say exactly what's wrong and the
+// likely cause so the fix is obvious. Shared by bundleVersion (startup) and loadBundle (read).
+function bundleMissingError(candidates: string[]): Error {
+  return new Error(
+    "credentagent-storefront: widget bundle dist/ui/mcp-app.html not found — the package was built " +
+      "without its UI (run `npm run build`) or the deploy's includeFiles is missing it. " +
+      `Looked in: ${[...new Set(candidates)].join(", ")}.`,
+  );
+}
+
+// Stamp the resource URI with a short hash of the bundle so hosts re-fetch exactly when the
+// widget changes (they cache by URI). A MISSING bundle THROWS (fail fast at createStorefront()
+// startup) — it must NEVER fall back to a "dev" version, which would stamp
+// ui://product-picker/mcp-app-dev.html and poison connected clients' cached resource URIs, so
+// the widget 404s even after the bundle is restored (#55). `candidates` is a seam for the
+// missing-bundle test; production always uses bundleCandidates().
+export function bundleVersion(candidates: string[] = bundleCandidates()): string {
+  for (const c of candidates) {
     try {
       return createHash("sha256").update(readFileSync(c)).digest("hex").slice(0, 8);
     } catch {
       /* try next */
     }
   }
-  return "dev";
+  throw bundleMissingError(candidates);
 }
 
 async function loadBundle(): Promise<string> {
-  for (const c of bundleCandidates()) {
+  const candidates = bundleCandidates();
+  for (const c of candidates) {
     try {
       return await readFile(c, "utf-8");
     } catch {
       /* try next */
     }
   }
-  throw new Error(`credentagent-storefront: widget bundle not found (looked in: ${bundleCandidates().join(", ")})`);
+  throw bundleMissingError(candidates);
 }
 
 // Derive this server's public origin from the incoming request. Proxies (Vercel,
