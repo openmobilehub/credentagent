@@ -1,0 +1,100 @@
+name: deploy-dev
+
+# Deploys main's UNPUBLISHED package source to the dev demo
+# (https://credentagent-demo-dev.vercel.app) after every merge to main, then runs the
+# quickstart smoke against it. The prod demo (credentagent-demo) keeps running the
+# PUBLISHED npm packages; this dev twin is where a human with a phone can click through
+# unpublished ceremonies before they ship to npm (#113, step 2).
+#
+# Same publish-shape mechanism as ci.yml's quickstart-smoke-source: build both
+# workspaces, npm-pack them (the exact tarball `npm publish` would ship), install the
+# tarballs into a copy of the quickstart, deploy THAT. `file:` links are deliberately
+# not used — the tarball path exercises the `files` allowlist and `exports` map.
+#
+# Requires the VERCEL_TOKEN secret (a token for the Vercel account that owns the
+# credentagent-demo-dev project). Without it every step SKIPS (green, with a notice) —
+# the same pattern as agent-e2e — so this merges before the secret exists. The dev
+# project has its own GATE_SECRET and NO shared state with the prod demo.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+# Serialize runs: two quick merges to main must deploy in order, or an OLDER run
+# finishing last would silently move the dev endpoint back to its commit (and the
+# smoke would test whichever deploy won, not its own). Queue, don't cancel — a
+# cancelled run's `vercel deploy` can still complete server-side and race anyway.
+concurrency:
+  group: deploy-dev
+  cancel-in-progress: false
+
+env:
+  # Identifiers, not credentials: which Vercel team/project `vercel deploy` targets.
+  VERCEL_ORG_ID: team_hJvCfLus8Jc0Q77qB5bOi6gP # dfzuluagas-projects
+  VERCEL_PROJECT_ID: prj_69vlbxYYn2NYwLFvcf1AiS0Lu7AD # credentagent-demo-dev
+
+jobs:
+  deploy-dev:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check for VERCEL_TOKEN
+        id: gate
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          if [ -z "$VERCEL_TOKEN" ]; then
+            echo "::notice::VERCEL_TOKEN not configured — skipping the dev deploy."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.configured == 'true'
+      - uses: actions/setup-node@v4
+        if: steps.gate.outputs.configured == 'true'
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Build + pack both workspaces (publish shape)
+        if: steps.gate.outputs.configured == 'true'
+        run: |
+          npm ci
+          npm run build
+          npm pack ./packages/credentagent-gate ./packages/credentagent-storefront
+
+      - name: Assemble the dev deploy directory
+        if: steps.gate.outputs.configured == 'true'
+        run: |
+          cp -r examples/quickstart "$RUNNER_TEMP/dev-deploy"
+          cp openmobilehub-credentagent-*.tgz "$RUNNER_TEMP/dev-deploy/"
+          cd "$RUNNER_TEMP/dev-deploy"
+          # Rewrites package.json to file:<tarball> so Vercel's remote install uses
+          # the packed source, not the registry.
+          npm install --no-audit --no-fund ./openmobilehub-credentagent-*.tgz
+          # CLI deploys have no dashboard framework preset; pin it off so the
+          # `functions` config in vercel.json is honored as-is.
+          node -e '
+            const fs = require("fs");
+            const v = JSON.parse(fs.readFileSync("vercel.json"));
+            v.framework = null;
+            fs.writeFileSync("vercel.json", JSON.stringify(v, null, 2) + "\n");
+          '
+
+      - name: Deploy to credentagent-demo-dev (production)
+        if: steps.gate.outputs.configured == 'true'
+        working-directory: ${{ runner.temp }}/dev-deploy
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: npx vercel@latest deploy --prod --yes --token "$VERCEL_TOKEN"
+
+      - name: Smoke the live dev endpoint
+        if: steps.gate.outputs.configured == 'true'
+        working-directory: examples/quickstart
+        env:
+          SMOKE_URL: https://credentagent-demo-dev.vercel.app
+        run: |
+          npm ci
+          npm run smoke
