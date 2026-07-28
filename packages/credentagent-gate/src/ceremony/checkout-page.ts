@@ -491,13 +491,19 @@ function renderPaid(paid: RenderPaid): string {
   // txn but no chain account / explorer; an on-chain one has both — each shows what it has.
   let detail: string;
   if (s) {
+    // Lead with the settlement network when the record carries one AND it adds information
+    // beyond the backend label — so an on-chain settlement still discloses testnet vs
+    // mainnet (network "hedera-testnet" ≠ provider "x402"), but a processor whose network
+    // merely repeats its provider ("upay" / "UPay") doesn't render a redundant "on upay".
+    const showNetwork = !!s.network && s.network.toLowerCase() !== (s.provider ?? "").toLowerCase();
+    const lead = showNetwork ? `Settled on ${escapeHtml(s.network)}` : "Settled";
     const parts: string[] = [];
     if (s.payer?.accountId) parts.push(`paid from ${escapeHtml(s.payer.accountId)}`);
     if (s.txId) parts.push(`txn ${escapeHtml(s.txId)}`);
     if (s.hashscanUrl) parts.push(`<a href="${escapeHtml(s.hashscanUrl)}" target="_blank" rel="noopener">View on HashScan</a>`);
     detail = parts.length
-      ? `<p class="small" style="margin:0;">Settled · ${parts.join(" · ")}</p>`
-      : `<p class="small" style="margin:0;">Settled.</p>`;
+      ? `<p class="small" style="margin:0;">${lead} · ${parts.join(" · ")}</p>`
+      : `<p class="small" style="margin:0;">${lead}.</p>`;
   } else {
     detail = `<p class="small" style="margin:0;">No settlement recorded for this payment method.</p>`;
   }

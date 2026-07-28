@@ -171,6 +171,7 @@ describe("renderRequirements — paid revisit", () => {
       },
     });
     expect(html).toContain("Order paid · $111.60 via x402");
+    expect(html).toContain("Settled on hedera-testnet"); // network disclosed — testnet vs mainnet (#130 review)
     expect(html).toContain("View on HashScan"); // the actual explorer link, not just the CSS class
     expect(html).toContain("0.0.5555");
   });
@@ -193,6 +194,7 @@ describe("renderRequirements — paid revisit", () => {
     expect(html).toContain("txn ccOuvUeikyv22XIn"); // the real transaction id is shown
     expect(html).not.toContain("via x402"); // never the hardcoded blockchain rail
     expect(html).not.toContain("View on HashScan"); // no explorer link a processor can't back
+    expect(html).not.toContain("on upay"); // network == provider ⇒ no redundant "on upay" (#130 review)
     expect(html).not.toContain("No settlement recorded"); // money DID move — don't deny it
   });
 
