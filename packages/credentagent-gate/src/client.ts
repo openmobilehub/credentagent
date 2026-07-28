@@ -3,7 +3,7 @@
 // serializable manifest (Context 1); `mount(app)` is the Context-2 seam.
 
 import * as x509 from "@peculiar/x509";
-import type { Credential, CredentAgentOptions, GateOrder, ReaderIdentity, Step, VerificationManifestEntry, VerificationStore } from "./types.js";
+import type { Branding, Credential, CredentAgentOptions, GateOrder, ReaderIdentity, Step, VerificationManifestEntry, VerificationStore } from "./types.js";
 import { resolveRequirements } from "./manifest.js";
 import { MemoryVerificationStore } from "./store.js";
 import { mountCeremony, type CeremonyApp, type CeremonySeams } from "./ceremony/mount.js";
@@ -41,6 +41,9 @@ export class CredentAgent {
   readonly grants: Grants;
   /** Stable reader identity presented by the rails (undefined ⇒ per-request self-signed). */
   readonly readerIdentity?: ReaderIdentity;
+  /** Host brand for the ceremony pages, threaded into every rail + the checkout page
+   *  (undefined ⇒ the built-in look). Set once here; never brands the honesty footer. */
+  readonly branding?: Branding;
   private readonly listeners = new Map<string, Set<(payload: { id: string }) => void>>();
   // True once the ceremony rails are wired onto a host app (so `/credentagent/*` routes
   // exist on this server). `requirements()` then emits approve links that resolve
@@ -102,6 +105,9 @@ export class CredentAgent {
     this.sharedVerificationStore = opts.store !== undefined && !(opts.store instanceof MemoryVerificationStore);
     this.hasGateSecret = typeof opts.gateSecret === "string" && opts.gateSecret.length > 0;
     this.readerIdentity = opts.readerIdentity;
+    // Host brand for the ceremony pages — threaded into every mount path below. Kept raw;
+    // theme.ts sanitizes each field at the one point it is interpolated into a page.
+    if (opts.branding) this.branding = opts.branding;
     // Honesty / fail-fast: a reader cert whose SAN doesn't cover the origin host is
     // silently rejected by the wallet (origin binding, invariant 6). Warn now, at
     // construction, rather than let it surface as an opaque ceremony failure.
@@ -146,6 +152,7 @@ export class CredentAgent {
           verificationStore: this.store,
           credentialRegistry: this.registry,
           ...(this.readerIdentity ? { readerIdentity: this.readerIdentity } : {}),
+          ...(this.branding ? { branding: this.branding } : {}),
           ...(opts.gateSecret ? { signingKey: opts.gateSecret } : {}),
         });
         this.ordersServed = true;
@@ -245,7 +252,7 @@ export class CredentAgent {
    */
   mount(app: ExpressApp, ceremony?: MountCeremony): void {
     if (ceremony) {
-      mountCeremony(app as CeremonyApp, { ...ceremony, verificationStore: this.store, readerIdentity: this.readerIdentity, credentialRegistry: this.registry });
+      mountCeremony(app as CeremonyApp, { ...ceremony, verificationStore: this.store, readerIdentity: this.readerIdentity, credentialRegistry: this.registry, ...(this.branding ? { branding: this.branding } : {}) });
       this.mountedRoutes = true;
       // #25 doctor(): a host owns the serving surface here; capture the signing key it supplied via
       // the seams (the verification store is this.store — already reflected in sharedVerificationStore).
@@ -260,7 +267,7 @@ export class CredentAgent {
     // rails write (invariant 4). Falls back to CredentAgent's own store otherwise.
     const locals = (app.locals.credentagent ?? {}) as Partial<CeremonySeams>;
     if (locals.orderStore && locals.catalog && locals.completion) {
-      mountCeremony(app as CeremonyApp, { readerIdentity: this.readerIdentity, credentialRegistry: this.registry, ...(locals.verificationStore ? {} : { verificationStore: this.store }) });
+      mountCeremony(app as CeremonyApp, { readerIdentity: this.readerIdentity, credentialRegistry: this.registry, ...(this.branding ? { branding: this.branding } : {}), ...(locals.verificationStore ? {} : { verificationStore: this.store }) });
       this.mountedRoutes = true;
       // #25 doctor(): a composed storefront owns the serving surface. Capture the effective signing
       // key + verification store it published on app.locals (e.g. createStorefront({ signingKey,

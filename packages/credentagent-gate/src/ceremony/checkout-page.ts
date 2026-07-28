@@ -16,7 +16,7 @@
 // age gate server-side (Security invariant 1). Hiding the payment group is not the
 // control; it just keeps the UI honest about what the server will refuse.
 
-import type { VerificationManifestEntry } from "../types.js";
+import type { Branding, VerificationManifestEntry } from "../types.js";
 import { pageHead, brandHeader, progressRail, trustFooter, type RailStep } from "./theme.js";
 
 // ── Inputs ──────────────────────────────────────────────────────────────────
@@ -117,6 +117,10 @@ export interface RenderRequirementsOptions {
    *  encodes and returns the matching `revision` from `statusUrl`. Omitted ⇒ completion-only
    *  (unchanged; #63). */
   statusRevision?: string;
+  /** Host brand for this page (wordmark / accent / logo / demo-pill). Normally threaded from
+   *  `new CredentAgent({ branding })` via `orders.serve`. Omitted ⇒ the built-in look,
+   *  byte-for-byte. Never affects the honesty trust footer. */
+  branding?: Branding;
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -279,10 +283,10 @@ export function renderRequirements(
 
   return `<!doctype html>
 <html lang="en">
-${pageHead(`Checkout · ${order.id}`)}
+${pageHead(`Checkout · ${order.id}`, "", opts.branding)}
 <body>
   <div class="wrap">
-  ${brandHeader({ h1: "Checkout", tagline: "Prove it. Then pay." })}
+  ${brandHeader({ h1: "Checkout", tagline: "Prove it. Then pay." }, opts.branding)}
   <div class="card summary">
     <p class="card-title">Order ${escapeHtml(order.id)} · ${itemCount} item(s)</p>
     <table>

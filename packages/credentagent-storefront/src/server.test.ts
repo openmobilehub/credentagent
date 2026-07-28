@@ -228,6 +228,21 @@ describe("GET /checkout — the shared three-gate page (renderRequirements)", ()
     expect(res.text).toContain("presence-only-demo");
   });
 
+  it("carries the host brand onto the checkout hub — wordmark replaces the default, honesty footer unchanged (issue #61)", async () => {
+    const store = createStorefront();
+    const credentagent = new CredentAgent({ branding: { wordmark: "ACME", accent: "#7c3aed" } });
+    credentagent.mount(store.app); // publishes branding onto app.locals; the /checkout handler reads it
+    const orderId = await checkoutId(await connect(store), "drift-mouse");
+    const res = await request(store.app).get(`/checkout?order=${orderId}`);
+    expect(res.status).toBe(200);
+    // The hub now carries the host brand — matching the linked gate pages (the #132 P1 gap).
+    expect(res.text).toContain(`<span class="wordmark">ACME</span>`);
+    expect(res.text).toContain("--accent:#7c3aed"); // the accent override reached the hub's <head>
+    expect(res.text).not.toContain("CREDENTAGENT"); // the default wordmark is gone on the hub too
+    // The honesty footer is NEVER branded — byte-identical to the default render (FR-011).
+    expect(res.text).toContain("🔒 presence-only-demo · secured by CredentAgent · the wire crypto is real; issuer trust anchor is not");
+  });
+
   it("once age is proven, the gated order offers the mounted payment rail as the Pay CTA (still no bypass)", async () => {
     const store = gatedStore();
     const orderId = await checkoutId(await connect(store), "oak-whiskey");

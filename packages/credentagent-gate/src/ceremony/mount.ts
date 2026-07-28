@@ -9,7 +9,7 @@
 // The package stays dependency-free: `CeremonyApp` is a minimal structural type
 // (no `express` import) carrying just `locals` + the route methods a rail needs.
 import { randomBytes } from "node:crypto";
-import type { Credential, ReaderIdentity, VerificationStore } from "../types.js";
+import type { Branding, Credential, ReaderIdentity, VerificationStore } from "../types.js";
 import { deriveOrigin, type Origin, type RequestLike } from "./origin.js";
 import type {
   CeremonyCatalog,
@@ -82,6 +82,10 @@ export interface CeremonySeams {
    *  storefront's route). A host that serves its checkout elsewhere — e.g. `orders.serve`
    *  at `/credentagent/orders/:id` — sets this so the buyer lands back on the right page. */
   returnUrl?: (orderId: string) => string;
+  /** Host brand for the ceremony pages (wordmark / accent / logo / demo-pill). Normally set
+   *  once on `new CredentAgent({ branding })` and threaded here; every rail page picks it up.
+   *  Absent ⇒ the built-in look. Never affects the honesty trust footer. */
+  branding?: Branding;
 }
 
 /** The resolved context each rail receives (every required seam present). */
@@ -107,6 +111,8 @@ export interface CeremonyContext {
   credentialRegistry?: ReadonlyMap<string, Credential>;
   /** Build the buyer's return-to-checkout URL for an order (absent ⇒ the rail default). */
   returnUrl?: (orderId: string) => string;
+  /** Host brand for the ceremony pages (absent ⇒ the built-in look). Never brands the footer. */
+  branding?: Branding;
 }
 
 /** A rail attaches its routes to the host app given the resolved context. */
@@ -141,6 +147,7 @@ export function mountCeremony(app: CeremonyApp, options: Partial<CeremonySeams> 
   const readerIdentity = options.readerIdentity ?? locals.readerIdentity;
   const credentialRegistry = options.credentialRegistry ?? locals.credentialRegistry;
   const returnUrl = options.returnUrl ?? locals.returnUrl;
+  const branding = options.branding ?? locals.branding;
   let signingKey = options.signingKey ?? locals.signingKey;
 
   // Fail fast (CT2) — a load-bearing seam must never silently default. (`origin`
@@ -183,6 +190,7 @@ export function mountCeremony(app: CeremonyApp, options: Partial<CeremonySeams> 
     ...(verifier ? { verifier } : {}),
     ...(readerIdentity ? { readerIdentity } : {}),
     ...(returnUrl ? { returnUrl } : {}),
+    ...(branding ? { branding } : {}),
   };
 
   // Re-expose the resolved seams on app.locals so the storefront's gate routes

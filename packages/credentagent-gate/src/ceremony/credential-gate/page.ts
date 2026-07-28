@@ -12,6 +12,7 @@
 // Credentials API the page points the buyer at the instant-demo button. Every surface
 // states trust_level "presence-only-demo" (CT11 / Principle VII / FR-011): the wire
 // crypto is real; the issuer trust anchor is not — never a real safety control.
+import type { Branding } from "../../types.js";
 import { pageHead, brandHeader, trustFooter } from "../theme.js";
 
 export interface CredentialPageArgs {
@@ -46,6 +47,8 @@ export interface CredentialPageArgs {
   /** The order-derived progress rail HTML (from `checkoutRail`), built by the route which
    *  holds the full re-priced order. Absent ⇒ no rail (never a hardcoded one). */
   rail?: string;
+  /** Host brand for this page (from `ctx.branding`). Absent ⇒ the built-in look. */
+  branding?: Branding;
 }
 
 function escapeHtml(s: string): string {
@@ -96,10 +99,10 @@ export function renderCredentialPage(args: CredentialPageArgs): string {
 
   return `<!doctype html>
 <html lang="en">
-${pageHead(title, extraCss)}
+${pageHead(title, extraCss, args.branding)}
 <body>
   <div class="wrap">
-  ${brandHeader({ h1: title, tagline })}
+  ${brandHeader({ h1: title, tagline }, args.branding)}
   ${rail}
   <div class="card">
     <p class="lede">${escapeHtml(lede)}</p>
