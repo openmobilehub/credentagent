@@ -356,6 +356,11 @@ describe("completeOrder — custom gate() enforcement (007, US2 / invariant 1)",
   });
 });
 
+// PR #131 review (P1): the mount() path scoping is exercised end-to-end in mount.test.ts (the
+// mounted ceremony seam sets input.policyCredentialIds from the client's per-order policy). At the
+// completeOrder level the explicit `policyCredentialIds` input is already pinned by the F2 repro
+// (pr42-findings.repro.test.ts) and the orders-serve integration test.
+
 // ── Draw-path hardening (PR #41 review): the delegated-draw branch must run the SAME custom-
 // gate sweep as the HP path, bind currency to the order, and echo delegationId on replay. ──
 describe("completeOrder — draw path hardening (PR #41 review)", () => {
