@@ -19,7 +19,7 @@
 
 import type { Order } from "./index.js";
 import type { CartStore, OrderStore, StorageProvider, CompletedOrderRecord } from "./server.js";
-import type { VerificationRecord, VerificationStore } from "@openmobilehub/credentagent-gate";
+import type { VerificationRecord, VerificationStore, GrantStore, GrantSnapshot } from "@openmobilehub/credentagent-gate";
 
 /** The minimal slice of the Upstash client the adapters use (also the injectable test seam). */
 export interface RedisLike {
@@ -45,6 +45,9 @@ export interface RedisStorageOptions {
 }
 
 const DEFAULT_NAMESPACE = "credentagent-storefront";
+// Grants live under their OWN namespace so a deployment that shares a Redis database with other
+// tenants (or with the storefront's own order/cart state) can't collide keys.
+const DEFAULT_GRANTS_NAMESPACE = "credentagent-grants";
 
 function joinKey(...parts: string[]): string {
   return parts.join(":");
@@ -114,6 +117,25 @@ class RedisVerificationStore implements VerificationStore {
   }
 }
 
+class RedisGrantStore implements GrantStore {
+  // Full-snapshot get/set per grant id (`${namespace}:grant:${id}`) — the grants facade merges
+  // state at the call site before persisting, so no adapter-level merge is needed; isolation is
+  // per-grant keying under a grants-only namespace.
+  constructor(
+    private readonly redis: RedisLike,
+    private readonly namespace: string,
+  ) {}
+  private keyFor(id: string): string {
+    return joinKey(this.namespace, "grant", id);
+  }
+  async read(id: string): Promise<GrantSnapshot | null> {
+    return (await this.redis.get<GrantSnapshot>(this.keyFor(id))) ?? null;
+  }
+  async write(id: string, snapshot: GrantSnapshot): Promise<void> {
+    await this.redis.set(this.keyFor(id), snapshot);
+  }
+}
+
 // A RedisLike that loads `@upstash/redis` and constructs the real client on FIRST use.
 // Deferring the import keeps `redisStorage()` synchronous and means the dependency is
 // only required when a Redis op actually runs (never at import / construction time).
@@ -172,4 +194,28 @@ export function redisStorage(options: RedisStorageOptions): StorageProvider {
     orderStore: new RedisOrderStore<CompletedOrderRecord>(redis, namespace, "completed"),
     verificationStore: new RedisVerificationStore(redis, namespace),
   };
+}
+
+/**
+ * Build a durable {@link GrantStore} backed by an Upstash-compatible Redis — pass it as
+ * `new CredentAgent({ grantStore })` so delegated grants survive a serverless instance split.
+ * Supply either `{ url, token }` or an injected `{ client }`. Grants use their OWN default
+ * namespace (`"credentagent-grants"`), separate from `redisStorage`'s, so the two never collide.
+ */
+export function redisGrantStore(options: RedisStorageOptions): GrantStore {
+  const namespace = options.namespace ?? DEFAULT_GRANTS_NAMESPACE;
+  return new RedisGrantStore(resolveClient(options), namespace);
+}
+
+/**
+ * Zero-args {@link redisGrantStore} from the standard Upstash / Vercel-KV env vars
+ * (`KV_REST_API_URL`/`KV_REST_API_TOKEN`, or `UPSTASH_REDIS_REST_URL`/`_TOKEN`). Returns
+ * `undefined` when neither pair is set (so a caller keeps the in-memory default with no branching).
+ * `namespace` overrides the default; pass `process.env.GRANTS_NAMESPACE` to isolate a deployment.
+ */
+export function redisGrantStoreFromEnv(opts: { namespace?: string } = {}): GrantStore | undefined {
+  const url = process.env.KV_REST_API_URL ?? process.env.UPSTASH_REDIS_REST_URL;
+  const token = process.env.KV_REST_API_TOKEN ?? process.env.UPSTASH_REDIS_REST_TOKEN;
+  if (!url || !token) return undefined;
+  return redisGrantStore({ url, token, ...(opts.namespace ? { namespace: opts.namespace } : {}) });
 }
