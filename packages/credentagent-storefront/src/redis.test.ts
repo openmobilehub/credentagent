@@ -4,7 +4,8 @@
 // sharing one backend.
 
 import { describe, it, expect } from "vitest";
-import { redisStorage, type RedisLike } from "./redis.js";
+import { redisStorage, redisGrantStore, redisGrantStoreFromEnv, type RedisLike } from "./redis.js";
+import type { GrantSnapshot } from "@openmobilehub/credentagent-gate";
 
 // A Map-backed RedisLike fake standing in for one shared Upstash instance. `set`
 // round-trips through JSON to mirror Upstash's auto-serialization (so a test would catch
@@ -191,5 +192,77 @@ describe("redisStorage — fail-closed on backend error (Polish / FR-012, CT-11)
     const s = redisStorage({ client: throwingRedis() });
     await expect(s.cartStore.read("sess-1")).rejects.toThrow(/backend down/);
     await expect(s.verificationStore.write("ORD-1", { ageVerified: true })).rejects.toThrow(/backend down/);
+  });
+});
+
+const sampleGrant: GrantSnapshot = {
+  id: "grant_abc",
+  status: "authorized",
+  opts: { merchant: "utopia", budget: 200, perSpend: 60, allow: { categories: ["Beverages"] } },
+  spent: 49,
+  cache: [["k1", { ok: true, amount: 49, remaining: 151, replayed: false, authorization: "delegated" }]],
+};
+
+describe("redisGrantStore — durable grants across instances (#104 follow-up)", () => {
+  function fakeGrantRedis(): RedisLike & { store: Map<string, unknown> } {
+    return fakeRedis();
+  }
+
+  it("persists a grant snapshot so a separate instance reads exactly what the first wrote", async () => {
+    const client = fakeGrantRedis();
+    const a = redisGrantStore({ client, namespace: "g" });
+    const b = redisGrantStore({ client, namespace: "g" }); // a distinct "instance"
+    await a.write(sampleGrant.id, sampleGrant);
+    expect(await b.read(sampleGrant.id)).toEqual(sampleGrant);
+    expect(await b.read("grant_missing")).toBeNull();
+  });
+
+  it("defaults to its OWN namespace (credentagent-grants) — never collides with redisStorage keys", async () => {
+    const client = fakeGrantRedis();
+    const grants = redisGrantStore({ client }); // default grants namespace
+    const storage = redisStorage({ client }); // default storefront namespace
+    await grants.write(sampleGrant.id, sampleGrant);
+    await storage.verificationStore.write("grant_abc", { ageVerified: true }); // same id, different kind
+    // Distinct key prefixes → no collision.
+    expect([...client.store.keys()]).toContain("credentagent-grants:grant:grant_abc");
+    expect([...client.store.keys()]).toContain("credentagent-storefront:verification:grant_abc");
+    // A grant read never returns the storefront's verification record.
+    expect(await grants.read("grant_abc")).toEqual(sampleGrant);
+  });
+
+  it("two grant namespaces over one backend never cross-read (deployment isolation)", async () => {
+    const client = fakeGrantRedis();
+    const prod = redisGrantStore({ client, namespace: "credentagent-grants" });
+    const preview = redisGrantStore({ client, namespace: "credentagent-grants-preview" });
+    await prod.write(sampleGrant.id, sampleGrant);
+    expect(await preview.read(sampleGrant.id)).toBeNull(); // the preview deploy sees none of prod's grants
+  });
+
+  it("fail-closed: a backend error propagates (the grants facade then refuses the operation)", async () => {
+    const down: RedisLike = {
+      async get() { throw new Error("backend down"); },
+      async set() { throw new Error("backend down"); },
+      async del() { throw new Error("backend down"); },
+    };
+    const s = redisGrantStore({ client: down });
+    await expect(s.read("grant_abc")).rejects.toThrow(/backend down/);
+    await expect(s.write("grant_abc", sampleGrant)).rejects.toThrow(/backend down/);
+  });
+
+  it("redisGrantStoreFromEnv returns undefined with no Redis env, and builds a store when it is set", () => {
+    const saved = { url: process.env.KV_REST_API_URL, token: process.env.KV_REST_API_TOKEN, u2: process.env.UPSTASH_REDIS_REST_URL, t2: process.env.UPSTASH_REDIS_REST_TOKEN };
+    try {
+      delete process.env.KV_REST_API_URL; delete process.env.KV_REST_API_TOKEN;
+      delete process.env.UPSTASH_REDIS_REST_URL; delete process.env.UPSTASH_REDIS_REST_TOKEN;
+      expect(redisGrantStoreFromEnv()).toBeUndefined();
+      process.env.KV_REST_API_URL = "https://x.upstash.io";
+      process.env.KV_REST_API_TOKEN = "t";
+      const store = redisGrantStoreFromEnv({ namespace: "credentagent-grants" });
+      expect(store && typeof store.read).toBe("function"); // lazy — no Redis op runs here
+    } finally {
+      for (const [k, v] of [["KV_REST_API_URL", saved.url], ["KV_REST_API_TOKEN", saved.token], ["UPSTASH_REDIS_REST_URL", saved.u2], ["UPSTASH_REDIS_REST_TOKEN", saved.t2]] as const) {
+        if (v === undefined) delete process.env[k]; else process.env[k] = v;
+      }
+    }
   });
 });
