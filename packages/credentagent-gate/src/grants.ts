@@ -15,7 +15,7 @@
 // human clicks approve — presence "delegated-demo", trust "server-issued-demo"). The wallet
 // key-signing ceremony is the roadmap (#71/#14); it will call the SAME _authorize seam.
 
-import { DelegatedGate, DelegatedGrant, type CatalogEntry, type PreApproveOptions } from "./delegated.js";
+import { DelegatedGate, DelegatedGrant, type CatalogEntry } from "./delegated.js";
 import { serveGrants, type GrantsApp } from "./grants-serve.js";
 
 /** Why a grant operation refused — a TYPED union (never `string`; #95 review). */
@@ -127,65 +127,13 @@ interface GrantRecord {
   engine?: DelegatedGrant;
   /** Idempotent spend cache: key → the door already returned (a retry replays it). */
   cache: Map<string, SpendDoor>;
-  /** Cumulative dollars drawn down so far — persisted, and re-seeds the engine on rehydration. */
-  spent: number;
-}
-
-/**
- * The JSON-safe persisted state of ONE grant — what a {@link GrantStore} round-trips. Everything a
- * different process/instance needs to reconstruct the grant faithfully: the raw status, the sealed
- * bounds the human approved, how much has been drawn down (`spent`), and the idempotency door
- * cache (so a retry replays identically on ANY instance).
- */
-export interface GrantSnapshot {
-  id: string;
-  status: GrantStatus;
-  opts: CreateGrantOptions;
-  spent: number;
-  /** The idempotency cache as `[key, door]` pairs (a Map isn't JSON-serializable). */
-  cache: Array<[string, SpendDoor]>;
-}
-
-/**
- * A durable key-value store for grant state, keyed by grant id (the #104 durability follow-up).
- * Inject one — `new CredentAgent({ grantStore })` — so grants survive a restart and a serverless
- * instance that never ran `create()` can still `retrieve()`/spend against a SHARED backend. The
- * default is in-memory (single process). Mirrors {@link VerificationStore}'s injectable shape.
- *
- * FAIL-CLOSED: a `read`/`write` error must REJECT so the caller refuses the operation — never
- * silently fall back to an authorized in-memory grant (that would defeat cross-instance revoke).
- */
-export interface GrantStore {
-  read(id: string): Promise<GrantSnapshot | null>;
-  write(id: string, snapshot: GrantSnapshot): Promise<void>;
-}
-
-/**
- * In-memory {@link GrantStore} — the reference implementation (and the test double for two
- * "instances" sharing one store). Clones on read/write so callers can't mutate stored state
- * through a live reference, exactly as a real (serializing) Redis store would.
- */
-export class MemoryGrantStore implements GrantStore {
-  private readonly snaps = new Map<string, GrantSnapshot>();
-  async read(id: string): Promise<GrantSnapshot | null> {
-    const s = this.snaps.get(id);
-    return s ? structuredClone(s) : null;
-  }
-  async write(id: string, snapshot: GrantSnapshot): Promise<void> {
-    this.snaps.set(id, structuredClone(snapshot));
-  }
 }
 
 export interface GrantsDeps {
   walletOrigin: string;
   /** The priced catalog (dollars) — the ONE price source; also read by the `allow` bounds. */
   catalog?: Record<string, CatalogEntry>;
-  /** Optional durable store (default in-memory, single-process). Persists every state change and
-   *  rehydrates on a cross-instance retrieve/spend. */
-  store?: GrantStore;
 }
-
-const round2 = (n: number): number => Math.round(n * 100) / 100;
 
 const genGrantId = (): string => `grant_${globalThis.crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
 
@@ -283,66 +231,6 @@ export class Grants {
     this.served = true;
   }
 
-  /** The engine bounds a set of sealed grant options map to (used at authorize AND rehydrate). */
-  private boundsOf(opts: CreateGrantOptions): PreApproveOptions {
-    return {
-      merchant: opts.merchant,
-      perOrder: toCents(opts.perSpend),
-      total: toCents(opts.budget),
-      description: opts.description ?? `Up to $${opts.budget} at ${opts.merchant}, $${opts.perSpend}/purchase`,
-    };
-  }
-
-  private snapshotOf(rec: GrantRecord): GrantSnapshot {
-    return { id: rec.id, status: rec.status, opts: rec.opts, spent: rec.spent, cache: [...rec.cache] };
-  }
-
-  /** Persist a record to the durable store (a no-op without one). Called after every state change. */
-  private async persist(rec: GrantRecord): Promise<void> {
-    if (this.deps.store) await this.deps.store.write(rec.id, this.snapshotOf(rec));
-  }
-
-  /** Bring an in-memory record into agreement with the store (the source of truth when one is
-   *  configured) — mutating it IN PLACE so any live handle closing over it sees the change. Rebuilds
-   *  the engine only when it's missing or the drawn-down total moved (a spend on another instance),
-   *  re-seeding it to the stored `spent` so `remaining` + the budget cap stay faithful. */
-  private async reconcile(rec: GrantRecord, snap: GrantSnapshot): Promise<void> {
-    rec.status = snap.status;
-    rec.cache = new Map(snap.cache);
-    if (snap.status === "authorized" || snap.status === "revoked") {
-      if (!rec.engine || rec.spent !== snap.spent) {
-        rec.engine = await this.engineGate().rehydrate(this.boundsOf(rec.opts), toCents(snap.spent));
-        if (snap.status === "revoked") await rec.engine.revoke();
-      }
-    } else {
-      rec.engine = undefined;
-    }
-    rec.spent = snap.spent;
-  }
-
-  /** Sync a live record with the store in place (revoke-wins + faithful budget across instances).
-   *  A no-op without a store; a store READ error REJECTS so the caller fail-closes. */
-  private async syncFromStore(rec: GrantRecord): Promise<void> {
-    if (!this.deps.store) return;
-    const snap = await this.deps.store.read(rec.id);
-    if (snap) await this.reconcile(rec, snap);
-  }
-
-  /** Resolve the current record for `id`: memory first, then the store (rehydrating a cold
-   *  instance). Returns null on a miss in BOTH; a store READ error propagates (caller fail-closes). */
-  private async loadRecord(id: string): Promise<GrantRecord | null> {
-    let rec = this.records.get(id);
-    if (!this.deps.store) return rec ?? null;
-    const snap = await this.deps.store.read(id);
-    if (!snap) return rec ?? null; // unknown in the store (never persisted / other namespace)
-    if (!rec) {
-      rec = { id, status: snap.status, opts: deepFreeze(structuredClone(snap.opts)), cache: new Map(), spent: snap.spent };
-      this.records.set(id, rec);
-    }
-    await this.reconcile(rec, snap);
-    return rec;
-  }
-
   /** Open a grant awaiting the human's one-time approval. Returns immediately (status "pending"). */
   async create(opts: CreateGrantOptions): Promise<Grant> {
     this.engineGate(); // fail fast on a missing catalog at create, not first spend
@@ -355,22 +243,14 @@ export class Grants {
     // share this immutable copy, so neither a caller mutating `grant.allow` nor the original
     // options object can widen what the human approved after the fact.
     const sealed: CreateGrantOptions = deepFreeze(structuredClone(opts));
-    const rec: GrantRecord = { id, status: "pending", opts: sealed, cache: new Map(), spent: 0 };
+    const rec: GrantRecord = { id, status: "pending", opts: sealed, cache: new Map() };
     this.records.set(id, rec);
-    // Persist BEFORE returning so a DIFFERENT instance can retrieve/approve this grant immediately.
-    await this.persist(rec);
     return this.view(rec);
   }
 
-  /** Rehydrate a grant handle by id (the authorize-now / spend-later process boundary). A store
-   *  read error fail-closes to `null` (treat as not retrievable) rather than surfacing a stale grant. */
+  /** Rehydrate a grant handle by id (the authorize-now / spend-later process boundary). */
   async retrieve(id: string): Promise<Grant | null> {
-    let rec: GrantRecord | null;
-    try {
-      rec = await this.loadRecord(id);
-    } catch {
-      return null;
-    }
+    const rec = this.records.get(id);
     return rec ? this.view(rec) : null;
   }
 
@@ -382,20 +262,18 @@ export class Grants {
   async _authorize(id: string): Promise<boolean> {
     // Serialized per grant (fix 1): the pending→authorized transition can't interleave with a
     // concurrent revoke/deny or a second approve, so a stopped grant is never resurrected and a
-    // double-approve seals exactly one intent. Caps go to the engine in cents (fix 2). Reads the
-    // store first so a grant already denied/revoked on another instance can't be authorized here.
+    // double-approve seals exactly one intent. Caps go to the engine in cents (fix 2).
     return this.locks.run(id, async () => {
-      let rec: GrantRecord | null;
-      try {
-        rec = await this.loadRecord(id);
-      } catch {
-        return false; // store unavailable → can't confirm it's still pending → refuse to authorize
-      }
+      const rec = this.records.get(id);
       if (!rec || rec.status !== "pending") return false;
-      rec.engine = await this.engineGate().preApprove(this.boundsOf(rec.opts));
+      rec.engine = await this.engineGate().preApprove({
+        merchant: rec.opts.merchant,
+        perOrder: toCents(rec.opts.perSpend),
+        total: toCents(rec.opts.budget),
+        description:
+          rec.opts.description ?? `Up to $${rec.opts.budget} at ${rec.opts.merchant}, $${rec.opts.perSpend}/purchase`,
+      });
       rec.status = "authorized";
-      rec.spent = 0;
-      await this.persist(rec);
       return true;
     });
   }
@@ -403,15 +281,9 @@ export class Grants {
   /** The deny seam — the human rejected the approve screen. Terminal (spec FR-007). */
   async _deny(id: string): Promise<boolean> {
     return this.locks.run(id, async () => {
-      let rec: GrantRecord | null;
-      try {
-        rec = await this.loadRecord(id);
-      } catch {
-        return false;
-      }
+      const rec = this.records.get(id);
       if (!rec || rec.status !== "pending") return false;
       rec.status = "denied";
-      await this.persist(rec);
       return true;
     });
   }
@@ -442,26 +314,16 @@ export class Grants {
         // prices exactly one item, so a multi-item array must not silently drop items past the first.
         if (!Array.isArray(items) || items.length !== 1) return { ok: false, code: "invalid-request" };
 
-        // CROSS-INSTANCE SYNC (revoke-wins): with a durable store, the store is the source of
-        // truth — re-read it HERE so a revoke (or a spend) on ANOTHER instance is enforced even
-        // when this instance's memory still holds an authorized engine. Fail-closed: a store read
-        // error refuses the spend rather than falling through to the stale in-memory authorization.
-        try {
-          await this.syncFromStore(rec);
-        } catch {
-          return { ok: false, code: "refused" };
-        }
-
         // Idempotent replay FIRST — a safe retry echoes the original outcome, SUCCESS OR REFUSAL
         // (P2 on #112: replaying only successes let a refused key be repurposed with a cheaper item).
         const cached = rec.cache.get(idempotencyKey);
         if (cached) return { ...cached, replayed: true };
 
         // Status gates the spend (FR-007): only an authorized grant spends. Fail-closed —
-        // pending/denied never reach the engine; revoked is ALSO re-checked by the store above
-        // (revoke-wins, cross-instance) and by the engine's ledger at settle. Deliberately
-        // UNCACHED: status legitimately transitions (pending → authorized), so a retry after
-        // approval must proceed — unlike engine/bounds refusals, which are final for that key.
+        // pending/denied never reach the engine; revoked is ALSO re-checked by the engine's
+        // ledger at settle (revoke-wins, even for an in-flight spend). Deliberately UNCACHED:
+        // status legitimately transitions (pending → authorized), so a retry after approval
+        // must proceed — unlike engine/bounds refusals, which are final for that key.
         if (rec.status !== "authorized" || !rec.engine) {
           return { ok: false, code: rec.status === "revoked" ? "revoked" : "not-authorized" };
         }
@@ -473,11 +335,6 @@ export class Grants {
         if (!this.allowed(rec, sku)) {
           const refusal: SpendDoor = { ok: false, code: "not-allowed" };
           rec.cache.set(idempotencyKey, refusal);
-          try {
-            await this.persist(rec);
-          } catch {
-            return { ok: false, code: "refused" };
-          }
           return refusal;
         }
 
@@ -488,17 +345,6 @@ export class Grants {
           ? { ok: true, amount: r.amount / 100, remaining: r.remaining / 100, replayed: false, authorization: "delegated", ...(r.delegationId ? { delegationId: r.delegationId } : {}) }
           : { ok: false, code: CODE_MAP[r.reason ?? ""] ?? "refused", remaining: r.remaining / 100, ...(r.retryable ? { retryable: r.retryable } : {}) };
         rec.cache.set(idempotencyKey, door);
-        // Track the drawn-down total (dollars) so the persisted snapshot re-seeds a rehydrated
-        // engine faithfully. A completed draw moves it; a refusal leaves it where it was.
-        if (door.ok) rec.spent = round2(rec.opts.budget - door.remaining);
-        // Persist the outcome + updated cache. A write error fail-closes to `refused`: the draw is
-        // not durable, and the next spend's syncFromStore rebuilds from the (pre-spend) store state,
-        // so the phantom in-memory draw is discarded rather than double-counted on another instance.
-        try {
-          await this.persist(rec);
-        } catch {
-          return { ok: false, code: "refused" };
-        }
         return door;
       });
 
@@ -533,14 +379,10 @@ export class Grants {
         // it settle first. Ledger `revoke()` is idempotent, so the serialized re-revoke is safe.
         if (rec.engine) await rec.engine.revoke();
         // Flip status + catch an authorize that raced us (it may seal a NEW engine after the line
-        // above) — serialized against _authorize so a revoked grant is never left spendable. The
-        // DURABLE write is what stops OTHER instances: their spend re-reads it via syncFromStore
-        // (the cross-instance revoke-wins path). Revoke is authoritative, so it does not itself
-        // re-read the store first — it forces `revoked` regardless of what memory or the store held.
+        // above) — serialized against _authorize so a revoked grant is never left spendable.
         await this.locks.run(rec.id, async () => {
           if (rec.engine) await rec.engine.revoke();
           rec.status = "revoked";
-          await this.persist(rec);
         });
       },
     };

@@ -5,10 +5,7 @@
 import { fileURLToPath } from "node:url";
 import { createStorefront } from "@openmobilehub/credentagent-storefront/server";
 import { SAMPLE_CATALOG } from "@openmobilehub/credentagent-storefront";
-// Namespace import so the NEW grant-store export is feature-detected — this same file runs in CI
-// against the PUBLISHED 0.3.1 packages (which lack it), and a named import of a missing export
-// would throw at load. `redisStorage` (0.3.1) comes off the same namespace.
-import * as sfRedis from "@openmobilehub/credentagent-storefront/redis";
+import { redisStorage } from "@openmobilehub/credentagent-storefront/redis";
 import { CredentAgent, age, membership, payment, required, optional } from "@openmobilehub/credentagent-gate";
 
 const deployed = !!process.env.VERCEL; // serverless: instances share no memory, so an
@@ -23,21 +20,14 @@ const walletOrigin = origin && `https://${origin}`;
 const grantCatalog = Object.fromEntries(
   SAMPLE_CATALOG.map((p) => [p.id, { price: p.price, category: p.category, ...(p.minimumAge ? { minAge: p.minimumAge } : {}) }]),
 );
-// Durable grant state across serverless instances (fixes the cross-instance "unknown grant").
-// Feature-detected: undefined against 0.3.1 (in-memory fallback) or when no Redis env is set.
-// GRANTS_NAMESPACE isolates this deployment's grant keys from anything else sharing the database.
-const grantStore = sfRedis.redisGrantStoreFromEnv
-  ? sfRedis.redisGrantStoreFromEnv({ namespace: process.env.GRANTS_NAMESPACE })
-  : undefined;
 // The grants resource lives on the CredentAgent, so construct it BEFORE the storefront wires it in.
-const credentagent = new CredentAgent({ walletOrigin, catalog: grantCatalog, ...(grantStore ? { grantStore } : {}) });
+const credentagent = new CredentAgent({ walletOrigin, catalog: grantCatalog });
 
 const store = createStorefront({
   signingKey: process.env.GATE_SECRET,
   statelessOrders: deployed, // the signed cart mandate carries the order between instances
   statelessMcp: deployed, // no per-instance MCP session — survives Vercel's instance split
-  // Storage namespace from env (default unchanged) so a shared Redis database stays isolated per deployment.
-  storage: kv.url && kv.token ? sfRedis.redisStorage({ ...kv, namespace: process.env.STORAGE_NAMESPACE }) : undefined,
+  storage: kv.url && kv.token ? redisStorage(kv) : undefined,
   baseUrl: walletOrigin,
   grants: credentagent.grants, // human-NOT-present: adds create/get/spend/revoke grant tools
   merchant: "Utopia", // the merchant a created grant is sealed + audited as

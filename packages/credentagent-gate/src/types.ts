@@ -8,7 +8,6 @@
 import type { OrderStore, CreatedOrder, CompletedOrder } from "./orders.js";
 import type { WebhookOptions } from "./webhooks.js";
 import type { CatalogEntry } from "./delegated.js";
-import type { GrantStore } from "./grants.js";
 
 // ── DCQL (what to ask the wallet) ──────────────────────────────────────────
 
@@ -294,11 +293,4 @@ export interface CredentAgentOptions {
    * Omit if you don't use `grants`.
    */
   catalog?: Record<string, CatalogEntry>;
-  /**
-   * A durable store for `grants` state (default in-memory, single-process). Inject one — e.g.
-   * `redisGrantStore(...)` from `@openmobilehub/credentagent-storefront/redis` — so grants survive
-   * a restart and a serverless instance that never ran `create()` can still `retrieve()`/spend
-   * against a SHARED backend. Mirrors `store` (VerificationStore). Omit for the in-memory default.
-   */
-  grantStore?: GrantStore;
 }
