@@ -71,6 +71,40 @@ export interface CreateGrantOptions {
 
 export type GrantStatus = "pending" | "authorized" | "denied" | "revoked";
 
+/** A grant's DISPLAY lifecycle — the projection/UI state, derived ONCE server-side from the
+ *  raw {@link GrantStatus} plus the live money read so a view never re-derives "low"/"exhausted"
+ *  independently (spec 011 FR-1 / UX A2). `low` = remaining has fallen to ≤ 20% of budget;
+ *  `exhausted` = the budget is fully drawn down. */
+export type GrantLifecycle = "pending" | "active" | "low" | "exhausted" | "revoked" | "denied";
+
+/** A grant's live money read, in the grant's dollars — what a display shows and what the
+ *  {@link grantLifecycle} derivation reads. `spent + remaining === budget`. */
+export interface GrantUsage {
+  budget: number;
+  spent: number;
+  remaining: number;
+}
+
+/** Fraction of the budget at/under which an active grant reads as "running low" (UX design §5). */
+const LOW_BUDGET_FRACTION = 0.2;
+
+/**
+ * The ONE lifecycle derivation (spec 011 FR-1 / UX A2): map a grant's raw status + live money
+ * to its display lifecycle. Terminal/pending states pass straight through; an authorized grant
+ * is `exhausted` when spent out, `low` at ≤ 20% remaining, else `active`. Kept here (not in the
+ * widget) so every surface — server projection, tests, custom views — reads the same rule.
+ */
+export function grantLifecycle(input: { status: GrantStatus; budget: number; remaining: number }): GrantLifecycle {
+  const { status, budget, remaining } = input;
+  if (status === "pending") return "pending";
+  if (status === "denied") return "denied";
+  if (status === "revoked") return "revoked";
+  // authorized:
+  if (remaining <= 0) return "exhausted";
+  if (remaining <= LOW_BUDGET_FRACTION * budget) return "low";
+  return "active";
+}
+
 /** The one spend door (spec 009 FR-003 shape). A retried idempotency key replays the ORIGINAL
  *  outcome — success OR refusal (`replayed: true` on both) — so a key can never be repurposed
  *  with a different item after a refusal (a P2 on #112). */
@@ -327,6 +361,15 @@ export class Grants {
       description: rec.opts.description,
       presence: rec.engine?.presence ?? "delegated-demo",
       trustLevel: rec.engine?.trustLevel ?? "server-issued-demo",
+      usage: async (): Promise<GrantUsage> => {
+        const budget = rec.opts.budget;
+        // Before authorize there is no engine ledger yet: nothing has been drawn, so the
+        // full budget is available. After authorize (incl. once revoked) the engine's
+        // committed-draws ledger is the authority — convert its cents back to dollars.
+        if (!rec.engine) return { budget, spent: 0, remaining: budget };
+        const { spent, remaining } = await rec.engine.usage();
+        return { budget, spent: spent / 100, remaining: remaining / 100 };
+      },
       spend,
       revoke: async () => {
         // Revoke the engine's ledger IMMEDIATELY — OUTSIDE the per-grant queue — so a spend
@@ -361,6 +404,10 @@ export interface Grant {
   /** When/how consent happened — "delegated-demo" until the wallet ceremony lands (honesty axis). */
   presence: string;
   trustLevel: string;
+  /** Live money read (dollars) for a display/projection — `{ budget, spent, remaining }`. Async
+   *  because the engine's committed-draws ledger is the authority (it may be remote later); a
+   *  pending grant reads `{ spent: 0, remaining: budget }`. Feeds {@link grantLifecycle}. */
+  usage(): Promise<GrantUsage>;
   spend(input: SpendItems): Promise<SpendDoor>;
   revoke(): Promise<void>;
 }
