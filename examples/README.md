@@ -13,6 +13,7 @@ Each is runnable against the two `@openmobilehub/credentagent-*` packages (build
 
 **Gating patterns** (identity-first, beyond commerce)
 - [`gate-any-action.mjs`](#gate-any-actionmjs--gate-a-non-commerce-action-identity-first-no-checkout) — gate a non-commerce action, no checkout
+- [`delegated-verifier-identity/`](delegated-verifier-identity/) — the identity twin of [`delegated-verifier/`](delegated-verifier/): the SAME external `verifier` seam proves **who** (release a sealed record behind `required(age.over(21))`) with **no cart, no price, no `payment.in(...)`** — the stand-in verifier has **no `settle` member at all**, so the money path provably never fires. `VERDICT=underage|declined` shows the gate refusing end-to-end. Same honesty fence: a local stand-in, `trust_level: "presence-only-demo"`, not a real trust anchor (real adapter = the downstream Multipaz work). A custom `defineCredential(...)` licence gate drops into the same policy slot
 
 **See it work — one page, click through it** (demo)
 - [`demo-hub/`](demo-hub/) — a single page that drives the real checkout AND shows the signed webhook arrive + get verified in a live feed. Start here to *see* the product. Plain-English guarantees + one-command proofs in [`demo-hub/GUARANTEES.md`](demo-hub/GUARANTEES.md).

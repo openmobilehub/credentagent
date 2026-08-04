@@ -8,7 +8,7 @@
 //      as live HTML/CSS on the consent page a buyer sees.
 
 import { describe, it, expect } from "vitest";
-import { pageHead, brandHeader, trustFooter } from "./theme.js";
+import { pageHead, brandHeader, trustFooter, orderSummaryCard } from "./theme.js";
 import { renderCredentialPage } from "./credential-gate/page.js";
 import { renderPasskeyPage } from "./passkey/page.js";
 import { renderDcPaymentPage } from "./dc-payment/page.js";
@@ -205,5 +205,31 @@ describe("THREADING — branding flows from new CredentAgent({ branding }) to th
     const ca = new CredentAgent({ branding: { wordmark: "ACME", accent: "#7c3aed" } });
     ca.mount(app, { orderStore: { read: async () => null }, catalog, completion: async () => ({ completed: true }), signingKey: "k" });
     expect((app.locals.credentagent as { branding?: Branding }).branding).toEqual({ wordmark: "ACME", accent: "#7c3aed" });
+  });
+});
+
+// ── An identity gate has no amounts to show (#141 follow-up) ─────────────────────────────
+// The summary card is the ONLY thing telling a user WHAT they are proving a credential for,
+// so it must stay — but a policy with no payment credential prices nothing, and rendering
+// "$0.00 / Total $0.00" on a "prove you are 21" page frames an access decision as a free
+// purchase. `showAmounts` defaults to true, so every checkout page keeps its totals.
+describe("orderSummaryCard — amounts are suppressible for a non-payment ceremony", () => {
+  const lines = [{ name: "Sealed record — patient-7", quantity: 1, lineTotal: 0, currency: "USD" }];
+
+  it("keeps the subject but drops the money when showAmounts is false", () => {
+    const html = orderSummaryCard({ lines, total: 0, currency: "USD", caption: "Request REQ-1", showAmounts: false });
+    expect(html).toContain("Sealed record — patient-7"); // WHAT is being gated stays
+    expect(html).toContain("Request REQ-1");
+    expect(html).not.toContain("$0.00");
+    expect(html).not.toMatch(/<tr class="total">/);
+  });
+
+  it("renders the money by default — every checkout page is unchanged (control)", () => {
+    const html = orderSummaryCard({
+      lines: [{ name: "oak-whiskey", quantity: 1, lineTotal: 124, currency: "USD" }],
+      total: 124, currency: "USD", caption: "Order ORD-1",
+    });
+    expect(html).toContain("$124.00");
+    expect(html).toMatch(/<tr class="total">/);
   });
 });
