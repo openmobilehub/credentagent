@@ -33,37 +33,69 @@ export interface DelegatedPageOptions {
   /** The order-derived progress rail HTML (from `checkoutRail`), built by the route which
    *  holds the full re-priced order. Absent ⇒ no rail (never a hardcoded one). */
   rail?: string;
+  /** Does THIS order's policy carry a payment credential (`policyHasPayment`)? When it does
+   *  not, the ceremony settles nothing, so the page must not announce a payment, a payment
+   *  credential or a settlement — it proves identity and returns. Defaults to true so the
+   *  payment framing stays the default for every existing caller. */
+  hasPayment?: boolean;
 }
 
 export function renderDelegatedPage(opts: DelegatedPageOptions): string {
   const { order, total, currency, lines, cart, rail } = opts;
+  // Honesty (Principle VII): the page may not claim more than the ceremony does. A policy
+  // with no authorize() credential never settles — pinned by "an identity-only delegated
+  // gate (no payment) completes with NO settlement call" — so every word below that promises
+  // a payment is simply false on that path.
+  const hasPayment = opts.hasPayment !== false;
+  const copy = hasPayment
+    ? {
+        h1: "Authorize payment",
+        tagline: "Authorize from your wallet",
+        lede: `Continue to your wallet to present a payment credential. Verification and
+      settlement are handled by an <strong>external verifier</strong> — this site re-derives the
+      amount from its own catalog and re-checks the verifier's result before completing, so it
+      never accepts an approval from this page.`,
+        complete: "\\u2713 Payment complete \\u00b7 trust: ",
+        banner: {},
+        returnLabel: "Return to checkout \\u203a",
+      }
+    : {
+        h1: "Verify your credential",
+        tagline: "Prove it from your wallet",
+        lede: `Continue to your wallet to present the credential this action requires. Verification
+      is handled by an <strong>external verifier</strong> — this site re-checks the verifier's
+      result before releasing the action, so it never accepts an approval from this page.`,
+        complete: "\\u2713 Verified \\u00b7 trust: ",
+        banner: { headline: "✓ Verified", returnLabel: "Staying in the browser? Continue ›" },
+        returnLabel: "Continue \\u203a",
+      };
   const qs = `order=${encodeURIComponent(order)}${cart ? `&cart=${encodeURIComponent(cart)}` : ""}`;
   // `cart` is caller-supplied and lands in a URL the page later renders, so it is
   // percent-encoded here exactly as `qs` above does. Unencoded, a crafted
   // `?cart="><img src=x onerror=…>` would survive into the page as raw markup.
   // (A legitimate mandate is base64url, which encodeURIComponent leaves byte-identical.)
   const returnUrl = opts.returnUrl ?? `/checkout?order=${encodeURIComponent(order)}${cart ? `&cart=${encodeURIComponent(cart)}` : ""}`;
-  // The shared order summary card (line items + bold Total) — same chrome as the hub.
+  // The shared summary card — same chrome as the hub. On an identity-only gate it still
+  // names WHAT is being gated (the one thing the user is consenting to) but shows no
+  // money: nothing was priced, and a "$0.00 Total" reads as a free purchase.
   const summary = orderSummaryCard({
     lines: lines.map((l) => ({ name: l.name, quantity: l.quantity, lineTotal: l.lineTotal, currency: l.currency })),
     total,
     currency,
-    caption: `Order ${order}`,
+    caption: `${hasPayment ? "Order" : "Request"} ${order}`,
+    showAmounts: hasPayment,
   });
 
   return `<!doctype html>
 <html lang="en">
-${pageHead(`Authorize payment · ${order}`)}
+${pageHead(`${copy.h1} · ${order}`)}
 <body>
   <div class="wrap">
-  ${brandHeader({ h1: "Authorize payment", tagline: "Authorize from your wallet" })}
+  ${brandHeader({ h1: copy.h1, tagline: copy.tagline })}
   ${rail ?? ""}
   ${summary}
   <div class="card">
-    <p class="lede">Continue to your wallet to present a payment credential. Verification and
-      settlement are handled by an <strong>external verifier</strong> — this site re-derives the
-      amount from its own catalog and re-checks the verifier's result before completing, so it
-      never accepts an approval from this page.</p>
+    <p class="lede">${copy.lede}</p>
     <button id="go" class="btn btn-primary">Continue to your wallet</button>
     <div id="out" class="small" role="status"></div>
     <div id="done"></div>
@@ -80,16 +112,16 @@ ${pageHead(`Authorize payment · ${order}`)}
   // POST below. Read from the live URL, exactly as the dc-payment rail does.
   var CART = new URLSearchParams(location.search).get("cart");
   var RETURN_URL = ${JSON.stringify(returnUrl)};
-  var DONE_BANNER = ${JSON.stringify(completionHandoffBanner(returnUrl))};
-  // Show the "Return to checkout" link built with DOM APIs — never by concatenating
-  // RETURN_URL into innerHTML. The URL carries a caller-supplied cart param, and innerHTML
-  // would PARSE any markup that survived in it; setAttribute + textContent cannot.
+  var DONE_BANNER = ${JSON.stringify(completionHandoffBanner(returnUrl, copy.banner))};
+  // Show the return link (labelled for this ceremony) built with DOM APIs — never by
+  // concatenating RETURN_URL into innerHTML. The URL carries a caller-supplied cart param,
+  // and innerHTML would PARSE any markup that survived in it; setAttribute + textContent cannot.
   // (The success path uses DONE_BANNER, which the server already HTML-escapes.)
   function showReturnLink() {
     var a = document.createElement("a");
     a.className = "ret";
     a.setAttribute("href", RETURN_URL);
-    a.textContent = "Return to checkout \\u203a";
+    a.textContent = "${copy.returnLabel}";
     done.textContent = "";
     done.appendChild(a);
   }
@@ -139,8 +171,8 @@ ${pageHead(`Authorize payment · ${order}`)}
       var result = await res2.json();
       if (result.completed) {
         // Relay the verifier's reported trust verbatim — never upgraded here.
-        out.textContent = "\\u2713 Payment complete \\u00b7 trust: " + result.trust_level;
-        done.innerHTML = DONE_BANNER; // "Order complete" + a Return to checkout link
+        out.textContent = "${copy.complete}" + result.trust_level;
+        done.innerHTML = DONE_BANNER; // the completion banner + its return link
         ${railCompleteScript()}
         // Return the buyer to the checkout hub (it shows the paid state) so they are not
         // stranded here — the completion the buyer asked to see happens on the hub.
