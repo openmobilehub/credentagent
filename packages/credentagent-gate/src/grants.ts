@@ -17,9 +17,6 @@
 
 import { DelegatedGate, DelegatedGrant, type CatalogEntry } from "./delegated.js";
 import { serveGrants, type GrantsApp } from "./grants-serve.js";
-// Serializes each grant's lifecycle + spend transitions per grant id (the TOCTOU class —
-// REVIEW.md §1/§2, issue #104). Shared with `ceremony/completion.ts` since #140; see that
-// file's header for why in-process locking is the belt and idempotency the suspenders.
 import { KeyedMutex } from "./keyed-mutex.js";
 
 /** Why a grant operation refused — a TYPED union (never `string`; #95 review). */
