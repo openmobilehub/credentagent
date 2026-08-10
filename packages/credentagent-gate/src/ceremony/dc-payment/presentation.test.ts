@@ -52,13 +52,18 @@ const INSTRUMENT = {
 
 // Build a synthetic ISO 18013-5 payment DeviceResponse: issuer-signed instrument
 // claims + an issuerAuth + deviceAuth block + a deviceSigned transaction_data_hash.
-function paymentDeviceResponseB64(transactionDataHashHex: string | null): string {
+// When `coseAlg` is given it also emits `transaction_data_hash_alg` (the COSE id),
+// mirroring Multipaz's mdocPresentment.kt (which omits it for its SHA-256 default).
+function paymentDeviceResponseB64(transactionDataHashHex: string | null, coseAlg?: number): string {
   const ns = "org.multipaz.payment.sca.1";
   const issuerItems = Object.entries(INSTRUMENT).map(([elementIdentifier, elementValue], digestID) =>
     new Tag(cbor({ digestID, random: Buffer.alloc(16), elementIdentifier, elementValue }), 24),
   );
   const deviceSignedNs = transactionDataHashHex
-    ? new Tag(cbor({ "urn:eudi:sca:payment:1": { transaction_data_hash: Buffer.from(transactionDataHashHex, "hex") } }), 24)
+    ? new Tag(cbor({ "urn:eudi:sca:payment:1": {
+        ...(coseAlg !== undefined ? { transaction_data_hash_alg: coseAlg } : {}),
+        transaction_data_hash: Buffer.from(transactionDataHashHex, "hex"),
+      } }), 24)
     : new Tag(cbor({}), 24);
   const dr = cbor({
     version: "1.0",
@@ -96,6 +101,12 @@ function encJwkOf(requestJwt: string): jose.JWK {
 // base64url; the gate recomputes hashTransactionData (base64url) and compares.
 function txHashHex(transactionDataB64: string): string {
   return createHash("sha256").update(transactionDataB64).digest("hex");
+}
+
+// Same, for an arbitrary SHA-2 algorithm (used to prove the gate honors the wallet's
+// declared transaction_data_hash_alg rather than assuming SHA-256).
+function txHashHexWith(alg: "sha256" | "sha384" | "sha512", transactionDataB64: string): string {
+  return createHash(alg).update(transactionDataB64).digest("hex");
 }
 
 describe("dc-payment REAL OpenID4VP presentation", () => {
@@ -141,6 +152,47 @@ describe("dc-payment REAL OpenID4VP presentation", () => {
     const order: CeremonyOrder = catalog.createOrder([{ productId: "aurora-headphones", quantity: 1 }], "ORD-RP3");
     const req = await buildDcPaymentRequest(order, ORIGIN, SECRET);
     const dpc = paymentDeviceResponseB64(null); // no hash disclosed
+    const response = await walletEncrypt(encJwkOf(req.request), dpc);
+
+    const out = await verifyDcPresentation({
+      order,
+      origin: ORIGIN,
+      result: { protocol: "openid4vp-v1-signed", data: { response } },
+      readerContextToken: req.readerContextToken,
+      secret: SECRET,
+    });
+    expect(out.gates.find((g) => g.gate === "Amount binding")?.pass).toBe(false);
+  });
+
+  it("HONORS a non-SHA-256 transaction_data_hash_alg: a SHA-384-bound wallet response verifies", async () => {
+    const order: CeremonyOrder = catalog.createOrder([{ productId: "aurora-headphones", quantity: 1 }], "ORD-RP4");
+    const req = await buildDcPaymentRequest(order, ORIGIN, SECRET);
+    const txDataB64 = req.transaction_data[0];
+    // The wallet bound the hash with SHA-384 (COSE -43) and declared it. The gate must
+    // recompute with SHA-384 — not assume SHA-256 — to match.
+    const dpc = paymentDeviceResponseB64(txHashHexWith("sha384", txDataB64), -43);
+    const response = await walletEncrypt(encJwkOf(req.request), dpc);
+
+    const out = await verifyDcPresentation({
+      order,
+      origin: ORIGIN,
+      result: { protocol: "openid4vp-v1-signed", data: { response } },
+      readerContextToken: req.readerContextToken,
+      secret: SECRET,
+    });
+    // RED-ON-REVERT: if verify ignores transaction_data_hash_alg and recomputes SHA-256,
+    // this SHA-384 hash will not match and the amount-binding gate fails.
+    expect(out.gates.find((g) => g.gate === "Amount binding")?.pass).toBe(true);
+    expect(out.gates.every((g) => g.pass)).toBe(true);
+  });
+
+  it("REFUSES an unknown transaction_data_hash_alg (fails closed — no silent SHA-256 fallback)", async () => {
+    const order: CeremonyOrder = catalog.createOrder([{ productId: "aurora-headphones", quantity: 1 }], "ORD-RP5");
+    const req = await buildDcPaymentRequest(order, ORIGIN, SECRET);
+    const txDataB64 = req.transaction_data[0];
+    // A CORRECT SHA-256 hash, but the declared algorithm is unrecognized (-999). The gate
+    // cannot know which algorithm produced the hash, so it must refuse rather than assume.
+    const dpc = paymentDeviceResponseB64(txHashHex(txDataB64), -999);
     const response = await walletEncrypt(encJwkOf(req.request), dpc);
 
     const out = await verifyDcPresentation({

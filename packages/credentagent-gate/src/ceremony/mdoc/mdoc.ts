@@ -88,6 +88,26 @@ export function extractTransactionDataHash(
   return null;
 }
 
+// The COSE hash-algorithm id the wallet bound the transaction_data with, read from
+// `transaction_data_hash_alg` in the SAME deviceSigned namespace. Multipaz OMITS this
+// element when it used its SHA-256 default (mdocPresentment.kt), so `null` means
+// "SHA-256"; otherwise it is the raw COSE integer (e.g. -43 for SHA-384) that verify
+// maps to a hash function.
+export function extractTransactionDataHashAlg(
+  vpStr: string | string[],
+  namespace = "urn:eudi:sca:payment:1",
+  element = "transaction_data_hash_alg",
+): number | null {
+  const str = Array.isArray(vpStr) ? vpStr[0] : vpStr;
+  const dr = decode(b64urlToBytes(str)) as any;
+  for (const doc of dr.documents ?? []) {
+    const ns = decodeTagged(doc.deviceSigned?.nameSpaces);
+    const val = ns?.[namespace]?.[element];
+    if (typeof val === "number") return val;
+  }
+  return null;
+}
+
 export interface AuthBlocks {
   hasIssuerAuth: boolean;
   hasDeviceAuth: boolean;
