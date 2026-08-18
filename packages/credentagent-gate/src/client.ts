@@ -286,7 +286,7 @@ export class CredentAgent {
    */
   mount(app: ExpressApp, ceremony?: MountCeremony): void {
     if (ceremony) {
-      mountCeremony(app as CeremonyApp, { ...ceremony, verificationStore: this.store, readerIdentity: this.readerIdentity, credentialRegistry: this.registry, orderPolicies: this.orderPolicies, ...(this.branding ? { branding: this.branding } : {}) });
+      mountCeremony(app as CeremonyApp, { ...ceremony, verificationStore: this.store, readerIdentity: this.readerIdentity, credentialRegistry: this.registry, orderPolicies: this.orderPolicies, grants: this.grants, ...(this.branding ? { branding: this.branding } : {}) });
       this.mountedRoutes = true;
       if (ceremony.verifier) this.delegated = true;
       // #25 doctor(): a host owns the serving surface here; capture the signing key it supplied via
@@ -302,7 +302,7 @@ export class CredentAgent {
     // rails write (invariant 4). Falls back to CredentAgent's own store otherwise.
     const locals = (app.locals.credentagent ?? {}) as Partial<CeremonySeams>;
     if (locals.orderStore && locals.catalog && locals.completion) {
-      mountCeremony(app as CeremonyApp, { readerIdentity: this.readerIdentity, credentialRegistry: this.registry, orderPolicies: this.orderPolicies, ...(this.branding ? { branding: this.branding } : {}), ...(locals.verificationStore ? {} : { verificationStore: this.store }) });
+      mountCeremony(app as CeremonyApp, { readerIdentity: this.readerIdentity, credentialRegistry: this.registry, orderPolicies: this.orderPolicies, grants: this.grants, ...(this.branding ? { branding: this.branding } : {}), ...(locals.verificationStore ? {} : { verificationStore: this.store }) });
       this.mountedRoutes = true;
       // The host published a verifier on app.locals (createStorefront({ verifier })): route the
       // manifest's gate/authorize links to the delegated ceremony (008).

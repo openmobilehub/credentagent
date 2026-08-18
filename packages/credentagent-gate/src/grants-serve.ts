@@ -9,7 +9,8 @@
 // intent server-side (presence "delegated-demo"). The wallet key-signing ceremony (#71) replaces
 // this page and calls the SAME _authorize/_deny seams; the URL contract doesn't change.
 
-import type { Grants } from "./grants.js";
+import type { Grant, Grants } from "./grants.js";
+import type { GrantAgeScope } from "./grants-age.js";
 
 /** Structural Express app — the package stays dependency-free (mirrors orders-serve). */
 export interface GrantsApp {
@@ -29,7 +30,61 @@ interface GrantsResponse {
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
 const page = (body: string) =>
-  `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Approve spending grant</title><body style="font-family:system-ui;max-width:34rem;margin:3rem auto;padding:0 1rem;line-height:1.55">${body}<p style="color:#888;font-size:13px;border-top:1px solid #ddd;padding-top:12px;margin-top:28px">🔒 delegated-demo — this page stands in for the wallet ceremony; no real money moves.</p></body>`;
+  `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Approve spending grant</title><body style="font-family:system-ui;max-width:34rem;margin:0 auto;padding:3rem 1rem;line-height:1.55;background:#fff;color:#141413">${body}<p style="color:#888;font-size:13px;border-top:1px solid #ddd;padding-top:12px;margin-top:28px">🔒 delegated-demo — this page stands in for the wallet ceremony; no real money moves.</p></body>`;
+
+/** Name the scope the way the human chose it, so the warning reads like their own sentence:
+ *  a category grant says "Beverages includes…", a sku grant "The items you picked include…",
+ *  an unbounded one "This store includes…". */
+function scopeLabel(g: Grant): string {
+  const categories = g.allow?.categories;
+  if (categories?.length) return `${esc(categories.join(", "))} includes`;
+  if (g.allow?.skus?.length) return "The items you picked include";
+  return "This store includes";
+}
+
+/** The money line for one disclosed item — its catalog name when it has one, else its sku id. */
+const itemLine = (i: { sku: string; name?: string; price: number }) => `${esc(i.name ?? i.sku)} — $${i.price}`;
+
+/**
+ * The age disclosure (#172): tell the human, BEFORE the tap, that the scope they are about to
+ * approve contains items the agent will be refused on — and name them. Nothing is rendered for
+ * a clean scope, so an unrestricted grant's page is unchanged.
+ *
+ * HONESTY: this is DISCLOSURE, and for a category grant a forecast made at approval time (a 21+
+ * product added to that category next week could not have been predicted). The control is still
+ * the server-side refusal at spend time, not this screen.
+ */
+function ageDisclosure(g: Grant, ageScope: GrantAgeScope, ageRailMounted: boolean): string {
+  const minimumAge = ageScope.minimumAge;
+  if (minimumAge == null) return "";
+  const named = ageScope.items.map(itemLine).join(" · ");
+
+  // Already proved, on this page, before the tap — say what it bought them.
+  if (g.ageProof && g.ageProof.provenAge >= minimumAge) {
+    return `<div style="border:1px solid #2f9e77;background:#e6f3ed;border-radius:10px;padding:12px 14px;margin:20px 0">
+       <p style="margin:0 0 6px;font-weight:600;color:#1d6f52">✓ Age verified (${g.ageProof.provenAge}+).</p>
+       <p style="margin:0;color:#1d6f52;font-size:14px">Your agent may buy these while you're away: ${named}</p>
+     </div>`;
+  }
+
+  // Not proved. Step 1 — tell them. Step 2 — offer the way out, but only if the ceremony is
+  // actually mounted; otherwise the honest thing is the warning alone.
+  const verify = ageRailMounted
+    ? `<p style="margin:12px 0 0"><a href="/credentagent/grants/${encodeURIComponent(g.id)}/age" style="display:inline-block;font-weight:600;padding:10px 16px;border-radius:9px;border:1px solid #2f9e77;background:#fff;color:#1d6f52;text-decoration:none">Verify ${minimumAge}+ with your wallet</a></p>`
+    : "";
+  return `<div style="border:1px solid #fab219;background:#fdf2da;border-radius:10px;padding:12px 14px;margin:20px 0">
+       <p style="margin:0 0 6px;font-weight:600;color:#7a5606">⚠️ ${scopeLabel(g)} age-restricted items (${minimumAge}+).</p>
+       <p style="margin:0;color:#7a5606;font-size:14px">Your agent can't buy these: ${named}</p>${verify}
+     </div>`;
+}
+
+/** What the primary button says. Once age is on the table, "Approve" alone is ambiguous — the
+ *  human is choosing between approving WITH the restricted items and approving without them. */
+function approveLabel(g: Grant, ageScope: GrantAgeScope): string {
+  const minimumAge = ageScope.minimumAge;
+  if (minimumAge == null) return "✓ Approve";
+  return g.ageProof && g.ageProof.provenAge >= minimumAge ? "✓ Approve" : "Approve without them";
+}
 
 const STATUS_LINE: Record<string, string> = {
   authorized: "✅ <strong>Approved.</strong> The agent may now spend within these bounds. You can close this tab.",
@@ -57,7 +112,8 @@ export function serveGrants(app: GrantsApp, grants: Grants): void {
       `<h1>Approve this spending grant?</h1>
        <p>${g.description ? esc(g.description) : "An AI agent asks to spend on your behalf while you're away."}</p>
        <p>${bounds}</p>
-       <form method="post" action="/credentagent/grants/${encodeURIComponent(g.id)}/approve" style="display:inline"><button style="font:inherit;font-weight:600;padding:10px 16px;border-radius:9px;border:0;background:#2f9e77;color:#fff;cursor:pointer">✓ Approve</button></form>
+       ${ageDisclosure(g, g.ageScope, grants._ageRailMounted)}
+       <form method="post" action="/credentagent/grants/${encodeURIComponent(g.id)}/approve" style="display:inline"><button style="font:inherit;font-weight:600;padding:10px 16px;border-radius:9px;border:0;background:#2f9e77;color:#fff;cursor:pointer">${approveLabel(g, g.ageScope)}</button></form>
        <form method="post" action="/credentagent/grants/${encodeURIComponent(g.id)}/deny" style="display:inline;margin-left:8px"><button style="font:inherit;font-weight:600;padding:10px 16px;border-radius:9px;border:1px solid #ccc;background:transparent;cursor:pointer">✗ Deny</button></form>`,
     ));
   });

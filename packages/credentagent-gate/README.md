@@ -470,10 +470,44 @@ if (g.status === "authorized") {
 
 The refusal `code` is a **typed union** (`GrantDoorCode`) — a typo fails to compile. A retried
 `idempotencyKey` replays the ORIGINAL outcome, refusal included, so a key can never be repurposed.
-The sealed bounds are **immutable** after create. **Age is non-delegable** — an age-restricted item
-refuses `step-up` no matter the budget: buying wine always needs a live human. Try all of it
-clickable in [`examples/demo-hub/`](https://github.com/openmobilehub/credentagent/tree/main/examples/demo-hub)
+The sealed bounds are **immutable** after create. Try all of it clickable in
+[`examples/demo-hub/`](https://github.com/openmobilehub/credentagent/tree/main/examples/demo-hub)
 (Section 3) or the two-pane [`examples/grants-proto/`](https://github.com/openmobilehub/credentagent/tree/main/examples/grants-proto).
+
+### Age on a grant — proved on the approve page, or not at all
+
+A grant scoped to *"Beverages"* over a catalog whose Beverages are 21+ used to be a grant that could
+spend **$0.00**: every purchase refused `step-up`, and nothing told the human before they approved.
+Two things fix that, both on the approve page.
+
+**It tells you.** `grant.ageScope` is derived server-side from the grant's own `allow` bounds against
+your catalog — the agent is never asked — and the approve page names what it found:
+
+```ts
+grant.ageScope  // → { minimumAge: 21, items: [{ sku: "wine", name: "Reserve Wine", price: 21, minAge: 21 }] }
+```
+
+> ⚠️ **Beverages includes age-restricted items (21+).**
+> Your agent can't buy these: Reserve Wine — $21
+
+For a category grant this is a **forecast** made at approval time: a 21+ product added to that
+category next week could not have been predicted. That is fine — this is *disclosure*. The
+server-side refusal at spend time is unchanged, and remains the control.
+
+**It lets you unlock them.** Add `credentagent.mount(app)` alongside `grants.serve(app)` and the page
+grows a *"Verify 21+ with your wallet"* button — the same OpenID4VP ceremony as the checkout age
+gate, run at the one moment the human is holding their phone. The claim they prove is sealed into the
+grant's intent (covered by its content-addressed id), and their agent can then buy those items while
+they're away. Decline, and *"Approve without them"* gives you exactly today's grant.
+
+Nothing about identity is delegated to the agent: the proof is the **human's**, presented by **their**
+wallet while they are **present**. Without one, an age-restricted item still refuses `step-up` — and a
+proof only ever opens items at or below what it proved, so an 18+ proof never opens a 21+ item.
+
+> **Honesty:** the wire crypto is real (signed OpenID4VP request, sealed nonce, JWE/HPKE decrypt,
+> ISO-mdoc parse) but there is **no issuer trust anchor** yet — `trust_level` is
+> `"presence-only-demo"` and a self-crafted credential would pass. This is disclosure and binding,
+> **not** a real age-safety control, until issuer-verified trust lands.
 
 ### Under the hood — the delegated-draw seams (005)
 
@@ -492,7 +526,9 @@ Under that facade are **signer-agnostic seams** for redeeming a user-sealed
 (pure, total, typed refusals), a `RevocationStore` (per-intent + subject kill-switch, atomic
 single-use consume), and an additive, fail-closed **draw branch** in `completeOrder` that re-runs
 every bounds + revocation check server-side, writes a `delegationId`, and **suppresses settlement**.
-Age is **non-delegable** — an age-restricted cart always steps up to a live ceremony.
+An age-restricted cart completes on that branch **only** against an age claim the human sealed into
+the intent at approval time, tested at the order's re-derived threshold — absent, too low, or past
+its stated validity, it steps up to a live ceremony (`ageProofCovers` is the one predicate).
 
 Honesty (Principle VII, constitution v1.1.0): draws carry a **`presence`** axis (`"delegated"` /
 `"delegated-demo"`) — *when* consent happened — separate from `trust_level` — *how strongly it's

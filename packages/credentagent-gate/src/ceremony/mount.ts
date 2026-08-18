@@ -25,6 +25,8 @@ import { registerCredentialGate } from "./credential-gate/routes.js";
 import { registerPasskeyGate } from "./passkey/routes.js";
 import { registerDcPaymentGate } from "./dc-payment/routes.js";
 import { registerDelegatedPaymentGate } from "./delegated-payment/routes.js";
+import { registerGrantAgeGate } from "./grant-age/routes.js";
+import type { Grants } from "../grants.js";
 
 /** Minimal Express-app shape mount() needs (no `express` dependency). */
 export interface CeremonyApp {
@@ -93,6 +95,10 @@ export interface CeremonySeams {
    *  once on `new CredentAgent({ branding })` and threaded here; every rail page picks it up.
    *  Absent ⇒ the built-in look. Never affects the honesty trust footer. */
   branding?: Branding;
+  /** The human-not-present grants resource (#172). `CredentAgent.mount()` passes its own
+   *  `grants` here; the grant-age rail then serves the approve-page age ceremony against it.
+   *  Absent ⇒ the rail registers NOTHING and every existing path is byte-unchanged. */
+  grants?: Grants;
 }
 
 /** The resolved context each rail receives (every required seam present). */
@@ -123,6 +129,9 @@ export interface CeremonyContext {
   returnUrl?: (orderId: string) => string;
   /** Host brand for the ceremony pages (absent ⇒ the built-in look). Never brands the footer. */
   branding?: Branding;
+  /** The grants resource the grant-age rail (#172) serves the approve-page ceremony against.
+   *  Absent ⇒ that rail self-skips. */
+  grants?: Grants;
 }
 
 /** A rail attaches its routes to the host app given the resolved context. */
@@ -135,7 +144,8 @@ export type RailRegistrar = (app: CeremonyApp, ctx: CeremonyContext) => void;
 // (which pass a `{ locals }`-only app) are unaffected.
 // `registerDelegatedPaymentGate` (008) self-skips unless a `verifier` seam is
 // configured, so adding it here changes nothing for a host that hasn't opted in.
-const RAILS: RailRegistrar[] = [registerCredentialGate, registerPasskeyGate, registerDcPaymentGate, registerDelegatedPaymentGate];
+// `registerGrantAgeGate` (#172) likewise self-skips unless a `grants` resource is wired.
+const RAILS: RailRegistrar[] = [registerCredentialGate, registerPasskeyGate, registerDcPaymentGate, registerDelegatedPaymentGate, registerGrantAgeGate];
 
 /**
  * Read + validate the injected seams, build the CeremonyContext, and register
@@ -159,6 +169,7 @@ export function mountCeremony(app: CeremonyApp, options: Partial<CeremonySeams> 
   const orderPolicies = options.orderPolicies ?? locals.orderPolicies;
   const returnUrl = options.returnUrl ?? locals.returnUrl;
   const branding = options.branding ?? locals.branding;
+  const grants = options.grants ?? locals.grants;
   let signingKey = options.signingKey ?? locals.signingKey;
 
   // Fail fast (CT2) — a load-bearing seam must never silently default. (`origin`
@@ -219,6 +230,7 @@ export function mountCeremony(app: CeremonyApp, options: Partial<CeremonySeams> 
     ...(readerIdentity ? { readerIdentity } : {}),
     ...(returnUrl ? { returnUrl } : {}),
     ...(branding ? { branding } : {}),
+    ...(grants ? { grants } : {}),
   };
 
   // Re-expose the resolved seams on app.locals so the storefront's gate routes

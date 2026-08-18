@@ -77,6 +77,7 @@ import {
   type VerificationManifestEntry,
   type VerificationRecord,
   type VerificationStore,
+  ageProofCovers,
 } from "@openmobilehub/credentagent-gate";
 
 /** Given a priced order, return the `requires` manifest (or `undefined` = ungated). */
@@ -183,7 +184,8 @@ export interface StorefrontOptions {
    * `create-spending-grant`, `get-grant-status`, `spend-from-grant`, `revoke-grant` — so an AI
    * agent can be granted a bounded spending authority ONCE by the human (grant.approveUrl) and
    * then buy unattended within it, every rule enforced server-side (caps, allow-bounds,
-   * revocation; age-restricted items NEVER delegate — they refuse `step-up`). Omit ⇒ no grant
+   * revocation; an age-restricted item refuses `step-up` unless the human proved their age on
+   * the approve page — #172). Omit ⇒ no grant
    * tools (additive). Serve the approve page with `credentagent.grants.serve(store.app)`.
    */
   grants?: Grants;
@@ -715,7 +717,8 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
           description:
             "Buy ONE product unattended against an authorized grant. The server re-prices from the catalog and enforces " +
             "every sealed rule; a refusal returns a typed code: not-authorized (human never approved), not-allowed (outside " +
-            "the allowed categories), per-spend-exceeded, budget-exceeded, step-up (age-restricted — NEVER delegable: hand " +
+            "the allowed categories), per-spend-exceeded, budget-exceeded, step-up (age-restricted and the human " +
+            "proved no age for this grant, or proved a lower one — hand " +
             "back to the human), revoked. Pass a stable idempotencyKey to make retries safe (same key replays the SAME outcome).",
           inputSchema: {
             grantId: z.string(),
@@ -743,7 +746,11 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
           await source.load();
           const live = getProduct(source.current(), productId);
           if (!live) return reply({ ok: false, code: "invalid-request", reason: "unknown product" }); // P2: typed, not a throw
-          if (live.minimumAge != null) return reply({ ok: false, code: "step-up" }); // age NEVER delegates
+          // Age completes unattended ONLY against a proof the human sealed into THIS grant at
+          // approval time (#172), tested at the LIVE catalog's threshold — so a product newly
+          // marked 21+, or raised from 18+ to 21+, still steps up even though the grant's own
+          // snapshot predates the change. No proof, or one below the bar ⇒ step-up as before.
+          if (live.minimumAge != null && !ageProofCovers(g.ageProof, live.minimumAge)) return reply({ ok: false, code: "step-up" });
           if (live.price * qty > g.perSpend) return reply({ ok: false, code: "per-spend-exceeded" }); // live price vs sealed cap
 
           try {

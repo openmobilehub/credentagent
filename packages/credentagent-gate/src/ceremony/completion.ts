@@ -9,7 +9,7 @@ import type { Credential, GateOrder, TrustLevel, VerificationStore } from "../ty
 import type { CartItemRef, CeremonyCatalog, CeremonyOrder, CompletionInput, CompletionResult, GateOutcome } from "./types.js";
 import { verifyCartMandate, type CartMandate } from "./cartMandate.js";
 import { reconcileCartPayment } from "./reconciliation.js";
-import { checkDraw, type DrawVerifier } from "./mandate.js";
+import { checkDraw, ageProofCovers, type DrawVerifier } from "./mandate.js";
 import type { RevocationStore } from "./revocation.js";
 import { refusal } from "./refusals.js";
 import { KeyedMutex } from "./keyed-mutex.js";
@@ -239,6 +239,10 @@ async function completeOrderLocked(input: CompletionInput, ctx: CompletionContex
   // is the shared-completion-seam half of CT9; the demo's place-order + MCP
   // order-completion-tool halves are wired in T014.
   const ageRestricted = repriced.lines.some((l) => typeof l.minimumAge === "number" && l.minimumAge > 0);
+  // The STRICTEST threshold this order demands, re-derived from the catalog-priced lines (never
+  // the token — invariant 2). 0 when nothing is restricted. Read by the delegated branch below to
+  // test a sealed age proof at the RIGHT threshold, so an 18+ proof cannot open a 21+ item.
+  const requiredAge = Math.max(0, ...repriced.lines.map((l) => (typeof l.minimumAge === "number" ? l.minimumAge : 0)));
 
   // ── HNP delegated-draw branch (005 FR-006): additive + fail-closed. Only taken when a
   // draw is present; every HP path above/below is byte-unchanged. The gate re-runs the FULL
@@ -251,9 +255,16 @@ async function completeOrderLocked(input: CompletionInput, ctx: CompletionContex
     // Fail-closed: a draw with no store to check it against cannot complete.
     if (!store) return { completed: false, reason: "draw", refusals: [refusal("revocation-unavailable")] };
 
-    // Age is NON-DELEGABLE: an age-restricted cart ALWAYS steps up to a live ceremony and
-    // never completes from a grant, regardless of any snapshot (invariant 5, spec FR-013).
-    if (ageRestricted) return { completed: false, reason: "draw", refusals: [refusal("step-up", { cause: "age-restricted" })] };
+    // Age on a delegated draw completes ONLY against an age proof the human sealed into this
+    // intent at approval time (#172). Absent, below the order's threshold, or past its stated
+    // validity ⇒ step up to a live ceremony exactly as before (invariant 5, fail-closed).
+    //
+    // `requiredAge` is re-derived from the re-priced lines above; `intent.ageProof` is covered by
+    // the content-addressed `intentId`, so neither side of this comparison can be supplied by the
+    // agent or edited after the human approved. The proof is the HUMAN's, captured while they were
+    // present with their wallet — nothing about identity is delegated to the agent.
+    if (ageRestricted && !ageProofCovers(intent.ageProof, requiredAge, ctx.now?.()))
+      return { completed: false, reason: "draw", refusals: [refusal("step-up", { cause: "age-restricted" })] };
 
     // Custom gate() credentials are non-delegable too (invariant 1, generalized — 007): a draw
     // is a completion path, so an applicable custom gate (prescription, license, …) with no

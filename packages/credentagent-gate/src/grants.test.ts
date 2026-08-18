@@ -176,6 +176,160 @@ describe("credentagent.grants — the approve page (grants.serve, #112 P1)", () 
     await app._get.get("/credentagent/grants/:id")!({ params: { id: "grant_nope" } }, res);
     expect(res._status).toBe(404);
   });
+
+  // ── #172: the approve page must DISCLOSE an age-restricted scope before the tap ──────────
+  // The bug: "$300, Beverages only" over a catalog whose Beverages are 21+ is a grant that can
+  // spend $0.00, and nothing said so. Both directions are asserted — a page that warns about
+  // everything is as useless as one that warns about nothing.
+
+  it("discloses the age-restricted items a CATEGORY grant covers, and names them", async () => {
+    const ca = client();
+    const app = fakeApp();
+    ca.grants.serve(app);
+    const g = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30, allow: { categories: ["Beverages"] } });
+
+    const res = fakeRes();
+    await app._get.get("/credentagent/grants/:id")!({ params: { id: g.id } }, res);
+    expect(res._body).toContain("age-restricted items (21+)");
+    expect(res._body).toContain("wine"); // the only 21+ item inside Beverages, named
+    expect(res._body).toContain("$21");
+    // The choice the human is actually making, spelled out on the button.
+    expect(res._body).toContain("Approve without them");
+  });
+
+  it("says NOTHING about age when the scope holds no restricted item", async () => {
+    const ca = client();
+    const app = fakeApp();
+    ca.grants.serve(app);
+    const g = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30, allow: { categories: ["Electronics"] } });
+
+    const res = fakeRes();
+    await app._get.get("/credentagent/grants/:id")!({ params: { id: g.id } }, res);
+    expect(res._body).not.toContain("age-restricted");
+    expect(res._body).toContain("✓ Approve"); // today's page, unchanged
+  });
+
+  it("offers the wallet button ONLY when the age ceremony is actually mounted", async () => {
+    const ca = client();
+    const app = fakeApp();
+    ca.grants.serve(app); // serve() alone — no mount(), so no /age route exists
+    const g = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30, allow: { categories: ["Beverages"] } });
+
+    let res = fakeRes();
+    await app._get.get("/credentagent/grants/:id")!({ params: { id: g.id } }, res);
+    expect(res._body).toContain("age-restricted items (21+)"); // the warning still lands
+    expect(res._body).not.toContain("with your wallet"); // but never a link to a 404
+
+    ca.grants._ageRailMounted = true; // what registerGrantAgeGate does at mount()
+    res = fakeRes();
+    await app._get.get("/credentagent/grants/:id")!({ params: { id: g.id } }, res);
+    expect(res._body).toContain("Verify 21+ with your wallet");
+    expect(res._body).toContain(`/credentagent/grants/${g.id}/age`);
+  });
+
+  it("flips to the verified state once the human has proved their age", async () => {
+    const ca = client();
+    const app = fakeApp();
+    ca.grants.serve(app);
+    const g = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30, allow: { categories: ["Beverages"] } });
+    expect(await ca.grants._recordAgeProof(g.id, { provenAge: 21 })).toBe(true);
+
+    const res = fakeRes();
+    await app._get.get("/credentagent/grants/:id")!({ params: { id: g.id } }, res);
+    expect(res._body).toContain("Age verified (21+)");
+    expect(res._body).toContain("may buy these while you're away");
+    expect(res._body).toContain("✓ Approve"); // no longer "Approve without them"
+  });
+});
+
+// ── #172: age at approval — the human proves once, on their phone, and the claim is SEALED into
+// the grant. Every test below goes red if its control is reverted.
+describe("credentagent.grants — the age claim sealed at approval (#172)", () => {
+  /** create → prove `provenAge` → approve. The order the approve page enforces. */
+  async function grantWithAgeProof(ca: CredentAgent, provenAge: number): Promise<Grant> {
+    const g = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30 });
+    expect(await ca.grants._recordAgeProof(g.id, { provenAge })).toBe(true);
+    await ca.grants._authorize(g.id);
+    return (await ca.grants.retrieve(g.id))!;
+  }
+
+  // BYPASS (the reversal's guard — completion.ts's delegated branch): a grant nobody proved an
+  // age for must still refuse an age-restricted item. Delete the `!ageProofCovers(...)` half of
+  // that condition and this goes red — every grant would suddenly buy alcohol unattended.
+  it("BYPASS: a grant with NO age proof still refuses a 21+ item — step-up", async () => {
+    const g = await authorizedGrant(client());
+    const s = await g.spend({ idempotencyKey: "np1", items: [{ sku: "wine" }] });
+    expect(s).toMatchObject({ ok: false, code: "step-up" });
+  });
+
+  // BYPASS (the threshold comparison in ageProofCovers): an 18+ proof must NOT open a 21+ item.
+  // Drop the `proof.provenAge < requiredAge` check and this goes red.
+  it("BYPASS: an 18+ proof does not open a 21+ item — step-up", async () => {
+    const g = await grantWithAgeProof(client(), 18);
+    const s = await g.spend({ idempotencyKey: "u18", items: [{ sku: "wine" }] });
+    expect(s).toMatchObject({ ok: false, code: "step-up" });
+  });
+
+  // The positive path — without it the reversal is unproven: the whole point of #172 is that a
+  // proved grant CAN buy what it was approved for.
+  it("a 21+ proof lets the agent buy the 21+ item, priced + drawn down like any other spend", async () => {
+    const g = await grantWithAgeProof(client(), 21);
+    const s = await g.spend({ idempotencyKey: "ok21", items: [{ sku: "wine" }] });
+    expect(s).toMatchObject({ ok: true, amount: 21, remaining: 79, authorization: "delegated" });
+  });
+
+  // BYPASS (the `status !== "pending"` gate in _recordAgeProof): consent happened when the human
+  // tapped Approve. A grant must never gain a capability afterwards. Delete that check and this
+  // goes red — an approved grant would start buying 21+ goods the human never blessed.
+  it("BYPASS: a proof recorded AFTER approval is refused, and the sealed grant is unchanged", async () => {
+    const ca = client();
+    const g = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30 });
+    await ca.grants._authorize(g.id);
+
+    expect(await ca.grants._recordAgeProof(g.id, { provenAge: 21 })).toBe(false);
+    const live = (await ca.grants.retrieve(g.id))!;
+    expect(live.ageProof).toBeUndefined();
+    expect(await live.spend({ idempotencyKey: "late", items: [{ sku: "wine" }] })).toMatchObject({ ok: false, code: "step-up" });
+  });
+
+  it("a second, WEAKER ceremony cannot lower what the first one proved", async () => {
+    const ca = client();
+    const g = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30 });
+    await ca.grants._recordAgeProof(g.id, { provenAge: 21 });
+    await ca.grants._recordAgeProof(g.id, { provenAge: 18 });
+    await ca.grants._authorize(g.id);
+    expect((await ca.grants.retrieve(g.id))!.ageProof?.provenAge).toBe(21);
+  });
+
+  it("refuses a malformed threshold rather than sealing it", async () => {
+    const ca = client();
+    const g = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30 });
+    expect(await ca.grants._recordAgeProof(g.id, { provenAge: Number.NaN })).toBe(false);
+    expect(await ca.grants._recordAgeProof(g.id, { provenAge: 0 })).toBe(false);
+    expect((await ca.grants.retrieve(g.id))!.ageProof).toBeUndefined();
+  });
+
+  // BYPASS (the expiry half of ageProofCovers): a snapshot claim must respect the credential's
+  // own validity. Delete the `expiry <= nowMs` check and this goes red.
+  it("BYPASS: an EXPIRED proof refuses the 21+ item — a snapshot fails closed", async () => {
+    const ca = client();
+    const g = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30 });
+    await ca.grants._recordAgeProof(g.id, { provenAge: 21, expiresAt: new Date(Date.now() - 60_000).toISOString() });
+    await ca.grants._authorize(g.id);
+    const live = (await ca.grants.retrieve(g.id))!;
+    expect(await live.spend({ idempotencyKey: "exp", items: [{ sku: "wine" }] })).toMatchObject({ ok: false, code: "step-up" });
+  });
+
+  it("the proof is SEALED: it rides the authorized intent, and is stated presence-only", async () => {
+    const g = await grantWithAgeProof(client(), 21);
+    expect(g.ageProof).toMatchObject({ provenAge: 21, trust_level: "presence-only-demo" });
+    expect(typeof g.ageProof!.verifiedAt).toBe("string");
+  });
+
+  it("changes NOTHING for an unrestricted purchase", async () => {
+    const g = await grantWithAgeProof(client(), 21);
+    expect(await g.spend({ idempotencyKey: "c1", items: [{ sku: "coffee" }] })).toMatchObject({ ok: true, amount: 18, remaining: 82 });
+  });
 });
 
 // ── Ported from the closed PR #106 (issue #104): concurrency + money-boundary coverage the

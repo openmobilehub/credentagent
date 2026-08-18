@@ -166,6 +166,46 @@ describe("grant tools — merchant config & live-catalog re-pricing (Codex #118)
     expect(s).toMatchObject({ ok: false, code: "per-spend-exceeded" });
   });
 
+  // ── #172: the human proved their age on the approve page, so the agent may buy the 21+ item ──
+
+  // The positive path for the reversal, over the real MCP wire: without it the whole feature is
+  // unproven — the point of #172 is that a grant the human proved for CAN spend.
+  it("a grant carrying a 21+ proof buys the age-restricted item over MCP", async () => {
+    const ca = new CredentAgent({ walletOrigin: wallet, catalog: GATE_CATALOG });
+    const c = await client(ca);
+    const g = sc(await c.callTool({ name: "create-spending-grant", arguments: { budget: 300, perSpend: 150, categories: ["Beverages"] } }));
+    // What the grant-age rail does when the human's wallet proves age on the approve page.
+    expect(await ca.grants._recordAgeProof(g.grantId, { provenAge: 21 })).toBe(true);
+    await ca.grants._authorize(g.grantId);
+    const s = sc(await c.callTool({ name: "spend-from-grant", arguments: { grantId: g.grantId, productId: "oak-whiskey", idempotencyKey: "w172" } }));
+    expect(s).toMatchObject({ ok: true, amount: 124, remaining: 176 });
+  });
+
+  // BYPASS — the live-catalog pre-check must still refuse a grant with NO proof. Delete the
+  // `!ageProofCovers(...)` half of that condition and this goes red: every grant would buy 21+.
+  it("BYPASS: a grant with no age proof still refuses the 21+ item over MCP", async () => {
+    const ca = new CredentAgent({ walletOrigin: wallet, catalog: GATE_CATALOG });
+    const c = await client(ca);
+    const g = sc(await c.callTool({ name: "create-spending-grant", arguments: { budget: 300, perSpend: 150, categories: ["Beverages"] } }));
+    await ca.grants._authorize(g.grantId);
+    const s = sc(await c.callTool({ name: "spend-from-grant", arguments: { grantId: g.grantId, productId: "oak-whiskey" } }));
+    expect(s).toMatchObject({ ok: false, code: "step-up" });
+  });
+
+  // BYPASS — the pre-check must test the proof against the LIVE threshold, not the grant's stale
+  // snapshot. The human proved 18+; the storefront has since raised this product to 21+. Drop the
+  // threshold comparison (or read the snapshot's age) and this goes red.
+  it("BYPASS: an 18+ proof cannot buy a product the LIVE catalog raised to 21+", async () => {
+    const ca = new CredentAgent({ walletOrigin: wallet, catalog: { widget: { price: 20, minAge: 18, category: "Gadgets" } } });
+    const store = createStorefront({ grants: ca.grants, catalog: [prod({ id: "widget", price: 20, category: "Gadgets", minimumAge: 21 })] });
+    const c = await connect(store);
+    const g = sc(await c.callTool({ name: "create-spending-grant", arguments: { budget: 100, perSpend: 50, categories: ["Gadgets"] } }));
+    await ca.grants._recordAgeProof(g.grantId, { provenAge: 18 });
+    await ca.grants._authorize(g.grantId);
+    const s = sc(await c.callTool({ name: "spend-from-grant", arguments: { grantId: g.grantId, productId: "widget" } }));
+    expect(s).toMatchObject({ ok: false, code: "step-up" });
+  });
+
   // The happy path still works when the two catalogs AGREE: an in-scope, in-cap, unrestricted item spends.
   it("spends when the live catalog agrees (in scope, under cap, no age gate)", async () => {
     const ca = new CredentAgent({ walletOrigin: wallet, catalog: { widget: { price: 20, category: "Gadgets" } } });

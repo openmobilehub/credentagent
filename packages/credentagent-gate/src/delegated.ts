@@ -16,16 +16,17 @@
 import type { CeremonyCatalog, CeremonyOrder } from "./ceremony/types.js";
 import { MemoryVerificationStore } from "./store.js";
 import { MemoryRevocationStore, type RevocationStore } from "./ceremony/revocation.js";
-import { sealIntent, generateDelegate, signDraw, type IntentBounds } from "./ceremony/mandate.js";
+import { sealIntent, generateDelegate, signDraw, type IntentBounds, type SealedAgeProof } from "./ceremony/mandate.js";
 import { completeOrder, type CompletedRecord, type CompletionContext } from "./ceremony/completion.js";
 import type { RefusalCode, RefusalRetryable } from "./ceremony/refusals.js";
 
 /** The delegate private key type, without naming the DOM `CryptoKey` global. */
 type DelegateKey = Awaited<ReturnType<typeof generateDelegate>>["privateKey"];
 
-/** A catalog entry: a bare price, or a price plus an age restriction and/or a category
- *  (categories feed the grants `allow` bounds — what a delegated agent may buy). */
-export type CatalogEntry = number | { price: number; minAge?: number; category?: string };
+/** A catalog entry: a bare price, or a price plus an age restriction, a category and/or a
+ *  display name (categories feed the grants `allow` bounds — what a delegated agent may buy;
+ *  `name` is what the approve page calls the product instead of its bare sku id — #172). */
+export type CatalogEntry = number | { price: number; minAge?: number; category?: string; name?: string };
 
 export interface DelegatedGateOptions {
   /** Your priced catalog: item id → price, or → { price, minAge }. */
@@ -46,6 +47,10 @@ export interface PreApproveOptions {
   description?: string;
   /** Who delegated — informational in v0.1 (an audit key; not yet an enforced identity). */
   subject?: string;
+  /** An age claim the HUMAN proved at approval time, sealed into the grant's bounds (#172).
+   *  Absent ⇒ an age-restricted purchase steps up exactly as before. Present ⇒ purchases at or
+   *  below its proven threshold complete unattended; anything above still steps up. */
+  ageProof?: SealedAgeProof;
 }
 
 export interface Purchase {
@@ -77,8 +82,13 @@ export interface SpendResult {
   delegationId?: string;
 }
 
-const priceOf = (e: CatalogEntry) => (typeof e === "number" ? e : e.price);
-const minAgeOf = (e: CatalogEntry) => (typeof e === "number" ? undefined : e.minAge);
+// The ONE set of catalog-entry accessors — exported so the grants `allow` bounds and the
+// approve-page age disclosure (grants-age.ts) read an entry exactly the way the priced
+// ceremony order does, rather than each re-narrowing the union.
+export const priceOf = (e: CatalogEntry) => (typeof e === "number" ? e : e.price);
+export const minAgeOf = (e: CatalogEntry | undefined) => (e === undefined || typeof e === "number" ? undefined : e.minAge);
+export const categoryOf = (e: CatalogEntry | undefined) => (e === undefined || typeof e === "number" ? undefined : e.category);
+export const nameOf = (e: CatalogEntry | undefined) => (e === undefined || typeof e === "number" ? undefined : e.name);
 
 function buildCatalog(items: Record<string, CatalogEntry>): CeremonyCatalog {
   return {
@@ -136,6 +146,9 @@ export class DelegatedGate {
       totalAmount: opts.total,
       subject: opts.subject,
       delegate,
+      // Sealed WITH the bounds: `sealIntent` content-addresses the whole object, so the proof is
+      // part of this grant's identity and cannot be attached or raised afterwards (#172).
+      ...(opts.ageProof ? { ageProof: opts.ageProof } : {}),
       presence: "delegated-demo",
       trust_level: "server-issued-demo",
     });
@@ -168,6 +181,11 @@ export class DelegatedGrant {
   /** How strongly the authorization is bound — "server-issued-demo" in v0.1 (demo-fenced). */
   get trustLevel(): string {
     return this.grant.trust_level;
+  }
+
+  /** The age claim sealed into these bounds at approval time, if the human proved one (#172). */
+  get ageProof(): SealedAgeProof | undefined {
+    return this.grant.ageProof;
   }
 
   /** The human sentence this grant was described with, if any. */

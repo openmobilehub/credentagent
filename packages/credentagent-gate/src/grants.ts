@@ -8,8 +8,13 @@
 //   await g.revoke();                                // the very next spend is refused, fail-closed
 //
 // It wraps the REAL DelegatedGate engine (per-spend cap, cumulative budget, single-use ledger,
-// revocation, age-non-delegable) — this file adds the lifecycle (pending → authorized/denied →
+// revocation, the age gate) — this file adds the lifecycle (pending → authorized/denied →
 // revoked), the `allow` item bounds, and the spec-009 door vocabulary over the engine's refusals.
+//
+// AGE (#172): a grant discloses what its bounds cover age-wise (`ageScope`) so the approve page can
+// say so BEFORE the human taps Approve, and carries an age claim the human proved on that page
+// (`ageProof`) so their agent can buy those items later. No proof ⇒ an age-restricted item still
+// refuses `step-up`, exactly as before.
 //
 // HONESTY: the authorize ceremony today is a DEMO step (the intent is sealed server-side when the
 // human clicks approve — presence "delegated-demo", trust "server-issued-demo"). The wallet
@@ -17,6 +22,8 @@
 
 import { DelegatedGate, DelegatedGrant, type CatalogEntry } from "./delegated.js";
 import { serveGrants, type GrantsApp } from "./grants-serve.js";
+import { ageScopeFor, skuAllowed, type GrantAgeScope } from "./grants-age.js";
+import type { SealedAgeProof } from "./ceremony/mandate.js";
 
 /** Why a grant operation refused — a TYPED union (never `string`; #95 review). */
 export type GrantDoorCode =
@@ -91,6 +98,9 @@ interface GrantRecord {
   opts: CreateGrantOptions;
   /** Minted at AUTHORIZE time (the intent is sealed when the human approves, not before). */
   engine?: DelegatedGrant;
+  /** The age claim the human proved on the approve page, held until `_authorize` seals it into
+   *  the intent (#172). Writable ONLY while the grant is pending — see `_recordAgeProof`. */
+  ageProof?: SealedAgeProof;
   /** Idempotent spend cache: key → the door already returned (a retry replays it). */
   cache: Map<string, SpendDoor>;
 }
@@ -169,6 +179,10 @@ export class Grants {
   private readonly locks = new KeyedMutex();
   private gate?: DelegatedGate;
   private served = false;
+  /** Set by the grant-age rail when `mount()` registers it (#172). The approve page offers the
+   *  "prove your age" button ONLY when the ceremony is actually reachable — a host that calls
+   *  `grants.serve(app)` without `mount(app)` gets the disclosure alone, never a link to a 404. */
+  _ageRailMounted = false;
 
   constructor(private readonly deps: GrantsDeps) {}
 
@@ -238,8 +252,41 @@ export class Grants {
         total: toCents(rec.opts.budget),
         description:
           rec.opts.description ?? `Up to $${rec.opts.budget} at ${rec.opts.merchant}, $${rec.opts.perSpend}/purchase`,
+        // Whatever age claim the human proved BEFORE tapping Approve is sealed with the bounds
+        // (#172) — one atomic act of consent, covered by the content-addressed intentId.
+        ...(rec.ageProof ? { ageProof: rec.ageProof } : {}),
       });
       rec.status = "authorized";
+      return true;
+    });
+  }
+
+  /**
+   * The age seam (#172) — called by the grant-age rail when the human's wallet proves an over-age
+   * claim on the approve page, BEFORE they tap Approve. The wallet ceremony and the instant-demo
+   * path both land here; neither may pass a threshold of its own choosing (the rail re-derives it
+   * from the catalog).
+   *
+   * PENDING ONLY, and serialized with the rest of the lifecycle: an already-authorized grant can
+   * never gain a capability the human didn't approve, and a proof can't race the approve tap.
+   * Returns false when the grant is unknown or past pending — the caller surfaces that, it is
+   * never a silent no-op.
+   */
+  async _recordAgeProof(id: string, proof: { provenAge: number; expiresAt?: string }): Promise<boolean> {
+    return this.locks.run(id, async () => {
+      const rec = this.records.get(id);
+      if (!rec || rec.status !== "pending") return false;
+      if (typeof proof.provenAge !== "number" || !Number.isFinite(proof.provenAge) || proof.provenAge <= 0) return false;
+      // Keep the STRICTEST proof if the human verifies twice — a second, weaker ceremony must
+      // never lower what the first one established.
+      if (rec.ageProof && rec.ageProof.provenAge >= proof.provenAge) return true;
+      rec.ageProof = {
+        provenAge: proof.provenAge,
+        verifiedAt: new Date().toISOString(),
+        ...(proof.expiresAt ? { expiresAt: proof.expiresAt } : {}),
+        // HONESTY: the wire crypto is real, the issuer trust anchor is not (#14).
+        trust_level: "presence-only-demo",
+      };
       return true;
     });
   }
@@ -255,17 +302,11 @@ export class Grants {
   }
 
   /** Is this sku inside the grant's `allow` bounds? Fail-closed: with bounds set, an unknown or
-   *  uncategorized item does NOT pass. No bounds ⇒ everything in the catalog is allowed. */
+   *  uncategorized item does NOT pass. No bounds ⇒ everything in the catalog is allowed.
+   *  Delegates to the SHARED predicate the approve page's age disclosure reads (grants-age.ts),
+   *  so what the page says a grant covers is exactly what this enforces (#172). */
   private allowed(rec: GrantRecord, sku: string): boolean {
-    const allow = rec.opts.allow;
-    if (!allow || (!allow.skus && !allow.categories)) return true;
-    if (allow.skus?.includes(sku)) return true;
-    if (allow.categories) {
-      const entry = this.deps.catalog?.[sku];
-      const category = typeof entry === "object" ? (entry as { category?: string }).category : undefined;
-      if (category && allow.categories.includes(category)) return true;
-    }
-    return false;
+    return skuAllowed(rec.opts.allow, sku, this.deps.catalog ?? {});
   }
 
   private view(rec: GrantRecord): Grant {
@@ -327,6 +368,13 @@ export class Grants {
       description: rec.opts.description,
       presence: rec.engine?.presence ?? "delegated-demo",
       trustLevel: rec.engine?.trustLevel ?? "server-issued-demo",
+      // Derived HERE, from the sealed bounds against the live catalog — never reported by the
+      // agent (#172). Re-derived per handle read, so a catalog change is reflected at the next
+      // `retrieve()`; it is disclosure, not the control (grants-age.ts documents the limit).
+      ageScope: ageScopeFor(rec.opts.allow, this.deps.catalog),
+      // The sealed intent is the authority once authorized; before that, the pending record's
+      // claim is what the approve page reflects back to the human.
+      ageProof: rec.engine?.ageProof ?? rec.ageProof,
       spend,
       revoke: async () => {
         // Revoke the engine's ledger IMMEDIATELY — OUTSIDE the per-grant queue — so a spend
@@ -361,6 +409,14 @@ export interface Grant {
   /** When/how consent happened — "delegated-demo" until the wallet ceremony lands (honesty axis). */
   presence: string;
   trustLevel: string;
+  /** What these bounds cover, age-wise — the fact the approve page discloses BEFORE the human
+   *  taps Approve (#172). `{ minimumAge: null, items: [] }` when nothing in scope is restricted.
+   *  A forecast for a category grant, and DISCLOSURE only: the spend-time refusal is unchanged. */
+  readonly ageScope: GrantAgeScope;
+  /** The age claim the human proved at approval time, if they did (#172). Absent ⇒ an
+   *  age-restricted purchase steps up. Read it to answer "may this grant buy that?" the way the
+   *  gate does — pair it with `ageProofCovers(proof, requiredAge)`. */
+  readonly ageProof?: SealedAgeProof;
   spend(input: SpendItems): Promise<SpendDoor>;
   revoke(): Promise<void>;
 }

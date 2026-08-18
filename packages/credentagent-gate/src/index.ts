@@ -38,6 +38,10 @@ export type { OrderStore, CreatedOrder, CompletedOrder, OrderDoor, OrderDoorCode
 // REAL engine (per-spend cap, budget, single-use, revocation, age-non-delegable) → typed door.
 export { Grants } from "./grants.js";
 export type { Grant, GrantStatus, GrantDoorCode, GrantAllow, CreateGrantOptions, SpendDoor, SpendItems } from "./grants.js";
+// `grant.ageScope` — what the bounds cover age-wise, so the approve page can say so BEFORE the
+// human taps Approve (#172). Derived server-side from the catalog; disclosure, not enforcement.
+export { ageScopeFor, skuAllowed } from "./grants-age.js";
+export type { GrantAgeScope, AgeRestrictedItem } from "./grants-age.js";
 
 // ── Webhooks (spec 010) — the REAL HTTP completion signal ───────────────────
 // SEND: `new CredentAgent({ webhooks: { endpoints: [{ url, secret }] } })` → every settled order
@@ -134,6 +138,11 @@ export type { Refusal, RefusalCode, RefusalEnforcer, RefusalRetryable } from "./
 // completeOrder) is bundled. Demo-fenced today; stable surface for the wallet-server increment.
 export { DelegatedGate, DelegatedGrant } from "./delegated.js";
 export type { DelegatedGateOptions, PreApproveOptions, Purchase, SpendResult, CatalogEntry } from "./delegated.js";
+// The age claim a human seals into a grant at approval time (#172) + the ONE predicate that
+// answers "does it cover an order demanding N?" — so a host pre-check can ask the same question
+// the gate's completion path asks, rather than inventing a second, drifting rule.
+export { ageProofCovers } from "./ceremony/mandate.js";
+export type { SealedAgeProof } from "./ceremony/mandate.js";
 export type {
   CeremonyOrder,
   CeremonyOrderLine,
