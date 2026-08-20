@@ -23,7 +23,7 @@
 
 import express from "express";
 import { createStorefront } from "@openmobilehub/credentagent-storefront/server";
-import { CredentAgent } from "@openmobilehub/credentagent-gate";
+import { CredentAgent, pageHead, brandHeader, progressRail } from "@openmobilehub/credentagent-gate";
 
 const PORT = Number(process.env.PORT ?? 4021);
 const BASE = `http://localhost:${PORT}`;
@@ -72,54 +72,43 @@ const approved = await bar("Your shopping agent wants to restock the bar cart wh
 await grants._authorize(approved.id);
 
 const STATES = [
-  { n: 1, label: "Age-restricted · not yet proved", note: "The warning, the wallet button, and “Approve without them”.", grant: unproved },
-  { n: 2, label: "Age-restricted · proved", note: "Age ✓ on the stepper, and a plain “Approve”.", grant: proved },
-  { n: 3, label: "Nothing restricted", note: "No warning and no stepper — a single decision.", grant: unrestricted },
-  { n: 4, label: "Already approved", note: "The terminal state.", grant: approved },
+  { label: "Age-restricted · not yet proved", note: "The warning, the items it names, the wallet button, and “Approve without them”.", grant: unproved, rail: [{ label: "Age" }, { label: "Approve" }] },
+  { label: "Age-restricted · proved", note: "Age ✓ on the stepper, and a plain “Approve”.", grant: proved, rail: [{ label: "Age", done: true }, { label: "Approve" }] },
+  { label: "Nothing restricted", note: "No warning and no stepper — one decision.", grant: unrestricted, rail: [] },
+  { label: "Already approved", note: "The terminal state.", grant: approved, rail: [] },
 ];
 
 // ── an index so you can walk the states ──────────────────────────────────────
+// Built from the gate's OWN design-system primitives (pageHead / brandHeader / progressRail), not
+// hand-rolled CSS — so this page can't drift from the approve page it links to. Each card previews
+// that state's stepper: the same rail the page itself renders, at the same point in the flow.
 store.app.get("/", (_req, res) => {
-  const cards = STATES.map(
-    (s) => `<a class="card" href="/credentagent/grants/${s.grant.id}">
-      <span class="n">${s.n}</span>
-      <span class="t">${s.label}</span>
-      <span class="d">${s.note}</span>
-    </a>`,
-  ).join("\n");
-  res.type("html").send(`<!doctype html><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Spending grant · approve page states</title>
-<style>
-  :root { color-scheme: light }
-  body { font: 16px/1.55 system-ui, -apple-system, sans-serif; background: #f7f9f9; color: #10201c;
-         margin: 0; padding: 40px 20px; }
-  .wrap { max-width: 520px; margin: 0 auto; }
-  h1 { font-size: 1.5rem; margin: 0 0 6px; }
-  p.lede { color: #5b6f6a; margin: 0 0 26px; }
-  .card { display: grid; grid-template-columns: 32px 1fr; gap: 2px 12px; text-decoration: none;
-          color: inherit; background: #fff; border: 1px solid #e2eae7; border-radius: 12px;
-          padding: 16px 18px; margin-bottom: 12px; }
-  .card:hover { border-color: #0d9488; }
-  .n { grid-row: span 2; display: flex; align-items: center; justify-content: center; width: 28px;
-       height: 28px; border-radius: 999px; background: #0d9488; color: #fff; font-weight: 700;
-       font-size: .85rem; }
-  .t { font-weight: 600; }
-  .d { color: #5b6f6a; font-size: .9rem; }
-  .foot { color: #5b6f6a; font-size: .82rem; border-top: 1px solid #e2eae7; margin-top: 26px;
-          padding-top: 16px; }
-</style>
-<div class="wrap">
-  <h1>Spending grant — approve page</h1>
-  <p class="lede">The page a human opens when an agent asks to spend on their behalf. Four states, one per grant.</p>
+  const cards = STATES.map((s, i) => {
+    // The rail marks the first unfinished step current, exactly as the approve page does. A state
+    // with nothing to prove has no rail at all — a one-dot stepper says nothing.
+    const rail = s.rail.length > 1 ? progressRail(s.rail, s.rail.findIndex((r) => !r.done)) : "";
+    return `<div class="card">
+      <p class="card-title"><span class="step-no">${i + 1}.</span> ${s.label}</p>
+      ${rail}
+      <p class="row-pending" style="margin:0 0 14px">${s.note}</p>
+      <a class="btn btn-secondary" href="/credentagent/grants/${s.grant.id}">Open this state</a>
+    </div>`;
+  }).join("\n");
+
+  res.type("html").send(`<!doctype html>
+<html lang="en">
+${pageHead("Spending grant · approve page states")}
+<body>
+  <div class="wrap">
+  ${brandHeader({ h1: "Approve page", tagline: "The page a human opens when an agent asks to spend on their behalf. Four states, one per grant." })}
   ${cards}
-  <p class="foot">🔒 Approving here stands in for the wallet ceremony (<code>delegated-demo</code>), and the age proof is
-  <code>presence-only-demo</code> — the wire crypto is real, but there is no issuer trust anchor yet. Not a real
-  age-safety control. No real money moves.</p>
-</div>`);
+  <div class="trust"><div class="trust-line">🔒 Approving here stands in for the wallet ceremony (delegated-demo), and the age proof is presence-only-demo — the wire crypto is real, but there is no issuer trust anchor yet. Not a real age-safety control. No real money moves.</div></div>
+  </div>
+</body>
+</html>`);
 });
 
 await store.listen(PORT);
 console.log(`\n  Spending-grant approve page → ${BASE}\n`);
-for (const s of STATES) console.log(`  ${s.n}. ${s.label.padEnd(34)} ${BASE}/credentagent/grants/${s.grant.id}`);
+STATES.forEach((s, i) => console.log(`  ${i + 1}. ${s.label.padEnd(34)} ${BASE}/credentagent/grants/${s.grant.id}`));
 console.log(`\n  Tap "Verify 21+ with your wallet" on state 1 for the live age ceremony.\n`);

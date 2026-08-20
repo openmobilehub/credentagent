@@ -92,6 +92,13 @@ export type { PaymentBinding, ReconcileRefusal, ReconcileVerdict } from "./cerem
 // polished, route-agnostic page driven by the `requires` manifest (each gate links
 // to its OWN approveUrl) so the two surfaces never drift (T030).
 export { renderRequirements } from "./ceremony/checkout-page.js";
+// The design-system primitives every ceremony page is built from — the page shell + CSS, the
+// brand row, and the step rail. Exported so a HOST page that sits inside the same flow (a grant
+// index, a landing step, a confirmation) can match the rails instead of re-copying their CSS and
+// drifting from it. `trustFooter` is deliberately NOT here: that honesty line belongs to the
+// OpenID4VP rails and must not be pasted onto a page making a different claim.
+export { pageHead, brandHeader, progressRail } from "./ceremony/theme.js";
+export type { RailStep } from "./ceremony/theme.js";
 export type {
   RenderOrder,
   RenderOrderLine,
