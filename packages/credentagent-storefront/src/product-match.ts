@@ -16,7 +16,7 @@ export type ProductMatch =
   | { kind: "none" };
 
 /** Words that carry no product meaning — dropped before scoring so they can't create matches. */
-const STOPWORDS = new Set([
+const STOPWORDS: ReadonlySet<string> = new Set([
   "a", "an", "and", "the", "of", "in", "for", "with", "some", "please", "buy", "get", "me", "my",
   "one", "pair", "size", "colour", "color", "brand", "new", "want", "would", "like", "to", "on",
 ]);
