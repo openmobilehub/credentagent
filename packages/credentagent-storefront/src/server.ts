@@ -770,6 +770,16 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
               note: "That requestState was refused. Start over: call create-spending-grant again with no requestState.",
             });
           }
+          // The human is allowed to say no. A declined question ends the flow honestly instead of
+          // asking the same thing again until the round cap runs out.
+          if (round.declined.length) {
+            return plain({
+              ok: false,
+              code: "declined",
+              declined: round.declined,
+              note: "The human declined to answer, so no grant was created. Don't retry unless they ask you to.",
+            });
+          }
           const ask = (requests: Record<string, Ask>): CallToolResult =>
             round.round >= MAX_ROUNDS
               ? plain({ ok: false, code: "unresolved", note: `Still could not pin down "${item}" after ${MAX_ROUNDS} rounds — no grant was created. Ask the human to name a product from browse-products.` })

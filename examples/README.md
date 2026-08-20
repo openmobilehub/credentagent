@@ -33,6 +33,7 @@ Each is runnable against the two `@openmobilehub/credentagent-*` packages (build
 - [`hnp-on-claude/`](hnp-on-claude/) — connect the WHOLE store (checkout + grants) to the Claude app: tunnel it, add /mcp as a custom connector, approve a grant once, then watch Claude spend within your bounds
 - [`grants-proto/`](grants-proto/) — the two-pane `credentagent.grants` demo (REAL API): authorize once, watch the agent's spend loop draw the budget down, revoke
 - [`grant-exact-product.mjs`](grant-exact-product.mjs) — **"buy the black court sneakers, US 10"**: the grant tool asks which size and colour (MCP's multi round-trip pattern) instead of handing back a link, then pins the grant to that exact product — a spend on anything else refuses, and a hand-edited `requestState` is refused too
+- [`mrtr-client.mjs`](mrtr-client.mjs) — **the client half of the pattern**: an MCP client that declares `elicitation`, reads the store's `input_required` answer, puts the questions to you in the terminal, and retries the call with `inputResponses` + `requestState` as request-level params. Point it at [`hnp-on-claude/`](hnp-on-claude/) and watch the whole round trip over real HTTP
 - [`hnp-draws/`](hnp-draws/) — the lower-level `DelegatedGate` seams reference (superseded for everyday use by `grants` + the demo hub)
 
 ---

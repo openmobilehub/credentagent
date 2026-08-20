@@ -112,6 +112,27 @@ describe("create-spending-grant — asking until the product is pinned down", ()
     expect(sc(retry as never)).toMatchObject({ status: "pending", allow: { skus: ["court-sneakers"] } });
   });
 
+  it("stops when the human declines a question instead of asking again until the cap", async () => {
+    const c = await connect(agent());
+    const first = await create(c, { budget: 200, perSpend: 120, item: "sneakers" });
+
+    const retry = await c.request(
+      {
+        method: "tools/call",
+        params: {
+          name: "create-spending-grant",
+          arguments: { budget: 200, perSpend: 120, item: "sneakers" },
+          requestState: first.requestState,
+          inputResponses: { size: { action: "decline" }, colour: { action: "accept", content: { colour: "Black" } } },
+        },
+      },
+      CallToolResultSchema,
+    );
+    const v = sc(retry as never);
+    expect(v).toMatchObject({ ok: false, code: "declined", declined: ["size"] });
+    expect(v.approveUrl).toBeUndefined();
+  });
+
   it("asks WHICH ONE when the words fit several products, instead of picking for the human", async () => {
     const c = await connect(agent());
     const v = sc(await create(c, { budget: 400, perSpend: 250, item: "wireless" }));
