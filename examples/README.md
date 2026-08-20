@@ -32,6 +32,7 @@ Each is runnable against the two `@openmobilehub/credentagent-*` packages (build
 **Human-not-present** (spec 009 · #104)
 - [`hnp-on-claude/`](hnp-on-claude/) — connect the WHOLE store (checkout + grants) to the Claude app: tunnel it, add /mcp as a custom connector, approve a grant once, then watch Claude spend within your bounds
 - [`grants-proto/`](grants-proto/) — the two-pane `credentagent.grants` demo (REAL API): authorize once, watch the agent's spend loop draw the budget down, revoke
+- [`grants-approve/`](grants-approve/) — the spending-grant APPROVE PAGE (`grant.approveUrl`) in every state: an age-restricted scope before and after the human proves their age, an unrestricted one, and the terminal state. Tap the wallet button for the live age ceremony
 - [`hnp-draws/`](hnp-draws/) — the lower-level `DelegatedGate` seams reference (superseded for everyday use by `grants` + the demo hub)
 
 ---
