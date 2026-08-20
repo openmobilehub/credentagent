@@ -144,7 +144,12 @@ export class CredentAgent {
     // The outbound HTTP webhook sender (spec 010). Zero endpoints ⇒ inert (additive, zero-cost).
     this.webhooks = new Webhooks(opts.webhooks ?? {});
     // The delegated-spend resource (spec 009): needs the priced catalog to bound + price spends.
-    this.grants = new Grants({ walletOrigin: this.walletOrigin, ...(opts.catalog ? { catalog: opts.catalog } : {}) });
+    this.grants = new Grants({
+      walletOrigin: this.walletOrigin,
+      ...(opts.catalog ? { catalog: opts.catalog } : {}),
+      // The approve page wears the same brand as the ceremony gate pages (one product, one look).
+      ...(this.branding ? { branding: this.branding } : {}),
+    });
     this.orders = new Orders({
       walletOrigin: this.walletOrigin,
       requirements: (order, policy) => this.requirements(order, policy),

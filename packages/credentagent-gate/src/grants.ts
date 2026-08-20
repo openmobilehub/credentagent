@@ -24,6 +24,7 @@ import { DelegatedGate, DelegatedGrant, type CatalogEntry } from "./delegated.js
 import { serveGrants, type GrantsApp } from "./grants-serve.js";
 import { ageScopeFor, skuAllowed, type GrantAgeScope } from "./grants-age.js";
 import type { SealedAgeProof } from "./ceremony/mandate.js";
+import type { Branding } from "./types.js";
 
 /** Why a grant operation refused — a TYPED union (never `string`; #95 review). */
 export type GrantDoorCode =
@@ -109,6 +110,9 @@ export interface GrantsDeps {
   walletOrigin: string;
   /** The priced catalog (dollars) — the ONE price source; also read by the `allow` bounds. */
   catalog?: Record<string, CatalogEntry>;
+  /** Host brand for the approve page — the SAME one the ceremony gate pages wear, so a human
+   *  who verifies their age and then approves never sees the brand change under them. */
+  branding?: Branding;
 }
 
 const genGrantId = (): string => `grant_${globalThis.crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
@@ -183,6 +187,11 @@ export class Grants {
    *  "prove your age" button ONLY when the ceremony is actually reachable — a host that calls
    *  `grants.serve(app)` without `mount(app)` gets the disclosure alone, never a link to a 404. */
   _ageRailMounted = false;
+
+  /** The brand the approve page wears (read by `serveGrants`). */
+  get _branding(): Branding | undefined {
+    return this.deps.branding;
+  }
 
   constructor(private readonly deps: GrantsDeps) {}
 

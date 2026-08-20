@@ -209,6 +209,43 @@ describe("credentagent.grants — the approve page (grants.serve, #112 P1)", () 
     expect(res._body).toContain("✓ Approve"); // today's page, unchanged
   });
 
+  // The approve page and the ceremony gate pages must look like ONE product: same chrome, same
+  // stepper, same card language. This pins the shared design system rather than the old bespoke
+  // inline styles — swap it back for hand-rolled markup and this goes red.
+  it("wears the SHARED ceremony chrome — brand header, progress rail, cards", async () => {
+    const ca = client();
+    const app = fakeApp();
+    ca.grants.serve(app);
+    const g = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30, allow: { categories: ["Beverages"] } });
+
+    const res = fakeRes();
+    await app._get.get("/credentagent/grants/:id")!({ params: { id: g.id } }, res);
+    expect(res._body).toContain(`<div class="wrap">`); // theme.pageHead + the shared shell
+    expect(res._body).toContain(`<span class="wordmark">CREDENTAGENT</span>`);
+    expect(res._body).toContain(`<div class="rail" role="list" aria-label="Progress">`);
+    expect(res._body).toContain(`<div class="rail-label">Age</div>`);
+    expect(res._body).toContain(`<div class="rail-label">Approve</div>`);
+    expect(res._body).toContain(`class="btn btn-primary"`);
+    expect(res._body).toContain(`class="card summary"`);
+    // The limits read as money, with the budget as the bold total row.
+    expect(res._body).toContain("$100.00");
+    expect(res._body).toContain("$30.00");
+    // The page's own honesty posture — NOT the rails' presence-only line (a different claim).
+    expect(res._body).toContain("delegated-demo");
+  });
+
+  it("renders NO stepper when the grant has a single step — a one-dot rail says nothing", async () => {
+    const ca = client();
+    const app = fakeApp();
+    ca.grants.serve(app);
+    const g = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30, allow: { categories: ["Electronics"] } });
+
+    const res = fakeRes();
+    await app._get.get("/credentagent/grants/:id")!({ params: { id: g.id } }, res);
+    expect(res._body).not.toContain(`class="rail"`);
+    expect(res._body).toContain("✓ Approve"); // just the decision
+  });
+
   it("offers the wallet button ONLY when the age ceremony is actually mounted", async () => {
     const ca = client();
     const app = fakeApp();
@@ -236,9 +273,11 @@ describe("credentagent.grants — the approve page (grants.serve, #112 P1)", () 
 
     const res = fakeRes();
     await app._get.get("/credentagent/grants/:id")!({ params: { id: g.id } }, res);
-    expect(res._body).toContain("Age verified (21+)");
-    expect(res._body).toContain("may buy these while you're away");
+    expect(res._body).toContain("✓ Age verified — 21+");
+    expect(res._body).toContain("may buy the age-restricted items above while you're away");
     expect(res._body).toContain("✓ Approve"); // no longer "Approve without them"
+    // The rail agrees with the card: Age ticked, Approve current.
+    expect(res._body).toContain(`<div class="rail-step done"><div class="rail-dot">✓</div><div class="rail-label">Age</div>`);
   });
 });
 

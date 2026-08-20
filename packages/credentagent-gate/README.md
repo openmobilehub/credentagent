@@ -487,8 +487,11 @@ your catalog — the agent is never asked — and the approve page names what it
 grant.ageScope  // → { minimumAge: 21, items: [{ sku: "wine", name: "Reserve Wine", price: 21, minAge: 21 }] }
 ```
 
-> ⚠️ **Beverages includes age-restricted items (21+).**
-> Your agent can't buy these: Reserve Wine — $21
+The page it renders is the **same design as the checkout hub** — brand header, a limits card, a
+numbered progress rail, one card per step, the decision last — so a human who approves a grant and a
+buyer who checks out are looking at one product. Like the hub, the rail lists only the steps this
+grant actually has: `Age · Approve` when the scope is age-restricted, and no stepper at all when
+there is nothing to prove.
 
 For a category grant this is a **forecast** made at approval time: a 21+ product added to that
 category next week could not have been predicted. That is fine — this is *disclosure*. The
