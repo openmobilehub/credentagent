@@ -21,6 +21,16 @@ export interface Review {
   text: string;
 }
 
+/** One choice a product needs pinned down (size, colour, …) before it is a specific purchase. */
+export interface ProductVariant {
+  /** The answer's field name, e.g. `"size"`. Unique per product. */
+  name: string;
+  /** How to ask for it, e.g. `"Which size?"`. Defaults to `Which <name>?`. */
+  label?: string;
+  /** The acceptable values — a closed set, so the human picks instead of free-typing. */
+  options: string[];
+}
+
 export interface Product {
   id: string;
   name: string;
@@ -33,6 +43,13 @@ export interface Product {
   minimumAge?: number;
   /** Requires a prescription to purchase — a custom `appliesTo` flag (e.g. the prescription gate). */
   requiresRx?: boolean;
+  /**
+   * Choices the buyer must make before this product is fully specified — size, colour, finish.
+   * A grant for "sneakers" is not yet a grant for a PARTICULAR pair, so the tools that create one
+   * ask for each missing choice (over MCP's multi round-trip pattern) and put the answers in the
+   * sentence the human approves. Absent = nothing to choose.
+   */
+  variants?: ProductVariant[];
   /** Any additional catalog attribute a custom `defineCredential` `appliesTo` keys on
    *  (e.g. `region`, `licenseTier`). Forwarded verbatim onto the priced line by `priceCart`,
    *  so a custom gate can key on ANY product field — not just the ones we predefine. */
@@ -261,6 +278,20 @@ export const SAMPLE_CATALOG: Product[] = [
     image: PRODUCT_IMAGES["summit-backpack"],
     category: "Outdoors",
     description: "35L weatherproof hiking backpack with a stowaway rain cover.",
+  },
+  {
+    id: "court-sneakers",
+    name: "Cascade Court Sneakers",
+    price: 95.0,
+    currency: "USD",
+    image: PRODUCT_IMAGES["court-sneakers"],
+    category: "Apparel",
+    description: "Low-top canvas court sneakers with a gum sole.",
+    // Not a specific purchase until both are chosen — see ProductVariant.
+    variants: [
+      { name: "size", label: "Which size?", options: ["US 8", "US 9", "US 10", "US 11", "US 12"] },
+      { name: "colour", label: "Which colour?", options: ["Black", "White", "Sand"] },
+    ],
   },
   {
     id: "lumen-desk-lamp",

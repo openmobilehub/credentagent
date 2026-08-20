@@ -138,6 +138,45 @@ const store = createStorefront({
 - **Lean by default:** `firebase-admin` is an **optional peer dependency**, loaded lazily only on the
   credentials path — static-catalog users never install it.
 
+## "Buy the black court sneakers, US 10" — a grant pinned to one product
+
+When `grants` is wired, `create-spending-grant` takes an `item`: the exact product the human asked
+for, in their own words. If those words fit **several** products, **none**, or leave a choice open
+(size, colour), the tool returns **no approve link**. It answers with the questions to put to the
+human plus an opaque `requestState`, and the agent calls it again with the answers — MCP's
+[multi round-trip request](https://modelcontextprotocol.io/specification/draft/basic/patterns/mrtr)
+pattern, powered by `MultiRoundTrip` from the gate:
+
+```jsonc
+// 1. the agent asks for a grant                → no link yet, two questions
+{ "name": "create-spending-grant",
+  "arguments": { "budget": 200, "perSpend": 120, "item": "sneakers" } }
+// ← { "resultType": "input_required",
+//     "inputRequests": { "size": { "method": "elicitation/create", … }, "colour": { … } },
+//     "requestState": "mrtr1.…" }
+
+// 2. the human answers; the agent calls again with the SAME arguments + the state, verbatim
+{ "name": "create-spending-grant",
+  "arguments": { "budget": 200, "perSpend": 120, "item": "sneakers",
+                 "requestState": "mrtr1.…", "answers": { "size": "US 10", "colour": "Black" } } }
+// ← { "status": "pending", "approveUrl": "…", "allow": { "skus": ["court-sneakers"] },
+//     "item": { "productId": "court-sneakers", "selections": { "size": "US 10", "colour": "Black" } } }
+```
+
+The grant is sealed to **that product**: a later unattended spend on anything else refuses
+`not-allowed`, and the approve page names exactly what the human is agreeing to
+(*"Buy Cascade Court Sneakers — US 10, Black ($95.00) from utopia."*). Products declare their own
+choices via `Product.variants`; omit `item` and you get the open, category-only grant, unchanged.
+
+`requestState` is signed, short-lived, and bound to the call, the money bounds, and the session — a
+hand-edited one is refused rather than believed. It is **not** proof a human answered: until clients
+implement MRTR, the agent relays the answers, which is why the human still confirms on the page.
+
+The MRTR envelope (`resultType` / `inputRequests`) is sent **only to a client that declared the
+`elicitation` capability** — the spec forbids sending requests a client never said it can handle.
+Every other client gets the same questions as ordinary tool output and answers through the tool's
+own `requestState` + `answers` arguments, so the round trip completes either way.
+
 ## The three execution contexts
 
 `createStorefront()` is built around the split the gate enforces — conflating these is forbidden

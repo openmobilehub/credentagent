@@ -39,6 +39,26 @@ export type { OrderStore, CreatedOrder, CompletedOrder, OrderDoor, OrderDoorCode
 export { Grants } from "./grants.js";
 export type { Grant, GrantStatus, GrantDoorCode, GrantAllow, CreateGrantOptions, SpendDoor, SpendItems } from "./grants.js";
 
+// ── MRTR (spec: Multi Round-Trip Requests) — "I need more from the human before I can do this" ──
+// The MCP pattern for a tool that cannot complete yet: answer with `input_required` (the questions
+// + an opaque `requestState`), the client asks the human, then calls the tool AGAIN echoing the
+// blob. `MultiRoundTrip` seals that blob (HMAC + TTL + request/principal binding) so the server
+// keeps NO session between rounds and a hand-edited blob is refused, never trusted.
+//   const round = rounds.open({ request: "create-spending-grant", params, state, responses });
+//   if (!round.answers.size) return round.ask({ size: { message: "Which size?", fields: { size: { type: "string" } } } });
+// Implemented here because @modelcontextprotocol/sdk does not ship the MRTR types yet.
+export { MultiRoundTrip, DEFAULT_MRTR_TTL_MS } from "./mrtr.js";
+export type {
+  Ask,
+  AskField,
+  InputRequests,
+  InputRequiredResult,
+  MultiRoundTripOptions,
+  MultiRoundTripRefusal,
+  OpenRoundArgs,
+  Round,
+} from "./mrtr.js";
+
 // ── Webhooks (spec 010) — the REAL HTTP completion signal ───────────────────
 // SEND: `new CredentAgent({ webhooks: { endpoints: [{ url, secret }] } })` → every settled order
 // POSTs a signed `order.settled` event. RECEIVE (a different service, secret only):

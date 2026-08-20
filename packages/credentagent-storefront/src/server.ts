@@ -42,6 +42,8 @@ import type { CartItemInput, CatalogSource, Order, PricedCart, Product, Review }
 // reaching into the pure model module.
 export type { CatalogSource } from "./index.js";
 import { appToolMeta } from "./tool-meta.js";
+import { enableMrtrParams, mrtrParams } from "./mcp-mrtr.js";
+import { matchProducts, prefillVariants, validSelections, missingVariants, describeChoice } from "./product-match.js";
 import { MemoryCartStore, MemoryOrderStore } from "./state.js";
 import type { CartStore, OrderStore } from "./state.js";
 // Re-export the store contracts so a consumer can type an explicit store (the escape
@@ -60,6 +62,9 @@ import {
   decodeCartMandateParam,
   renderRequirements,
   MemoryVerificationStore,
+  MultiRoundTrip,
+  type Ask,
+  type InputRequiredResult,
   type Branding,
   type CartItemRef,
   type Credential,
@@ -383,6 +388,12 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
   const grants = opts.grants;
   // The merchant a created grant is sealed as — honest default for the generic package.
   const merchant = opts.merchant ?? "storefront";
+  // MRTR (#174): the questions a half-specified grant asks ride in a SEALED `requestState` blob,
+  // so the server holds no session between rounds. It is signed with the storefront's
+  // `signingKey` when there is one; otherwise with a per-process key — which is fine for a single
+  // instance, but on a multi-instance deployment a state minted on instance A is refused
+  // ("tampered") by instance B, exactly like an unshared cart-mandate key. Pass `signingKey`.
+  const rounds = new MultiRoundTrip({ secret: signingKey ?? randomBytes(32).toString("hex") });
 
   // Issue + base64url-encode a Cart Mandate for a priced order (the checkout link's `cart`).
   const cartParamFor = (order: Order): string => {
@@ -665,32 +676,166 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
     if (grants) {
       const grantView = (g: NonNullable<Awaited<ReturnType<Grants["retrieve"]>>>) =>
         ({ grantId: g.id, status: g.status, merchant: g.merchant, approveUrl: g.approveUrl, budget: g.budget, perSpend: g.perSpend, allow: g.allow ?? null });
+      // Rounds of questions are capped: a client that never converges gets an honest "I could not
+      // pin this down" instead of an endless loop of elicitations.
+      const MAX_ROUNDS = 4;
+      /** The MRTR answer, ALSO rendered as plain text for the clients that don't speak MRTR yet. */
+      const askResult = (asked: InputRequiredResult): CallToolResult => {
+        const questions = Object.entries(asked.inputRequests).map(([key, req]) => ({
+          key,
+          message: req.params.message,
+          fields: Object.entries(req.params.requestedSchema.properties).map(([name, f]) => ({ name, options: f.enum ?? null })),
+        }));
+        const view = {
+          ok: false,
+          code: "input-required",
+          questions,
+          requestState: asked.requestState,
+          note:
+            "NO GRANT EXISTS YET. Put these questions to the human, then call create-spending-grant AGAIN with the " +
+            "same budget/perSpend/item plus requestState (copied verbatim, never edited) and answers keyed by field name.",
+        };
+        // MRTR server requirement 7: NEVER send `inputRequests` a client hasn't declared support
+        // for. A client that didn't advertise `elicitation` cannot put these questions to anyone,
+        // and answering it with a bare `input_required` would only invite an immediate, useless
+        // retry — so it gets the questions as ordinary tool output for its agent to relay instead.
+        const speaksElicitation = !!server.server.getClientCapabilities()?.elicitation;
+        const body: CallToolResult = { content: [{ type: "text", text: JSON.stringify(view) }], structuredContent: view };
+        // Spread first: the MRTR fields (resultType / inputRequests / requestState) are the wire
+        // contract for a client that implements the pattern; content + structuredContent are the
+        // same questions in the form today's clients can actually read.
+        return speaksElicitation ? { ...asked, ...body } : body;
+      };
+      const plain = (view: Record<string, unknown>): CallToolResult =>
+        ({ content: [{ type: "text", text: JSON.stringify(view) }], structuredContent: view });
+
       server.registerTool(
         "create-spending-grant",
         {
           title: "Create Spending Grant",
           description:
             "Ask the human for a bounded spending authority you can buy against WHILE THEY ARE AWAY: a total budget, " +
-            "a per-purchase cap, and optionally which product categories are allowed. Returns an approveUrl — SEND IT " +
-            "TO THE HUMAN; nothing can be spent until they approve there (status pending → authorized). Amounts are dollars.",
+            "a per-purchase cap, and — when they have a specific purchase in mind — the exact product, named in `item` " +
+            "(e.g. \"Oak Reserve Whiskey Collection\", \"black court sneakers, US 10\"). If those words fit several " +
+            "products, none at all, or leave a choice open (size, colour), this tool returns NO LINK: it answers with the " +
+            "questions to put to the human, plus a requestState — ask them, then call it again with the same arguments " +
+            "plus that requestState (verbatim) and their answers. Once the product is pinned down the grant can only ever " +
+            "buy THAT product. Returns an approveUrl — SEND IT TO THE HUMAN; nothing can be spent until they approve " +
+            "there (status pending → authorized). Amounts are dollars.",
           inputSchema: {
             budget: z.number().positive().describe("total budget in dollars"),
             perSpend: z.number().positive().describe("max dollars per single purchase"),
+            item: z.string().optional().describe("the exact product the human wants, in their own words; omit for an open, category-only grant"),
             categories: z.array(z.string()).optional().describe("allowed product categories (e.g. Beverages); omit = any"),
             description: z.string().optional().describe("the human-readable sentence shown at approval"),
+            requestState: z.string().optional().describe("copy VERBATIM from this tool's previous answer; never edit or invent one"),
+            answers: z.record(z.string(), z.string()).optional().describe("the human's answers to the questions the previous call asked, keyed by field name (e.g. { size: \"US 10\" })"),
           },
           annotations: { readOnlyHint: false },
         },
-        async ({ budget, perSpend, categories, description }): Promise<CallToolResult> => {
-          const g = await grants.create({
-            merchant,
-            budget,
-            perSpend,
-            ...(categories?.length ? { allow: { categories } } : {}),
-            ...(description ? { description } : {}),
+        async ({ budget, perSpend, item, categories, description, requestState, answers }, extra): Promise<CallToolResult> => {
+          const mint = async (allow: { skus?: string[]; categories?: string[] } | undefined, sentence: string | undefined, extras: Record<string, unknown> = {}) => {
+            const g = await grants.create({
+              merchant,
+              budget,
+              perSpend,
+              ...(allow ? { allow } : {}),
+              ...(sentence ? { description: sentence } : {}),
+            });
+            return plain({ ...grantView(g), ...extras, note: "PENDING — send approveUrl to the human; spending refuses until they approve." });
+          };
+
+          // No `item` — the open, category-only grant, unchanged and round-trip free.
+          if (!item) {
+            return mint(categories?.length ? { categories } : undefined, description);
+          }
+
+          // ── the multi round-trip path: pin the grant to ONE product ──────────────────
+          // `requestState` is attacker-controlled (MRTR spec): the engine verifies its signature,
+          // TTL, and binding to THIS tool + THESE money bounds + THIS session before a single
+          // answer inside it is believed.
+          const mrtr = mrtrParams();
+          const round = rounds.open({
+            request: "create-spending-grant",
+            params: { budget, perSpend, item, categories: categories ?? null },
+            principal: extra?.sessionId ?? "",
+            state: requestState ?? mrtr.requestState,
+            responses: mrtr.inputResponses,
+            answers,
           });
-          const view = { ...grantView(g), note: "PENDING — send approveUrl to the human; spending refuses until they approve." };
-          return { content: [{ type: "text", text: JSON.stringify(view) }], structuredContent: view };
+          if (!round.ok) {
+            return plain({
+              ok: false,
+              code: round.code,
+              note: "That requestState was refused. Start over: call create-spending-grant again with no requestState.",
+            });
+          }
+          const ask = (requests: Record<string, Ask>): CallToolResult =>
+            round.round >= MAX_ROUNDS
+              ? plain({ ok: false, code: "unresolved", note: `Still could not pin down "${item}" after ${MAX_ROUNDS} rounds — no grant was created. Ask the human to name a product from browse-products.` })
+              : askResult(round.ask(requests));
+
+          await source.load();
+          const catalog = source.current();
+          // A later round may have replaced the human's words with an exact product name.
+          const words = typeof round.answers.item === "string" ? round.answers.item : item;
+          const match = matchProducts(catalog, words);
+
+          if (match.kind === "none") {
+            return ask({
+              product: {
+                message: `I couldn't find "${words}" in this store. What exactly should I buy?`,
+                fields: { item: { type: "string", description: "the product name, as listed in the store" } },
+              },
+            });
+          }
+          if (match.kind === "many") {
+            return ask({
+              product: {
+                message: `"${words}" matches more than one product. Which one?`,
+                fields: { item: { type: "string", enum: match.candidates.map((p) => p.name) } },
+              },
+            });
+          }
+
+          // One product — now every choice it offers (size, colour…) must be pinned down too.
+          const product = match.product;
+          const selections = { ...prefillVariants(product, words), ...validSelections(product, round.answers) };
+          const missing = missingVariants(product, selections);
+          if (missing.length) {
+            return ask(
+              Object.fromEntries(
+                missing.map((v) => [
+                  v.name,
+                  { message: `${product.name}: ${v.label ?? `Which ${v.name}?`}`, fields: { [v.name]: { type: "string" as const, enum: v.options } } },
+                ]),
+              ),
+            );
+          }
+
+          // Bounds sanity, BEFORE the human is asked to approve: a grant whose caps can never
+          // cover this product's live price would only refuse later, with the human gone.
+          if (product.price > perSpend || product.price > budget) {
+            return plain({
+              ok: false,
+              code: "bounds-too-low",
+              productId: product.id,
+              price: product.price,
+              note: `${describeChoice(product, selections)} costs more than the caps you asked for (budget $${budget}, per purchase $${perSpend}). No grant was created — call again with caps that cover it.`,
+            });
+          }
+
+          const choice = describeChoice(product, selections);
+          return mint(
+            { skus: [product.id] }, // WHAT it may buy: this product and nothing else (fail-closed)
+            `Buy ${choice} from ${merchant}${description ? ` — ${description}` : ""}.`,
+            {
+              item: { productId: product.id, name: product.name, price: product.price, selections },
+              ...(product.minimumAge != null
+                ? { ageRestricted: product.minimumAge, ageNote: `This item is ${product.minimumAge}+. Age never delegates: an unattended spend refuses with step-up and needs the human present.` }
+                : {}),
+            },
+          );
         },
       );
       server.registerTool(
@@ -797,6 +942,10 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
         contents: [{ uri: SKYBRIDGE_URI, mimeType: SKYBRIDGE_MIME, text: await loadBundle(), _meta: { "openai/widgetCSP": { connect_domains: baseUrl ? [baseUrl] : [], resource_domains: [...IMAGE_DOMAINS, "data:"] } } }],
       }),
     );
+
+    // MRTR: surface `params.requestState` / `params.inputResponses` to the tool handlers above.
+    // Must run AFTER the tools are registered — the SDK installs its tools/call handler lazily.
+    enableMrtrParams(server);
 
     return server;
   }

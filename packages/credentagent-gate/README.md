@@ -475,6 +475,48 @@ refuses `step-up` no matter the budget: buying wine always needs a live human. T
 clickable in [`examples/demo-hub/`](https://github.com/openmobilehub/credentagent/tree/main/examples/demo-hub)
 (Section 3) or the two-pane [`examples/grants-proto/`](https://github.com/openmobilehub/credentagent/tree/main/examples/grants-proto).
 
+### Asking for what's missing first — MRTR (multi round-trip)
+
+A grant for *"sneakers"* is not yet a grant for a **particular pair**. `MultiRoundTrip` implements
+MCP's [multi round-trip request](https://modelcontextprotocol.io/specification/draft/basic/patterns/mrtr)
+pattern so a tool can answer *"which size?"* instead of a link, and finish the job on the next call —
+with **no server-side session** between the two:
+
+```ts
+import { MultiRoundTrip } from "@openmobilehub/credentagent-gate";
+
+const rounds = new MultiRoundTrip({ secret: process.env.GATE_SECRET });  // configure once
+
+// inside your tool handler — the same code runs on every round:
+const round = rounds.open({
+  request: "create-spending-grant",     // what this state may be presented on
+  params: { budget, perSpend, item },   // the money bounds it was minted for
+  principal: sessionId,                 // whose session it belongs to
+  state: requestState,                  // the opaque blob the client echoed back
+  responses: inputResponses,            // the human's answers to the last round
+});
+if (!round.ok) return refuse(round.code);          // "tampered" | "expired" | "wrong-request" | "wrong-principal"
+
+if (!round.answers.size) {
+  return round.ask({                               // → { resultType: "input_required", inputRequests, requestState }
+    size: { message: "Which size?", fields: { size: { type: "string", enum: ["US 9", "US 10"] } } },
+  });
+}
+mintTheGrant(round.answers);                       // enough information — do the thing
+```
+
+Everything gathered so far rides in `requestState`, which travels **through the client** — so the
+spec (and repo invariants 2 + 4) treat it as attacker-controlled. `open()` refuses a blob that fails
+its **HMAC**, that has **expired**, or that was minted for a **different call, different money
+bounds, or different session**; and it merges **only** answers to questions this flow actually asked.
+Anything else is dropped.
+
+> **Honesty.** The seal proves *this server* minted the blob and nobody edited it in transit. It does
+> not prove a human gave the answers inside: no shipping client implements MRTR yet, so today the
+> **agent** answers on the human's behalf (`answers`, the flat fallback channel). That is why the
+> resolved purchase is still spelled out on the approve page — the human's tap is what counts.
+> Implemented here because `@modelcontextprotocol/sdk` does not ship the MRTR types yet.
+
 ### Under the hood — the delegated-draw seams (005)
 
 `grants` wraps **`DelegatedGate`** (`preApprove`/`spend`/`revoke`), which remains exported for
