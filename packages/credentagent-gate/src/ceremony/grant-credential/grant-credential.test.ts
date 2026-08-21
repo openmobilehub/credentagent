@@ -1,4 +1,4 @@
-// Bypass/contract tests for the grant-age rail (#172) — proving your age ON THE APPROVE PAGE,
+// Bypass/contract tests for the grant-credential rail (#172) — proving your age ON THE APPROVE PAGE,
 // before you hand an agent a spending grant. Every assertion pins a control and FAILS if that
 // control is removed:
 //
@@ -38,8 +38,8 @@ interface Harness {
   grants: Grants;
 }
 
-function harness(): Harness {
-  const ca = new CredentAgent({ walletOrigin: "http://localhost:4000", catalog: CATALOG });
+function harness(opts: { loyaltyDiscountPct?: number } = {}): Harness {
+  const ca = new CredentAgent({ walletOrigin: "http://localhost:4000", catalog: CATALOG, ...opts });
   const app = express();
   app.use(express.json());
   mountCeremony(app as never, {
@@ -58,7 +58,7 @@ const pending = (grants: Grants, categories = ["Beverages"]) =>
 
 // ── the threshold is the server's, not the request's ─────────────────────────
 
-describe("grant-age — the threshold is re-derived from the catalog (invariant 5)", () => {
+describe("grant-credential — the age threshold is re-derived from the catalog (invariant 5)", () => {
   it("asks the wallet for the STRICTEST age in the grant's scope", async () => {
     const { app, grants } = harness();
     const g = await pending(grants);
@@ -110,7 +110,7 @@ describe("grant-age — the threshold is re-derived from the catalog (invariant 
 
 // ── who may run the ceremony, and when ───────────────────────────────────────
 
-describe("grant-age — the ceremony is pending-only, per-grant, and only where it's needed", () => {
+describe("grant-credential — the ceremony is pending-only, per-grant, and only where it's needed", () => {
   // BYPASS (the `status !== "pending"` half of resolveGrantAge): consent is the Approve tap.
   // Drop it and this goes red — an already-approved grant would gain 21+ buying power.
   it("BYPASS: an already-approved grant has no ceremony — 404, and no proof is written", async () => {
@@ -149,7 +149,90 @@ describe("grant-age — the ceremony is pending-only, per-grant, and only where 
 
 // ── the rail is genuinely optional ───────────────────────────────────────────
 
-describe("grant-age — self-skips without a grants resource", () => {
+// ── membership: the second credential the same rail serves ───────────────────
+
+describe("grant-credential — the membership step (#172)", () => {
+  const withProgramme = () => harness({ loyaltyDiscountPct: 10 });
+
+  it("asks the wallet for a membership at the host's configured rate", async () => {
+    const { app, grants } = withProgramme();
+    const g = await pending(grants);
+    const res = await request(app).get(`/credentagent/grants/${g.id}/membership/request`).expect(200);
+    expect(JSON.stringify(res.body.dcql_query)).toContain("membership");
+    expect(res.body.trust_level).toBe("presence-only-demo");
+  });
+
+  it("renders the gate page and returns to the approve page", async () => {
+    const { app, grants } = withProgramme();
+    const g = await pending(grants);
+    const res = await request(app).get(`/credentagent/grants/${g.id}/membership`).expect(200);
+    expect(res.text).toContain("10%");
+    expect(res.text).toContain(`/credentagent/grants/${g.id}/membership/verify`);
+    expect(res.text).toContain(`/credentagent/grants/${g.id}"`); // back where they left off
+  });
+
+  it("a disclosed membership id records the claim at the host's rate", async () => {
+    const { app, grants } = withProgramme();
+    const g = await pending(grants);
+    const res = await request(app)
+      .post(`/credentagent/grants/${g.id}/membership/verify`)
+      .send({ claims: { membership_number: "GOLD-0001" } })
+      .expect(200);
+    expect(res.body.verified).toBe(true);
+    expect((await grants.retrieve(g.id))!.membershipProof).toMatchObject({ membershipNumber: "GOLD-0001", discountPct: 10 });
+  });
+
+  // BYPASS (invariant 5 — a real, non-empty membership id): a bare token must not earn the
+  // discount, because a forged loyalty state lowers the amount actually charged.
+  it("BYPASS: a token with no membership id earns nothing", async () => {
+    const { app, grants } = withProgramme();
+    const g = await pending(grants);
+    await request(app).post(`/credentagent/grants/${g.id}/membership/verify`).send({ claims: { token: true } }).expect(200);
+    expect((await grants.retrieve(g.id))!.membershipProof).toBeUndefined();
+  });
+
+  // BYPASS (the opt-in): no programme configured ⇒ no ceremony exists at all. Delete the
+  // `_loyaltyDiscountPct` check in resolveGrantCred and this goes red — anyone with the link could
+  // record a discount at a rate the merchant never offered.
+  it("BYPASS: with no programme configured there is no membership step — 404", async () => {
+    const { app, grants } = harness(); // no loyaltyDiscountPct
+    const g = await pending(grants);
+    await request(app).get(`/credentagent/grants/${g.id}/membership`).expect(404);
+    await request(app).post(`/credentagent/grants/${g.id}/membership/verify`).send({ claims: { membership_number: "GOLD-0001" } }).expect(404);
+    expect((await grants.retrieve(g.id))!.membershipProof).toBeUndefined();
+  });
+
+  // BYPASS (pending-only): the terms are what the human approved.
+  it("BYPASS: an already-approved grant has no membership step — 404, nothing written", async () => {
+    const { app, grants } = withProgramme();
+    const g = await pending(grants);
+    await grants._authorize(g.id);
+    await request(app).post(`/credentagent/grants/${g.id}/membership/verify`).send({ claims: { membership_number: "GOLD-0001" } }).expect(404);
+    expect((await grants.retrieve(g.id))!.membershipProof).toBeUndefined();
+  });
+
+  // BYPASS (invariant 4 — per-grant scoping): a membership proved on one grant must not discount
+  // another.
+  it("BYPASS: proving membership on grant A leaves grant B at full price", async () => {
+    const { app, grants } = withProgramme();
+    const a = await pending(grants);
+    const b = await pending(grants);
+    await request(app).post(`/credentagent/grants/${a.id}/membership/verify`).send({ claims: { membership_number: "GOLD-0001" } }).expect(200);
+    expect((await grants.retrieve(a.id))!.membershipProof?.membershipNumber).toBe("GOLD-0001");
+    expect((await grants.retrieve(b.id))!.membershipProof).toBeUndefined();
+  });
+
+  it("age and membership are independent: proving one leaves the other unproved", async () => {
+    const { app, grants } = withProgramme();
+    const g = await pending(grants);
+    await request(app).post(`/credentagent/grants/${g.id}/age/verify`).send({ claims: { age_over_21: true } }).expect(200);
+    const live = (await grants.retrieve(g.id))!;
+    expect(live.ageProof?.provenAge).toBe(21);
+    expect(live.membershipProof).toBeUndefined();
+  });
+});
+
+describe("grant-credential — self-skips without a grants resource", () => {
   it("registers NO routes when mount() gets no grants, and flags the approve page when it does", async () => {
     const app = express();
     mountCeremony(app as never, {
@@ -160,8 +243,9 @@ describe("grant-age — self-skips without a grants resource", () => {
       signingKey: "stable-test-secret",
     });
     await request(app).get("/credentagent/grants/grant_x/age").expect(404); // no handler at all
+    await request(app).get("/credentagent/grants/grant_x/membership").expect(404);
 
     const { grants } = harness();
-    expect(grants._ageRailMounted).toBe(true); // the approve page may now offer the button
+    expect(grants._credentialRailMounted).toBe(true); // the approve page may now offer the button
   });
 });

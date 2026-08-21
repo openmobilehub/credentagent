@@ -238,6 +238,10 @@ export interface IntentBounds {
   /** The human's age claim, proved at approval time and sealed into these bounds (#172). Absent
    *  ⇒ an age-restricted draw steps up exactly as before. Covered by `intentId`. */
   ageProof?: SealedAgeProof;
+  /** The human's loyalty membership, proved at approval time and sealed into these bounds (#172).
+   *  Absent ⇒ every draw prices at full catalog price, exactly as before. Covered by `intentId`,
+   *  so the rate cannot move after the human approved it. */
+  membershipProof?: SealedMembershipProof;
   /** Honesty axes (constitution VII v1.1.0): when consent happened / how strongly bound. */
   presence: "delegated" | "delegated-demo";
   trust_level: string;
@@ -295,6 +299,32 @@ export function ageProofCovers(proof: SealedAgeProof | undefined, requiredAge: n
     if (!Number.isFinite(expiry) || expiry <= nowMs) return false;
   }
   return true;
+}
+
+/**
+ * A loyalty membership the human proved AT APPROVAL TIME, sealed into the intent (issue #172).
+ *
+ * Same shape of consent as {@link SealedAgeProof}: the credential is the HUMAN's, presented by
+ * THEIR wallet while they are present, and the agent never holds or presents one. Where the age
+ * proof UNLOCKS items, this one LOWERS the price of every purchase made under the grant.
+ *
+ * `discountPct` is sealed here rather than read from config at spend time on purpose. The rate is
+ * part of what the human approved ("10% off"), so it must be tamper-evident — and BOTH sides of
+ * the amount binding read this one number: the draw signer prices with it, and `completeOrder`
+ * re-prices with it. A rate that could move between those two moments would break invariant 3
+ * (the line sum, the order total and the signed amount must agree on every path).
+ *
+ * HONESTY: `trust_level` is "presence-only-demo" — real wire crypto, no issuer trust anchor yet.
+ */
+export interface SealedMembershipProof {
+  /** The membership id the wallet disclosed — a real, non-empty one (invariant 5). */
+  membershipNumber: string;
+  /** The percentage off, as approved and shown to the human. Sealed; never re-read from config. */
+  discountPct: number;
+  /** When the ceremony ran (ISO 8601) — the audit line on the sealed record. */
+  verifiedAt: string;
+  /** Honesty axis — how strongly the claim is bound. "presence-only-demo" in v0.1. */
+  trust_level: string;
 }
 
 /** One draw — the per-purchase spend against an intent, signed by the delegate key. */

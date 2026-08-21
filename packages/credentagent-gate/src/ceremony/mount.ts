@@ -25,7 +25,7 @@ import { registerCredentialGate } from "./credential-gate/routes.js";
 import { registerPasskeyGate } from "./passkey/routes.js";
 import { registerDcPaymentGate } from "./dc-payment/routes.js";
 import { registerDelegatedPaymentGate } from "./delegated-payment/routes.js";
-import { registerGrantAgeGate } from "./grant-age/routes.js";
+import { registerGrantCredentialGate } from "./grant-credential/routes.js";
 import type { Grants } from "../grants.js";
 
 /** Minimal Express-app shape mount() needs (no `express` dependency). */
@@ -96,7 +96,7 @@ export interface CeremonySeams {
    *  Absent ⇒ the built-in look. Never affects the honesty trust footer. */
   branding?: Branding;
   /** The human-not-present grants resource (#172). `CredentAgent.mount()` passes its own
-   *  `grants` here; the grant-age rail then serves the approve-page age ceremony against it.
+   *  `grants` here; the grant-credential rail then serves the approve-page ceremonies against it.
    *  Absent ⇒ the rail registers NOTHING and every existing path is byte-unchanged. */
   grants?: Grants;
 }
@@ -129,7 +129,7 @@ export interface CeremonyContext {
   returnUrl?: (orderId: string) => string;
   /** Host brand for the ceremony pages (absent ⇒ the built-in look). Never brands the footer. */
   branding?: Branding;
-  /** The grants resource the grant-age rail (#172) serves the approve-page ceremony against.
+  /** The grants resource the grant-credential rail (#172) serves the approve-page ceremonies against.
    *  Absent ⇒ that rail self-skips. */
   grants?: Grants;
 }
@@ -144,8 +144,8 @@ export type RailRegistrar = (app: CeremonyApp, ctx: CeremonyContext) => void;
 // (which pass a `{ locals }`-only app) are unaffected.
 // `registerDelegatedPaymentGate` (008) self-skips unless a `verifier` seam is
 // configured, so adding it here changes nothing for a host that hasn't opted in.
-// `registerGrantAgeGate` (#172) likewise self-skips unless a `grants` resource is wired.
-const RAILS: RailRegistrar[] = [registerCredentialGate, registerPasskeyGate, registerDcPaymentGate, registerDelegatedPaymentGate, registerGrantAgeGate];
+// `registerGrantCredentialGate` (#172) likewise self-skips unless a `grants` resource is wired.
+const RAILS: RailRegistrar[] = [registerCredentialGate, registerPasskeyGate, registerDcPaymentGate, registerDelegatedPaymentGate, registerGrantCredentialGate];
 
 /**
  * Read + validate the injected seams, build the CeremonyContext, and register

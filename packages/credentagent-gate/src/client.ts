@@ -149,6 +149,7 @@ export class CredentAgent {
       ...(opts.catalog ? { catalog: opts.catalog } : {}),
       // The approve page wears the same brand as the ceremony gate pages (one product, one look).
       ...(this.branding ? { branding: this.branding } : {}),
+      ...(opts.loyaltyDiscountPct != null ? { loyaltyDiscountPct: opts.loyaltyDiscountPct } : {}),
     });
     this.orders = new Orders({
       walletOrigin: this.walletOrigin,

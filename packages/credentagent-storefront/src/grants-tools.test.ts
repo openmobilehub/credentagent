@@ -206,6 +206,44 @@ describe("grant tools — merchant config & live-catalog re-pricing (Codex #118)
     expect(s).toMatchObject({ ok: false, code: "step-up" });
   });
 
+  // ── #172: the loyalty membership the human proved on the approve page ──────────────────────
+  // The risk is invariant 3 — the line sum, the order total and the SIGNED draw amount must agree
+  // on every path. These run it over the real MCP wire, where the storefront's live-catalog
+  // pre-check and the engine both have to reach the same number.
+
+  it("a grant carrying a membership is charged the discounted amount over MCP", async () => {
+    const ca = new CredentAgent({ walletOrigin: wallet, catalog: GATE_CATALOG, loyaltyDiscountPct: 10 });
+    const c = await client(ca);
+    const g = sc(await c.callTool({ name: "create-spending-grant", arguments: { budget: 200, perSpend: 100, categories: ["Electronics"] } }));
+    expect(await ca.grants._recordMembershipProof(g.grantId, { membershipNumber: "GOLD-0001" })).toBe(true);
+    await ca.grants._authorize(g.grantId);
+    const s = sc(await c.callTool({ name: "spend-from-grant", arguments: { grantId: g.grantId, productId: "drift-mouse", idempotencyKey: "m172" } }));
+    expect(s).toMatchObject({ ok: true, amount: 44.1, remaining: 155.9 }); // $49 − 10%
+  });
+
+  // BYPASS — the storefront's per-spend pre-check must measure what is CHARGED, not the list price.
+  // Compare the list price instead and this goes red: a purchase the gate would have completed is
+  // refused by the storefront, which is exactly the cross-path drift invariant 3 forbids.
+  it("BYPASS: the per-spend pre-check honours the discount, so a discounted purchase is not refused", async () => {
+    const ca = new CredentAgent({ walletOrigin: wallet, catalog: GATE_CATALOG, loyaltyDiscountPct: 10 });
+    const c = await client(ca);
+    // drift-mouse lists at $49 — over the $45 cap — but bills at $44.10.
+    const g = sc(await c.callTool({ name: "create-spending-grant", arguments: { budget: 200, perSpend: 45, categories: ["Electronics"] } }));
+    await ca.grants._recordMembershipProof(g.grantId, { membershipNumber: "GOLD-0001" });
+    await ca.grants._authorize(g.grantId);
+    const s = sc(await c.callTool({ name: "spend-from-grant", arguments: { grantId: g.grantId, productId: "drift-mouse", idempotencyKey: "cap172" } }));
+    expect(s).toMatchObject({ ok: true, amount: 44.1 });
+  });
+
+  it("no membership ⇒ full catalog price, exactly as before", async () => {
+    const ca = new CredentAgent({ walletOrigin: wallet, catalog: GATE_CATALOG, loyaltyDiscountPct: 10 });
+    const c = await client(ca);
+    const g = sc(await c.callTool({ name: "create-spending-grant", arguments: { budget: 200, perSpend: 100, categories: ["Electronics"] } }));
+    await ca.grants._authorize(g.grantId);
+    const s = sc(await c.callTool({ name: "spend-from-grant", arguments: { grantId: g.grantId, productId: "drift-mouse", idempotencyKey: "nom172" } }));
+    expect(s).toMatchObject({ ok: true, amount: 49 });
+  });
+
   // The happy path still works when the two catalogs AGREE: an in-scope, in-cap, unrestricted item spends.
   it("spends when the live catalog agrees (in scope, under cap, no age gate)", async () => {
     const ca = new CredentAgent({ walletOrigin: wallet, catalog: { widget: { price: 20, category: "Gadgets" } } });

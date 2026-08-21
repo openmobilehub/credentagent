@@ -13,10 +13,10 @@
 // The wallet-server increment swaps the internals (the key is minted in the user's
 // wallet during a live ceremony) WITHOUT changing this surface.
 
-import type { CeremonyCatalog, CeremonyOrder } from "./ceremony/types.js";
+import type { CeremonyCatalog, CeremonyOrder, RepriceOpts } from "./ceremony/types.js";
 import { MemoryVerificationStore } from "./store.js";
 import { MemoryRevocationStore, type RevocationStore } from "./ceremony/revocation.js";
-import { sealIntent, generateDelegate, signDraw, type IntentBounds, type SealedAgeProof } from "./ceremony/mandate.js";
+import { sealIntent, generateDelegate, signDraw, type IntentBounds, type SealedAgeProof, type SealedMembershipProof } from "./ceremony/mandate.js";
 import { completeOrder, type CompletedRecord, type CompletionContext } from "./ceremony/completion.js";
 import type { RefusalCode, RefusalRetryable } from "./ceremony/refusals.js";
 
@@ -51,6 +51,9 @@ export interface PreApproveOptions {
    *  Absent ⇒ an age-restricted purchase steps up exactly as before. Present ⇒ purchases at or
    *  below its proven threshold complete unattended; anything above still steps up. */
   ageProof?: SealedAgeProof;
+  /** A loyalty membership the HUMAN proved at approval time (#172). Present ⇒ every purchase
+   *  under this grant prices at its sealed rate, on BOTH the signing and the re-pricing side. */
+  membershipProof?: SealedMembershipProof;
 }
 
 export interface Purchase {
@@ -90,13 +93,23 @@ export const minAgeOf = (e: CatalogEntry | undefined) => (e === undefined || typ
 export const categoryOf = (e: CatalogEntry | undefined) => (e === undefined || typeof e === "number" ? undefined : e.category);
 export const nameOf = (e: CatalogEntry | undefined) => (e === undefined || typeof e === "number" ? undefined : e.name);
 
+/** The loyalty discount for a re-price, in the catalog's own units. Rounded to the smallest
+ *  representable unit so it is EXACT and deterministic — the draw signer and `completeOrder`
+ *  run this same line over the same sealed rate, so their totals cannot drift (invariant 3).
+ *  (Under `grants` the units are integer cents, so this rounds to the cent.) */
+function loyaltyDiscount(subtotal: number, opts?: RepriceOpts): number {
+  if (!opts?.loyaltyApplied) return 0;
+  const pct = opts.loyaltyDiscountPct ?? 0;
+  return pct > 0 ? Math.round((subtotal * pct) / 100) : 0;
+}
+
 function buildCatalog(items: Record<string, CatalogEntry>): CeremonyCatalog {
   return {
     // Must honor the passed orderId — completeOrder re-prices under the SAME id, and its
     // idempotency is keyed by it, so a duplicate id would echo a prior completion instead
     // of running the per-draw checks. An unknown item is a programming error, not a gate
     // decision, so it throws (fail fast) rather than silently refusing.
-    createOrder(refs, orderId): CeremonyOrder {
+    createOrder(refs, orderId, opts): CeremonyOrder {
       const lines = refs.map(({ productId, quantity }) => {
         const entry = items[productId];
         if (entry === undefined) {
@@ -106,8 +119,12 @@ function buildCatalog(items: Record<string, CatalogEntry>): CeremonyCatalog {
         const minimumAge = minAgeOf(entry);
         return { id: productId, unitPrice, quantity, lineTotal: unitPrice * quantity, currency: "USD", ...(minimumAge ? { minimumAge } : {}) };
       });
-      const total = lines.reduce((sum, l) => sum + l.lineTotal, 0);
-      return { id: orderId, lines, itemCount: refs.length, subtotal: total, discount: 0, total, currency: "USD" };
+      const subtotal = lines.reduce((sum, l) => sum + l.lineTotal, 0);
+      // A loyalty discount applies ONLY when the caller opts in AND names the rate — for a grant,
+      // the rate sealed into the intent at approval time (#172). No opt-in ⇒ full price, byte-for-
+      // byte what this returned before.
+      const discount = loyaltyDiscount(subtotal, opts);
+      return { id: orderId, lines, itemCount: refs.length, subtotal, discount, total: subtotal - discount, currency: "USD" };
     },
   };
 }
@@ -149,6 +166,7 @@ export class DelegatedGate {
       // Sealed WITH the bounds: `sealIntent` content-addresses the whole object, so the proof is
       // part of this grant's identity and cannot be attached or raised afterwards (#172).
       ...(opts.ageProof ? { ageProof: opts.ageProof } : {}),
+      ...(opts.membershipProof ? { membershipProof: opts.membershipProof } : {}),
       presence: "delegated-demo",
       trust_level: "server-issued-demo",
     });
@@ -188,6 +206,11 @@ export class DelegatedGrant {
     return this.grant.ageProof;
   }
 
+  /** The loyalty membership sealed into these bounds at approval time, if any (#172). */
+  get membershipProof(): SealedMembershipProof | undefined {
+    return this.grant.membershipProof;
+  }
+
   /** The human sentence this grant was described with, if any. */
   get description(): string | undefined {
     return this.grant.naturalLanguageDescription;
@@ -205,7 +228,15 @@ export class DelegatedGrant {
     // draw, charged once. The grant prefix keeps two grants on one gate from colliding
     // (grant B must never read grant A's completion — invariant 4).
     const orderId = `${this.grant.intentId}-${idempotencyKey}`;
-    const order = this.catalog.createOrder([{ productId: item, quantity }], orderId);
+    // Price with the grant's OWN sealed loyalty rate (#172), so the amount the delegate key signs
+    // below is the amount `completeOrder` re-derives — one number, both sides (invariant 3). The
+    // per-draw cap is then checked against what the human is actually charged, not the list price.
+    const loyalty = this.grant.membershipProof;
+    const order = this.catalog.createOrder(
+      [{ productId: item, quantity }],
+      orderId,
+      loyalty ? { loyaltyApplied: true, loyaltyDiscountPct: loyalty.discountPct } : undefined,
+    );
     const draw = await signDraw(
       {
         type: "credentagent.Draw/v0",

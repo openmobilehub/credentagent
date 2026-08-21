@@ -7,19 +7,25 @@
 // `grant.approveUrl`, served by `grants.serve(app)`. It seeds four grants so you can see, side by
 // side, every state the page has:
 //
-//   1. age-restricted scope, unproved  — the warning, the wallet button, "Approve without them"
-//   2. age-restricted scope, proved    — Age ✓ on the stepper, a plain "Approve"
-//   3. nothing restricted              — no warning, no stepper: one decision
-//   4. already approved                — the terminal state
+//   1. nothing proved yet         — the age warning, both wallet buttons, "Approve without them"
+//   2. age proved                 — Age ✓, the 21+ items unlocked
+//   3. membership proved          — Membership ✓, 10% off every purchase
+//   4. both proved                — the full stepper ticked
+//   5. nothing restricted         — no age step: membership and the decision
+//   6. already approved           — the terminal state
 //
-// The whole flow is live: tap "Verify 21+ with your wallet" on grant 1 and you get the REAL age
-// ceremony (a signed OpenID4VP request; use the instant-demo button if you have no wallet on this
-// device), land back here with the proof in hand, and approve.
+// The whole flow is live: tap either wallet button on grant 1 and you get the REAL ceremony (a
+// signed OpenID4VP request; use the instant-demo button if you have no wallet on this device),
+// land back here with the claim in hand, and approve.
+//
+// The two credentials do different things. AGE unlocks items the agent would otherwise be refused
+// on. MEMBERSHIP lowers the price of every purchase the grant makes. Both are optional — declining
+// either still approves the grant, on the terms the page states.
 //
 // HONESTY: approving here stands in for the wallet key-signing ceremony (presence
-// "delegated-demo"), and the age proof's trust level is "presence-only-demo" — the wire crypto is
-// real, but there is no issuer trust anchor yet, so a self-made credential would pass. Not a real
-// age-safety control. No real money moves.
+// "delegated-demo"), and each wallet claim's trust level is "presence-only-demo" — the wire crypto
+// is real, but there is no issuer trust anchor yet, so a self-made credential would pass. Not a
+// real age-safety control. No real money moves.
 
 import express from "express";
 import { createStorefront } from "@openmobilehub/credentagent-storefront/server";
@@ -46,35 +52,52 @@ const PRODUCTS = [
   p("drift-mouse", "Drift Wireless Mouse", 49, "Electronics"),
 ];
 
-const credentagent = new CredentAgent({ walletOrigin: BASE, catalog: GATE_CATALOG, signingKey: "grants-approve-example" });
+// `loyaltyDiscountPct` OPTS IN to the membership step. Omit it and no grant offers one, and every
+// purchase prices at full catalog price — the approve page simply has one step fewer.
+const credentagent = new CredentAgent({ walletOrigin: BASE, catalog: GATE_CATALOG, signingKey: "grants-approve-example", loyaltyDiscountPct: 10 });
 const store = createStorefront({ grants: credentagent.grants, catalog: PRODUCTS, signingKey: "grants-approve-example" });
 store.app.use(express.json());
-credentagent.mount(store.app); // the /credentagent/* ceremony rails — incl. the grant age gate
+credentagent.mount(store.app); // the /credentagent/* rails — incl. the grant age + membership gates
 credentagent.grants.serve(store.app); // grant.approveUrl → the real approve page
 
 const grants = credentagent.grants;
 const bar = (description, allow) => grants.create({ merchant: "utopia", budget: 300, perSpend: 150, allow, description });
 
-// ── the four states ──────────────────────────────────────────────────────────
-const unproved = await bar("Your shopping agent wants to restock the bar cart while you're away.", { categories: ["Beverages"] });
+// ── the states ───────────────────────────────────────────────────────────────
+// `_recordAgeProof` / `_recordMembershipProof` are what the ceremony calls when the human's wallet
+// discloses a claim on the approve page. Calling them here just saves you the taps — the buttons
+// on grant 1 run the real thing.
+const BAR = "Your shopping agent wants to restock the bar cart while you're away.";
 
-const proved = await bar("Your shopping agent wants to restock the bar cart while you're away.", { categories: ["Beverages"] });
-// What the age ceremony does when the human's wallet proves 21+ on the approve page. Doing it
-// here just saves you the tap — the button on grant 1 runs the real thing.
-await grants._recordAgeProof(proved.id, { provenAge: 21 });
+const nothing = await bar(BAR, { categories: ["Beverages"] });
+
+const aged = await bar(BAR, { categories: ["Beverages"] });
+await grants._recordAgeProof(aged.id, { provenAge: 21 });
+
+const member = await bar(BAR, { categories: ["Beverages"] });
+await grants._recordMembershipProof(member.id, { membershipNumber: "GOLD-0001" });
+
+const both = await bar(BAR, { categories: ["Beverages"] });
+await grants._recordAgeProof(both.id, { provenAge: 21 });
+await grants._recordMembershipProof(both.id, { membershipNumber: "GOLD-0001" });
 
 const unrestricted = await grants.create({
   merchant: "utopia", budget: 300, perSpend: 150, allow: { categories: ["Electronics"] },
   description: "Your shopping agent wants to replace your mouse.",
 });
 
-const approved = await bar("Your shopping agent wants to restock the bar cart while you're away.", { categories: ["Beverages"] });
+const approved = await bar(BAR, { categories: ["Beverages"] });
 await grants._authorize(approved.id);
 
+const AGE = { label: "Age" };
+const MEMBER = { label: "Membership" };
+const APPROVE = { label: "Approve" };
 const STATES = [
-  { label: "Age-restricted · not yet proved", note: "The warning, the items it names, the wallet button, and “Approve without them”.", grant: unproved, rail: [{ label: "Age" }, { label: "Approve" }] },
-  { label: "Age-restricted · proved", note: "Age ✓ on the stepper, and a plain “Approve”.", grant: proved, rail: [{ label: "Age", done: true }, { label: "Approve" }] },
-  { label: "Nothing restricted", note: "No warning and no stepper — one decision.", grant: unrestricted, rail: [] },
+  { label: "Nothing proved yet", note: "The age warning with the items it names, both wallet buttons, and “Approve without them”.", grant: nothing, rail: [AGE, MEMBER, APPROVE] },
+  { label: "Age proved", note: "Age ✓ — the 21+ items are unlocked for the agent.", grant: aged, rail: [{ ...AGE, done: true }, MEMBER, APPROVE] },
+  { label: "Membership proved", note: "Membership ✓ — 10% off every purchase, shown as a term in the limits.", grant: member, rail: [AGE, { ...MEMBER, done: true }, APPROVE] },
+  { label: "Both proved", note: "The full stepper ticked, and a plain “Approve”.", grant: both, rail: [{ ...AGE, done: true }, { ...MEMBER, done: true }, APPROVE] },
+  { label: "Nothing restricted", note: "No age step — just membership and the decision.", grant: unrestricted, rail: [MEMBER, APPROVE] },
   { label: "Already approved", note: "The terminal state.", grant: approved, rail: [] },
 ];
 
@@ -100,9 +123,9 @@ store.app.get("/", (_req, res) => {
 ${pageHead("Spending grant · approve page states")}
 <body>
   <div class="wrap">
-  ${brandHeader({ h1: "Approve page", tagline: "The page a human opens when an agent asks to spend on their behalf. Four states, one per grant." })}
+  ${brandHeader({ h1: "Approve page", tagline: "The page a human opens when an agent asks to spend on their behalf. One grant per state." })}
   ${cards}
-  <div class="trust"><div class="trust-line">🔒 Approving here stands in for the wallet ceremony (delegated-demo), and the age proof is presence-only-demo — the wire crypto is real, but there is no issuer trust anchor yet. Not a real age-safety control. No real money moves.</div></div>
+  <div class="trust"><div class="trust-line">🔒 Approving here stands in for the wallet ceremony (delegated-demo), and each wallet claim is presence-only-demo — the wire crypto is real, but there is no issuer trust anchor yet. Not a real age-safety control. No real money moves.</div></div>
   </div>
 </body>
 </html>`);
@@ -111,4 +134,4 @@ ${pageHead("Spending grant · approve page states")}
 await store.listen(PORT);
 console.log(`\n  Spending-grant approve page → ${BASE}\n`);
 STATES.forEach((s, i) => console.log(`  ${i + 1}. ${s.label.padEnd(34)} ${BASE}/credentagent/grants/${s.grant.id}`));
-console.log(`\n  Tap "Verify 21+ with your wallet" on state 1 for the live age ceremony.\n`);
+console.log(`\n  Tap either wallet button on state 1 for the live ceremony.\n`);

@@ -474,7 +474,7 @@ The sealed bounds are **immutable** after create. Try all of it clickable in
 [`examples/demo-hub/`](https://github.com/openmobilehub/credentagent/tree/main/examples/demo-hub)
 (Section 3) or the two-pane [`examples/grants-proto/`](https://github.com/openmobilehub/credentagent/tree/main/examples/grants-proto).
 
-### Age on a grant — proved on the approve page, or not at all
+### Credentials on a grant — proved on the approve page, or not at all
 
 A grant scoped to *"Beverages"* over a catalog whose Beverages are 21+ used to be a grant that could
 spend **$0.00**: every purchase refused `step-up`, and nothing told the human before they approved.
@@ -507,10 +507,32 @@ Nothing about identity is delegated to the agent: the proof is the **human's**, 
 wallet while they are **present**. Without one, an age-restricted item still refuses `step-up` — and a
 proof only ever opens items at or below what it proved, so an 18+ proof never opens a 21+ item.
 
+**The same moment can carry your loyalty card.** Set `loyaltyDiscountPct` and the page grows a second,
+optional step — present your membership, and every purchase the agent makes under that grant is
+discounted:
+
+```ts
+const credentagent = new CredentAgent({ catalog, loyaltyDiscountPct: 10 });
+// …the human presents their membership on the approve page, then approves:
+const s = await g.spend({ idempotencyKey: "o-1", items: [{ sku: "coffee" }] });
+//  → { ok: true, amount: 16.2, remaining: 83.8, … }     // $18 − 10%
+```
+
+The rate is **sealed into the grant** when the human approves it, not read from config at spend time —
+so changing your programme never re-prices a grant somebody already agreed to. And it is the *same*
+sealed number on both sides of the money: the delegate key signs the discounted amount, and
+`completeOrder` re-derives it independently and refuses the draw unless they match to the cent. The
+per-purchase cap is then measured on what the human is actually **charged**, not the shelf price.
+
+Omit `loyaltyDiscountPct` and none of this exists: no membership step, full catalog price, exactly as
+before.
+
 > **Honesty:** the wire crypto is real (signed OpenID4VP request, sealed nonce, JWE/HPKE decrypt,
 > ISO-mdoc parse) but there is **no issuer trust anchor** yet — `trust_level` is
 > `"presence-only-demo"` and a self-crafted credential would pass. This is disclosure and binding,
 > **not** a real age-safety control, until issuer-verified trust lands.
+
+See it in every state: [`examples/grants-approve/`](https://github.com/openmobilehub/credentagent/tree/main/examples/grants-approve).
 
 ### Under the hood — the delegated-draw seams (005)
 

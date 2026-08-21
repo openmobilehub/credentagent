@@ -23,7 +23,7 @@
 import { DelegatedGate, DelegatedGrant, type CatalogEntry } from "./delegated.js";
 import { serveGrants, type GrantsApp } from "./grants-serve.js";
 import { ageScopeFor, skuAllowed, type GrantAgeScope } from "./grants-age.js";
-import type { SealedAgeProof } from "./ceremony/mandate.js";
+import type { SealedAgeProof, SealedMembershipProof } from "./ceremony/mandate.js";
 import type { Branding } from "./types.js";
 
 /** Why a grant operation refused — a TYPED union (never `string`; #95 review). */
@@ -102,6 +102,8 @@ interface GrantRecord {
   /** The age claim the human proved on the approve page, held until `_authorize` seals it into
    *  the intent (#172). Writable ONLY while the grant is pending — see `_recordAgeProof`. */
   ageProof?: SealedAgeProof;
+  /** The loyalty membership the human proved on the approve page, same lifecycle (#172). */
+  membershipProof?: SealedMembershipProof;
   /** Idempotent spend cache: key → the door already returned (a retry replays it). */
   cache: Map<string, SpendDoor>;
 }
@@ -113,6 +115,12 @@ export interface GrantsDeps {
   /** Host brand for the approve page — the SAME one the ceremony gate pages wear, so a human
    *  who verifies their age and then approves never sees the brand change under them. */
   branding?: Branding;
+  /** Your loyalty programme's discount, as a percentage (e.g. `10`). Setting it OPTS IN: the
+   *  approve page grows a "present your membership" step, and a grant the human proves one on
+   *  prices every unattended purchase at this rate (#172). Absent ⇒ no membership step anywhere
+   *  and every grant prices at full catalog price, exactly as before. The rate is SEALED into
+   *  each grant at approval time, so changing it here never re-prices a grant already approved. */
+  loyaltyDiscountPct?: number;
 }
 
 const genGrantId = (): string => `grant_${globalThis.crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
@@ -183,14 +191,24 @@ export class Grants {
   private readonly locks = new KeyedMutex();
   private gate?: DelegatedGate;
   private served = false;
-  /** Set by the grant-age rail when `mount()` registers it (#172). The approve page offers the
-   *  "prove your age" button ONLY when the ceremony is actually reachable — a host that calls
-   *  `grants.serve(app)` without `mount(app)` gets the disclosure alone, never a link to a 404. */
-  _ageRailMounted = false;
+  /** Set by the grant-credential rail when `mount()` registers it (#172). The approve page offers
+   *  its "present your credential" buttons ONLY when the ceremonies are actually reachable — a
+   *  host that calls `grants.serve(app)` without `mount(app)` gets the disclosure alone, never a
+   *  link to a 404. */
+  _credentialRailMounted = false;
 
   /** The brand the approve page wears (read by `serveGrants`). */
   get _branding(): Branding | undefined {
     return this.deps.branding;
+  }
+
+  /** The configured loyalty rate, or undefined when the host runs no programme (#172). Read by
+   *  the approve page and the grant-credential rail to decide whether a membership step exists. */
+  get _loyaltyDiscountPct(): number | undefined {
+    const pct = this.deps.loyaltyDiscountPct;
+    // Fail-closed on a nonsensical configuration rather than seal a rate that can't be honoured:
+    // a discount must be a real percentage strictly between 0 and 100.
+    return typeof pct === "number" && Number.isFinite(pct) && pct > 0 && pct < 100 ? pct : undefined;
   }
 
   constructor(private readonly deps: GrantsDeps) {}
@@ -264,6 +282,7 @@ export class Grants {
         // Whatever age claim the human proved BEFORE tapping Approve is sealed with the bounds
         // (#172) — one atomic act of consent, covered by the content-addressed intentId.
         ...(rec.ageProof ? { ageProof: rec.ageProof } : {}),
+        ...(rec.membershipProof ? { membershipProof: rec.membershipProof } : {}),
       });
       rec.status = "authorized";
       return true;
@@ -271,7 +290,7 @@ export class Grants {
   }
 
   /**
-   * The age seam (#172) — called by the grant-age rail when the human's wallet proves an over-age
+   * The age seam (#172) — called by the grant-credential rail when the human's wallet proves an over-age
    * claim on the approve page, BEFORE they tap Approve. The wallet ceremony and the instant-demo
    * path both land here; neither may pass a threshold of its own choosing (the rail re-derives it
    * from the catalog).
@@ -293,6 +312,37 @@ export class Grants {
         provenAge: proof.provenAge,
         verifiedAt: new Date().toISOString(),
         ...(proof.expiresAt ? { expiresAt: proof.expiresAt } : {}),
+        // HONESTY: the wire crypto is real, the issuer trust anchor is not (#14).
+        trust_level: "presence-only-demo",
+      };
+      return true;
+    });
+  }
+
+  /**
+   * The membership seam (#172) — called by the grant-credential rail when the human's wallet
+   * discloses a loyalty membership on the approve page, BEFORE they tap Approve. Its effect is
+   * the mirror of the age proof's: where age UNLOCKS items, this LOWERS the price of every
+   * purchase the agent later makes under the grant.
+   *
+   * PENDING ONLY and serialized with the rest of the lifecycle, for the same reason: an already
+   * approved grant must never gain terms the human didn't approve. The rate is taken from THIS
+   * instance's configuration and sealed with the claim — never from the request — so a later
+   * config change cannot re-price a grant that is already sealed.
+   */
+  async _recordMembershipProof(id: string, proof: { membershipNumber: string }): Promise<boolean> {
+    return this.locks.run(id, async () => {
+      const rec = this.records.get(id);
+      if (!rec || rec.status !== "pending") return false;
+      const discountPct = this._loyaltyDiscountPct;
+      // No programme configured ⇒ there is no rate to seal, so there is nothing to record.
+      if (discountPct === undefined) return false;
+      // Invariant 5: a real, non-empty membership id — never a bare "a token was present".
+      if (typeof proof.membershipNumber !== "string" || proof.membershipNumber.trim() === "") return false;
+      rec.membershipProof = {
+        membershipNumber: proof.membershipNumber,
+        discountPct,
+        verifiedAt: new Date().toISOString(),
         // HONESTY: the wire crypto is real, the issuer trust anchor is not (#14).
         trust_level: "presence-only-demo",
       };
@@ -384,6 +434,7 @@ export class Grants {
       // The sealed intent is the authority once authorized; before that, the pending record's
       // claim is what the approve page reflects back to the human.
       ageProof: rec.engine?.ageProof ?? rec.ageProof,
+      membershipProof: rec.engine?.membershipProof ?? rec.membershipProof,
       spend,
       revoke: async () => {
         // Revoke the engine's ledger IMMEDIATELY — OUTSIDE the per-grant queue — so a spend
@@ -426,6 +477,9 @@ export interface Grant {
    *  age-restricted purchase steps up. Read it to answer "may this grant buy that?" the way the
    *  gate does — pair it with `ageProofCovers(proof, requiredAge)`. */
   readonly ageProof?: SealedAgeProof;
+  /** The loyalty membership the human proved at approval time, if they did (#172). Present ⇒
+   *  every purchase under this grant is priced at `discountPct` off, on every path. */
+  readonly membershipProof?: SealedMembershipProof;
   spend(input: SpendItems): Promise<SpendDoor>;
   revoke(): Promise<void>;
 }

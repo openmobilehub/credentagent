@@ -199,14 +199,22 @@ async function completeOrderLocked(input: CompletionInput, ctx: CompletionContex
   // says it was applied; a token merely claiming the discounted total reprices
   // higher and is refused.
   const verification = await ctx.verificationStore.read(input.order.id);
-  const loyaltyApplied = !!(verification as { loyalty?: { applied?: boolean } } | undefined)?.loyalty?.applied;
+  // A DELEGATED draw carries its own loyalty claim: the membership the human proved at approval
+  // time, sealed into the intent (#172). It is read from the intent — never from a verification
+  // record (a grant has none) and never from the caller — and the SEALED rate is what re-prices,
+  // so this side and the draw-signing side compute the total from one tamper-evident number.
+  const drawLoyalty = input.draw?.intent.membershipProof;
+  const loyaltyApplied = !!(verification as { loyalty?: { applied?: boolean } } | undefined)?.loyalty?.applied || drawLoyalty != null;
   // Scope the custom-gate sweep to THIS order's policy (#59 finding 2). The mounted ceremony seam
   // enriches `input.policyCredentialIds` for every rail (mount.ts, from the client's per-order
   // policy) and `orders.serve` sets it from the stored created order; absent ⇒ the sweep stays
   // registry-wide (fail-closed). Always server-side state — never the order token.
   const policyCredentialIds = input.policyCredentialIds;
   const items: CartItemRef[] = input.order.lines.map((l) => ({ productId: l.id, quantity: l.quantity }));
-  const repricedRaw = ctx.catalog.createOrder(items, input.order.id, { loyaltyApplied });
+  const repricedRaw = ctx.catalog.createOrder(items, input.order.id, {
+    loyaltyApplied,
+    ...(drawLoyalty ? { loyaltyDiscountPct: drawLoyalty.discountPct } : {}),
+  });
   if (repricedRaw.total !== input.order.total) return { completed: false, reason: "reprice" };
   // #59 finding 3: re-attach any product attribute the (possibly lossy) host catalog dropped
   // during the re-price, from the faithful order the rail already resolved — so a custom gate's

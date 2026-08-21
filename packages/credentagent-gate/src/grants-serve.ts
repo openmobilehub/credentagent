@@ -10,13 +10,14 @@
 // approves a grant and a buyer who checks out are looking at one product, not two. It follows the
 // hub's shape exactly — brand header, a summary card, a numbered progress rail, one card per step,
 // the decision last — and, like the hub, the rail lists ONLY the steps this grant actually has
-// (#172: an age step appears when the granted scope contains age-restricted items, and not
-// otherwise). A grant with nothing to prove is a single decision, so it gets no stepper at all.
+// (#172): an age step when the granted scope contains age-restricted items, a membership step when
+// the host runs a loyalty programme. A grant with nothing to prove is a single decision, so it
+// gets no stepper at all.
 //
 // HONESTY: this page is the DEMO stand-in for the wallet ceremony — clicking Approve seals the
 // intent server-side (presence "delegated-demo"). The wallet key-signing ceremony (#71) replaces
-// this page and calls the SAME _authorize/_deny seams; the URL contract doesn't change. When an
-// age proof has been captured, the footer states that proof's own weaker posture too
+// this page and calls the SAME _authorize/_deny seams; the URL contract doesn't change. When a
+// wallet credential has been captured, the footer states that claim's own weaker posture too
 // (presence-only-demo — real wire crypto, no issuer trust anchor yet).
 
 import type { Grant, Grants } from "./grants.js";
@@ -63,9 +64,11 @@ ${body}
  * `theme.trustFooter()`: that line is fixed to the OpenID4VP rails' presence-only claim, and a
  * grant approval is a different act with a different honest answer.
  */
-const trustLine = (hasAgeProof: boolean) =>
+const trustLine = (g?: Grant) =>
   `<div class="trust"><div class="trust-line">🔒 delegated-demo — approving here stands in for the wallet ceremony; no real money moves.${
-    hasAgeProof ? " The age proof is presence-only-demo: the wire crypto is real; the issuer trust anchor is not." : ""
+    g?.ageProof || g?.membershipProof
+      ? " The wallet credential is presence-only-demo: the wire crypto is real; the issuer trust anchor is not."
+      : ""
   }</div></div>`;
 
 /** Name the scope the way the human chose it, so the warning reads like their own sentence:
@@ -89,11 +92,17 @@ function scopeValue(g: Grant): string {
 /** The limits card — the grant's answer to the hub's order-summary card. The budget is the
  *  bold total row because it is the number the human is actually deciding on. */
 function limitsCard(g: Grant): string {
+  // Once a membership is proved, the discount is a term of the grant — show it here, in the accent
+  // row the checkout summary uses for exactly this, rather than only inside the step card.
+  const loyalty = g.membershipProof
+    ? `<tr class="disc"><td>Loyalty discount (${g.membershipProof.discountPct}%)</td><td class="num">on every purchase</td></tr>`
+    : "";
   return `<div class="card summary">
     <p class="card-title">Spending limits</p>
     <table>
       <tr class="line"><td>Max per purchase</td><td class="num">${usd(g.perSpend)}</td></tr>
       <tr class="line"><td>Allowed</td><td class="num">${scopeValue(g)}</td></tr>
+      ${loyalty}
       <tr class="total"><td>Total budget</td><td class="num">${usd(g.budget)}</td></tr>
     </table>
   </div>`;
@@ -142,6 +151,32 @@ function ageCard(g: Grant, scope: GrantAgeScope, n: number, railMounted: boolean
   </div>`;
 }
 
+/**
+ * The membership step's card (#172) — the mirror of the age card, and of the hub's discount gate.
+ * Where age UNLOCKS items, this LOWERS the price of every purchase the agent makes under the grant.
+ *
+ * Optional by nature: declining still approves the grant, at full catalog price. It renders only
+ * when the host configured a loyalty rate (`new CredentAgent({ loyaltyDiscountPct })`) — no
+ * programme, no step — and the button only when the ceremony is actually mounted.
+ */
+function membershipCard(g: Grant, pct: number | undefined, n: number, railMounted: boolean): string {
+  if (pct == null) return "";
+  const no = `<span class="step-no">${n}.</span>`;
+  const proof = g.membershipProof;
+  if (proof) {
+    return `<div class="card">
+    <div class="row-ok">${no} ✓ Membership applied — ${proof.discountPct}% off</div>
+    <p class="card-title" style="margin:10px 0 0;text-transform:none;letter-spacing:0;font-weight:400">Member ${esc(proof.membershipNumber)} · every purchase your agent makes under this grant is discounted.</p>
+  </div>`;
+  }
+  const present = railMounted
+    ? `<div style="margin-top:12px;"><a class="btn btn-secondary" href="/credentagent/grants/${encodeURIComponent(g.id)}/membership">Apply loyalty discount (${pct}% off)</a></div>`
+    : "";
+  return `<div class="card">
+    <div class="row-pending">${no} Take ${pct}% off every purchase your agent makes under this grant by presenting your membership. Optional — the grant works without it.</div>${present}
+  </div>`;
+}
+
 /** The decision card — always last, the way payment is last on the hub. */
 function decisionCard(g: Grant, scope: GrantAgeScope, n: number): string {
   const withheld = scope.minimumAge != null && !ageProved(g, scope);
@@ -176,7 +211,7 @@ export function serveGrants(app: GrantsApp, grants: Grants): void {
   const branding = grants._branding;
   const notFound = () => shell("Spending grant", `${brandHeader({ h1: "Spending grant", tagline: "This link doesn't match a grant." }, branding)}
   <div class="card"><div class="row-pending">We don't recognise this grant. It may have been created by a different server, or the link may be incomplete.</div></div>
-  ${trustLine(false)}`, branding);
+  ${trustLine()}`, branding);
 
   get("/credentagent/grants/:id", async (req: GrantsRequest, res: GrantsResponse) => {
     const g = await grants.retrieve(req.params.id);
@@ -188,20 +223,24 @@ export function serveGrants(app: GrantsApp, grants: Grants): void {
         shell(`Spending grant · ${g.id}`, `${brandHeader({ h1: "Spending grant", tagline: `At ${g.merchant}` }, branding)}
   ${limitsCard(g)}
   <div class="card"><div class="${line?.row ?? "row-pending"}">${line ? line.text : esc(g.status)}</div></div>
-  ${trustLine(g.ageProof != null)}`, branding),
+  ${trustLine(g)}`, branding),
       );
     }
 
     const scope = g.ageScope;
-    // The rail lists only the steps this grant HAS (the hub's rule): an age step when the scope
-    // is age-restricted, then the decision. A single-step rail says nothing a stepper is for, so
-    // a grant with nothing to prove renders none.
+    const loyaltyPct = grants._loyaltyDiscountPct;
+    // The rail lists only the steps this grant HAS (the hub's rule): an age step when the scope is
+    // age-restricted, a membership step when the host runs a loyalty programme, then the decision.
+    // A single-step rail says nothing a stepper is for, so a grant with nothing to prove gets none.
     const steps: RailStep[] = [
       ...(scope.minimumAge != null ? [{ label: "Age", done: ageProved(g, scope) }] : []),
+      ...(loyaltyPct != null ? [{ label: "Membership", done: g.membershipProof != null }] : []),
       { label: "Approve", done: false },
     ];
     const rail = steps.length > 1 ? progressRail(steps, steps.findIndex((s) => !s.done)) : "";
-    const ageStep = scope.minimumAge != null ? 1 : 0;
+    // The numbers on the cards are the numbers on the rail — one sequence, never two.
+    const ageNo = scope.minimumAge != null ? 1 : 0;
+    const memberNo = loyaltyPct != null ? ageNo + 1 : ageNo;
 
     res.status(200).type("html").send(
       shell(`Approve spending grant · ${g.id}`, `${brandHeader(
@@ -213,9 +252,10 @@ export function serveGrants(app: GrantsApp, grants: Grants): void {
       )}
   ${limitsCard(g)}
   ${rail}
-  ${ageCard(g, scope, ageStep, grants._ageRailMounted)}
-  ${decisionCard(g, scope, ageStep + 1)}
-  ${trustLine(g.ageProof != null)}`, branding),
+  ${ageCard(g, scope, ageNo, grants._credentialRailMounted)}
+  ${membershipCard(g, loyaltyPct, memberNo, grants._credentialRailMounted)}
+  ${decisionCard(g, scope, memberNo + 1)}
+  ${trustLine(g)}`, branding),
     );
   });
 

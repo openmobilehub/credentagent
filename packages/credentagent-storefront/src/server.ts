@@ -751,7 +751,18 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
           // marked 21+, or raised from 18+ to 21+, still steps up even though the grant's own
           // snapshot predates the change. No proof, or one below the bar ⇒ step-up as before.
           if (live.minimumAge != null && !ageProofCovers(g.ageProof, live.minimumAge)) return reply({ ok: false, code: "step-up" });
-          if (live.price * qty > g.perSpend) return reply({ ok: false, code: "per-spend-exceeded" }); // live price vs sealed cap
+          // Live price vs the sealed cap — measured on what the human is actually CHARGED, so the
+          // grant's own loyalty discount (#172) is applied here exactly as the engine applies it
+          // when it prices and signs the draw. Comparing the list price instead would refuse a
+          // purchase the gate would have completed: a discount one path honours and another
+          // refuses is precisely the drift invariant 3 forbids.
+          // Computed in integer CENTS, the units the grant engine prices in — rounding the same
+          // discount in dollars would land a cent or two off and refuse purchases inside that band.
+          const cents = (dollars: number) => Math.round(dollars * 100);
+          const listed = cents(live.price) * qty;
+          const pct = g.membershipProof?.discountPct ?? 0;
+          const charged = pct > 0 ? listed - Math.round((listed * pct) / 100) : listed;
+          if (charged > cents(g.perSpend)) return reply({ ok: false, code: "per-spend-exceeded" });
 
           try {
             const s = await g.spend({

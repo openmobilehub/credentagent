@@ -149,7 +149,7 @@ export type { DelegatedGateOptions, PreApproveOptions, Purchase, SpendResult, Ca
 // answers "does it cover an order demanding N?" — so a host pre-check can ask the same question
 // the gate's completion path asks, rather than inventing a second, drifting rule.
 export { ageProofCovers } from "./ceremony/mandate.js";
-export type { SealedAgeProof } from "./ceremony/mandate.js";
+export type { SealedAgeProof, SealedMembershipProof } from "./ceremony/mandate.js";
 export type {
   CeremonyOrder,
   CeremonyOrderLine,
