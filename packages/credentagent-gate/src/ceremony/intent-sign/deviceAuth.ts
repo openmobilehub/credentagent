@@ -91,7 +91,13 @@ function asTag24(item: unknown): Tag {
  * position 3). `jwkThumbprint` is a base64url string (RFC 7638; see the caller).
  */
 export function intentHandoverInfo(origin: string, nonce: string, jwkThumbprint: string): Uint8Array {
-  return cbor([origin, nonce, jwkThumbprint]);
+  // The thumbprint is the RAW 32-byte SHA-256 digest (a CBOR bstr) — NOT the base64url
+  // text jose hands back. Established on a real Pixel: of the candidate handover shapes, this
+  // is the only one a Multipaz device signature verifies against (on-device-interop.md §5.1
+  // records how it was solved). Carrying it as a tstr is the same digest under a different
+  // CBOR major type — which every simulated test accepts and every phone refuses, so
+  // deviceAuth.test.ts asserts the CBOR type itself, not just the value.
+  return cbor([origin, nonce, Buffer.from(jwkThumbprint, "base64url")]);
 }
 
 /**

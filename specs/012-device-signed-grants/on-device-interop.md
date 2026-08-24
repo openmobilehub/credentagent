@@ -45,7 +45,7 @@ sealed reader context server-side (FR-7 guidance: keep the request conservative)
 DRAFT_29 3-element HandoverInfo in commit `86da8d1`** (adversarial-review finding 1):
 
 ```
-HandoverInfo            = CBOR([ origin (tstr), nonce (tstr), jwkThumbprint (tstr) ])
+HandoverInfo            = CBOR([ origin (tstr), nonce (tstr), jwkThumbprint (bstr, raw 32 bytes) ])
 HandoverInfoHash        = SHA-256( HandoverInfo )                      # raw 32-byte digest
 SessionTranscript       = CBOR([ null, null,
                                  [ "OpenID4VPDCAPIHandover", HandoverInfoHash (bstr) ] ])
@@ -103,7 +103,7 @@ response (our `response_mode` is `dc_api.jwt` — `request.ts:64`), OpenID4VP 1.
 ```
 SessionTranscript          = [ null, null, OpenID4VPDCAPIHandover ]
 OpenID4VPDCAPIHandover     = [ "OpenID4VPDCAPIHandover", OpenID4VPDCAPIHandoverInfoHash ]
-OpenID4VPDCAPIHandoverInfo = [ origin, nonce, jwk_thumbprint ]        # THREE elements
+OpenID4VPDCAPIHandoverInfo = [ origin, nonce, jwk_thumbprint ]        # THREE elements; thumbprint is a bstr
 OpenID4VPDCAPIHandoverInfoHash = SHA-256( CBOR( OpenID4VPDCAPIHandoverInfo ) )
 ```
 
@@ -128,8 +128,13 @@ review is a source read, not a phone round-trip.
 churned across OpenID4VP drafts: **DRAFT_29** is `[origin, nonce, jwk_thumbprint]` (what we ship);
 **DRAFT_24** is `[origin, clientId, nonce]`. If a real wallet still rejects the signature, the
 wallet build may be on the older draft — the one-line switch is in §4.4 (Fix A′). Also still
-**UNVERIFIED**: the exact `jwk_thumbprint` encoding (raw bstr vs base64url tstr) and the literal
-`"OpenID4VPDCAPIHandover"` label — confirm both against the wallet's build.
+**CONFIRMED ON DEVICE (2026-08-24):** the `jwk_thumbprint` is a **raw 32-byte bstr**, not a
+base64url tstr, and the literal label `"OpenID4VPDCAPIHandover"` is correct. Established by
+solving a real Multipaz presentation offline against every candidate shape — exactly one
+verified. The encoding is asserted by `deviceAuth.test.ts`, which checks the CBOR type of that
+element rather than only its value — the captured presentation itself is NOT committed (it is
+specific to one device and one wallet build; re-capture with `INTENT_DEBUG_DEVICE_RESPONSE` and
+re-run the solve if you need to re-establish it).
 
 ---
 
@@ -139,8 +144,8 @@ wallet build may be on the older draft — the one-line switch is in §4.4 (Fix 
 |---|---|---|---|---|---|
 | 1 | `SessionTranscript` outer | `[null, null, Handover]` | `[null, null, Handover]` | **MATCH** | — |
 | 2 | Handover tuple | `["OpenID4VPDCAPIHandover", hash]` | `["OpenID4VPDCAPIHandover", hash]` | **LIKELY-MATCH** | wrong label/shape ⇒ total transcript mismatch |
-| 3 | **HandoverInfo elements** | `[origin, nonce, jwk_thumbprint]` (3) — **fixed in `86da8d1`** | `[origin, nonce, jwk_thumbprint]` (DRAFT_29) | **MATCH (pending device)** | draft skew (DRAFT_24 = `[origin, clientId, nonce]`) ⇒ Fix A′ |
-| 4 | `jwk_thumbprint` value | RFC-7638 SHA-256 of `encJwk`, base64url string (jose) | RFC-7638 SHA-256 | **MATCH (pending device)** | encoding skew (base64url tstr vs raw bstr) ⇒ Fix A″ |
+| 3 | **HandoverInfo elements** | `[origin, nonce, jwk_thumbprint]` (3) — **fixed in `86da8d1`** | `[origin, nonce, jwk_thumbprint]` (DRAFT_29) | **CONFIRMED ON DEVICE** | ruled out on device: DRAFT_24's `[origin, clientId, nonce]` does not verify |
+| 4 | `jwk_thumbprint` value | RFC-7638 SHA-256 of `encJwk`, **raw bstr** (Fix A″ applied) | RFC-7638 SHA-256, raw bstr | **CONFIRMED ON DEVICE** | was the real mismatch: we shipped a base64url tstr and the phone refused every signature |
 | 5 | `origin` string | `` `${proto}://${host}` `` from `Host` header | canonical browser Web Origin | **UNKNOWN** | port/case/`x-forwarded` drift ⇒ different bytes |
 | 6 | `nonce` string | our request `nonce`, verbatim | request `nonce`, verbatim | **MATCH** | — (the wallet echoes the request nonce) |
 | 7 | HandoverInfoHash alg | SHA-256 | SHA-256 (fixed) | **MATCH** | — |
@@ -167,7 +172,7 @@ Fixes A′/A″) and the origin canonicalization (row 5).**
   certificate's SAN must cover the host (`readerIdentity`, or the per-request self-signed
   default whose SAN = the request host).
 - The Multipaz wallet on the Pixel with **`payment.mpzpass` imported** (registers the
-  `org.openwallet.payment.1` credential the request asks for — research.md §2.6: an
+  `org.multipaz.payment.sca.1` credential the request asks for — research.md §2.6: an
   unregistered type is hard-rejected, but this is a *credential*, not a `transaction_data`
   type, so it just needs to be present to be presentable).
 - `INTENT_DEBUG_TRANSCRIPT=1` set on the dev-twin server process (logs the transcript bytes
@@ -190,10 +195,10 @@ Fixes A′/A″) and the origin canonicalization (row 5).**
 
 | `/sign/verify` reason | Meaning | First fix to try |
 |---|---|---|
-| `device signature does not verify` | **the transcript mismatch** (the expected failure; the #1 suspect is already fixed in `86da8d1`) | Try **Fix A′** (DRAFT_24 handover), then **Fix A″** (thumbprint encoding), then **Fix B** (origin), then **Fix C** (label). |
+| `device signature does not verify` | a transcript mismatch. **Fix A″ (thumbprint as raw bstr) was the real one and is now applied** — a fresh occurrence is something new | Don't guess through the fixes: capture the wallet's DeviceResponse (`INTENT_DEBUG_DEVICE_RESPONSE=<path>`) and solve the shape offline against the real signature (§5.1). |
 | `no device key in MSO` / `unparseable DeviceResponse` | the presented credential's MSO shape differs from what `parseDeviceResponse` expects | capture the raw DeviceResponse (§5) and compare the issuerAuth/MSO CBOR; adjust `unwrap24`/`coseKeyToJwk` if the nesting differs |
-| `wrong credential: expected org.openwallet.payment.1` | the wallet presented a different doctype | check the imported `payment.mpzpass` doctype vs the DCQL (`dcql.ts` / `payment.in`) |
-| `payment credential did not disclose an account` | no `account` element disclosed (or a different element id) | check the credential's namespace/element ids; adjust the requested claim leaf |
+| `wrong credential: expected org.multipaz.payment.sca.1` | the wallet presented a different doctype | check the imported `payment.mpzpass` doctype vs the DCQL (`intent-sign/dcql.ts`, which reuses `dc-payment/dcql.ts`) — re-derive the fixture's doctype with `python3 tools/demo-pki/mint/inspect_mpzpass.py tools/demo-pki/out/payment.mpzpass` |
+| `payment credential did not disclose payment_instrument_id` | no `payment_instrument_id` element disclosed (or a different element id) | check the credential's namespace/element ids against the fixture (`inspect_mpzpass.py`, above); adjust the requested claim leaf |
 | no wallet picker / the wallet rejects the **request** | reader-cert/origin binding, or an https/SAN problem | verify the dev-twin is https and the reader-cert SAN covers the host; the request is already conservative (standard members only) so this is almost always cert/origin |
 | `bounds mismatch` / `nonce derivation mismatch` | server-side only — the grant record changed, or a stale reader context | not an interop issue; a clean create→sign flow won't hit it |
 
@@ -213,11 +218,11 @@ jwkThumbprint])` to `cbor([origin, clientId, nonce])`, where `clientId` is
 `x509_san_dns:${rpID}` (the request's `client_id`); thread `clientId` through the two call sites.
 (Prefer probing the wallet's OpenID4VP version first — DRAFT_29 is the current shape.)
 
-**Fix A″ — thumbprint encoding (row 4).** We carry the thumbprint as a base64url **string**
-(jose's `calculateJwkThumbprint` output). If the wallet instead uses the raw 32-byte digest as a
-**bstr**, change the third element to `Buffer.from(jwkThumbprint, "base64url")` in
-`intentHandoverInfo` (so it encodes as a bstr). The value is the same digest — only the CBOR
-major type differs.
+**Fix A″ — thumbprint encoding (row 4). ✅ THIS WAS THE BUG — APPLIED.** We carried the
+thumbprint as a base64url **string**; Multipaz uses the raw 32-byte digest as a **bstr**. Same
+digest, different CBOR major type — which is why every in-process test passed and every real
+signature was refused. `intentHandoverInfo` now encodes `Buffer.from(jwkThumbprint, "base64url")`.
+Pinned by `deviceAuth.test.ts`, which asserts the CBOR type of the element.
 
 **Fix B — canonicalize the origin (row 5).** Ensure the `origin` string equals the browser's
 Web Origin exactly: lowercase scheme+host, drop default ports, no path/slash. If the dev-twin
@@ -251,10 +256,21 @@ the returned bytes or the verification outcome, and it is off unless the env var
 it never touches the security surface. Use it on-device to capture the exact bytes the gate
 hashes, then compare against the OpenID4VP 1.0 construction in §2 to see which field diverged.
 
-To also see what the *wallet* sent, temporarily log the decrypted `vp_token` DeviceResponse
-in `verify.ts` and decode it (`cbor-x`) — note the transcript itself is **not** in the
-DeviceResponse (it is the external signed content), so the transcript diff is inferred from
-the spec + the debug log, not read off the wire.
+To also see what the *wallet* sent, set `INTENT_DEBUG_DEVICE_RESPONSE=<path>`: `verify.ts`
+dumps the decrypted DeviceResponse plus the origin / nonce / thumbprint it used. Same fence as
+the transcript hook — env-gated, pure observability, no effect on the verification outcome.
+
+### 5.1 Solve the transcript offline (do this instead of guessing)
+
+The transcript is **not** on the wire (it is the external signed content), so you cannot read
+it off the DeviceResponse. But you do not need to: the wallet's signature is itself the oracle.
+With a captured DeviceResponse, enumerate the candidate handover shapes locally, rebuild
+`DeviceAuthentication` for each, and check which one the real signature verifies against. The
+shape that verifies IS the wallet's shape.
+
+This is how Fix A″ was found: 22 candidates (draft shapes × thumbprint encodings × handover
+labels × origin variants), exactly one match, **one** phone round-trip instead of four
+redeploy-and-retry cycles. Prefer it over applying the fixes below speculatively.
 
 ---
 
@@ -271,7 +287,10 @@ The **residual** on-device risks, ranked:
 1. **Origin string canonicalization (MEDIUM).** The wallet uses the browser's canonical Web
    Origin; we build the origin from the `Host` header. A port, a casing difference, or a
    proxy header drift changes the bytes. **Fix B.**
-2. **Draft / encoding skew of the (now-present) thumbprint element (MEDIUM).** DRAFT_24 uses
+2. **~~Draft / encoding skew of the thumbprint element~~ — RESOLVED ON DEVICE (2026-08-24).**
+   This was the actual failure: the element was present and correctly positioned, but encoded as a
+   base64url tstr where Multipaz uses a raw bstr. Fixed (Fix A″) and pinned by `deviceAuth.test.ts`.
+   The draft-shape half is also ruled out — DRAFT_24 uses
    `[origin, clientId, nonce]` instead of the DRAFT_29 shape we ship, and a wallet might encode
    the thumbprint as a base64url string rather than a raw bstr. **Fix A′ / A″.**
 3. **Handover label / shape churn (MEDIUM-LOW).** We believe Multipaz uses the

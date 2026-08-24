@@ -13,12 +13,17 @@ const NONCE = "nonce-abc";
 
 describe("intent-sign DC API handover shape (finding 1)", () => {
   it("HandoverInfo is a 3-element array with the JWK thumbprint in position 3", () => {
-    const decoded = cborDecode(intentHandoverInfo(ORIGIN, NONCE, "THUMB")) as unknown[];
+    // The thumbprint travels as the RAW digest (bstr), not the base64url text — the shape a real
+    // Multipaz wallet signs, established on device (on-device-interop.md §5.1). Asserting the CBOR
+    // TYPE is the point: a tstr carries the same digest, passes every simulated test in this rail
+    // (both sides build it with this same function), and makes every real phone refuse.
+    const THUMB = Buffer.alloc(32, 7).toString("base64url");
+    const decoded = cborDecode(intentHandoverInfo(ORIGIN, NONCE, THUMB)) as unknown[];
     expect(Array.isArray(decoded)).toBe(true);
     expect(decoded).toHaveLength(3);
     expect(decoded[0]).toBe(ORIGIN);
     expect(decoded[1]).toBe(NONCE);
-    expect(decoded[2]).toBe("THUMB"); // the thumbprint — the element the wallet requires
+    expect(Buffer.from(decoded[2] as Uint8Array)).toEqual(Buffer.from(THUMB, "base64url"));
   });
 
   it("the transcript actually depends on the thumbprint (it is hashed in, not ignored)", () => {
