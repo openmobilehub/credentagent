@@ -30,7 +30,10 @@ await Promise.all([store.mcpServer().connect(serverTransport), agent.connect(cli
 const call = async (args) => (await agent.callTool({ name: "create-spending-grant", arguments: args })).structuredContent;
 
 // ── Round 1: the human's words name a product, but not WHICH pair ────────────────
-const bounds = { budget: 200, perSpend: 120, item: "sneakers" };
+// `signing: "page"` — this example's human "taps" the click-to-approve page (`_authorize` seam).
+// The default is a device-signed grant (spec 012), whose approveUrl serves a wallet SIGNING
+// ceremony instead; see examples/device-signed-grants.mjs for that flow.
+const bounds = { budget: 200, perSpend: 120, item: "sneakers", signing: "page" };
 const asked = await call(bounds);
 console.log("① agent asks for a grant → no link yet:", asked.code);
 for (const q of asked.questions) console.log(`   ${q.message}  ${JSON.stringify(q.fields[0].options)}`);

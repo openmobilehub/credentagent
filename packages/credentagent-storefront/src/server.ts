@@ -784,7 +784,10 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
             "you get the approveUrl (SEND IT TO THE HUMAN) plus a final question — then IMMEDIATELY call again with the " +
             "same arguments + that requestState. The re-check holds the line server-side and returns the moment the " +
             "human approves; keep redialing until the status changes. Your answer is only a wake-up: approval is " +
-            "re-read server-side (pending → authorized), never taken from what you say. Amounts are dollars.",
+            "re-read server-side (pending → authorized), never taken from what you say. Amounts are dollars. Approval " +
+            "is a WALLET SIGNATURE by default: the approveUrl serves a signing ceremony and the grant authorizes only " +
+            "on a real device signature over these exact bounds. Pass signing:\"page\" ONLY when the human has no " +
+            "phone in the loop and accepts a click-to-approve stand-in.",
           inputSchema: {
             budget: z.number().positive().describe("total budget in dollars"),
             perSpend: z.number().positive().describe("max dollars per single purchase"),
@@ -794,11 +797,15 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
             description: z.string().optional().describe("the human-readable sentence shown at approval"),
             requestState: z.string().optional().describe("copy VERBATIM from this tool's previous answer; never edit or invent one"),
             answers: z.record(z.string(), z.string()).optional().describe("the human's answers to the questions the previous call asked, keyed by field name (e.g. { size: \"US 10\" })"),
+            signing: z
+              .enum(["page", "device"])
+              .optional()
+              .describe('how the human authorizes: "device" (default — their phone wallet signs these exact bounds) or "page" (a click-to-approve stand-in; ask for it only when no phone is in the loop)'),
           },
           annotations: { readOnlyHint: false },
           _meta: UI_META,
         },
-        async ({ budget, perSpend, item, products, categories, description, requestState, answers }, extra): Promise<CallToolResult> => {
+        async ({ budget, perSpend, item, products, categories, description, requestState, answers, signing }, extra): Promise<CallToolResult> => {
           // No `item` — the id/category-bounded grant, round-trip free (spec 011 shape). Fold
           // `products` → allow.skus and `categories` → allow.categories; omit `allow` entirely
           // when neither is given (no bounds ⇒ merchant-wide, the openGrantCard).
@@ -813,8 +820,14 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
               perSpend,
               ...(Object.keys(allow).length ? { allow } : {}),
               ...(description ? { description } : {}),
+              ...(signing ? { signing } : {}),
             });
-            return grantResult(g, { note: "PENDING — send approveUrl to the human; spending refuses until they approve." });
+            return grantResult(g, {
+              note:
+                g.signing === "device"
+                  ? "PENDING — send approveUrl to the human; it opens a WALLET SIGNING ceremony. Spending refuses until their device signs these bounds."
+                  : "PENDING — send approveUrl to the human; spending refuses until they approve.",
+            });
           }
 
           // ── the multi round-trip path: pin the grant to ONE product ──────────────────
@@ -824,7 +837,7 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
           const mrtr = mrtrParams();
           const round = rounds.open({
             request: "create-spending-grant",
-            params: { budget, perSpend, item, products: products ?? null, categories: categories ?? null },
+            params: { budget, perSpend, item, products: products ?? null, categories: categories ?? null, signing: signing ?? null },
             principal: extra?.sessionId ?? "",
             state: requestState ?? mrtr.requestState,
             responses: mrtr.inputResponses,
@@ -955,6 +968,7 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
             perSpend,
             allow: { skus: [product.id] }, // WHAT it may buy: this product and nothing else (fail-closed)
             description: `Buy ${choice} from ${merchant}${description ? ` — ${description}` : ""}.`,
+            ...(signing ? { signing } : {}),
           });
           const extras = {
             item: { productId: product.id, name: product.name, price: product.price, selections },

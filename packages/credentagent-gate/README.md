@@ -324,6 +324,14 @@ Honesty is carried in the **types**, not prose (Principle VII):
   issuer / device signatures). A self-crafted mdoc would pass. **This is a flow demo, not a real
   safety control** — never present it as one. Issuer-trust verification (Multipaz / `@auth0/mdl`,
   `trust_level: "issuer-verified"`) is roadmap.
+- **`trust_level: "device-signed"`** — used by device-signed spending grants (`grants.create({
+  signing: "device" })`, below). Here the gate **does** verify the wallet's mdoc DeviceAuth
+  signature over the grant's exact bounds — a real holder-of-key binding, one step past
+  presence-only. What is still demo is only the trust **anchor**: the payment credential is a
+  self-minted demo credential with no issuer/VICAL check (that is the roadmap `issuer-verified`
+  line, issue #14), so a self-crafted device key would still pass. The signature is real; the
+  anchor is not — the page and the type both say exactly that, and the gate never claims
+  `issuer-verified` for the in-gate check.
 
 The three rails `mount()` serves differ in how much crypto is real today:
 
@@ -524,6 +532,58 @@ answer.
 > **agent** answers on the human's behalf (`answers`, the flat fallback channel). That is why the
 > resolved purchase is still spelled out on the approve page — the human's tap is what counts.
 > Implemented here because `@modelcontextprotocol/sdk` does not ship the MRTR types yet.
+### Device-signed grants — the wallet signs the grant first (spec 012)
+
+**Approving a grant is a signature.** A grant's `approveUrl` serves a signing ceremony, and the
+grant only reaches `"authorized"` once a wallet on the phone **signs its exact bounds** (an ISO mdoc
+DeviceAuth signature over the budget / per-purchase cap / allowed items). Nothing can be spent
+against a grant no device signed.
+
+Pass **`signing: "page"`** to opt into the older **click-to-approve** stand-in, where the server
+takes the human's word for it (`trustLevel: "server-issued-demo"`). It exists for demos, examples
+and CI — anywhere no phone is in the loop. The weaker door is still there; it just has to be asked
+for by name.
+
+> **What the signature does and does not prove.** It proves **holder-of-key** and **binding**: the
+> device key signed over *these* bounds, so a spend always traces to what the human authorized. It
+> does **not** yet prove **trust** — there is no issuer anchor, so a self-minted credential passes
+> ([#14](https://github.com/openmobilehub/credentagent/issues/14)). `trustLevel` says
+> `"device-signed"`, never `"issuer-verified"`.
+
+```ts
+const grant = await credentagent.grants.create({
+  merchant: "utopia", budget: 200, perSpend: 130,
+  allow: { categories: ["Beverages"] },
+  // signing defaults to "device" — pass signing: "page" for the click-to-approve stand-in
+});
+sendToUser(grant.approveUrl);                         // → the signing ceremony (not click-to-approve)
+// …the human signs on their phone…
+const g = await credentagent.grants.retrieve(grant.id);
+g.status;      // "authorized" — ONLY after the gate verified the device signature over these bounds
+g.trustLevel;  // "device-signed"
+g.mandate;     // { boundsHash, signedAt, credentialDoctype, verifiedBy } — the evidence, plain data
+const s = await g.spend({ idempotencyKey: "order-1", items: [{ sku: "coffee" }] });
+// s.mandate → { id, boundsHash } — every spend traces to the signed Intent Mandate (FR-5)
+```
+
+**The invariant:** signed by the device **first**, spent by the agent **second**. A device-mode grant
+that was never device-signed can never spend; a spend always traces to the exact signed bounds.
+
+**Honesty (`trust_level: "device-signed"`, not `"issuer-verified"`):** the device signature is
+**real** — the gate verifies the wallet's mdoc DeviceAuth COSE signature over the bounds-bound session
+transcript. What is **still demo** is the trust **anchor**: the payment credential
+(`org.openwallet.payment.1`, importable via the demo-PKI `payment.mpzpass`) is self-minted with **no
+issuer/VICAL check** (that hardening is issue #14), so a self-crafted device key would pass. The
+verify runs through a **seam** — the in-gate backend attests `device-signed` / `verifiedBy: "gate"`;
+wiring an external verifier (the `DelegatedVerifier` seam) that reports a stronger, issuer-backed level
+is the fast-follow, and the gate **relays** that level verbatim with the attestor recorded in
+`verifiedBy`.
+
+Test the whole flow **with no phone** using the exported simulated wallet — see
+[`examples/device-signed-grants.mjs`](https://github.com/openmobilehub/credentagent/blob/main/examples/device-signed-grants.mjs)
+(`devSimulateWalletSignature` produces a real device signature the way Stripe's test cards stand in
+for a real card). The **on-device** path — import `payment.mpzpass` into Multipaz and sign on a
+phone — is verified separately.
 
 ### Under the hood — the delegated-draw seams (005)
 

@@ -37,7 +37,22 @@ export type { OrderStore, CreatedOrder, CompletedOrder, OrderDoor, OrderDoorCode
 // the human approves once (grant.approveUrl) → `grant.spend({ idempotencyKey, items })` runs the
 // REAL engine (per-spend cap, budget, single-use, revocation, age-non-delegable) → typed door.
 export { Grants, grantLifecycle } from "./grants.js";
-export type { Grant, GrantStatus, GrantLifecycle, GrantUsage, GrantDoorCode, GrantAllow, CreateGrantOptions, SpendDoor, SpendItems } from "./grants.js";
+export type { Grant, GrantStatus, GrantLifecycle, GrantUsage, GrantDoorCode, GrantAllow, CreateGrantOptions, GrantSigning, GrantMandateEvidence, SpendDoor, SpendItems } from "./grants.js";
+
+// ── Device-signed grants (spec 012, #144) — the wallet SIGNS the Intent Mandate first ──
+// Opt a grant into wallet signing with `grants.create({ …, signing: "device" })`: its
+// approveUrl serves the signing ceremony, and it only authorizes on a REAL mdoc DeviceAuth
+// signature over its exact bounds (trust_level "device-signed" — the signature is real; the
+// trust anchor is still a demo credential, #14). These exports are the building blocks + a
+// SIMULATED wallet for testing the flow in-process (no phone), the way Stripe ships test cards.
+export { canonicalIntentBounds, boundsHash, deriveNonce } from "./ceremony/intent-sign/bounds.js";
+export type { IntentBoundsInput } from "./ceremony/intent-sign/bounds.js";
+export { buildIntentSignRequest } from "./ceremony/intent-sign/request.js";
+export type { SignedIntentRequest } from "./ceremony/intent-sign/request.js";
+export { verifyIntentPresentation, inGateBackend, memoryNonceGuard } from "./ceremony/intent-sign/verify.js";
+export type { IntentVerifyResult, IntentVerifyBackend, IntentTrustVerdict, NonceGuard } from "./ceremony/intent-sign/verify.js";
+export { devSimulateWalletSignature } from "./ceremony/intent-sign/simulate.js";
+export type { SimulateOptions } from "./ceremony/intent-sign/simulate.js";
 
 // ── MRTR (spec: Multi Round-Trip Requests) — "I need more from the human before I can do this" ──
 // The MCP pattern for a tool that cannot complete yet: answer with `input_required` (the questions

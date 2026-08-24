@@ -37,7 +37,9 @@ const agent = () => new CredentAgent({ walletOrigin: "http://localhost:3005", ca
 const sc = (r: Awaited<ReturnType<Client["callTool"]>>) => r.structuredContent as Record<string, any>;
 const create = (c: Client, args: Record<string, unknown>) => c.callTool({ name: "create-spending-grant", arguments: args });
 
-const ARGS = { budget: 200, perSpend: 120, item: "sneakers" };
+// `signing: "page"` — these tests drive the click-to-approve seam (`_authorize`); a device-mode
+// grant refuses that seam by design (spec 012 FR-3) and gets its own signing-ceremony tests.
+const ARGS = { budget: 200, perSpend: 120, item: "sneakers", signing: "page" };
 /** Drive the sneakers flow to the pinned grant → the awaiting-approval round. */
 async function pinned(c: Client) {
   const first = sc(await create(c, ARGS));
@@ -329,8 +331,8 @@ describe("create-spending-grant — requestState is attacker-controlled", () => 
   it("REFUSES a spend on any product other than the one the human approved", async () => {
     const ca = agent();
     const c = await connect(ca);
-    const first = sc(await create(c, { budget: 200, perSpend: 120, item: "sneakers" }));
-    const g = sc(await create(c, { budget: 200, perSpend: 120, item: "sneakers", requestState: first.requestState, answers: { size: "US 10", colour: "Black" } }));
+    const first = sc(await create(c, { budget: 200, perSpend: 120, item: "sneakers", signing: "page" }));
+    const g = sc(await create(c, { budget: 200, perSpend: 120, item: "sneakers", signing: "page", requestState: first.requestState, answers: { size: "US 10", colour: "Black" } }));
     await ca.grants._authorize(g.grantId); // the human approves the sneakers, once, then leaves
 
     // The typed door rides in the result's `spend` (the projection is the display half — spec 011).
