@@ -1,0 +1,14 @@
+{
+  "name": "spike-mcp-2026",
+  "private": true,
+  "type": "module",
+  "description": "SPIKE: 2026-07-28 bridge in front of the storefront — probes what the client speaks, proxies tools upstream",
+  "dependencies": {
+    "@modelcontextprotocol/server": "2.0.0",
+    "@modelcontextprotocol/express": "2.0.0",
+    "@modelcontextprotocol/node": "2.0.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "express": "^5.0.0",
+    "zod": "^4.2.0"
+  }
+}
