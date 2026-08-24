@@ -159,14 +159,30 @@ pattern, powered by `MultiRoundTrip` from the gate:
 { "name": "create-spending-grant",
   "arguments": { "budget": 200, "perSpend": 120, "item": "sneakers",
                  "requestState": "mrtr1.…", "answers": { "size": "US 10", "colour": "Black" } } }
-// ← { "status": "pending", "approveUrl": "…", "allow": { "skus": ["court-sneakers"] },
-//     "item": { "productId": "court-sneakers", "selections": { "size": "US 10", "colour": "Black" } } }
+// ← { "code": "awaiting-approval", "status": "pending", "approveUrl": "…",
+//     "allow": { "skus": ["court-sneakers"] },
+//     "item": { "productId": "court-sneakers", "selections": { "size": "US 10", "colour": "Black" } },
+//     "questions": [ /* "send the human the approve link; reply once they've tapped" */ ],
+//     "requestState": "mrtr1.…" }
+
+// 3. the agent redials at once with the state; the call HOLDS while the human taps Approve
+{ "name": "create-spending-grant",
+  "arguments": { "budget": 200, "perSpend": 120, "item": "sneakers",
+                 "requestState": "mrtr1.…", "answers": { "approved": "true" } } }
+// ← (resolves the moment the tap lands) { "status": "authorized", "allow": { "skus": ["court-sneakers"] }, … }
 ```
 
-The grant is sealed to **that product**: a later unattended spend on anything else refuses
-`not-allowed`, and the approve page names exactly what the human is agreeing to
-(*"Buy Cascade Court Sneakers — US 10, Black ($95.00) from utopia."*). Products declare their own
-choices via `Product.variants`; omit `item` and you get the open, category-only grant, unchanged.
+The grant is minted at step 2 but the flow **stays open** until the human's tap. A redial to a
+still-pending grant **holds its answer open** (`approvalHoldMs`, default 45 s — measured just under
+claude.ai's 60 s tool-call kill; `0` disables), re-reading the grant store until the tap lands — so
+the agent learns of the approval seconds after it happens, with no "I approved it" message from the
+human. The answer itself is a **doorbell, not a credential** — the store re-reads its own grant
+record before it ever says `authorized`, so ringing early (or lying) just returns
+`awaiting-approval` again, and a denial at the page comes back as `status: "denied"`. The grant is sealed to **that product**: a later
+unattended spend on anything else refuses `not-allowed`, and the approve page names exactly what the
+human is agreeing to (*"Buy Cascade Court Sneakers — US 10, Black ($95.00) from utopia."*). Products
+declare their own choices via `Product.variants`; omit `item` and you get the open, category-only
+grant, unchanged.
 
 `requestState` is signed, short-lived, and bound to the call, the money bounds, and the session — a
 hand-edited one is refused rather than believed. It is **not** proof a human answered: until clients

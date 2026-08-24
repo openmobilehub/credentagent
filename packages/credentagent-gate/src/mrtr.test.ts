@@ -186,3 +186,52 @@ describe("MultiRoundTrip — the flat fallback channel (clients without MRTR)", 
     expect(r.answers).toEqual({ size: "US 40" });
   });
 });
+
+describe("MultiRoundTrip — carried facts (server-attested state riding the blob)", () => {
+  /** Open a round or fail the test with the refusal code. */
+  function opened(args: Partial<Parameters<MultiRoundTrip["open"]>[0]> = {}) {
+    const r = rounds.open({ request: "create-spending-grant", params: PARAMS, ...args });
+    if (!r.ok) throw new Error(`unexpected refusal: ${r.code}`);
+    return r;
+  }
+
+  it("carries a server-set fact forward to the next round, under the seal", () => {
+    const first = opened().ask(
+      { approval: { message: "Approved yet?", fields: { approved: { type: "boolean" } } } },
+      { carry: { grantId: "grant_1" } },
+    );
+    const next = opened({ state: first.requestState });
+    expect(next.carried).toEqual({ grantId: "grant_1" });
+  });
+
+  it("starts a fresh round with nothing carried", () => {
+    expect(opened().carried).toEqual({});
+  });
+
+  it("keeps carried facts when a later ask omits them", () => {
+    const first = opened().ask(
+      { approval: { message: "Approved yet?", fields: { approved: { type: "boolean" } } } },
+      { carry: { grantId: "grant_1" } },
+    );
+    // The server asks again without repeating the carry — the fact must survive the re-seal.
+    const again = opened({ state: first.requestState }).ask({
+      approval: { message: "Still waiting — approved yet?", fields: { approved: { type: "boolean" } } },
+    });
+    expect(opened({ state: again.requestState }).carried).toEqual({ grantId: "grant_1" });
+  });
+
+  it("IGNORES a client answer that names a carried fact — facts are server-attested only", () => {
+    const first = opened().ask(
+      { approval: { message: "Approved yet?", fields: { approved: { type: "boolean" } } } },
+      { carry: { grantId: "grant_1" } },
+    );
+    // The attack: answer with a `grantId` of the attacker's choosing, through both channels.
+    const r = opened({
+      state: first.requestState,
+      responses: { approval: { action: "accept", content: { approved: true, grantId: "grant_evil" } } },
+      answers: { grantId: "grant_evil" },
+    });
+    expect(r.carried).toEqual({ grantId: "grant_1" });
+    expect(r.answers.grantId).toBeUndefined(); // never asked for, so never merged either
+  });
+});

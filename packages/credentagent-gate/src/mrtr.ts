@@ -109,14 +109,28 @@ export type Round =
       ok: true;
       /** Everything gathered so far — earlier rounds merged with this call's accepted answers. */
       answers: Record<string, unknown>;
+      /**
+       * Facts the SERVER sealed into the state on an earlier `ask()` (`carry`). Attested by the
+       * signature, so — unlike `answers` — the client can neither set nor edit them. Use for
+       * server-side context a later round needs back (e.g. the id of a record already created).
+       */
+      carried: Record<string, unknown>;
       /** Question keys the human declined or cancelled in THIS round. */
       declined: string[];
       /** How many times this flow has already asked (0 on the first call) — cap your own loops. */
       round: number;
       /** Build the `input_required` result: these questions + a freshly sealed state. */
-      ask(requests: Record<string, Ask>): InputRequiredResult;
+      ask(requests: Record<string, Ask>, opts?: AskOptions): InputRequiredResult;
     }
   | { ok: false; code: MultiRoundTripRefusal };
+
+export interface AskOptions {
+  /**
+   * Server-attested facts to seal into the new state, surfaced as `carried` next round.
+   * Omitted = whatever was already carried rides forward unchanged.
+   */
+  carry?: Record<string, unknown>;
+}
 
 /** What the sealed blob carries. Never exposed — `requestState` is opaque by contract. */
 interface StatePayload {
@@ -135,6 +149,8 @@ interface StatePayload {
   answers: Record<string, unknown>;
   /** Question key → the field names that question asked for. Anything else is ignored. */
   asked: Record<string, string[]>;
+  /** Server-attested carried facts (`AskOptions.carry`). Absent when nothing is carried. */
+  facts?: Record<string, unknown>;
 }
 
 /** Stable JSON: object keys sorted at every depth, so the same params digest the same way. */
@@ -231,12 +247,14 @@ export class MultiRoundTrip {
     }
 
     const round = prior?.n ?? 0;
+    const carried = prior?.facts ?? {};
     return {
       ok: true,
       answers,
+      carried,
       declined,
       round,
-      ask: (requests: Record<string, Ask>): InputRequiredResult => {
+      ask: (requests: Record<string, Ask>, opts?: AskOptions): InputRequiredResult => {
         const inputRequests: InputRequests = {};
         const nextAsked: Record<string, string[]> = {};
         for (const [key, a] of Object.entries(requests)) {
@@ -248,6 +266,7 @@ export class MultiRoundTrip {
           };
           nextAsked[key] = Object.keys(properties);
         }
+        const facts = opts?.carry ?? carried;
         const payload: StatePayload = {
           v: 1,
           req: args.request,
@@ -257,6 +276,7 @@ export class MultiRoundTrip {
           n: round + 1,
           answers,
           asked: nextAsked,
+          ...(Object.keys(facts).length ? { facts } : {}),
         };
         return { resultType: "input_required", inputRequests, requestState: this.#seal(payload) };
       },

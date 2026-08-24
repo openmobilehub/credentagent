@@ -51,6 +51,7 @@ export { MultiRoundTrip, DEFAULT_MRTR_TTL_MS } from "./mrtr.js";
 export type {
   Ask,
   AskField,
+  AskOptions,
   InputRequests,
   InputRequiredResult,
   MultiRoundTripOptions,

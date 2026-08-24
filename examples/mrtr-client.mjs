@@ -70,8 +70,18 @@ for (let round = 1; round <= MAX_ROUNDS; round++) {
   );
 
   if (result.resultType !== "input_required") break;
+  const view = result.structuredContent ?? {};
 
-  console.log(`\n── round ${round}: the store needs more before it will mint a grant ──`);
+  // The LAST round is the human's tap at the approve page. Unattended, there is no human to
+  // tap it — print the link and stop. (Interactively, open the link, approve, then answer:
+  // the reply is only a doorbell — the store re-reads its own record before saying "authorized".)
+  if (view.code === "awaiting-approval" && SCRIPTED) break;
+
+  console.log(
+    view.code === "awaiting-approval"
+      ? `\n── round ${round}: the grant EXISTS (pending) — the store is waiting for the human's tap ──`
+      : `\n── round ${round}: the store needs more before it will mint a grant ──`,
+  );
   inputResponses = {};
   for (const [key, request] of Object.entries(result.inputRequests)) {
     inputResponses[key] = await elicit(request);
@@ -81,8 +91,12 @@ for (let round = 1; round <= MAX_ROUNDS; round++) {
 }
 
 const view = result.structuredContent ?? {};
-if (view.approveUrl) {
-  console.log(`\n✅ grant pinned to: ${view.item?.name} ${JSON.stringify(view.item?.selections ?? {})}`);
+if (view.status === "authorized") {
+  console.log(`\n✅ AUTHORIZED — ${view.item?.name} ${JSON.stringify(view.item?.selections ?? {})}`);
+  console.log(`   it may buy: ${JSON.stringify(view.allow)}  ·  budget $${view.budget}, $${view.perSpend} per purchase`);
+  console.log(`   the agent can now spend-from-grant while the human is away.`);
+} else if (view.approveUrl) {
+  console.log(`\n⏳ grant pinned to: ${view.item?.name} ${JSON.stringify(view.item?.selections ?? {})} — status ${view.status}`);
   console.log(`   it may buy: ${JSON.stringify(view.allow)}  ·  budget $${view.budget}, $${view.perSpend} per purchase`);
   console.log(`   send this to the human — nothing spends until they approve:\n   ${view.approveUrl}`);
 } else {

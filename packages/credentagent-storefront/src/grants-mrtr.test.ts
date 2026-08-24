@@ -23,9 +23,10 @@ const GATE_CATALOG = {
 /**
  * Connect an MCP client. `elicitation` is what a client declares when it can put a question to
  * the human itself — the capability MRTR's `inputRequests` requires (spec, server requirement 7).
+ * Tests default `approvalHoldMs: 0` (instant answers); the held-redial suite opts back in.
  */
-async function connect(grantsOwner: CredentAgent, capabilities: Record<string, unknown> = { elicitation: {} }) {
-  const server = createStorefront({ grants: grantsOwner.grants, merchant: "utopia" }).mcpServer();
+async function connect(grantsOwner: CredentAgent, capabilities: Record<string, unknown> = { elicitation: {} }, storefrontOpts: Record<string, unknown> = {}) {
+  const server = createStorefront({ grants: grantsOwner.grants, merchant: "utopia", approvalHoldMs: 0, ...storefrontOpts }).mcpServer();
   const [ct, st] = InMemoryTransport.createLinkedPair();
   const c = new Client({ name: "mrtr-test", version: "1.0.0" }, { capabilities });
   await Promise.all([server.connect(st), c.connect(ct)]);
@@ -35,6 +36,13 @@ async function connect(grantsOwner: CredentAgent, capabilities: Record<string, u
 const agent = () => new CredentAgent({ walletOrigin: "http://localhost:3005", catalog: GATE_CATALOG });
 const sc = (r: Awaited<ReturnType<Client["callTool"]>>) => r.structuredContent as Record<string, any>;
 const create = (c: Client, args: Record<string, unknown>) => c.callTool({ name: "create-spending-grant", arguments: args });
+
+const ARGS = { budget: 200, perSpend: 120, item: "sneakers" };
+/** Drive the sneakers flow to the pinned grant → the awaiting-approval round. */
+async function pinned(c: Client) {
+  const first = sc(await create(c, ARGS));
+  return sc(await create(c, { ...ARGS, requestState: first.requestState, answers: { size: "US 10", colour: "Black" } }));
+}
 
 describe("create-spending-grant — asking until the product is pinned down", () => {
   it("asks for the choices the words left open, then pins the grant to that exact product", async () => {
@@ -180,6 +188,91 @@ describe("create-spending-grant — asking until the product is pinned down", ()
     const r = await create(c, { budget: 200, perSpend: 60, categories: ["Electronics"] });
     expect(r.resultType).toBeUndefined();
     expect(sc(r)).toMatchObject({ status: "pending", allow: { categories: ["Electronics"] } });
+  });
+});
+
+describe("create-spending-grant — the wait round: the flow stays open until the human's tap", () => {
+  it("holds the flow open after pinning: the grant is pending and the tool asks for the human's tap", async () => {
+    const c = await connect(agent());
+    const v = await pinned(c);
+    expect(v.code).toBe("awaiting-approval");
+    expect(v.status).toBe("pending");
+    expect(v.approveUrl).toContain("/credentagent/grants/");
+    expect(v.questions.map((q: any) => q.key)).toEqual(["approval"]);
+    expect(v.questions[0].message).toContain(v.approveUrl);
+    expect(typeof v.requestState).toBe("string");
+  });
+
+  it("REFUSES to report the grant authorized on the agent's say-so — status is re-read from the store", async () => {
+    const ca = agent();
+    const c = await connect(ca);
+    const waiting = await pinned(c);
+
+    // The attack: the agent rings the doorbell claiming approval while the human never tapped.
+    const still = sc(await create(c, { ...ARGS, requestState: waiting.requestState, answers: { approved: "true" } }));
+    expect(still.code).toBe("awaiting-approval");
+    expect(still.status).toBe("pending");
+
+    // The human actually approves at the page (the server-side transition) — NOW it reports.
+    await ca.grants._authorize(waiting.grantId);
+    const done = sc(await create(c, { ...ARGS, requestState: still.requestState, answers: { approved: "true" } }));
+    expect(done.status).toBe("authorized");
+    expect(done.questions).toBeUndefined();
+    expect(done.allow).toEqual({ skus: ["court-sneakers"] });
+  });
+
+  it("reports a denial honestly and stops asking", async () => {
+    const ca = agent();
+    const c = await connect(ca);
+    const waiting = await pinned(c);
+    await ca.grants._deny(waiting.grantId);
+
+    const v = sc(await create(c, { ...ARGS, requestState: waiting.requestState, answers: { approved: "true" } }));
+    expect(v.status).toBe("denied");
+    expect(v.questions).toBeUndefined();
+  });
+
+  it("keeps waiting past the product-question round cap — polling is not 'unresolved'", async () => {
+    const c = await connect(agent());
+    let v = await pinned(c);
+    for (let i = 0; i < 5; i++) {
+      v = sc(await create(c, { ...ARGS, requestState: v.requestState, answers: { approved: "true" } }));
+      expect(v.code).toBe("awaiting-approval");
+      expect(v.status).toBe("pending");
+    }
+  });
+});
+
+describe("create-spending-grant — the held redial (claude.ai kills a call at 60s; hold just under)", () => {
+  it("holds a redial to a pending grant and answers the moment the human's tap lands", async () => {
+    const ca = agent();
+    const c = await connect(ca, { elicitation: {} }, { approvalHoldMs: 2000 });
+    const waiting = await pinned(c);
+    setTimeout(() => void ca.grants._authorize(waiting.grantId), 300); // the browser tap, mid-hold
+    const t0 = Date.now();
+    const done = sc(await create(c, { ...ARGS, requestState: waiting.requestState, answers: { approved: "true" } }));
+    const elapsed = Date.now() - t0;
+    expect(done.status).toBe("authorized");
+    expect(elapsed).toBeGreaterThanOrEqual(250); // it really waited for the tap…
+    expect(elapsed).toBeLessThan(1800); // …and answered on it, not at the window's end
+  });
+
+  it("returns awaiting-approval after the hold expires when the human never taps", async () => {
+    const c = await connect(agent(), { elicitation: {} }, { approvalHoldMs: 400 });
+    const waiting = await pinned(c);
+    const t0 = Date.now();
+    const v = sc(await create(c, { ...ARGS, requestState: waiting.requestState, answers: { approved: "true" } }));
+    expect(v.code).toBe("awaiting-approval");
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(380);
+    expect(v.note).toContain("IMMEDIATELY"); // the note tells the model to redial, not sleep
+  });
+
+  it("never holds the FIRST awaiting-approval — the human needs the link before they can tap", async () => {
+    const c = await connect(agent(), { elicitation: {} }, { approvalHoldMs: 5000 });
+    const t0 = Date.now();
+    const v = await pinned(c);
+    expect(v.code).toBe("awaiting-approval");
+    expect(Date.now() - t0).toBeLessThan(1500);
   });
 });
 

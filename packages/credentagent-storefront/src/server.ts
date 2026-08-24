@@ -65,6 +65,7 @@ import {
   MultiRoundTrip,
   type Ask,
   type InputRequiredResult,
+  type Round,
   type Branding,
   type CartItemRef,
   type Credential,
@@ -199,6 +200,15 @@ export interface StorefrontOptions {
    * reflect the real host, not a placeholder.
    */
   merchant?: string;
+  /**
+   * How long a `create-spending-grant` re-check holds its answer open while the grant is still
+   * awaiting the human's approval, re-reading the grant store until the tap lands (or the window
+   * closes). Default 45 000 ms — measured just under claude.ai's 60 s tool-call kill, so the
+   * agent's redial resolves seconds after the human approves in the browser, with no "I approved
+   * it" message needed. `0` answers immediately (the agent then polls by redialing). The first
+   * awaiting-approval answer never holds: the human needs the link before they can tap it.
+   */
+  approvalHoldMs?: number;
 }
 
 /**
@@ -333,6 +343,8 @@ function homeRequires(requires: unknown[], base: string, cart?: string | null): 
   });
 }
 
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
 export function createStorefront(opts: StorefrontOptions = {}): Storefront {
   // Normalize the catalog into a CatalogSource: a plain array (or the default) is wrapped
   // in a static source; a dynamic source (e.g. `firestoreCatalog(...)`) is used as-is. Every
@@ -388,6 +400,8 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
   const grants = opts.grants;
   // The merchant a created grant is sealed as — honest default for the generic package.
   const merchant = opts.merchant ?? "storefront";
+  // How long an approval re-check holds before answering (see StorefrontOptions.approvalHoldMs).
+  const approvalHoldMs = opts.approvalHoldMs ?? 45_000;
   // MRTR (#174): the questions a half-specified grant asks ride in a SEALED `requestState` blob,
   // so the server holds no session between rounds. It is signed with the storefront's
   // `signingKey` when there is one; otherwise with a per-process key — which is fine for a single
@@ -680,7 +694,7 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
       // pin this down" instead of an endless loop of elicitations.
       const MAX_ROUNDS = 4;
       /** The MRTR answer, ALSO rendered as plain text for the clients that don't speak MRTR yet. */
-      const askResult = (asked: InputRequiredResult): CallToolResult => {
+      const askResult = (asked: InputRequiredResult, overrides: Record<string, unknown> = {}): CallToolResult => {
         const questions = Object.entries(asked.inputRequests).map(([key, req]) => ({
           key,
           message: req.params.message,
@@ -689,11 +703,12 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
         const view = {
           ok: false,
           code: "input-required",
-          questions,
-          requestState: asked.requestState,
           note:
             "NO GRANT EXISTS YET. Put these questions to the human, then call create-spending-grant AGAIN with the " +
             "same budget/perSpend/item plus requestState (copied verbatim, never edited) and answers keyed by field name.",
+          ...overrides,
+          questions,
+          requestState: asked.requestState,
         };
         // MRTR server requirement 7: NEVER send `inputRequests` a client hasn't declared support
         // for. A client that didn't advertise `elicitation` cannot put these questions to anyone,
@@ -708,6 +723,35 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
       };
       const plain = (view: Record<string, unknown>): CallToolResult =>
         ({ content: [{ type: "text", text: JSON.stringify(view) }], structuredContent: view });
+      /**
+       * The wait round: the grant is minted (view carries approveUrl) but the flow stays open
+       * until the human's tap. The grantId rides the sealed state as a server-attested carried
+       * fact — the client can present it, never choose it.
+       */
+      const awaitApproval = (round: Extract<Round, { ok: true }>, view: Record<string, unknown>, extras: Record<string, unknown>): CallToolResult =>
+        askResult(
+          round.ask(
+            {
+              approval: {
+                message:
+                  `Waiting for the human. Send them this link — it names exactly what the grant can buy: ${view.approveUrl} ` +
+                  `Once they say they've approved (or denied) there, reply here so I re-check.`,
+                fields: { approved: { type: "boolean", description: "true once the human says they have dealt with the approve page; the server re-checks its own record either way" } },
+              },
+            },
+            { carry: { grantId: view.grantId, extras } },
+          ),
+          {
+            ...view,
+            code: "awaiting-approval",
+            note:
+              "PENDING — the grant EXISTS but nothing can be spent yet. Send approveUrl to the human, then " +
+              "IMMEDIATELY call create-spending-grant again with the EXACT same arguments plus this requestState " +
+              "(change nothing else). That call holds the line server-side and returns the moment the human " +
+              "approves — keep redialing until the status changes, and never mint a new grant while this one is " +
+              "pending. Your answer is only a wake-up signal: approval is re-read server-side, never taken from it.",
+          },
+        );
 
       server.registerTool(
         "create-spending-grant",
@@ -720,8 +764,11 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
             "products, none at all, or leave a choice open (size, colour), this tool returns NO LINK: it answers with the " +
             "questions to put to the human, plus a requestState — ask them, then call it again with the same arguments " +
             "plus that requestState (verbatim) and their answers. Once the product is pinned down the grant can only ever " +
-            "buy THAT product. Returns an approveUrl — SEND IT TO THE HUMAN; nothing can be spent until they approve " +
-            "there (status pending → authorized). Amounts are dollars.",
+            "buy THAT product. The flow then stays open one more round: you get the approveUrl (SEND IT TO THE HUMAN) " +
+            "plus a final question — then IMMEDIATELY call again with the same arguments + that requestState. The " +
+            "re-check holds the line server-side and returns the moment the human approves; keep redialing until the " +
+            "status changes. Your answer is only a wake-up: approval is re-read server-side (pending → authorized), " +
+            "never taken from what you say. Amounts are dollars.",
           inputSchema: {
             budget: z.number().positive().describe("total budget in dollars"),
             perSpend: z.number().positive().describe("max dollars per single purchase"),
@@ -767,9 +814,54 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
             return plain({
               ok: false,
               code: round.code,
-              note: "That requestState was refused. Start over: call create-spending-grant again with no requestState.",
+              note:
+                "That requestState was refused. Start over: call create-spending-grant again with no requestState. " +
+                "If an earlier round already returned a grantId, do NOT mint another — check it with get-grant-status.",
             });
           }
+
+          // ── the wait phase: a grant already exists; the only question left is the human's tap
+          // at approveUrl. The answer that woke us up is a DOORBELL, not a credential — status is
+          // re-read from the grant store (where the approve page's transition lands), never taken
+          // from what the client said.
+          if (typeof round.carried.grantId === "string") {
+            let g = await grants.retrieve(round.carried.grantId);
+            if (!g) {
+              return plain({ ok: false, code: "not-found", note: "That grant no longer exists. Start over: call create-spending-grant again with no requestState." });
+            }
+            // The held redial: hosts kill a tool call on a fixed clock (claude.ai: 60s), so a
+            // re-check of a still-pending grant holds its answer open just under that, re-reading
+            // the grant store until the human's tap lands or the window closes. Holding changes
+            // WHEN the store is re-read, never WHO decides — the client's answer still authorizes
+            // nothing (the "REFUSES to report … authorized" bypass test pins that).
+            if (g.status === "pending" && !round.declined.length && approvalHoldMs > 0) {
+              const deadline = Date.now() + approvalHoldMs;
+              while (g.status === "pending" && Date.now() < deadline) {
+                await sleep(Math.min(500, deadline - Date.now()));
+                g = (await grants.retrieve(round.carried.grantId)) ?? g;
+              }
+            }
+            const extras = (round.carried.extras ?? {}) as Record<string, unknown>;
+            const view = { ...grantView(g), ...extras };
+            if (g.status !== "pending") {
+              const settled: Record<string, string> = {
+                authorized: "AUTHORIZED — the human approved at the link. You can now spend-from-grant within the sealed bounds.",
+                denied: "DENIED — the human refused this grant at the approve page. Don't retry; ask the human directly if that surprises you.",
+                revoked: "REVOKED — this grant was withdrawn. Nothing can be spent against it.",
+              };
+              return plain({ ...view, note: settled[g.status] ?? g.status });
+            }
+            if (round.declined.length) {
+              return plain({
+                ...view,
+                ok: false,
+                code: "declined",
+                note: "The human declined to confirm here. The grant stays PENDING — they can still approve or deny at approveUrl, or call revoke-grant to withdraw it.",
+              });
+            }
+            return awaitApproval(round, view, extras);
+          }
+
           // The human is allowed to say no. A declined question ends the flow honestly instead of
           // asking the same thing again until the round cap runs out.
           if (round.declined.length) {
@@ -836,16 +928,21 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
           }
 
           const choice = describeChoice(product, selections);
-          return mint(
-            { skus: [product.id] }, // WHAT it may buy: this product and nothing else (fail-closed)
-            `Buy ${choice} from ${merchant}${description ? ` — ${description}` : ""}.`,
-            {
-              item: { productId: product.id, name: product.name, price: product.price, selections },
-              ...(product.minimumAge != null
-                ? { ageRestricted: product.minimumAge, ageNote: `This item is ${product.minimumAge}+. Age never delegates: an unattended spend refuses with step-up and needs the human present.` }
-                : {}),
-            },
-          );
+          const g = await grants.create({
+            merchant,
+            budget,
+            perSpend,
+            allow: { skus: [product.id] }, // WHAT it may buy: this product and nothing else (fail-closed)
+            description: `Buy ${choice} from ${merchant}${description ? ` — ${description}` : ""}.`,
+          });
+          const extras = {
+            item: { productId: product.id, name: product.name, price: product.price, selections },
+            ...(product.minimumAge != null
+              ? { ageRestricted: product.minimumAge, ageNote: `This item is ${product.minimumAge}+. Age never delegates: an unattended spend refuses with step-up and needs the human present.` }
+              : {}),
+          };
+          // Minted, but not finished: the flow stays open (one more round) until the human taps.
+          return awaitApproval(round, { ...grantView(g), ...extras }, extras);
         },
       );
       server.registerTool(

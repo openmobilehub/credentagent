@@ -511,6 +511,14 @@ its **HMAC**, that has **expired**, or that was minted for a **different call, d
 bounds, or different session**; and it merges **only** answers to questions this flow actually asked.
 Anything else is dropped.
 
+A flow can also seal facts of its **own** into the blob: `round.ask(questions, { carry: { grantId } })`
+comes back as `round.carried` on the next call. Carried facts are **server-attested** — the client
+transports them but can neither set nor edit them (the seal covers them), and they ride forward
+untouched when a later `ask()` omits `carry`. That is what lets a flow park a record id across a
+*wait* round — "the grant is minted; call again once the human has tapped Approve" — and treat the
+client's reply as a **doorbell only**, re-reading the record server-side instead of believing the
+answer.
+
 > **Honesty.** The seal proves *this server* minted the blob and nobody edited it in transit. It does
 > not prove a human gave the answers inside: no shipping client implements MRTR yet, so today the
 > **agent** answers on the human's behalf (`answers`, the flat fallback channel). That is why the
