@@ -169,7 +169,10 @@ server-side (the widget only ever *shows* the server's state, so a stale card ca
 anything), and every card — stock or custom — carries the honest trust line through a frame the public
 API cannot omit.
 
-Inside the widget (own-the-code, `src/ui/grants/`):
+Inside the widget (own-the-code, `src/ui/grants/` — the gallery is **not yet a package
+export**: today a custom view means building your own widget from this source; publishing the
+components + a supported custom-bundle seam is
+[#176](https://github.com/openmobilehub/credentagent/issues/176)):
 
 ```tsx
 import { GrantCard, grantViews, defineGrantView, BudgetMeter } from "./grants";
@@ -183,7 +186,7 @@ import { GrantCard, grantViews, defineGrantView, BudgetMeter } from "./grants";
 // Choose or reorder the candidate views (e.g. the compact one-line meter for a dense list):
 <GrantCard grant={grant} views={[grantViews.budgetMeter]} />
 
-// Extend WITHOUT forking — a custom view is the SAME contract the stock gallery is built from. Its
+// Extend — a custom view is the SAME contract the stock gallery is built from. Its
 // body receives ONLY the inert GrantViewData projection (never a live grant handle, so it structurally
 // cannot spend or revoke), plus the token set; reuse the exported <BudgetMeter/> for the validated,
 // accessible meter. The frame (chrome + the non-omittable trust line) is applied for you.
