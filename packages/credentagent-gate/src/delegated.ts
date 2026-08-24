@@ -220,6 +220,16 @@ export class DelegatedGrant {
     return { ok: false, amount: order.total, remaining, reason: refusal?.code, retryable: refusal?.retryable };
   }
 
+  /** Live money read for a projection/display: how much this grant has drawn down so far and
+   *  how much cumulative headroom is left. Reads the SAME committed-draws ledger `spend()`
+   *  returns `remaining` from, so a projection never re-derives money the engine owns. In the
+   *  engine's integer cents (the caller converts to its display units). */
+  async usage(): Promise<{ spent: number; remaining: number }> {
+    const committed = await this.ctx.revocation!.priorDraws(this.grant.intentId);
+    const spent = committed.reduce((sum, d) => sum + d.amount, 0);
+    return { spent, remaining: this.grant.totalAmount - spent };
+  }
+
   /** Revoke the grant — the very next spend is refused, fail-closed. Async so a remote
    *  revocation store (the wallet-custody increment) can be awaited before the next spend. */
   async revoke(): Promise<void> {

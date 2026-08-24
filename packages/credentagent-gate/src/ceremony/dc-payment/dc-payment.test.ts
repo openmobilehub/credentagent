@@ -287,6 +287,29 @@ describe("CT11 — page / request descriptor / receipt all state presence-only-d
     expect(req.transaction_data.length).toBeGreaterThan(0);
   });
 
+  it("the transaction_data matches Multipaz's registered urn:eudi:sca:payment:1 schema (snake_case JsonData/Payload)", async () => {
+    // Decode the EXACT base64url wire bytes the wallet receives and assert they map onto
+    // Multipaz's PaymentTransaction.JsonData/Payload (github.com/openwallet-foundation/
+    // multipaz). Multipaz serializes with JsonNamingStrategy.SnakeCase and does NOT set
+    // ignoreUnknownKeys, so a renamed or extra key is HARD-REJECTED by a real wallet.
+    const order = catalog.createOrder([{ productId: "aurora-headphones", quantity: 1 }], "ORD-SCHEMA");
+    const req = await buildDcPaymentRequest(order, localhost, "stable-test-secret");
+    const td = JSON.parse(Buffer.from(req.transaction_data[0], "base64url").toString("utf8"));
+    // Envelope (JsonData): type, credential_ids referencing the DCQL id, and the declared
+    // hash-alg contract (this last assertion FAILS on the pre-fix request, which omitted it).
+    expect(td.type).toBe("urn:eudi:sca:payment:1");
+    expect(td.credential_ids).toContain("dpc");
+    expect(td.transaction_data_hashes_alg).toEqual(["sha-256"]);
+    // Payload: exactly the four required fields, snake_case. `transaction_id` (NOT
+    // `transactionId`) — a camelCase key would be unknown to Multipaz's decoder.
+    expect(Object.keys(td.payload).sort()).toEqual(["amount", "currency", "payee", "transaction_id"]);
+    expect("transactionId" in td.payload).toBe(false);
+    expect(typeof td.payload.transaction_id).toBe("string");
+    expect(typeof td.payload.amount).toBe("number");
+    expect(td.payload.currency).toMatch(/^[A-Z]{3}$/);
+    expect(Object.keys(td.payload.payee).sort()).toEqual(["id", "name"]);
+  });
+
   it("the verify receipt (mandate) carries trust_level presence-only-demo", async () => {
     const h = harness();
     h.seed("ORD-H", [{ id: "aurora-headphones", quantity: 1 }]);
