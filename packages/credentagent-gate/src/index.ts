@@ -36,8 +36,8 @@ export type { OrderStore, CreatedOrder, CompletedOrder, OrderDoor, OrderDoorCode
 // `await credentagent.grants.create({ merchant, budget, perSpend, allow? })` → a pending grant;
 // the human approves once (grant.approveUrl) → `grant.spend({ idempotencyKey, items })` runs the
 // REAL engine (per-spend cap, budget, single-use, revocation, age-non-delegable) → typed door.
-export { Grants } from "./grants.js";
-export type { Grant, GrantStatus, GrantDoorCode, GrantAllow, CreateGrantOptions, SpendDoor, SpendItems } from "./grants.js";
+export { Grants, grantLifecycle } from "./grants.js";
+export type { Grant, GrantStatus, GrantLifecycle, GrantUsage, GrantDoorCode, GrantAllow, CreateGrantOptions, SpendDoor, SpendItems } from "./grants.js";
 
 // ── MRTR (spec: Multi Round-Trip Requests) — "I need more from the human before I can do this" ──
 // The MCP pattern for a tool that cannot complete yet: answer with `input_required` (the questions

@@ -54,10 +54,11 @@ const t0 = Date.now();
 const live = await call({ ...bounds, requestState: grant.requestState, answers: { approved: "true" } });
 console.log(`④ held redial resolves t+${((Date.now() - t0) / 1000).toFixed(1)}s:      `, live.status);
 
-const bought = (await agent.callTool({ name: "spend-from-grant", arguments: { grantId: grant.grantId, productId: "court-sneakers" } })).structuredContent;
+// The typed spend door rides in the result's `spend`; the rest is the grant card projection.
+const bought = (await agent.callTool({ name: "spend-from-grant", arguments: { grantId: grant.grantId, productId: "court-sneakers" } })).structuredContent.spend;
 console.log("⑤ unattended spend on the approved pair:", bought.ok ? `ok, $${bought.amount}` : bought.code);
 
-const sneaky = (await agent.callTool({ name: "spend-from-grant", arguments: { grantId: grant.grantId, productId: "drift-mouse" } })).structuredContent;
+const sneaky = (await agent.callTool({ name: "spend-from-grant", arguments: { grantId: grant.grantId, productId: "drift-mouse" } })).structuredContent.spend;
 console.log("⑥ unattended spend on something else:   ", sneaky.ok ? "ok — BUG" : `refused (${sneaky.code})`);
 
 // A hand-edited requestState is refused rather than believed — it is client-controlled input.

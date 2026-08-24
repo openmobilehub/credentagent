@@ -44,6 +44,7 @@ export type { CatalogSource } from "./index.js";
 import { appToolMeta } from "./tool-meta.js";
 import { enableMrtrParams, mrtrParams } from "./mcp-mrtr.js";
 import { matchProducts, prefillVariants, validSelections, missingVariants, describeChoice } from "./product-match.js";
+import { projectGrantView } from "./grant-project.js";
 import { MemoryCartStore, MemoryOrderStore } from "./state.js";
 import type { CartStore, OrderStore } from "./state.js";
 // Re-export the store contracts so a consumer can type an explicit store (the escape
@@ -69,6 +70,7 @@ import {
   type Branding,
   type CartItemRef,
   type Credential,
+  type Grant,
   type Grants,
   type CeremonyCatalog,
   type CeremonyOrder,
@@ -688,8 +690,6 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
     // The lifecycle an agent drives: create (pending) → the HUMAN approves once at approveUrl →
     // spend within the sealed bounds → revoke. Every refusal is a typed code the agent can act on.
     if (grants) {
-      const grantView = (g: NonNullable<Awaited<ReturnType<Grants["retrieve"]>>>) =>
-        ({ grantId: g.id, status: g.status, merchant: g.merchant, approveUrl: g.approveUrl, budget: g.budget, perSpend: g.perSpend, allow: g.allow ?? null });
       // Rounds of questions are capped: a client that never converges gets an honest "I could not
       // pin this down" instead of an endless loop of elicitations.
       const MAX_ROUNDS = 4;
@@ -753,48 +753,68 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
           },
         );
 
-      server.registerTool(
+      // Project a grant to the full GrantViewData the grant widget renders (spec 011 FR-1) and
+      // return it as a UI-linked tool result: structuredContent = the projection (both host
+      // channels read it), plus a JSON text block for a headless agent. `_meta: UI_META` on the
+      // tool registration (below) is what links the widget resource — attached to ALL FOUR grant
+      // tools exactly as the shopping tools do. `extra` carries agent-only fields (a hint, or the
+      // spend door) alongside the view without polluting the display projection.
+      const grantResult = async (g: Grant, extra?: Record<string, unknown>): Promise<CallToolResult> => {
+        await source.load();
+        const view = await projectGrantView(g, { catalog: source.current() });
+        const structured = { ...view, ...(extra ?? {}) };
+        return { content: [{ type: "text", text: JSON.stringify(structured) }], structuredContent: structured };
+      };
+      const unknownGrant = (): CallToolResult =>
+        ({ content: [{ type: "text", text: JSON.stringify({ error: "unknown grant" }) }], structuredContent: { error: "unknown grant" }, isError: true });
+
+      registerAppTool(
+        server,
         "create-spending-grant",
         {
           title: "Create Spending Grant",
           description:
             "Ask the human for a bounded spending authority you can buy against WHILE THEY ARE AWAY: a total budget, " +
-            "a per-purchase cap, and — when they have a specific purchase in mind — the exact product, named in `item` " +
-            "(e.g. \"Oak Reserve Whiskey Collection\", \"black court sneakers, US 10\"). If those words fit several " +
-            "products, none at all, or leave a choice open (size, colour), this tool returns NO LINK: it answers with the " +
-            "questions to put to the human, plus a requestState — ask them, then call it again with the same arguments " +
-            "plus that requestState (verbatim) and their answers. Once the product is pinned down the grant can only ever " +
-            "buy THAT product. The flow then stays open one more round: you get the approveUrl (SEND IT TO THE HUMAN) " +
-            "plus a final question — then IMMEDIATELY call again with the same arguments + that requestState. The " +
-            "re-check holds the line server-side and returns the moment the human approves; keep redialing until the " +
-            "status changes. Your answer is only a wake-up: approval is re-read server-side (pending → authorized), " +
-            "never taken from what you say. Amounts are dollars.",
+            "a per-purchase cap, and optionally what it may buy — exact product ids (`products`), product CATEGORIES, " +
+            "or, when the human named what they want in their own words, `item` (e.g. \"black court sneakers, US 10\"). " +
+            "With `item`: if those words fit several products, none at all, or leave a choice open (size, colour), this " +
+            "tool returns NO LINK — it answers with the questions to put to the human plus a requestState; ask them, " +
+            "then call it again with the same arguments plus that requestState (verbatim) and their answers. Once the " +
+            "product is pinned down the grant can only ever buy THAT product, and the flow stays open one more round: " +
+            "you get the approveUrl (SEND IT TO THE HUMAN) plus a final question — then IMMEDIATELY call again with the " +
+            "same arguments + that requestState. The re-check holds the line server-side and returns the moment the " +
+            "human approves; keep redialing until the status changes. Your answer is only a wake-up: approval is " +
+            "re-read server-side (pending → authorized), never taken from what you say. Amounts are dollars.",
           inputSchema: {
             budget: z.number().positive().describe("total budget in dollars"),
             perSpend: z.number().positive().describe("max dollars per single purchase"),
-            item: z.string().optional().describe("the exact product the human wants, in their own words; omit for an open, category-only grant"),
+            item: z.string().optional().describe("the exact product the human wants, in their own words; the tool asks follow-up questions until it is pinned down"),
+            products: z.array(z.string()).optional().describe("allowed product ids (e.g. oak-whiskey); one id = a product-specific grant; omit = any"),
             categories: z.array(z.string()).optional().describe("allowed product categories (e.g. Beverages); omit = any"),
             description: z.string().optional().describe("the human-readable sentence shown at approval"),
             requestState: z.string().optional().describe("copy VERBATIM from this tool's previous answer; never edit or invent one"),
             answers: z.record(z.string(), z.string()).optional().describe("the human's answers to the questions the previous call asked, keyed by field name (e.g. { size: \"US 10\" })"),
           },
           annotations: { readOnlyHint: false },
+          _meta: UI_META,
         },
-        async ({ budget, perSpend, item, categories, description, requestState, answers }, extra): Promise<CallToolResult> => {
-          const mint = async (allow: { skus?: string[]; categories?: string[] } | undefined, sentence: string | undefined, extras: Record<string, unknown> = {}) => {
+        async ({ budget, perSpend, item, products, categories, description, requestState, answers }, extra): Promise<CallToolResult> => {
+          // No `item` — the id/category-bounded grant, round-trip free (spec 011 shape). Fold
+          // `products` → allow.skus and `categories` → allow.categories; omit `allow` entirely
+          // when neither is given (no bounds ⇒ merchant-wide, the openGrantCard).
+          if (!item) {
+            const allow = {
+              ...(products?.length ? { skus: products } : {}),
+              ...(categories?.length ? { categories } : {}),
+            };
             const g = await grants.create({
               merchant,
               budget,
               perSpend,
-              ...(allow ? { allow } : {}),
-              ...(sentence ? { description: sentence } : {}),
+              ...(Object.keys(allow).length ? { allow } : {}),
+              ...(description ? { description } : {}),
             });
-            return plain({ ...grantView(g), ...extras, note: "PENDING — send approveUrl to the human; spending refuses until they approve." });
-          };
-
-          // No `item` — the open, category-only grant, unchanged and round-trip free.
-          if (!item) {
-            return mint(categories?.length ? { categories } : undefined, description);
+            return grantResult(g, { note: "PENDING — send approveUrl to the human; spending refuses until they approve." });
           }
 
           // ── the multi round-trip path: pin the grant to ONE product ──────────────────
@@ -804,7 +824,7 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
           const mrtr = mrtrParams();
           const round = rounds.open({
             request: "create-spending-grant",
-            params: { budget, perSpend, item, categories: categories ?? null },
+            params: { budget, perSpend, item, products: products ?? null, categories: categories ?? null },
             principal: extra?.sessionId ?? "",
             state: requestState ?? mrtr.requestState,
             responses: mrtr.inputResponses,
@@ -842,23 +862,24 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
               }
             }
             const extras = (round.carried.extras ?? {}) as Record<string, unknown>;
-            const view = { ...grantView(g), ...extras };
             if (g.status !== "pending") {
               const settled: Record<string, string> = {
                 authorized: "AUTHORIZED — the human approved at the link. You can now spend-from-grant within the sealed bounds.",
                 denied: "DENIED — the human refused this grant at the approve page. Don't retry; ask the human directly if that surprises you.",
                 revoked: "REVOKED — this grant was withdrawn. Nothing can be spent against it.",
               };
-              return plain({ ...view, note: settled[g.status] ?? g.status });
+              return grantResult(g, { ...extras, note: settled[g.status] ?? g.status });
             }
             if (round.declined.length) {
-              return plain({
-                ...view,
+              return grantResult(g, {
+                ...extras,
                 ok: false,
                 code: "declined",
                 note: "The human declined to confirm here. The grant stays PENDING — they can still approve or deny at approveUrl, or call revoke-grant to withdraw it.",
               });
             }
+            await source.load();
+            const view = { ...(await projectGrantView(g, { catalog: source.current() })), grantId: g.id, ...extras };
             return awaitApproval(round, view, extras);
           }
 
@@ -942,33 +963,38 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
               : {}),
           };
           // Minted, but not finished: the flow stays open (one more round) until the human taps.
-          return awaitApproval(round, { ...grantView(g), ...extras }, extras);
+          await source.load();
+          const view = { ...(await projectGrantView(g, { catalog: source.current() })), grantId: g.id, ...extras };
+          return awaitApproval(round, view, extras);
         },
       );
-      server.registerTool(
+      registerAppTool(
+        server,
         "get-grant-status",
         {
           title: "Get Grant Status",
-          description: "Read a spending grant: status (pending | authorized | denied | revoked) and its sealed bounds.",
+          description: "Read a spending grant: status (pending | authorized | denied | revoked), its live budget/spend, and its sealed bounds.",
           inputSchema: { grantId: z.string() },
           annotations: { readOnlyHint: true },
+          _meta: UI_META,
         },
         async ({ grantId }): Promise<CallToolResult> => {
           const g = await grants.retrieve(grantId);
-          if (!g) return { content: [{ type: "text", text: JSON.stringify({ error: "unknown grant" }) }], structuredContent: { error: "unknown grant" }, isError: true };
-          const view = grantView(g);
-          return { content: [{ type: "text", text: JSON.stringify(view) }], structuredContent: view };
+          if (!g) return unknownGrant();
+          return grantResult(g);
         },
       );
-      server.registerTool(
+      registerAppTool(
+        server,
         "spend-from-grant",
         {
           title: "Spend From Grant",
           description:
             "Buy ONE product unattended against an authorized grant. The server re-prices from the catalog and enforces " +
-            "every sealed rule; a refusal returns a typed code: not-authorized (human never approved), not-allowed (outside " +
-            "the allowed categories), per-spend-exceeded, budget-exceeded, step-up (age-restricted — NEVER delegable: hand " +
-            "back to the human), revoked. Pass a stable idempotencyKey to make retries safe (same key replays the SAME outcome).",
+            "every sealed rule; a refusal returns a typed code (in the result's `spend`): not-authorized (human never " +
+            "approved), not-allowed (outside the allowed products/categories), per-spend-exceeded, budget-exceeded, step-up " +
+            "(age-restricted — NEVER delegable: hand back to the human), revoked. Pass a stable idempotencyKey to make " +
+            "retries safe (same key replays the SAME outcome).",
           inputSchema: {
             grantId: z.string(),
             productId: z.string(),
@@ -976,15 +1002,15 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
             idempotencyKey: z.string().optional().describe("stable per-purchase key; omit for a fresh one"),
           },
           annotations: { readOnlyHint: false },
+          _meta: UI_META,
         },
         async ({ grantId, productId, quantity, idempotencyKey }): Promise<CallToolResult> => {
           const g = await grants.retrieve(grantId);
-          if (!g) return { content: [{ type: "text", text: JSON.stringify({ error: "unknown grant" }) }], structuredContent: { error: "unknown grant" }, isError: true };
+          if (!g) return unknownGrant();
           const qty = quantity ?? 1;
-          const reply = (door: Record<string, unknown>): CallToolResult => {
-            const view = { grantId, productId, ...door };
-            return { content: [{ type: "text", text: JSON.stringify(view) }], structuredContent: view };
-          };
+          // The spend outcome (typed door) rides in the result's `spend`; the display projection
+          // re-reads the grant's live budget so the returned card reflects the draw-down.
+          const spent = (door: Record<string, unknown>): Promise<CallToolResult> => grantResult(g, { spend: { productId, ...door } });
 
           // Re-price and re-validate against the storefront's LIVE catalog before delegating
           // (Codex P1 + invariant 2). The grant engine holds its own catalog snapshot, which a
@@ -994,37 +1020,38 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
           // snapshot. The engine remains the authority for allow-bounds and budget draw-down.
           await source.load();
           const live = getProduct(source.current(), productId);
-          if (!live) return reply({ ok: false, code: "invalid-request", reason: "unknown product" }); // P2: typed, not a throw
-          if (live.minimumAge != null) return reply({ ok: false, code: "step-up" }); // age NEVER delegates
-          if (live.price * qty > g.perSpend) return reply({ ok: false, code: "per-spend-exceeded" }); // live price vs sealed cap
+          if (!live) return spent({ ok: false, code: "invalid-request", reason: "unknown product" }); // P2: typed, not a throw
+          if (live.minimumAge != null) return spent({ ok: false, code: "step-up" }); // age NEVER delegates
+          if (live.price * qty > g.perSpend) return spent({ ok: false, code: "per-spend-exceeded" }); // live price vs sealed cap
 
           try {
             const s = await g.spend({
               idempotencyKey: idempotencyKey ?? `mcp-${randomUUID().slice(0, 12)}`,
               items: [{ sku: productId, qty }],
             });
-            return reply(s as unknown as Record<string, unknown>);
+            return spent(s as unknown as Record<string, unknown>);
           } catch {
             // The engine's catalog doesn't know this sku (it throws on an unknown item) — surface
             // the promised typed refusal instead of a generic tool exception. P2.
-            return reply({ ok: false, code: "invalid-request", reason: "unknown product" });
+            return spent({ ok: false, code: "invalid-request", reason: "unknown product" });
           }
         },
       );
-      server.registerTool(
+      registerAppTool(
+        server,
         "revoke-grant",
         {
           title: "Revoke Grant",
           description: "Kill-switch a spending grant — the very next spend is refused (code: revoked). Not reversible.",
           inputSchema: { grantId: z.string() },
           annotations: { readOnlyHint: false },
+          _meta: UI_META,
         },
         async ({ grantId }): Promise<CallToolResult> => {
           const g = await grants.retrieve(grantId);
-          if (!g) return { content: [{ type: "text", text: JSON.stringify({ error: "unknown grant" }) }], structuredContent: { error: "unknown grant" }, isError: true };
+          if (!g) return unknownGrant();
           await g.revoke();
-          const view = grantView((await grants.retrieve(grantId))!);
-          return { content: [{ type: "text", text: JSON.stringify(view) }], structuredContent: view };
+          return grantResult((await grants.retrieve(grantId))!);
         },
       );
     }

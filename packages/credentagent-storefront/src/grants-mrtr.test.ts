@@ -65,7 +65,7 @@ describe("create-spending-grant — asking until the product is pinned down", ()
     }));
     expect(v2.status).toBe("pending");
     expect(v2.approveUrl).toContain("/credentagent/grants/");
-    expect(v2.allow).toEqual({ skus: ["court-sneakers"] });
+    expect(v2.allow).toMatchObject({ skus: ["court-sneakers"] });
     expect(v2.item).toMatchObject({ productId: "court-sneakers", selections: { size: "US 10", colour: "Black" } });
   });
 
@@ -94,7 +94,7 @@ describe("create-spending-grant — asking until the product is pinned down", ()
 
     // …and the round trip still completes through the tool-argument fallback.
     const done = sc(await create(c, { budget: 200, perSpend: 120, item: "sneakers", requestState: v.requestState, answers: { size: "US 10", colour: "Black" } }));
-    expect(done.allow).toEqual({ skus: ["court-sneakers"] });
+    expect(done.allow).toMatchObject({ skus: ["court-sneakers"] });
   });
 
   it("takes the answers through MRTR's request-level params too (inputResponses + requestState)", async () => {
@@ -150,7 +150,7 @@ describe("create-spending-grant — asking until the product is pinned down", ()
 
     // Naming one resolves it.
     const v2 = sc(await create(c, { budget: 400, perSpend: 250, item: "wireless", requestState: v.requestState, answers: { item: "Drift Wireless Mouse" } }));
-    expect(v2.allow).toEqual({ skus: ["drift-mouse"] });
+    expect(v2.allow).toMatchObject({ skus: ["drift-mouse"] });
   });
 
   it("asks again when nothing in the store matches, and gives up honestly instead of looping forever", async () => {
@@ -171,7 +171,7 @@ describe("create-spending-grant — asking until the product is pinned down", ()
   it("pins a product that needs no choices in one round, and flags an age-restricted one", async () => {
     const c = await connect(agent());
     const v = sc(await create(c, { budget: 300, perSpend: 150, item: "Oak Reserve Whiskey Collection" }));
-    expect(v.allow).toEqual({ skus: ["oak-whiskey"] });
+    expect(v.allow).toMatchObject({ skus: ["oak-whiskey"] });
     expect(v.ageRestricted).toBe(21);
     expect(v.ageNote).toContain("step-up");
   });
@@ -218,7 +218,7 @@ describe("create-spending-grant — the wait round: the flow stays open until th
     const done = sc(await create(c, { ...ARGS, requestState: still.requestState, answers: { approved: "true" } }));
     expect(done.status).toBe("authorized");
     expect(done.questions).toBeUndefined();
-    expect(done.allow).toEqual({ skus: ["court-sneakers"] });
+    expect(done.allow).toMatchObject({ skus: ["court-sneakers"] });
   });
 
   it("reports a denial honestly and stops asking", async () => {
@@ -323,7 +323,7 @@ describe("create-spending-grant — requestState is attacker-controlled", () => 
       requestState: state,
       answers: { size: "US 10", colour: "Black", item: "Oak Reserve Whiskey Collection" },
     }));
-    expect(v.allow).toEqual({ skus: ["court-sneakers"] });
+    expect(v.allow).toMatchObject({ skus: ["court-sneakers"] });
   });
 
   it("REFUSES a spend on any product other than the one the human approved", async () => {
@@ -333,10 +333,11 @@ describe("create-spending-grant — requestState is attacker-controlled", () => 
     const g = sc(await create(c, { budget: 200, perSpend: 120, item: "sneakers", requestState: first.requestState, answers: { size: "US 10", colour: "Black" } }));
     await ca.grants._authorize(g.grantId); // the human approves the sneakers, once, then leaves
 
+    // The typed door rides in the result's `spend` (the projection is the display half — spec 011).
     const other = sc(await c.callTool({ name: "spend-from-grant", arguments: { grantId: g.grantId, productId: "drift-mouse" } }));
-    expect(other).toMatchObject({ ok: false, code: "not-allowed" });
+    expect(other.spend).toMatchObject({ ok: false, code: "not-allowed" });
 
     const pinned = sc(await c.callTool({ name: "spend-from-grant", arguments: { grantId: g.grantId, productId: "court-sneakers" } }));
-    expect(pinned).toMatchObject({ ok: true, amount: 95 });
+    expect(pinned.spend).toMatchObject({ ok: true, amount: 95 });
   });
 });

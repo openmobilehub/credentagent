@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { CredentAgent } from "./client.js";
+import { grantLifecycle } from "./grants.js";
 import type { Grant } from "./grants.js";
 
 // A priced catalog in dollars — the ONE price source. wine is age-restricted (non-delegable);
@@ -295,5 +296,78 @@ describe("credentagent.grants — concurrency + money boundary (#104 port-forwar
     await ca.grants._authorize(gc.id);
     const g = (await ca.grants.retrieve(gc.id))!;
     await expect(g.spend({ idempotencyKey: "p1", items: [{ sku: "trinket" }] })).rejects.toThrow(/sub-cent/);
+  });
+});
+
+// The grant-widget projection (spec 011) reads the live money via `grant.usage()` and derives the
+// display lifecycle via `grantLifecycle()`. These are the authority the widget must NOT re-derive
+// (A2) — so they are tested as first-class behavior here, at the gate.
+describe("credentagent.grants — usage() live money read (spec 011 FR-1)", () => {
+  it("a pending grant reads the full budget: spent 0, remaining = budget", async () => {
+    const ca = client();
+    const g = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30 });
+    expect(await g.usage()).toEqual({ budget: 100, spent: 0, remaining: 100 });
+  });
+
+  it("usage() draws down as the grant spends, reading the SAME ledger spend() returns", async () => {
+    const g = await authorizedGrant(client());
+    expect(await g.usage()).toEqual({ budget: 100, spent: 0, remaining: 100 });
+    const s = await g.spend({ idempotencyKey: "u1", items: [{ sku: "coffee" }] }); // $18
+    expect(s).toMatchObject({ ok: true, remaining: 82 });
+    expect(await g.usage()).toEqual({ budget: 100, spent: 18, remaining: 82 });
+  });
+
+  it("a revoked grant still reports what was spent before it was stopped", async () => {
+    const g = await authorizedGrant(client());
+    await g.spend({ idempotencyKey: "u2", items: [{ sku: "coffee" }] }); // $18
+    await g.revoke();
+    expect(await g.usage()).toEqual({ budget: 100, spent: 18, remaining: 82 });
+  });
+});
+
+describe("grantLifecycle() — the ONE display-lifecycle derivation (spec 011 A2)", () => {
+  // The 20%-of-budget "low" threshold is a UI-honesty boundary: the pair pins it from both sides.
+  it("authorized: active above 20%, low at/under 20%, exhausted at 0", () => {
+    expect(grantLifecycle({ status: "authorized", budget: 100, remaining: 21 })).toBe("active");
+    expect(grantLifecycle({ status: "authorized", budget: 100, remaining: 20 })).toBe("low");
+    expect(grantLifecycle({ status: "authorized", budget: 100, remaining: 1 })).toBe("low");
+    expect(grantLifecycle({ status: "authorized", budget: 100, remaining: 0 })).toBe("exhausted");
+  });
+
+  it("terminal + pending statuses pass straight through (never re-derived from money)", () => {
+    expect(grantLifecycle({ status: "pending", budget: 100, remaining: 100 })).toBe("pending");
+    expect(grantLifecycle({ status: "denied", budget: 100, remaining: 100 })).toBe("denied");
+    expect(grantLifecycle({ status: "revoked", budget: 100, remaining: 40 })).toBe("revoked");
+  });
+
+  it("end-to-end: a real grant transitions pending → active → low → exhausted as it drains", async () => {
+    const ca = client();
+    // budget 36, perSpend 18: two $18 coffees take it exactly to 0.
+    const created = await ca.grants.create({ merchant: "utopia", budget: 36, perSpend: 18 });
+    const pendingUsage = await created.usage();
+    expect(grantLifecycle({ status: created.status, ...pendingUsage })).toBe("pending");
+
+    await ca.grants._authorize(created.id);
+    const g = (await ca.grants.retrieve(created.id))!;
+    const active = await g.usage();
+    expect(grantLifecycle({ status: g.status, ...active })).toBe("active");
+
+    await g.spend({ idempotencyKey: "l1", items: [{ sku: "coffee" }] }); // remaining 18 (= 50%)… still active
+    await g.spend({ idempotencyKey: "l2", items: [{ sku: "espresso-machine" }] }).catch(() => {}); // over budget → refused
+    // Take it into the low band with a small draw against a fresh low-budget grant instead:
+    const low = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 18 });
+    await ca.grants._authorize(low.id);
+    const lg = (await ca.grants.retrieve(low.id))!;
+    for (const k of ["a", "b", "c", "d", "e"]) await lg.spend({ idempotencyKey: k, items: [{ sku: "coffee" }] }); // 5×18 = 90
+    const lu = await lg.usage();
+    expect(lu.remaining).toBe(10);
+    expect(grantLifecycle({ status: lg.status, ...lu })).toBe("low");
+
+    const eu = await g.usage(); // g spent 18 of 36 → remaining 18 (still active); spend the rest
+    void eu;
+    await g.spend({ idempotencyKey: "l3", items: [{ sku: "coffee" }] }); // remaining 0
+    const exhausted = await g.usage();
+    expect(exhausted.remaining).toBe(0);
+    expect(grantLifecycle({ status: g.status, ...exhausted })).toBe("exhausted");
   });
 });
