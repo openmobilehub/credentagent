@@ -751,7 +751,9 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
               "IMMEDIATELY call create-spending-grant again with the EXACT same arguments plus this requestState " +
               "(change nothing else). That call holds the line server-side and returns the moment the human " +
               "approves — keep redialing until the status changes, and never mint a new grant while this one is " +
-              "pending. Your answer is only a wake-up signal: approval is re-read server-side, never taken from it.",
+              "pending. Your answer is only a wake-up signal: approval is re-read server-side, never taken from it. " +
+              "When it returns, READ `credentials`: if the human proved their age there, age-restricted items in " +
+              "these bounds can be bought unattended — don't tell them otherwise.",
           },
         );
 
@@ -827,8 +829,8 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
             return grantResult(g, {
               note:
                 g.signing === "device"
-                  ? "PENDING — send approveUrl to the human; it opens a WALLET SIGNING ceremony. Spending refuses until their device signs these bounds."
-                  : "PENDING — send approveUrl to the human; spending refuses until they approve.",
+                  ? "PENDING — send approveUrl to the human; it opens a WALLET SIGNING ceremony. Spending refuses until their device signs these bounds. On that page they can also present credentials: proving their age unlocks age-restricted items for unattended purchase, and a loyalty card discounts every purchase. Re-read `credentials` afterwards rather than assuming."
+                  : "PENDING — send approveUrl to the human; spending refuses until they approve. On that page they can also present credentials: proving their age unlocks age-restricted items for unattended purchase, and a loyalty card discounts every purchase. Re-read `credentials` afterwards rather than assuming.",
             });
           }
 
@@ -989,7 +991,12 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
         "get-grant-status",
         {
           title: "Get Grant Status",
-          description: "Read a spending grant: status (pending | authorized | denied | revoked), its live budget/spend, and its sealed bounds.",
+          description:
+            "Read a spending grant: status (pending | authorized | denied | revoked), its live budget/spend, its sealed " +
+            "bounds, and `credentials` — what the human proved from their wallet before authorizing it. " +
+            "`credentials.ageVerified` is the age they proved (null if none): an age-restricted product at or below that " +
+            "number CAN be bought unattended, so do not tell the human they must be present for it. " +
+            "`credentials.loyaltyDiscountPct` (null if none) is applied to every purchase.",
           inputSchema: { grantId: z.string() },
           annotations: { readOnlyHint: true },
           _meta: UI_META,
@@ -1010,7 +1017,9 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
             "every sealed rule; a refusal returns a typed code (in the result's `spend`): not-authorized (human never " +
             "approved), not-allowed (outside the allowed products/categories), per-spend-exceeded, budget-exceeded, step-up " +
             "(age-restricted, and the human proved no age for this grant or proved a lower one — hand back to the human), " +
-            "revoked. Pass a stable idempotencyKey to make retries safe (same key replays the SAME outcome).",
+            "revoked. Before saying a purchase needs the human present, check the grant's `credentials.ageVerified` — " +
+            "if they proved an age at or above the product's, this tool completes it unattended. Pass a stable " +
+            "idempotencyKey to make retries safe (same key replays the SAME outcome).",
           inputSchema: {
             grantId: z.string(),
             productId: z.string(),

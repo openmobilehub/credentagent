@@ -349,6 +349,32 @@ describe("grant tools — merchant config & live-catalog re-pricing (Codex #118)
     expect(door(s)).toMatchObject({ ok: false, code: "step-up" });
   });
 
+  // BYPASS (the agent-facing surface): the enforcement changing is not enough — the PROJECTION has
+  // to carry it. Without `credentials` on the view, an authorized grant looks identical whether or
+  // not the human proved their age, so an agent falls back on "age can't be delegated" and tells
+  // them their purchase still needs them present — while this very tool would have completed it.
+  // Found in a live Claude-mobile test. Delete `credentials` from projectGrantView → red.
+  it("BYPASS: the grant an agent READS says whether the human proved their age", async () => {
+    const ca = new CredentAgent({ walletOrigin: wallet, catalog: GATE_CATALOG, loyaltyDiscountPct: 10 });
+    const c = await client(ca);
+    const g = sc(await c.callTool({ name: "create-spending-grant", arguments: { budget: 300, perSpend: 150, products: ["oak-whiskey"], signing: "page" } }));
+    // Before: the agent can see there is no proof — as a fact, not a missing key.
+    expect(sc(await c.callTool({ name: "get-grant-status", arguments: { grantId: g.id } })).credentials)
+      .toEqual({ ageVerified: null, loyaltyDiscountPct: null });
+
+    await ca.grants._recordAgeProof(g.id, { provenAge: 21 });
+    await ca.grants._recordMembershipProof(g.id, { membershipNumber: "GOLD-0001" });
+    await ca.grants._authorize(g.id);
+
+    // After: the same read tells it the purchase it was about to refuse is available.
+    const after = sc(await c.callTool({ name: "get-grant-status", arguments: { grantId: g.id } }));
+    expect(after.credentials).toMatchObject({ ageVerified: 21, loyaltyDiscountPct: 10, trustLevel: "presence-only-demo" });
+
+    // …and the spend agrees with what the projection promised — 21+ item, discounted.
+    const s = await c.callTool({ name: "spend-from-grant", arguments: { grantId: g.id, productId: "oak-whiskey", idempotencyKey: "surface1" } });
+    expect(door(s)).toMatchObject({ ok: true, amount: 111.6 });
+  });
+
   // ── #172: the loyalty membership the human proved on the approve page ──────────────────────
   // The risk is invariant 3 — the line sum, the order total and the SIGNED draw amount must agree
   // on every path. These run it over the real MCP wire, where the storefront's live-catalog

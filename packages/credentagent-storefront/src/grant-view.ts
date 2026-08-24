@@ -53,4 +53,23 @@ export interface GrantViewData {
   trustLevel: string;
   /** Present for single-SKU grants: the resolved product (the flagship productGrantCard). */
   product?: GrantViewProduct;
+  /**
+   * What the human proved from their wallet before authorizing this grant (#172) — the fact an
+   * AGENT needs to answer "may I buy this?" without guessing.
+   *
+   * Without these fields the agent sees an authorized grant that looks identical whether or not
+   * an age proof was presented, so it falls back on the old rule and tells the human their
+   * purchase still needs them present — while the server would in fact complete it. The
+   * projection has to carry the change, not just the enforcement.
+   */
+  credentials: {
+    /** The age threshold the human proved, or `null`. An age-restricted purchase completes
+     *  unattended only at or below this number. */
+    ageVerified: number | null;
+    /** The loyalty rate sealed into this grant, or `null` — every purchase is priced at it. */
+    loyaltyDiscountPct: number | null;
+    /** Honesty axis for those claims: "presence-only-demo" until issuer trust lands (#14).
+     *  Absent when the human proved nothing. */
+    trustLevel?: string;
+  };
 }
