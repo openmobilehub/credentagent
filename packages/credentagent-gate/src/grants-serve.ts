@@ -10,6 +10,8 @@
 // this page and calls the SAME _authorize/_deny seams; the URL contract doesn't change.
 
 import type { Grants } from "./grants.js";
+import { registerIntentSignRail } from "./ceremony/intent-sign/routes.js";
+import { renderIntentSignPage } from "./ceremony/intent-sign/page.js";
 
 /** Structural Express app — the package stays dependency-free (mirrors orders-serve). */
 export interface GrantsApp {
@@ -43,10 +45,30 @@ export function serveGrants(app: GrantsApp, grants: Grants): void {
   const post = app.post?.bind(app);
   if (!get || !post) throw new Error("[credentagent] grants.serve(app): the app must expose Express-style get()/post().");
 
+  // The intent-sign endpoints for device-mode grants (spec 012): /sign/request + /sign/verify.
+  registerIntentSignRail(app, grants);
+
   get("/credentagent/grants/:id", async (req: GrantsRequest, res: GrantsResponse) => {
     const g = await grants.retrieve(req.params.id);
     if (!g) return res.status(404).type("html").send(page("<h1>Unknown grant</h1>"));
     if (g.status !== "pending") return res.status(200).type("html").send(page(`<h1>Spending grant</h1><p>${STATUS_LINE[g.status] ?? esc(g.status)}</p>`));
+    // A device-mode grant's approveUrl IS the signing ceremony (FR-3): the wallet signs the
+    // Intent Mandate — there is no click-to-approve for it.
+    if (g.signing === "device") {
+      const { branding } = grants.railConfig;
+      return res.status(200).type("html").send(
+        renderIntentSignPage({
+          grantId: g.id,
+          merchant: g.merchant,
+          budget: g.budget,
+          perSpend: g.perSpend,
+          ...(g.allow ? { allow: g.allow } : {}),
+          ...(g.description ? { description: g.description } : {}),
+          returnUrl: `/credentagent/grants/${encodeURIComponent(g.id)}`,
+          ...(branding ? { branding } : {}),
+        }),
+      );
+    }
     const bounds = [
       `up to <strong>$${g.budget}</strong> total`,
       `max <strong>$${g.perSpend}</strong> per purchase`,

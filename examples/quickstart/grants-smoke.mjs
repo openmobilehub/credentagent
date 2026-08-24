@@ -51,7 +51,11 @@ try {
     JSON.stringify(createTool?._meta));
 
   // 1) create a PRODUCT-SPECIFIC grant → the full GrantViewData projection, status pending.
-  const created = await call("create-spending-grant", { budget: 200, perSpend: 60, products: ["drift-mouse"] });
+  // signing:"page" is now an EXPLICIT opt-in: approving a grant is a wallet signature by default
+  // (spec 012). This smoke runs in CI with no phone, so it asks for the click-to-approve door by
+  // name — exactly the case that door exists for. The device path is covered by
+  // examples/device-signed-grants.mjs, which signs with the simulated wallet.
+  const created = await call("create-spending-grant", { budget: 200, perSpend: 60, products: ["drift-mouse"], signing: "page" });
   const id = created.id;
   ok("create → GrantViewData (kind marker, lifecycle pending, approveUrl, resolved product)",
     created.kind === "credentagent.grant" &&

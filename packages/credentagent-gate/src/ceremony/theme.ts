@@ -443,3 +443,17 @@ export function railCompleteScript(): string {
 export function trustFooter(): string {
   return `<div class="trust"><div class="trust-line">🔒 presence-only-demo · secured by CredentAgent · the wire crypto is real; issuer trust anchor is not</div></div>`;
 }
+
+/**
+ * The honesty line for the intent-sign rail (spec 012, FR-4). Distinct from
+ * `trustFooter()` because the trust level is different: here the wallet's device
+ * signature IS verified, so the disclosure says so — while stating plainly that the
+ * trust ANCHOR is still a demo credential (no issuer/VICAL check — #14). It MUST keep
+ * the literal token "device-signed".
+ *
+ * Like `trustFooter()`, it takes NO branding argument: host branding customises the
+ * chrome, never the trust disclosure (a bypass test asserts it stays fixed).
+ */
+export function deviceSignedTrustFooter(): string {
+  return `<div class="trust"><div class="trust-line">🔒 device-signed · secured by CredentAgent · the device signature is real; the trust anchor is a demo credential (no issuer verification yet)</div></div>`;
+}
