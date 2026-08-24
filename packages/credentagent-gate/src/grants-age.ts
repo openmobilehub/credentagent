@@ -1,28 +1,24 @@
-// What a grant's bounds actually cover, age-wise (issue #172) — the fact the approve page
-// needs BEFORE the human taps Approve.
+// The age-restricted products a grant's bounds NAME (issue #172) — the fact the approve/signing
+// page needs before the human authorizes anything.
 //
-// Today a human can approve a grant that is unable to buy anything: "$300 total, $150 per
-// purchase, Beverages only" over a catalog whose Beverages are all 21+ is a grant that can
-// spend $0.00, because age-restricted goods refuse `step-up` on every delegated purchase.
-// Nothing on the approve page said so.
+// A human could authorize a grant that was unable to buy the thing it was for: "$300, Beverages"
+// over a catalog whose Beverages are all 21+ is a grant that can spend $0.00, because
+// age-restricted goods refuse on every delegated purchase. Nothing on the page said so.
 //
-// The agent is NEVER asked (it must not be the one saying "no age needed here"). The server
-// works it out from the grant's OWN `allow` bounds against the catalog it already holds:
+// THE AGENT IS NEVER ASKED. The server reads the grant's own sealed `allow.skus` against the
+// catalog it already holds, and takes the highest `minAge` among those products.
 //
-//   allow.skus       → look up each named product, take the highest minAge
-//   allow.categories → scan the products in those categories, take the highest minAge
-//   no bounds        → scan the whole catalog
-//
-// HONEST LIMIT: for a category grant this is a FORECAST made at approval time — a 21+ product
-// added to Beverages next week could not have been predicted. That is fine: this module is
-// DISCLOSURE, never enforcement. The server-side refusal (completion.ts's delegated branch,
-// re-derived from the catalog-priced lines at spend time) stays exactly as it is. The gate
-// remains the control, not the screen.
+// IT DOES NOT GUESS. The storefront now pins a grant to the exact product the human named before
+// the link is even created (#175 — MCP's multi round-trip pattern), so `allow.skus` is the real
+// answer and there is nothing to infer. A grant that names no product gets no age step: a page
+// that forecast "your category MIGHT contain something 21+" would be warning about an item nobody
+// has chosen, and would be wrong the moment the catalog changed. Silence is the honest answer,
+// and the server-side refusal at spend time is unaffected either way.
 
-import { priceOf, minAgeOf, nameOf, categoryOf, type CatalogEntry } from "./delegated.js";
+import { priceOf, minAgeOf, nameOf, type CatalogEntry } from "./delegated.js";
 import type { GrantAllow } from "./grants.js";
 
-/** One age-restricted product inside a grant's bounds — what the approve page names. */
+/** One age-restricted product a grant names — what the page calls out by name. */
 export interface AgeRestrictedItem {
   sku: string;
   /** The catalog's display name, when it carries one (falls back to the sku id). */
@@ -31,42 +27,42 @@ export interface AgeRestrictedItem {
   minAge: number;
 }
 
-/** The age fact a grant's bounds imply, derived server-side from the catalog. */
+/** The age fact a grant's named products imply, derived server-side from the catalog. */
 export interface GrantAgeScope {
-  /** The strictest `minAge` among the products the bounds cover; `null` when none is restricted. */
+  /** The strictest `minAge` among the products the grant names; `null` when none is restricted. */
   minimumAge: number | null;
-  /** Those products, cheapest-name-first as the catalog orders them — the disclosure list. */
+  /** Those products, in the order the grant names them — the disclosure list. */
   items: AgeRestrictedItem[];
 }
 
 /**
  * Is `sku` inside the grant's `allow` bounds? Fail-closed: with bounds set, an unknown or
- * uncategorized item does NOT pass. No bounds (absent, or neither list present) ⇒ everything
- * in the catalog is allowed.
- *
- * This is the ONE definition — `Grants.allowed()` (the spend-time enforcement) and
- * {@link ageScopeFor} (the approve-time disclosure) both call it, so the page can never
- * disclose a scope different from the one the gate enforces.
+ * uncategorized item does NOT pass. No bounds (absent, or neither list present) ⇒ everything in
+ * the catalog is allowed. This is the SPEND-TIME enforcement predicate `Grants.allowed()` runs.
  */
 export function skuAllowed(allow: GrantAllow | undefined, sku: string, catalog: Record<string, CatalogEntry>): boolean {
   if (!allow || (!allow.skus && !allow.categories)) return true;
   if (allow.skus?.includes(sku)) return true;
   if (allow.categories) {
-    const category = categoryOf(catalog[sku]);
+    const entry = catalog[sku];
+    const category = typeof entry === "object" ? entry.category : undefined;
     if (category && allow.categories.includes(category)) return true;
   }
   return false;
 }
 
 /**
- * Derive the age scope a grant's bounds imply — the six lines issue #172 asks for, over data
- * the gate already holds. Pure: no I/O, no agent input, no new field on the wire.
+ * The age-restricted products this grant NAMES, looked up in the catalog. Pure: no I/O, no agent
+ * input, no new field on the wire.
+ *
+ * Only `allow.skus` is read. A grant bounded by category alone — or by nothing — names no product,
+ * so it reports `{ minimumAge: null, items: [] }` rather than guessing what might be in scope.
  */
 export function ageScopeFor(allow: GrantAllow | undefined, catalog: Record<string, CatalogEntry> | undefined): GrantAgeScope {
-  const entries = Object.entries(catalog ?? {});
   const items: AgeRestrictedItem[] = [];
-  for (const [sku, entry] of entries) {
-    if (!skuAllowed(allow, sku, catalog ?? {})) continue;
+  for (const sku of allow?.skus ?? []) {
+    const entry = catalog?.[sku];
+    if (entry === undefined) continue; // a sku this catalog doesn't price says nothing about age
     const minAge = minAgeOf(entry);
     // Only a positive threshold restricts: a 0/absent minAge is an unrestricted product.
     if (typeof minAge !== "number" || !(minAge > 0)) continue;

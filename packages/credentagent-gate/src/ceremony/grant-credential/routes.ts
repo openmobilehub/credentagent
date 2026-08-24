@@ -40,8 +40,7 @@
 // decrypt, ISO-mdoc parse) but there is NO issuer trust anchor yet — trust_level stays
 // "presence-only-demo" and a self-crafted credential would pass. This is disclosure + binding,
 // never a real safety control, until issuer-verified trust lands (#14).
-import type { CeremonyApp, CeremonyContext, RailRegistrar } from "../mount.js";
-import type { RequestLike } from "../origin.js";
+import { deriveOrigin, type RequestLike } from "../origin.js";
 import { buildCredentialRequest } from "../credential-gate/request.js";
 import { evaluateCredential, verifyCredentialPresentation, type CredGateResult } from "../credential-gate/verify.js";
 import { verifyMdocPresentation } from "../credential-gate/mdoc-verify.js";
@@ -49,7 +48,7 @@ import { mdocDocSpec } from "../credential-gate/doc-spec.js";
 import type { CredentialKind } from "../credential-gate/dcql.js";
 import { buildMdocRequestParts, sealMdocContext } from "../mdoc/mdoc-iso.js";
 import { renderCredentialPage } from "../credential-gate/page.js";
-import type { Grant } from "../../grants.js";
+import type { Grant, Grants } from "../../grants.js";
 
 /** The credentials a grant can carry. Both optional; each has its own routes. */
 const GRANT_CREDENTIALS = ["age", "membership"] as const;
@@ -75,9 +74,9 @@ function firstHeader(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
 }
 
-function originOf(ctx: CeremonyContext, req: RailRequest) {
+function originOf(req: RailRequest) {
   const reqLike: RequestLike = { headers: req.headers, host: firstHeader(req.headers.host) ?? "localhost", protocol: req.protocol };
-  return ctx.origin(reqLike);
+  return deriveOrigin(reqLike);
 }
 
 // Read the JSON body from a host-installed parser, or straight off the stream when no parser ran
@@ -116,10 +115,9 @@ interface Resolved {
  *                                              or a membership step with no programme configured,
  *                                              is a ceremony with nothing to prove
  */
-async function resolveGrantCred(ctx: CeremonyContext, id: string, cred: CredentialKind): Promise<Resolved | null> {
-  const grants = ctx.grants;
-  const grant = await grants?.retrieve(id);
-  if (!grants || !grant || grant.status !== "pending") return null;
+async function resolveGrantCred(grants: Grants, id: string, cred: CredentialKind): Promise<Resolved | null> {
+  const grant = await grants.retrieve(id);
+  if (!grant || grant.status !== "pending") return null;
   if (cred === "age") {
     const minimumAge = grant.ageScope.minimumAge;
     return minimumAge == null ? null : { grant, minimumAge };
@@ -136,17 +134,17 @@ function ledeFor(cred: CredentialKind, r: Resolved): string {
     : `Present your membership credential to take ${r.percent}% off every purchase your agent makes under this grant. Optional — the grant works without it.`;
 }
 
-export const registerGrantCredentialGate: RailRegistrar = (app: CeremonyApp, ctx: CeremonyContext): void => {
-  // Self-skip on a route-less app shape (mount()'s fail-fast tests pass a `{ locals }`-only app),
-  // and when no grants resource is wired — a host that never uses grants gets no new routes, the
-  // same way the delegated payment rail self-skips without a `verifier`.
+/** The structural app shape this rail registers on (mirrors the intent-sign rail). */
+export interface CredentialRailApp {
+  get?(path: string, ...handlers: unknown[]): unknown;
+  post?(path: string, ...handlers: unknown[]): unknown;
+}
+
+export function registerGrantCredentialGate(app: CredentialRailApp, grants: Grants): void {
   const get = app.get?.bind(app) as ((path: string, ...handlers: RailHandler[]) => unknown) | undefined;
   const post = app.post?.bind(app) as ((path: string, ...handlers: RailHandler[]) => unknown) | undefined;
-  if (!get || !post || !ctx.grants) return;
-
-  // Tell the approve page the ceremonies are actually reachable, so it renders live buttons rather
-  // than links to a 404 for a host that called grants.serve(app) without mount(app).
-  ctx.grants._credentialRailMounted = true;
+  if (!get || !post) return;
+  const cfg = grants.railConfig;
 
   for (const cred of GRANT_CREDENTIALS) {
     const base = `/credentagent/grants/:id/${cred}`;
@@ -154,7 +152,7 @@ export const registerGrantCredentialGate: RailRegistrar = (app: CeremonyApp, ctx
     // GET the gate page — the credential rail's page, pointed at this rail's endpoints and back to
     // the approve page, so the human lands where they left off with the claim in hand.
     get(base, async (req, res) => {
-      const r = await resolveGrantCred(ctx, req.params.id, cred);
+      const r = await resolveGrantCred(grants, req.params.id, cred);
       if (!r) { res.status(404).type("html").send(`<!doctype html><h1>This grant has no ${cred} step</h1>`); return; }
       const urls = `/credentagent/grants/${encodeURIComponent(r.grant.id)}/${cred}`;
       res.status(200).type("html").send(
@@ -168,7 +166,7 @@ export const registerGrantCredentialGate: RailRegistrar = (app: CeremonyApp, ctx
           lede: ledeFor(cred, r),
           returnUrl: `/credentagent/grants/${encodeURIComponent(r.grant.id)}`,
           endpoints: { request: `${urls}/request`, verify: `${urls}/verify` },
-          branding: ctx.branding,
+          ...(cfg.branding ? { branding: cfg.branding } : {}),
         }),
       );
     });
@@ -176,18 +174,18 @@ export const registerGrantCredentialGate: RailRegistrar = (app: CeremonyApp, ctx
     // GET the REAL request. Offer BOTH protocols; the platform's DC API self-selects the one it
     // supports (Android Chrome → openid4vp, iOS WebKit → org-iso-mdoc).
     get(`${base}/request`, async (req, res) => {
-      const r = await resolveGrantCred(ctx, req.params.id, cred);
+      const r = await resolveGrantCred(grants, req.params.id, cred);
       if (!r) { res.status(404).json({ error: `this grant has no ${cred} step` }); return; }
       try {
-        const reqOrigin = originOf(ctx, req);
+        const reqOrigin = originOf(req);
         // Signed (reader-authenticated) by default — required by iOS. ?signed=0 forces the
         // unsigned path for diagnostics.
         const signed = req.query.signed !== "0";
-        const oid = await buildCredentialRequest(cred, reqOrigin, ctx.signingKey, { minimumAge: r.minimumAge, percent: r.percent }, ctx.readerIdentity);
-        const mdoc = await buildMdocRequestParts(mdocDocSpec(cred, r.minimumAge ?? 21), reqOrigin.origin, signed, ctx.readerIdentity);
+        const oid = await buildCredentialRequest(cred, reqOrigin, cfg.secret, { minimumAge: r.minimumAge, percent: r.percent }, cfg.readerIdentity);
+        const mdoc = await buildMdocRequestParts(mdocDocSpec(cred, r.minimumAge ?? 21), reqOrigin.origin, signed, cfg.readerIdentity);
         const mdocContextToken = await sealMdocContext(
           { readerPrivateJwk: mdoc.readerPrivateJwk, base64EncryptionInfo: mdoc.base64EncryptionInfo },
-          ctx.signingKey,
+          cfg.secret,
         );
         res.json({
           requests: [
@@ -208,7 +206,7 @@ export const registerGrantCredentialGate: RailRegistrar = (app: CeremonyApp, ctx
     // checkout gates run. On success the claim is recorded against THIS pending grant; it is
     // sealed into the intent when the human then taps Approve.
     post(`${base}/verify`, async (req, res) => {
-      const r = await resolveGrantCred(ctx, req.params.id, cred);
+      const r = await resolveGrantCred(grants, req.params.id, cred);
       if (!r) { res.status(404).json({ verified: false, error: `this grant has no ${cred} step` }); return; }
       const body = await readJsonBody(req);
       // The terms are the SERVER's, never the body's (invariant 5). A presentation that only
@@ -225,13 +223,13 @@ export const registerGrantCredentialGate: RailRegistrar = (app: CeremonyApp, ctx
               res.status(400).json({ verified: false, error: "missing mdocContextToken for org-iso-mdoc" });
               return;
             }
-            out = await verifyMdocPresentation({ kind: cred, result, mdocContextToken: body.mdocContextToken, origin: originOf(ctx, req), secret: ctx.signingKey, minimumAge, percent });
+            out = await verifyMdocPresentation({ kind: cred, result, mdocContextToken: body.mdocContextToken, origin: originOf(req), secret: cfg.secret, minimumAge, percent });
           } else {
             if (typeof body.readerContextToken !== "string") {
               res.status(400).json({ verified: false, error: "missing readerContextToken for openid4vp presentation" });
               return;
             }
-            out = await verifyCredentialPresentation({ kind: cred, result, readerContextToken: body.readerContextToken, secret: ctx.signingKey, minimumAge, percent });
+            out = await verifyCredentialPresentation({ kind: cred, result, readerContextToken: body.readerContextToken, secret: cfg.secret, minimumAge, percent });
           }
         } else {
           // Instant-demo claims path (the tested default).
@@ -244,8 +242,8 @@ export const registerGrantCredentialGate: RailRegistrar = (app: CeremonyApp, ctx
           // threshold or a rate that arrived with the request.
           const recorded =
             cred === "age"
-              ? await ctx.grants!._recordAgeProof(r.grant.id, { provenAge: minimumAge! })
-              : await ctx.grants!._recordMembershipProof(r.grant.id, { membershipNumber: out.membershipNumber! });
+              ? await grants._recordAgeProof(r.grant.id, { provenAge: minimumAge! })
+              : await grants._recordMembershipProof(r.grant.id, { membershipNumber: out.membershipNumber! });
           if (!recorded) {
             // The grant left `pending` between the resolve above and here (a concurrent approve).
             res.status(409).json({ verified: false, error: "grant is no longer pending", trust_level: "presence-only-demo" });
@@ -258,4 +256,4 @@ export const registerGrantCredentialGate: RailRegistrar = (app: CeremonyApp, ctx
       }
     });
   }
-};
+}

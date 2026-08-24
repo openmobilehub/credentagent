@@ -11,34 +11,30 @@ const CATALOG = {
   coffee: 18, // a bare-price entry — no category, no name, no restriction
 };
 
-describe("ageScopeFor() — what a grant's bounds cover, age-wise (#172)", () => {
-  it("a CATEGORY grant reports the strictest age in that category and names every restricted item", () => {
-    const scope = ageScopeFor({ categories: ["Beverages"] }, CATALOG);
-    // 21 wins over the 18+ energy drink — the page must warn at the strictest bar in scope.
+describe("ageScopeFor() — the age-restricted products a grant NAMES (#172)", () => {
+  it("looks up the named products, and reports the strictest age among them", () => {
+    const scope = ageScopeFor({ skus: ["oak-whiskey", "energy-drink", "drift-mouse"] }, CATALOG);
+    // 21 wins over the 18+ energy drink — the page must state the strictest bar it will enforce.
     expect(scope.minimumAge).toBe(21);
-    expect(scope.items.map((i) => i.sku).sort()).toEqual(["celebration-champagne", "energy-drink", "oak-whiskey"]);
-    expect(scope.items.find((i) => i.sku === "oak-whiskey")).toEqual({
-      sku: "oak-whiskey",
-      name: "Oak Reserve Whiskey",
-      price: 124,
-      minAge: 21,
-    });
+    expect(scope.items.map((i) => i.sku)).toEqual(["oak-whiskey", "energy-drink"]); // the mouse isn't restricted
+    expect(scope.items[0]).toEqual({ sku: "oak-whiskey", name: "Oak Reserve Whiskey", price: 124, minAge: 21 });
   });
 
-  it("a SKU grant looks up only the named products", () => {
-    const scope = ageScopeFor({ skus: ["celebration-champagne", "drift-mouse"] }, CATALOG);
-    expect(scope.minimumAge).toBe(21);
-    expect(scope.items.map((i) => i.sku)).toEqual(["celebration-champagne"]); // the mouse isn't restricted
+  // The whole point of dropping the forecast (#175 pins the exact product before the link exists):
+  // a grant that names no product must not guess what its category MIGHT contain. A page warning
+  // about an item nobody chose is wrong the moment the catalog changes.
+  it("does NOT guess: a category grant, or an unbounded one, names no product and reports nothing", () => {
+    expect(ageScopeFor({ categories: ["Beverages"] }, CATALOG)).toEqual({ minimumAge: null, items: [] });
+    expect(ageScopeFor(undefined, CATALOG)).toEqual({ minimumAge: null, items: [] });
+    expect(ageScopeFor({}, CATALOG)).toEqual({ minimumAge: null, items: [] });
   });
 
-  it("NO bounds scans the whole catalog — an unbounded grant covers the restricted items too", () => {
-    expect(ageScopeFor(undefined, CATALOG).minimumAge).toBe(21);
-    expect(ageScopeFor({}, CATALOG).minimumAge).toBe(21);
-  });
-
-  it("a clean scope reports NOTHING — the page must not cry wolf", () => {
-    expect(ageScopeFor({ categories: ["Electronics"] }, CATALOG)).toEqual({ minimumAge: null, items: [] });
+  it("a named product that is unrestricted reports NOTHING — the page must not cry wolf", () => {
     expect(ageScopeFor({ skus: ["coffee", "drift-mouse"] }, CATALOG)).toEqual({ minimumAge: null, items: [] });
+  });
+
+  it("a named sku this catalog doesn't price says nothing about age", () => {
+    expect(ageScopeFor({ skus: ["not-in-catalog"] }, CATALOG)).toEqual({ minimumAge: null, items: [] });
   });
 
   it("falls back to the sku id when the catalog entry carries no display name", () => {
@@ -47,18 +43,11 @@ describe("ageScopeFor() — what a grant's bounds cover, age-wise (#172)", () =>
   });
 
   it("is empty for a grant with no catalog to read (fail-closed: warn about nothing you can't see)", () => {
-    expect(ageScopeFor({ categories: ["Beverages"] }, undefined)).toEqual({ minimumAge: null, items: [] });
-  });
-
-  it("an EMPTY allow list covers nothing — bounds that permit no item disclose no item", () => {
-    // `{ skus: [] }` is a real (if useless) bound: skuAllowed refuses every item, so the
-    // disclosure must agree rather than falling back to "no bounds ⇒ whole catalog".
-    expect(skuAllowed({ skus: [] }, "oak-whiskey", CATALOG)).toBe(false);
-    expect(ageScopeFor({ skus: [] }, CATALOG)).toEqual({ minimumAge: null, items: [] });
+    expect(ageScopeFor({ skus: ["oak-whiskey"] }, undefined)).toEqual({ minimumAge: null, items: [] });
   });
 
   it("treats minAge 0 as unrestricted (a threshold must be positive to restrict)", () => {
-    expect(ageScopeFor(undefined, { juice: { price: 5, minAge: 0 } })).toEqual({ minimumAge: null, items: [] });
+    expect(ageScopeFor({ skus: ["juice"] }, { juice: { price: 5, minAge: 0 } })).toEqual({ minimumAge: null, items: [] });
   });
 });
 

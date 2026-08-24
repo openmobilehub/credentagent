@@ -3,26 +3,29 @@
 //
 //   credentagent.grants.serve(app);
 //   const grant = await credentagent.grants.create({ ... });
-//   sendToUser(grant.approveUrl);        // → GET /credentagent/grants/:id — Approve / Deny
+//   sendToUser(grant.approveUrl);        // → GET /credentagent/grants/:id
 //
-// The page is built from the SAME design system as the checkout hub and the ceremony gate pages
-// (theme.ts: pageHead / brandHeader / progressRail / the card + btn chrome), so a human who
-// approves a grant and a buyer who checks out are looking at one product, not two. It follows the
-// hub's shape exactly — brand header, a summary card, a numbered progress rail, one card per step,
-// the decision last — and, like the hub, the rail lists ONLY the steps this grant actually has
-// (#172): an age step when the granted scope contains age-restricted items, a membership step when
-// the host runs a loyalty programme. A grant with nothing to prove is a single decision, so it
-// gets no stepper at all.
+// One call wires everything that page needs: the page itself, the intent-sign rail a device-mode
+// grant signs through (spec 012), and the grant-credential rail the human presents wallet
+// credentials on before authorizing (#172). No `mount()` required — a host that only does grants
+// never has to assemble a checkout's ceremony seams to serve this.
 //
-// HONESTY: this page is the DEMO stand-in for the wallet ceremony — clicking Approve seals the
-// intent server-side (presence "delegated-demo"). The wallet key-signing ceremony (#71) replaces
-// this page and calls the SAME _authorize/_deny seams; the URL contract doesn't change. When a
-// wallet credential has been captured, the footer states that claim's own weaker posture too
-// (presence-only-demo — real wire crypto, no issuer trust anchor yet).
+// TWO MODES, ONE SHAPE. A device-mode grant (the default) authorizes on a real wallet signature
+// over its exact bounds; a page-mode grant authorizes on a tap. Either way the page reads the
+// same: the limits, a numbered rail of only the steps THIS grant has, one card per step, and the
+// authorization last.
+//
+// HONESTY: in page mode the tap stands in for the wallet ceremony (presence "delegated-demo").
+// In device mode the signature is real (trust_level "device-signed") but its trust anchor is a
+// demo credential until issuer verification lands (#14). Wallet credentials presented on the way
+// are "presence-only-demo" on the same footing.
 
 import type { Grant, Grants } from "./grants.js";
 import type { GrantAgeScope } from "./grants-age.js";
 import type { Branding } from "./types.js";
+import { registerIntentSignRail } from "./ceremony/intent-sign/routes.js";
+import { renderIntentSignPage } from "./ceremony/intent-sign/page.js";
+import { registerGrantCredentialGate } from "./ceremony/grant-credential/routes.js";
 import { pageHead, brandHeader, progressRail, type RailStep } from "./ceremony/theme.js";
 
 /** Structural Express app — the package stays dependency-free (mirrors orders-serve). */
@@ -45,7 +48,6 @@ const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replac
 /** Grants are USD-only (the engine seals `currency: "USD"`), so one formatter covers the page. */
 const usd = (n: number) => `$${n.toFixed(2)}`;
 
-/** The page shell — the shared chrome every ceremony page wears. */
 const shell = (title: string, body: string, branding?: Branding) =>
   `<!doctype html>
 <html lang="en">
@@ -58,11 +60,9 @@ ${body}
 </html>`;
 
 /**
- * The honesty line, in the shared `.trust` chrome. It states THIS page's posture
- * ("delegated-demo" — approving here stands in for the wallet ceremony) and, once an age proof
- * has been captured, that proof's own separate and weaker posture. Deliberately not
- * `theme.trustFooter()`: that line is fixed to the OpenID4VP rails' presence-only claim, and a
- * grant approval is a different act with a different honest answer.
+ * The honesty line for the PAGE-mode page, in the shared `.trust` chrome. Deliberately not
+ * `theme.trustFooter()` (fixed to the OpenID4VP rails' claim) and not the device page's
+ * `deviceSignedTrustFooter()` — a tap-to-approve is a third, weaker act and says so itself.
  */
 const trustLine = (g?: Grant) =>
   `<div class="trust"><div class="trust-line">🔒 delegated-demo — approving here stands in for the wallet ceremony; no real money moves.${
@@ -71,29 +71,16 @@ const trustLine = (g?: Grant) =>
       : ""
   }</div></div>`;
 
-/** Name the scope the way the human chose it, so the warning reads like their own sentence:
- *  a category grant says "Beverages includes…", a sku grant "The items you picked include…",
- *  an unbounded one "This store includes…". */
-function scopeLabel(g: Grant): string {
-  const categories = g.allow?.categories;
-  if (categories?.length) return `${esc(categories.join(", "))} includes`;
-  if (g.allow?.skus?.length) return "The items you picked include";
-  return "This store includes";
-}
-
 /** What the grant is bounded to, as a plain-English row value. */
 function scopeValue(g: Grant): string {
+  if (g.allow?.skus?.length) return esc(g.allow.skus.join(", "));
   const categories = g.allow?.categories;
   if (categories?.length) return esc(categories.join(", "));
-  if (g.allow?.skus?.length) return esc(g.allow.skus.join(", "));
   return `Anything at ${esc(g.merchant)}`;
 }
 
-/** The limits card — the grant's answer to the hub's order-summary card. The budget is the
- *  bold total row because it is the number the human is actually deciding on. */
+/** The limits card — the grant's answer to the checkout hub's order-summary card. */
 function limitsCard(g: Grant): string {
-  // Once a membership is proved, the discount is a term of the grant — show it here, in the accent
-  // row the checkout summary uses for exactly this, rather than only inside the step card.
   const loyalty = g.membershipProof
     ? `<tr class="disc"><td>Loyalty discount (${g.membershipProof.discountPct}%)</td><td class="num">on every purchase</td></tr>`
     : "";
@@ -108,24 +95,18 @@ function limitsCard(g: Grant): string {
   </div>`;
 }
 
-/** True once the human has proved an age that covers everything restricted in this scope. */
+/** True once the human has proved an age that covers every restricted product the grant names. */
 const ageProved = (g: Grant, scope: GrantAgeScope) =>
   scope.minimumAge != null && g.ageProof != null && g.ageProof.provenAge >= scope.minimumAge;
 
 /**
- * The age step's card (#172), mirroring the hub's numbered gate card.
+ * The age step (#172) — mirroring the checkout hub's numbered gate card.
  *
- * UNPROVED — it names what the agent will be refused on, as a line-item table, and offers the
- * wallet ceremony. The button appears ONLY when that ceremony is actually mounted: a host that
- * calls `grants.serve(app)` without `mount(app)` gets the disclosure alone, never a dead link.
- *
- * PROVED — one ✓ row, plus what it bought the human.
- *
- * HONEST LIMIT: for a category grant this is a FORECAST made at approval time (a 21+ product
- * added to that category next week could not have been predicted). The control is the
- * server-side refusal at spend time; this screen is disclosure.
+ * UNPROVED: it NAMES the age-restricted products this grant is for (the storefront pins the exact
+ * product before the link exists — #175), and offers the wallet ceremony.
+ * PROVED: one ✓ row, plus what it bought the human.
  */
-function ageCard(g: Grant, scope: GrantAgeScope, n: number, railMounted: boolean): string {
+function ageCard(g: Grant, scope: GrantAgeScope, n: number): string {
   const minimumAge = scope.minimumAge;
   if (minimumAge == null) return "";
   const no = `<span class="step-no">${n}.</span>`;
@@ -133,58 +114,72 @@ function ageCard(g: Grant, scope: GrantAgeScope, n: number, railMounted: boolean
   if (ageProved(g, scope)) {
     return `<div class="card">
     <div class="row-ok">${no} ✓ Age verified — ${g.ageProof!.provenAge}+</div>
-    <p class="card-title" style="margin:10px 0 0;text-transform:none;letter-spacing:0;font-weight:400">Your agent may buy the age-restricted items above while you're away.</p>
+    <p class="small" style="margin:10px 0 0">Your agent may buy the age-restricted items above while you're away.</p>
   </div>`;
   }
-
   const rows = scope.items
     .map((i) => `<tr class="line"><td>${esc(i.name ?? i.sku)}</td><td class="num">${usd(i.price)}</td></tr>`)
     .join("\n      ");
-  const verify = railMounted
-    ? `<div style="margin-top:12px;"><a class="btn btn-primary" href="/credentagent/grants/${encodeURIComponent(g.id)}/age">Verify ${minimumAge}+ with your wallet</a></div>`
-    : "";
   return `<div class="card summary">
-    <div class="row-pending">${no} 🔒 ${scopeLabel(g)} age-restricted items (${minimumAge}+). Your agent can't buy these:</div>
+    <div class="row-pending">${no} 🔒 This grant is for age-restricted items (${minimumAge}+). Your agent can't buy them unless you prove your age:</div>
     <table style="margin-top:10px">
       ${rows}
-    </table>${verify}
+    </table>
+    <div style="margin-top:12px;"><a class="btn btn-primary" href="/credentagent/grants/${encodeURIComponent(g.id)}/age">Verify ${minimumAge}+ with your wallet</a></div>
   </div>`;
 }
 
 /**
- * The membership step's card (#172) — the mirror of the age card, and of the hub's discount gate.
- * Where age UNLOCKS items, this LOWERS the price of every purchase the agent makes under the grant.
- *
- * Optional by nature: declining still approves the grant, at full catalog price. It renders only
- * when the host configured a loyalty rate (`new CredentAgent({ loyaltyDiscountPct })`) — no
- * programme, no step — and the button only when the ceremony is actually mounted.
+ * The membership step (#172) — the mirror of the age step, and of the hub's discount gate. Where
+ * age UNLOCKS items, this LOWERS the price of every purchase. Renders only when the host
+ * configured a loyalty rate: no programme, no step.
  */
-function membershipCard(g: Grant, pct: number | undefined, n: number, railMounted: boolean): string {
+function membershipCard(g: Grant, pct: number | undefined, n: number): string {
   if (pct == null) return "";
   const no = `<span class="step-no">${n}.</span>`;
   const proof = g.membershipProof;
   if (proof) {
     return `<div class="card">
     <div class="row-ok">${no} ✓ Membership applied — ${proof.discountPct}% off</div>
-    <p class="card-title" style="margin:10px 0 0;text-transform:none;letter-spacing:0;font-weight:400">Member ${esc(proof.membershipNumber)} · every purchase your agent makes under this grant is discounted.</p>
+    <p class="small" style="margin:10px 0 0">Member ${esc(proof.membershipNumber)} · every purchase your agent makes under this grant is discounted.</p>
   </div>`;
   }
-  const present = railMounted
-    ? `<div style="margin-top:12px;"><a class="btn btn-secondary" href="/credentagent/grants/${encodeURIComponent(g.id)}/membership">Apply loyalty discount (${pct}% off)</a></div>`
-    : "";
   return `<div class="card">
-    <div class="row-pending">${no} Take ${pct}% off every purchase your agent makes under this grant by presenting your membership. Optional — the grant works without it.</div>${present}
+    <div class="row-pending">${no} Take ${pct}% off every purchase your agent makes under this grant by presenting your membership. Optional — the grant works without it.</div>
+    <div style="margin-top:12px;"><a class="btn btn-secondary" href="/credentagent/grants/${encodeURIComponent(g.id)}/membership">Apply loyalty discount (${pct}% off)</a></div>
   </div>`;
 }
 
-/** The decision card — always last, the way payment is last on the hub. */
-function decisionCard(g: Grant, scope: GrantAgeScope, n: number): string {
-  const withheld = scope.minimumAge != null && !ageProved(g, scope);
+/**
+ * The steps this grant has, as rail entries + the rendered cards, numbered as ONE sequence.
+ * `final` is what the last step is called — "Approve" for a page-mode tap, "Sign" for a
+ * device-mode signature. A grant with a single step gets no rail: a one-dot stepper says nothing.
+ */
+function stepsFor(g: Grant, loyaltyPct: number | undefined, final: string): { rail: string; cards: string; nextNo: number } {
+  const scope = g.ageScope;
+  const hasAge = scope.minimumAge != null;
+  const steps: RailStep[] = [
+    ...(hasAge ? [{ label: "Age", done: ageProved(g, scope) }] : []),
+    ...(loyaltyPct != null ? [{ label: "Membership", done: g.membershipProof != null }] : []),
+    { label: final, done: false },
+  ];
+  const ageNo = hasAge ? 1 : 0;
+  const memberNo = loyaltyPct != null ? ageNo + 1 : ageNo;
+  return {
+    rail: steps.length > 1 ? progressRail(steps, steps.findIndex((s) => !s.done)) : "",
+    cards: `${ageCard(g, scope, ageNo)}\n  ${membershipCard(g, loyaltyPct, memberNo)}`,
+    nextNo: memberNo + 1,
+  };
+}
+
+/** The page-mode decision card — always last, the way payment is last on the checkout hub. */
+function decisionCard(g: Grant, n: number): string {
+  const withheld = g.ageScope.minimumAge != null && !ageProved(g, g.ageScope);
   // Once age is on the table, "Approve" alone is ambiguous: the human is choosing between
   // approving WITH the restricted items and approving without them. Say which one this is.
   const label = withheld ? "Approve without them" : "✓ Approve";
   const lede = withheld
-    ? `Your agent will be able to spend within these limits, but will be refused on the ${scope.minimumAge}+ items above.`
+    ? `Your agent will be able to spend within these limits, but will be refused on the ${g.ageScope.minimumAge}+ items above.`
     : "Your agent can spend within these limits until the budget runs out, or until you revoke it.";
   const action = (verb: string) => `/credentagent/grants/${encodeURIComponent(g.id)}/${verb}`;
   return `<div class="card">
@@ -197,18 +192,23 @@ function decisionCard(g: Grant, scope: GrantAgeScope, n: number): string {
 
 /** What a grant that is no longer pending says, and how that reads. */
 const STATUS_LINE: Record<string, { row: "row-ok" | "row-pending"; text: string }> = {
-  authorized: { row: "row-ok", text: "✓ Approved — your agent may now spend within these limits. You can close this tab." },
+  authorized: { row: "row-ok", text: "✓ Authorized — your agent may now spend within these limits. You can close this tab." },
   denied: { row: "row-pending", text: "⛔ Denied — this grant will never spend. You can close this tab." },
   revoked: { row: "row-pending", text: "🚫 Revoked — no further spending is possible against this grant." },
 };
 
-/** Register the approve page + its POST actions onto `app` (called via `grants.serve(app)`). */
+/** Register the grant page, its POST actions, and the two rails it needs. */
 export function serveGrants(app: GrantsApp, grants: Grants): void {
   const get = app.get?.bind(app);
   const post = app.post?.bind(app);
   if (!get || !post) throw new Error("[credentagent] grants.serve(app): the app must expose Express-style get()/post().");
 
-  const branding = grants._branding;
+  // The intent-sign endpoints for device-mode grants (spec 012): /sign/request + /sign/verify.
+  registerIntentSignRail(app, grants);
+  // The wallet credentials a human may present before authorizing (#172): /age, /membership.
+  registerGrantCredentialGate(app, grants);
+
+  const branding = grants.railConfig.branding;
   const notFound = () => shell("Spending grant", `${brandHeader({ h1: "Spending grant", tagline: "This link doesn't match a grant." }, branding)}
   <div class="card"><div class="row-pending">We don't recognise this grant. It may have been created by a different server, or the link may be incomplete.</div></div>
   ${trustLine()}`, branding);
@@ -227,34 +227,43 @@ export function serveGrants(app: GrantsApp, grants: Grants): void {
       );
     }
 
-    const scope = g.ageScope;
-    const loyaltyPct = grants._loyaltyDiscountPct;
-    // The rail lists only the steps this grant HAS (the hub's rule): an age step when the scope is
-    // age-restricted, a membership step when the host runs a loyalty programme, then the decision.
-    // A single-step rail says nothing a stepper is for, so a grant with nothing to prove gets none.
-    const steps: RailStep[] = [
-      ...(scope.minimumAge != null ? [{ label: "Age", done: ageProved(g, scope) }] : []),
-      ...(loyaltyPct != null ? [{ label: "Membership", done: g.membershipProof != null }] : []),
-      { label: "Approve", done: false },
-    ];
-    const rail = steps.length > 1 ? progressRail(steps, steps.findIndex((s) => !s.done)) : "";
-    // The numbers on the cards are the numbers on the rail — one sequence, never two.
-    const ageNo = scope.minimumAge != null ? 1 : 0;
-    const memberNo = loyaltyPct != null ? ageNo + 1 : ageNo;
+    const loyaltyPct = grants.railConfig.loyaltyDiscountPct;
 
+    // A device-mode grant's approveUrl IS the signing ceremony (spec 012, FR-3): the wallet signs
+    // the Intent Mandate — there is no click-to-approve for it. The credential steps ride the same
+    // page, ABOVE the signature, because what the human proves there is part of what they sign
+    // (the proofs are inside `canonicalIntentBounds` — #172).
+    if (g.signing === "device") {
+      const { rail, cards } = stepsFor(g, loyaltyPct, "Sign");
+      return res.status(200).type("html").send(
+        renderIntentSignPage({
+          grantId: g.id,
+          merchant: g.merchant,
+          budget: g.budget,
+          perSpend: g.perSpend,
+          ...(g.allow ? { allow: g.allow } : {}),
+          ...(g.description ? { description: g.description } : {}),
+          returnUrl: `/credentagent/grants/${encodeURIComponent(g.id)}`,
+          ...(rail ? { rail } : {}),
+          ...(cards.trim() ? { steps: cards } : {}),
+          ...(branding ? { branding } : {}),
+        }),
+      );
+    }
+
+    const { rail, cards, nextNo } = stepsFor(g, loyaltyPct, "Approve");
     res.status(200).type("html").send(
       shell(`Approve spending grant · ${g.id}`, `${brandHeader(
-        {
-          h1: "Spending grant",
-          tagline: g.description ?? "An AI agent asks to spend on your behalf while you're away.",
-        },
+        // The page-mode heading is the one main's device-grant suite pins ("a page-mode grant's
+        // approveUrl still serves the click-to-approve page") — it also reads better here than a
+        // bare noun, because this page IS the decision.
+        { h1: "Approve this spending grant?", tagline: g.description ?? "An AI agent asks to spend on your behalf while you're away." },
         branding,
       )}
   ${limitsCard(g)}
   ${rail}
-  ${ageCard(g, scope, ageNo, grants._credentialRailMounted)}
-  ${membershipCard(g, loyaltyPct, memberNo, grants._credentialRailMounted)}
-  ${decisionCard(g, scope, memberNo + 1)}
+  ${cards}
+  ${decisionCard(g, nextNo)}
   ${trustLine(g)}`, branding),
     );
   });

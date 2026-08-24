@@ -42,6 +42,9 @@ import type { CartItemInput, CatalogSource, Order, PricedCart, Product, Review }
 // reaching into the pure model module.
 export type { CatalogSource } from "./index.js";
 import { appToolMeta } from "./tool-meta.js";
+import { enableMrtrParams, mrtrParams } from "./mcp-mrtr.js";
+import { matchProducts, prefillVariants, validSelections, missingVariants, describeChoice } from "./product-match.js";
+import { projectGrantView } from "./grant-project.js";
 import { MemoryCartStore, MemoryOrderStore } from "./state.js";
 import type { CartStore, OrderStore } from "./state.js";
 // Re-export the store contracts so a consumer can type an explicit store (the escape
@@ -60,9 +63,14 @@ import {
   decodeCartMandateParam,
   renderRequirements,
   MemoryVerificationStore,
+  MultiRoundTrip,
+  type Ask,
+  type InputRequiredResult,
+  type Round,
   type Branding,
   type CartItemRef,
   type Credential,
+  type Grant,
   type Grants,
   type CeremonyCatalog,
   type CeremonyOrder,
@@ -196,6 +204,15 @@ export interface StorefrontOptions {
    * reflect the real host, not a placeholder.
    */
   merchant?: string;
+  /**
+   * How long a `create-spending-grant` re-check holds its answer open while the grant is still
+   * awaiting the human's approval, re-reading the grant store until the tap lands (or the window
+   * closes). Default 45 000 ms — measured just under claude.ai's 60 s tool-call kill, so the
+   * agent's redial resolves seconds after the human approves in the browser, with no "I approved
+   * it" message needed. `0` answers immediately (the agent then polls by redialing). The first
+   * awaiting-approval answer never holds: the human needs the link before they can tap it.
+   */
+  approvalHoldMs?: number;
 }
 
 /**
@@ -330,6 +347,8 @@ function homeRequires(requires: unknown[], base: string, cart?: string | null): 
   });
 }
 
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
 export function createStorefront(opts: StorefrontOptions = {}): Storefront {
   // Normalize the catalog into a CatalogSource: a plain array (or the default) is wrapped
   // in a static source; a dynamic source (e.g. `firestoreCatalog(...)`) is used as-is. Every
@@ -385,6 +404,14 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
   const grants = opts.grants;
   // The merchant a created grant is sealed as — honest default for the generic package.
   const merchant = opts.merchant ?? "storefront";
+  // How long an approval re-check holds before answering (see StorefrontOptions.approvalHoldMs).
+  const approvalHoldMs = opts.approvalHoldMs ?? 45_000;
+  // MRTR (#174): the questions a half-specified grant asks ride in a SEALED `requestState` blob,
+  // so the server holds no session between rounds. It is signed with the storefront's
+  // `signingKey` when there is one; otherwise with a per-process key — which is fine for a single
+  // instance, but on a multi-instance deployment a state minted on instance A is refused
+  // ("tampered") by instance B, exactly like an unshared cart-mandate key. Pass `signingKey`.
+  const rounds = new MultiRoundTrip({ secret: signingKey ?? randomBytes(32).toString("hex") });
 
   // Issue + base64url-encode a Cart Mandate for a priced order (the checkout link's `cart`).
   const cartParamFor = (order: Order): string => {
@@ -665,61 +692,325 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
     // The lifecycle an agent drives: create (pending) → the HUMAN approves once at approveUrl →
     // spend within the sealed bounds → revoke. Every refusal is a typed code the agent can act on.
     if (grants) {
-      const grantView = (g: NonNullable<Awaited<ReturnType<Grants["retrieve"]>>>) =>
-        ({ grantId: g.id, status: g.status, merchant: g.merchant, approveUrl: g.approveUrl, budget: g.budget, perSpend: g.perSpend, allow: g.allow ?? null });
-      server.registerTool(
+      // Rounds of questions are capped: a client that never converges gets an honest "I could not
+      // pin this down" instead of an endless loop of elicitations.
+      const MAX_ROUNDS = 4;
+      /** The MRTR answer, ALSO rendered as plain text for the clients that don't speak MRTR yet. */
+      const askResult = (asked: InputRequiredResult, overrides: Record<string, unknown> = {}): CallToolResult => {
+        const questions = Object.entries(asked.inputRequests).map(([key, req]) => ({
+          key,
+          message: req.params.message,
+          fields: Object.entries(req.params.requestedSchema.properties).map(([name, f]) => ({ name, options: f.enum ?? null })),
+        }));
+        const view = {
+          ok: false,
+          code: "input-required",
+          note:
+            "NO GRANT EXISTS YET. Put these questions to the human, then call create-spending-grant AGAIN with the " +
+            "same budget/perSpend/item plus requestState (copied verbatim, never edited) and answers keyed by field name.",
+          ...overrides,
+          questions,
+          requestState: asked.requestState,
+        };
+        // MRTR server requirement 7: NEVER send `inputRequests` a client hasn't declared support
+        // for. A client that didn't advertise `elicitation` cannot put these questions to anyone,
+        // and answering it with a bare `input_required` would only invite an immediate, useless
+        // retry — so it gets the questions as ordinary tool output for its agent to relay instead.
+        const speaksElicitation = !!server.server.getClientCapabilities()?.elicitation;
+        const body: CallToolResult = { content: [{ type: "text", text: JSON.stringify(view) }], structuredContent: view };
+        // Spread first: the MRTR fields (resultType / inputRequests / requestState) are the wire
+        // contract for a client that implements the pattern; content + structuredContent are the
+        // same questions in the form today's clients can actually read.
+        return speaksElicitation ? { ...asked, ...body } : body;
+      };
+      const plain = (view: Record<string, unknown>): CallToolResult =>
+        ({ content: [{ type: "text", text: JSON.stringify(view) }], structuredContent: view });
+      /**
+       * The wait round: the grant is minted (view carries approveUrl) but the flow stays open
+       * until the human's tap. The grantId rides the sealed state as a server-attested carried
+       * fact — the client can present it, never choose it.
+       */
+      const awaitApproval = (round: Extract<Round, { ok: true }>, view: Record<string, unknown>, extras: Record<string, unknown>): CallToolResult =>
+        askResult(
+          round.ask(
+            {
+              approval: {
+                message:
+                  `Waiting for the human. Send them this link — it names exactly what the grant can buy: ${view.approveUrl} ` +
+                  `Once they say they've approved (or denied) there, reply here so I re-check.`,
+                fields: { approved: { type: "boolean", description: "true once the human says they have dealt with the approve page; the server re-checks its own record either way" } },
+              },
+            },
+            { carry: { grantId: view.grantId, extras } },
+          ),
+          {
+            ...view,
+            code: "awaiting-approval",
+            note:
+              "PENDING — the grant EXISTS but nothing can be spent yet. Send approveUrl to the human, then " +
+              "IMMEDIATELY call create-spending-grant again with the EXACT same arguments plus this requestState " +
+              "(change nothing else). That call holds the line server-side and returns the moment the human " +
+              "approves — keep redialing until the status changes, and never mint a new grant while this one is " +
+              "pending. Your answer is only a wake-up signal: approval is re-read server-side, never taken from it.",
+          },
+        );
+
+      // Project a grant to the full GrantViewData the grant widget renders (spec 011 FR-1) and
+      // return it as a UI-linked tool result: structuredContent = the projection (both host
+      // channels read it), plus a JSON text block for a headless agent. `_meta: UI_META` on the
+      // tool registration (below) is what links the widget resource — attached to ALL FOUR grant
+      // tools exactly as the shopping tools do. `extra` carries agent-only fields (a hint, or the
+      // spend door) alongside the view without polluting the display projection.
+      const grantResult = async (g: Grant, extra?: Record<string, unknown>): Promise<CallToolResult> => {
+        await source.load();
+        const view = await projectGrantView(g, { catalog: source.current() });
+        const structured = { ...view, ...(extra ?? {}) };
+        return { content: [{ type: "text", text: JSON.stringify(structured) }], structuredContent: structured };
+      };
+      const unknownGrant = (): CallToolResult =>
+        ({ content: [{ type: "text", text: JSON.stringify({ error: "unknown grant" }) }], structuredContent: { error: "unknown grant" }, isError: true });
+
+      registerAppTool(
+        server,
         "create-spending-grant",
         {
           title: "Create Spending Grant",
           description:
             "Ask the human for a bounded spending authority you can buy against WHILE THEY ARE AWAY: a total budget, " +
-            "a per-purchase cap, and optionally which product categories are allowed. Returns an approveUrl — SEND IT " +
-            "TO THE HUMAN; nothing can be spent until they approve there (status pending → authorized). Amounts are dollars.",
+            "a per-purchase cap, and optionally what it may buy — exact product ids (`products`), product CATEGORIES, " +
+            "or, when the human named what they want in their own words, `item` (e.g. \"black court sneakers, US 10\"). " +
+            "With `item`: if those words fit several products, none at all, or leave a choice open (size, colour), this " +
+            "tool returns NO LINK — it answers with the questions to put to the human plus a requestState; ask them, " +
+            "then call it again with the same arguments plus that requestState (verbatim) and their answers. Once the " +
+            "product is pinned down the grant can only ever buy THAT product, and the flow stays open one more round: " +
+            "you get the approveUrl (SEND IT TO THE HUMAN) plus a final question — then IMMEDIATELY call again with the " +
+            "same arguments + that requestState. The re-check holds the line server-side and returns the moment the " +
+            "human approves; keep redialing until the status changes. Your answer is only a wake-up: approval is " +
+            "re-read server-side (pending → authorized), never taken from what you say. Amounts are dollars. Approval " +
+            "is a WALLET SIGNATURE by default: the approveUrl serves a signing ceremony and the grant authorizes only " +
+            "on a real device signature over these exact bounds. Pass signing:\"page\" ONLY when the human has no " +
+            "phone in the loop and accepts a click-to-approve stand-in.",
           inputSchema: {
             budget: z.number().positive().describe("total budget in dollars"),
             perSpend: z.number().positive().describe("max dollars per single purchase"),
+            item: z.string().optional().describe("the exact product the human wants, in their own words; the tool asks follow-up questions until it is pinned down"),
+            products: z.array(z.string()).optional().describe("allowed product ids (e.g. oak-whiskey); one id = a product-specific grant; omit = any"),
             categories: z.array(z.string()).optional().describe("allowed product categories (e.g. Beverages); omit = any"),
             description: z.string().optional().describe("the human-readable sentence shown at approval"),
+            requestState: z.string().optional().describe("copy VERBATIM from this tool's previous answer; never edit or invent one"),
+            answers: z.record(z.string(), z.string()).optional().describe("the human's answers to the questions the previous call asked, keyed by field name (e.g. { size: \"US 10\" })"),
+            signing: z
+              .enum(["page", "device"])
+              .optional()
+              .describe('how the human authorizes: "device" (default — their phone wallet signs these exact bounds) or "page" (a click-to-approve stand-in; ask for it only when no phone is in the loop)'),
           },
           annotations: { readOnlyHint: false },
+          _meta: UI_META,
         },
-        async ({ budget, perSpend, categories, description }): Promise<CallToolResult> => {
+        async ({ budget, perSpend, item, products, categories, description, requestState, answers, signing }, extra): Promise<CallToolResult> => {
+          // No `item` — the id/category-bounded grant, round-trip free (spec 011 shape). Fold
+          // `products` → allow.skus and `categories` → allow.categories; omit `allow` entirely
+          // when neither is given (no bounds ⇒ merchant-wide, the openGrantCard).
+          if (!item) {
+            const allow = {
+              ...(products?.length ? { skus: products } : {}),
+              ...(categories?.length ? { categories } : {}),
+            };
+            const g = await grants.create({
+              merchant,
+              budget,
+              perSpend,
+              ...(Object.keys(allow).length ? { allow } : {}),
+              ...(description ? { description } : {}),
+              ...(signing ? { signing } : {}),
+            });
+            return grantResult(g, {
+              note:
+                g.signing === "device"
+                  ? "PENDING — send approveUrl to the human; it opens a WALLET SIGNING ceremony. Spending refuses until their device signs these bounds."
+                  : "PENDING — send approveUrl to the human; spending refuses until they approve.",
+            });
+          }
+
+          // ── the multi round-trip path: pin the grant to ONE product ──────────────────
+          // `requestState` is attacker-controlled (MRTR spec): the engine verifies its signature,
+          // TTL, and binding to THIS tool + THESE money bounds + THIS session before a single
+          // answer inside it is believed.
+          const mrtr = mrtrParams();
+          const round = rounds.open({
+            request: "create-spending-grant",
+            params: { budget, perSpend, item, products: products ?? null, categories: categories ?? null, signing: signing ?? null },
+            principal: extra?.sessionId ?? "",
+            state: requestState ?? mrtr.requestState,
+            responses: mrtr.inputResponses,
+            answers,
+          });
+          if (!round.ok) {
+            return plain({
+              ok: false,
+              code: round.code,
+              note:
+                "That requestState was refused. Start over: call create-spending-grant again with no requestState. " +
+                "If an earlier round already returned a grantId, do NOT mint another — check it with get-grant-status.",
+            });
+          }
+
+          // ── the wait phase: a grant already exists; the only question left is the human's tap
+          // at approveUrl. The answer that woke us up is a DOORBELL, not a credential — status is
+          // re-read from the grant store (where the approve page's transition lands), never taken
+          // from what the client said.
+          if (typeof round.carried.grantId === "string") {
+            let g = await grants.retrieve(round.carried.grantId);
+            if (!g) {
+              return plain({ ok: false, code: "not-found", note: "That grant no longer exists. Start over: call create-spending-grant again with no requestState." });
+            }
+            // The held redial: hosts kill a tool call on a fixed clock (claude.ai: 60s), so a
+            // re-check of a still-pending grant holds its answer open just under that, re-reading
+            // the grant store until the human's tap lands or the window closes. Holding changes
+            // WHEN the store is re-read, never WHO decides — the client's answer still authorizes
+            // nothing (the "REFUSES to report … authorized" bypass test pins that).
+            if (g.status === "pending" && !round.declined.length && approvalHoldMs > 0) {
+              const deadline = Date.now() + approvalHoldMs;
+              while (g.status === "pending" && Date.now() < deadline) {
+                await sleep(Math.min(500, deadline - Date.now()));
+                g = (await grants.retrieve(round.carried.grantId)) ?? g;
+              }
+            }
+            const extras = (round.carried.extras ?? {}) as Record<string, unknown>;
+            if (g.status !== "pending") {
+              const settled: Record<string, string> = {
+                authorized: "AUTHORIZED — the human approved at the link. You can now spend-from-grant within the sealed bounds.",
+                denied: "DENIED — the human refused this grant at the approve page. Don't retry; ask the human directly if that surprises you.",
+                revoked: "REVOKED — this grant was withdrawn. Nothing can be spent against it.",
+              };
+              return grantResult(g, { ...extras, note: settled[g.status] ?? g.status });
+            }
+            if (round.declined.length) {
+              return grantResult(g, {
+                ...extras,
+                ok: false,
+                code: "declined",
+                note: "The human declined to confirm here. The grant stays PENDING — they can still approve or deny at approveUrl, or call revoke-grant to withdraw it.",
+              });
+            }
+            await source.load();
+            const view = { ...(await projectGrantView(g, { catalog: source.current() })), grantId: g.id, ...extras };
+            return awaitApproval(round, view, extras);
+          }
+
+          // The human is allowed to say no. A declined question ends the flow honestly instead of
+          // asking the same thing again until the round cap runs out.
+          if (round.declined.length) {
+            return plain({
+              ok: false,
+              code: "declined",
+              declined: round.declined,
+              note: "The human declined to answer, so no grant was created. Don't retry unless they ask you to.",
+            });
+          }
+          const ask = (requests: Record<string, Ask>): CallToolResult =>
+            round.round >= MAX_ROUNDS
+              ? plain({ ok: false, code: "unresolved", note: `Still could not pin down "${item}" after ${MAX_ROUNDS} rounds — no grant was created. Ask the human to name a product from browse-products.` })
+              : askResult(round.ask(requests));
+
+          await source.load();
+          const catalog = source.current();
+          // A later round may have replaced the human's words with an exact product name.
+          const words = typeof round.answers.item === "string" ? round.answers.item : item;
+          const match = matchProducts(catalog, words);
+
+          if (match.kind === "none") {
+            return ask({
+              product: {
+                message: `I couldn't find "${words}" in this store. What exactly should I buy?`,
+                fields: { item: { type: "string", description: "the product name, as listed in the store" } },
+              },
+            });
+          }
+          if (match.kind === "many") {
+            return ask({
+              product: {
+                message: `"${words}" matches more than one product. Which one?`,
+                fields: { item: { type: "string", enum: match.candidates.map((p) => p.name) } },
+              },
+            });
+          }
+
+          // One product — now every choice it offers (size, colour…) must be pinned down too.
+          const product = match.product;
+          const selections = { ...prefillVariants(product, words), ...validSelections(product, round.answers) };
+          const missing = missingVariants(product, selections);
+          if (missing.length) {
+            return ask(
+              Object.fromEntries(
+                missing.map((v) => [
+                  v.name,
+                  { message: `${product.name}: ${v.label ?? `Which ${v.name}?`}`, fields: { [v.name]: { type: "string" as const, enum: v.options } } },
+                ]),
+              ),
+            );
+          }
+
+          // Bounds sanity, BEFORE the human is asked to approve: a grant whose caps can never
+          // cover this product's live price would only refuse later, with the human gone.
+          if (product.price > perSpend || product.price > budget) {
+            return plain({
+              ok: false,
+              code: "bounds-too-low",
+              productId: product.id,
+              price: product.price,
+              note: `${describeChoice(product, selections)} costs more than the caps you asked for (budget $${budget}, per purchase $${perSpend}). No grant was created — call again with caps that cover it.`,
+            });
+          }
+
+          const choice = describeChoice(product, selections);
           const g = await grants.create({
             merchant,
             budget,
             perSpend,
-            ...(categories?.length ? { allow: { categories } } : {}),
-            ...(description ? { description } : {}),
+            allow: { skus: [product.id] }, // WHAT it may buy: this product and nothing else (fail-closed)
+            description: `Buy ${choice} from ${merchant}${description ? ` — ${description}` : ""}.`,
+            ...(signing ? { signing } : {}),
           });
-          const view = { ...grantView(g), note: "PENDING — send approveUrl to the human; spending refuses until they approve." };
-          return { content: [{ type: "text", text: JSON.stringify(view) }], structuredContent: view };
+          const extras = {
+            item: { productId: product.id, name: product.name, price: product.price, selections },
+            ...(product.minimumAge != null
+              ? { ageRestricted: product.minimumAge, ageNote: `This item is ${product.minimumAge}+. Age never delegates: an unattended spend refuses with step-up and needs the human present.` }
+              : {}),
+          };
+          // Minted, but not finished: the flow stays open (one more round) until the human taps.
+          await source.load();
+          const view = { ...(await projectGrantView(g, { catalog: source.current() })), grantId: g.id, ...extras };
+          return awaitApproval(round, view, extras);
         },
       );
-      server.registerTool(
+      registerAppTool(
+        server,
         "get-grant-status",
         {
           title: "Get Grant Status",
-          description: "Read a spending grant: status (pending | authorized | denied | revoked) and its sealed bounds.",
+          description: "Read a spending grant: status (pending | authorized | denied | revoked), its live budget/spend, and its sealed bounds.",
           inputSchema: { grantId: z.string() },
           annotations: { readOnlyHint: true },
+          _meta: UI_META,
         },
         async ({ grantId }): Promise<CallToolResult> => {
           const g = await grants.retrieve(grantId);
-          if (!g) return { content: [{ type: "text", text: JSON.stringify({ error: "unknown grant" }) }], structuredContent: { error: "unknown grant" }, isError: true };
-          const view = grantView(g);
-          return { content: [{ type: "text", text: JSON.stringify(view) }], structuredContent: view };
+          if (!g) return unknownGrant();
+          return grantResult(g);
         },
       );
-      server.registerTool(
+      registerAppTool(
+        server,
         "spend-from-grant",
         {
           title: "Spend From Grant",
           description:
             "Buy ONE product unattended against an authorized grant. The server re-prices from the catalog and enforces " +
-            "every sealed rule; a refusal returns a typed code: not-authorized (human never approved), not-allowed (outside " +
-            "the allowed categories), per-spend-exceeded, budget-exceeded, step-up (age-restricted and the human " +
-            "proved no age for this grant, or proved a lower one — hand " +
-            "back to the human), revoked. Pass a stable idempotencyKey to make retries safe (same key replays the SAME outcome).",
+            "every sealed rule; a refusal returns a typed code (in the result's `spend`): not-authorized (human never " +
+            "approved), not-allowed (outside the allowed products/categories), per-spend-exceeded, budget-exceeded, step-up " +
+            "(age-restricted, and the human proved no age for this grant or proved a lower one — hand back to the human), " +
+            "revoked. Pass a stable idempotencyKey to make retries safe (same key replays the SAME outcome).",
           inputSchema: {
             grantId: z.string(),
             productId: z.string(),
@@ -727,15 +1018,15 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
             idempotencyKey: z.string().optional().describe("stable per-purchase key; omit for a fresh one"),
           },
           annotations: { readOnlyHint: false },
+          _meta: UI_META,
         },
         async ({ grantId, productId, quantity, idempotencyKey }): Promise<CallToolResult> => {
           const g = await grants.retrieve(grantId);
-          if (!g) return { content: [{ type: "text", text: JSON.stringify({ error: "unknown grant" }) }], structuredContent: { error: "unknown grant" }, isError: true };
+          if (!g) return unknownGrant();
           const qty = quantity ?? 1;
-          const reply = (door: Record<string, unknown>): CallToolResult => {
-            const view = { grantId, productId, ...door };
-            return { content: [{ type: "text", text: JSON.stringify(view) }], structuredContent: view };
-          };
+          // The spend outcome (typed door) rides in the result's `spend`; the display projection
+          // re-reads the grant's live budget so the returned card reflects the draw-down.
+          const spent = (door: Record<string, unknown>): Promise<CallToolResult> => grantResult(g, { spend: { productId, ...door } });
 
           // Re-price and re-validate against the storefront's LIVE catalog before delegating
           // (Codex P1 + invariant 2). The grant engine holds its own catalog snapshot, which a
@@ -745,52 +1036,53 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
           // snapshot. The engine remains the authority for allow-bounds and budget draw-down.
           await source.load();
           const live = getProduct(source.current(), productId);
-          if (!live) return reply({ ok: false, code: "invalid-request", reason: "unknown product" }); // P2: typed, not a throw
-          // Age completes unattended ONLY against a proof the human sealed into THIS grant at
-          // approval time (#172), tested at the LIVE catalog's threshold — so a product newly
+          if (!live) return spent({ ok: false, code: "invalid-request", reason: "unknown product" }); // P2: typed, not a throw
+          // Age completes unattended ONLY against a proof the human sealed into THIS grant before
+          // authorizing it (#172), tested at the LIVE catalog's threshold — so a product newly
           // marked 21+, or raised from 18+ to 21+, still steps up even though the grant's own
           // snapshot predates the change. No proof, or one below the bar ⇒ step-up as before.
-          if (live.minimumAge != null && !ageProofCovers(g.ageProof, live.minimumAge)) return reply({ ok: false, code: "step-up" });
+          if (live.minimumAge != null && !ageProofCovers(g.ageProof, live.minimumAge)) return spent({ ok: false, code: "step-up" });
           // Live price vs the sealed cap — measured on what the human is actually CHARGED, so the
           // grant's own loyalty discount (#172) is applied here exactly as the engine applies it
           // when it prices and signs the draw. Comparing the list price instead would refuse a
           // purchase the gate would have completed: a discount one path honours and another
-          // refuses is precisely the drift invariant 3 forbids.
-          // Computed in integer CENTS, the units the grant engine prices in — rounding the same
-          // discount in dollars would land a cent or two off and refuse purchases inside that band.
+          // refuses is precisely the drift invariant 3 forbids. Computed in integer CENTS, the
+          // units the engine prices in — rounding the same discount in dollars would land a cent
+          // or two off and refuse purchases inside that band.
           const cents = (dollars: number) => Math.round(dollars * 100);
           const listed = cents(live.price) * qty;
           const pct = g.membershipProof?.discountPct ?? 0;
           const charged = pct > 0 ? listed - Math.round((listed * pct) / 100) : listed;
-          if (charged > cents(g.perSpend)) return reply({ ok: false, code: "per-spend-exceeded" });
+          if (charged > cents(g.perSpend)) return spent({ ok: false, code: "per-spend-exceeded" });
 
           try {
             const s = await g.spend({
               idempotencyKey: idempotencyKey ?? `mcp-${randomUUID().slice(0, 12)}`,
               items: [{ sku: productId, qty }],
             });
-            return reply(s as unknown as Record<string, unknown>);
+            return spent(s as unknown as Record<string, unknown>);
           } catch {
             // The engine's catalog doesn't know this sku (it throws on an unknown item) — surface
             // the promised typed refusal instead of a generic tool exception. P2.
-            return reply({ ok: false, code: "invalid-request", reason: "unknown product" });
+            return spent({ ok: false, code: "invalid-request", reason: "unknown product" });
           }
         },
       );
-      server.registerTool(
+      registerAppTool(
+        server,
         "revoke-grant",
         {
           title: "Revoke Grant",
           description: "Kill-switch a spending grant — the very next spend is refused (code: revoked). Not reversible.",
           inputSchema: { grantId: z.string() },
           annotations: { readOnlyHint: false },
+          _meta: UI_META,
         },
         async ({ grantId }): Promise<CallToolResult> => {
           const g = await grants.retrieve(grantId);
-          if (!g) return { content: [{ type: "text", text: JSON.stringify({ error: "unknown grant" }) }], structuredContent: { error: "unknown grant" }, isError: true };
+          if (!g) return unknownGrant();
           await g.revoke();
-          const view = grantView((await grants.retrieve(grantId))!);
-          return { content: [{ type: "text", text: JSON.stringify(view) }], structuredContent: view };
+          return grantResult((await grants.retrieve(grantId))!);
         },
       );
     }
@@ -815,6 +1107,10 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
         contents: [{ uri: SKYBRIDGE_URI, mimeType: SKYBRIDGE_MIME, text: await loadBundle(), _meta: { "openai/widgetCSP": { connect_domains: baseUrl ? [baseUrl] : [], resource_domains: [...IMAGE_DOMAINS, "data:"] } } }],
       }),
     );
+
+    // MRTR: surface `params.requestState` / `params.inputResponses` to the tool handlers above.
+    // Must run AFTER the tools are registered — the SDK installs its tools/call handler lazily.
+    enableMrtrParams(server);
 
     return server;
   }

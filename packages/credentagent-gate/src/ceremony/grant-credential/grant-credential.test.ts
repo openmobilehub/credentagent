@@ -20,7 +20,6 @@
 import { describe, it, expect } from "vitest";
 import express, { type Express } from "express";
 import request from "supertest";
-import { mountCeremony } from "../mount.js";
 import { CredentAgent } from "../../client.js";
 import type { Grants } from "../../grants.js";
 
@@ -38,23 +37,18 @@ interface Harness {
   grants: Grants;
 }
 
+// `grants.serve(app)` is the WHOLE wiring — no checkout ceremony seams to assemble. A host that
+// only does grants gets these routes from the same call that serves the page.
 function harness(opts: { loyaltyDiscountPct?: number } = {}): Harness {
-  const ca = new CredentAgent({ walletOrigin: "http://localhost:4000", catalog: CATALOG, ...opts });
+  const ca = new CredentAgent({ walletOrigin: "http://localhost:4000", catalog: CATALOG, gateSecret: "stable-test-secret", ...opts });
   const app = express();
   app.use(express.json());
-  mountCeremony(app as never, {
-    verificationStore: ca.store,
-    orderStore: { read: async () => null }, // this rail resolves grants, never orders
-    catalog: { createOrder: () => { throw new Error("unused"); } },
-    completion: async () => ({ completed: true }),
-    signingKey: "stable-test-secret",
-    grants: ca.grants,
-  });
+  ca.grants.serve(app as never);
   return { app, grants: ca.grants };
 }
 
-const pending = (grants: Grants, categories = ["Beverages"]) =>
-  grants.create({ merchant: "utopia", budget: 100, perSpend: 30, allow: { categories } });
+const pending = (grants: Grants, skus = ["wine"]) =>
+  grants.create({ merchant: "utopia", budget: 100, perSpend: 30, allow: { skus } });
 
 // ── the threshold is the server's, not the request's ─────────────────────────
 
@@ -113,10 +107,10 @@ describe("grant-credential — the age threshold is re-derived from the catalog 
 describe("grant-credential — the ceremony is pending-only, per-grant, and only where it's needed", () => {
   // BYPASS (the `status !== "pending"` half of resolveGrantAge): consent is the Approve tap.
   // Drop it and this goes red — an already-approved grant would gain 21+ buying power.
-  it("BYPASS: an already-approved grant has no ceremony — 404, and no proof is written", async () => {
+  it("BYPASS: an already-authorized grant has no ceremony — 404, and no proof is written", async () => {
     const { app, grants } = harness();
-    const g = await pending(grants);
-    await grants._authorize(g.id);
+    const g = await grants.create({ merchant: "utopia", budget: 100, perSpend: 30, allow: { skus: ["wine"] }, signing: "page" });
+    expect(await grants._authorize(g.id)).toBe(true);
     await request(app).get(`/credentagent/grants/${g.id}/age`).expect(404);
     await request(app).post(`/credentagent/grants/${g.id}/age/verify`).send({ claims: { age_over_21: true } }).expect(404);
     expect((await grants.retrieve(g.id))!.ageProof).toBeUndefined();
@@ -132,9 +126,9 @@ describe("grant-credential — the ceremony is pending-only, per-grant, and only
     expect((await grants.retrieve(b.id))!.ageProof).toBeUndefined();
   });
 
-  it("a grant with nothing restricted in scope has no ceremony to run — 404", async () => {
+  it("a grant naming an unrestricted product has no age ceremony — 404", async () => {
     const { app, grants } = harness();
-    const g = await pending(grants, ["Electronics"]);
+    const g = await pending(grants, ["headphones"]);
     await request(app).get(`/credentagent/grants/${g.id}/age`).expect(404);
     await request(app).post(`/credentagent/grants/${g.id}/age/verify`).send({ claims: { age_over_21: true } }).expect(404);
   });
@@ -203,10 +197,10 @@ describe("grant-credential — the membership step (#172)", () => {
   });
 
   // BYPASS (pending-only): the terms are what the human approved.
-  it("BYPASS: an already-approved grant has no membership step — 404, nothing written", async () => {
+  it("BYPASS: an already-authorized grant has no membership step — 404, nothing written", async () => {
     const { app, grants } = withProgramme();
-    const g = await pending(grants);
-    await grants._authorize(g.id);
+    const g = await grants.create({ merchant: "utopia", budget: 100, perSpend: 30, allow: { skus: ["wine"] }, signing: "page" });
+    expect(await grants._authorize(g.id)).toBe(true);
     await request(app).post(`/credentagent/grants/${g.id}/membership/verify`).send({ claims: { membership_number: "GOLD-0001" } }).expect(404);
     expect((await grants.retrieve(g.id))!.membershipProof).toBeUndefined();
   });
@@ -232,20 +226,12 @@ describe("grant-credential — the membership step (#172)", () => {
   });
 });
 
-describe("grant-credential — self-skips without a grants resource", () => {
-  it("registers NO routes when mount() gets no grants, and flags the approve page when it does", async () => {
-    const app = express();
-    mountCeremony(app as never, {
-      verificationStore: new CredentAgent({ walletOrigin: "http://x" }).store,
-      orderStore: { read: async () => null },
-      catalog: { createOrder: () => { throw new Error("unused"); } },
-      completion: async () => ({ completed: true }),
-      signingKey: "stable-test-secret",
-    });
-    await request(app).get("/credentagent/grants/grant_x/age").expect(404); // no handler at all
-    await request(app).get("/credentagent/grants/grant_x/membership").expect(404);
-
-    const { grants } = harness();
-    expect(grants._credentialRailMounted).toBe(true); // the approve page may now offer the button
+describe("grant-credential — registered by grants.serve(app), nothing else needed", () => {
+  it("needs no checkout ceremony seams — and the credential rail flags nothing to guess at", async () => {
+    const { app, grants } = harness({ loyaltyDiscountPct: 10 });
+    const g = await pending(grants);
+    // Age + membership both served off the one `grants.serve(app)` call in `harness`.
+    await request(app).get(`/credentagent/grants/${g.id}/age`).expect(200);
+    await request(app).get(`/credentagent/grants/${g.id}/membership`).expect(200);
   });
 });

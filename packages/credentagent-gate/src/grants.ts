@@ -24,7 +24,8 @@ import { DelegatedGate, DelegatedGrant, type CatalogEntry } from "./delegated.js
 import { serveGrants, type GrantsApp } from "./grants-serve.js";
 import { ageScopeFor, skuAllowed, type GrantAgeScope } from "./grants-age.js";
 import type { SealedAgeProof, SealedMembershipProof } from "./ceremony/mandate.js";
-import type { Branding } from "./types.js";
+import type { IntentBoundsInput } from "./ceremony/intent-sign/bounds.js";
+import type { Branding, ReaderIdentity, TrustLevel } from "./types.js";
 
 /** Why a grant operation refused — a TYPED union (never `string`; #95 review). */
 export type GrantDoorCode =
@@ -64,6 +65,13 @@ export interface GrantAllow {
   categories?: string[];
 }
 
+/** How the human authorizes a grant (spec 012):
+ *  • "page"   — today's default: click Approve on the server page (server-issued-demo).
+ *  • "device" — the wallet SIGNS the Intent Mandate first; the grant reaches "authorized"
+ *               ONLY through the verified device signature (trust_level "device-signed").
+ */
+export type GrantSigning = "device" | "page";
+
 export interface CreateGrantOptions {
   /** The granted merchant scope. */
   merchant: string;
@@ -75,16 +83,80 @@ export interface CreateGrantOptions {
   allow?: GrantAllow;
   /** The human sentence shown at approve time. */
   description?: string;
+  /** How the human authorizes (spec 012). Defaults to **"device"**: the grant's approveUrl serves
+   *  the wallet signing ceremony, and the grant only authorizes on a verified device signature over
+   *  its exact bounds. Pass "page" to opt INTO the click-to-approve stand-in — it takes the human's
+   *  word for it (`trustLevel: "server-issued-demo"`) and exists for demos, examples and CI, where
+   *  no phone is in the loop. Approving a grant is a signature by default; the weaker door must be
+   *  asked for by name. */
+  signing?: GrantSigning;
 }
 
 export type GrantStatus = "pending" | "authorized" | "denied" | "revoked";
+
+/** A grant's DISPLAY lifecycle — the projection/UI state, derived ONCE server-side from the
+ *  raw {@link GrantStatus} plus the live money read so a view never re-derives "low"/"exhausted"
+ *  independently (spec 011 FR-1 / UX A2). `low` = remaining has fallen to ≤ 20% of budget;
+ *  `exhausted` = the budget is fully drawn down. */
+export type GrantLifecycle = "pending" | "active" | "low" | "exhausted" | "revoked" | "denied";
+
+/** A grant's live money read, in the grant's dollars — what a display shows and what the
+ *  {@link grantLifecycle} derivation reads. `spent + remaining === budget`. */
+export interface GrantUsage {
+  budget: number;
+  spent: number;
+  remaining: number;
+}
+
+/** Fraction of the budget at/under which an active grant reads as "running low" (UX design §5). */
+const LOW_BUDGET_FRACTION = 0.2;
+
+/**
+ * The ONE lifecycle derivation (spec 011 FR-1 / UX A2): map a grant's raw status + live money
+ * to its display lifecycle. Terminal/pending states pass straight through; an authorized grant
+ * is `exhausted` when spent out, `low` at ≤ 20% remaining, else `active`. Kept here (not in the
+ * widget) so every surface — server projection, tests, custom views — reads the same rule.
+ */
+export function grantLifecycle(input: { status: GrantStatus; budget: number; remaining: number }): GrantLifecycle {
+  const { status, budget, remaining } = input;
+  if (status === "pending") return "pending";
+  if (status === "denied") return "denied";
+  if (status === "revoked") return "revoked";
+  // authorized:
+  if (remaining <= 0) return "exhausted";
+  if (remaining <= LOW_BUDGET_FRACTION * budget) return "low";
+  return "active";
+}
 
 /** The one spend door (spec 009 FR-003 shape). A retried idempotency key replays the ORIGINAL
  *  outcome — success OR refusal (`replayed: true` on both) — so a key can never be repurposed
  *  with a different item after a refusal (a P2 on #112). */
 export type SpendDoor =
-  | { ok: true; amount: number; remaining: number; replayed: boolean; authorization: "delegated"; delegationId?: string }
+  | {
+      ok: true;
+      amount: number;
+      remaining: number;
+      replayed: boolean;
+      authorization: "delegated";
+      delegationId?: string;
+      /** For a device-signed grant (spec 012, FR-5): the signed Intent Mandate this spend
+       *  draws against — `id` (the content-addressed mandate id) + `boundsHash` (the exact
+       *  bounds the device signed). Absent on page-mode grants. So a settled purchase traces
+       *  to the signed authority. */
+      mandate?: { id: string; boundsHash: string };
+    }
   | { ok: false; code: GrantDoorCode; remaining?: number; retryable?: string; replayed?: boolean };
+
+/** The device-signature evidence recorded when a device-mode grant authorizes (spec 012).
+ *  `verifiedBy` + `trustLevel` are the FR-4 provenance: "gate"/"device-signed" for the in-gate
+ *  backend, or an external verifier's id + its attested level (relayed verbatim). */
+export interface GrantMandateEvidence {
+  boundsHash: string;
+  signedAt: string;
+  credentialDoctype: string;
+  verifiedBy: string;
+  trustLevel: TrustLevel;
+}
 
 export interface SpendItems {
   /** Durable per-purchase key — a safe retry replays the SAME outcome (`replayed: true`). */
@@ -97,13 +169,21 @@ interface GrantRecord {
   id: string;
   status: GrantStatus;
   opts: CreateGrantOptions;
+  /** When the grant was opened (ISO 8601) — part of the signed bounds (spec 012). */
+  createdAt: string;
+  /** A per-grant random salt folded into the signed bounds (spec 012, bounds.ts). */
+  boundsNonce: string;
   /** Minted at AUTHORIZE time (the intent is sealed when the human approves, not before). */
   engine?: DelegatedGrant;
-  /** The age claim the human proved on the approve page, held until `_authorize` seals it into
-   *  the intent (#172). Writable ONLY while the grant is pending — see `_recordAgeProof`. */
+  /** The age claim the human proved before authorizing, held until the grant seals it into the
+   *  intent (#172). Writable ONLY while the grant is pending — see `_recordAgeProof`. */
   ageProof?: SealedAgeProof;
-  /** The loyalty membership the human proved on the approve page, same lifecycle (#172). */
+  /** The loyalty membership the human proved before authorizing, same lifecycle (#172). */
   membershipProof?: SealedMembershipProof;
+  /** Device-signature evidence (spec 012) — present once a device-mode grant authorizes. */
+  mandate?: GrantMandateEvidence;
+  /** The content-addressed Intent Mandate id (the engine's id) a device spend references. */
+  mandateId?: string;
   /** Idempotent spend cache: key → the door already returned (a retry replays it). */
   cache: Map<string, SpendDoor>;
 }
@@ -112,14 +192,18 @@ export interface GrantsDeps {
   walletOrigin: string;
   /** The priced catalog (dollars) — the ONE price source; also read by the `allow` bounds. */
   catalog?: Record<string, CatalogEntry>;
-  /** Host brand for the approve page — the SAME one the ceremony gate pages wear, so a human
-   *  who verifies their age and then approves never sees the brand change under them. */
+  /** Stable secret sealing the intent-sign reader context (spec 012). Defaults to a
+   *  per-instance random key — fine because grant records are in-memory / process-local. */
+  signingKey?: string;
+  /** Stable reader identity the intent-sign request presents (absent ⇒ per-request self-signed). */
+  readerIdentity?: ReaderIdentity;
+  /** Host brand for the signing page (absent ⇒ the built-in look; never brands the trust line). */
   branding?: Branding;
   /** Your loyalty programme's discount, as a percentage (e.g. `10`). Setting it OPTS IN: the
-   *  approve page grows a "present your membership" step, and a grant the human proves one on
-   *  prices every unattended purchase at this rate (#172). Absent ⇒ no membership step anywhere
-   *  and every grant prices at full catalog price, exactly as before. The rate is SEALED into
-   *  each grant at approval time, so changing it here never re-prices a grant already approved. */
+   *  page grows a "present your membership" step, and a grant the human proves one on prices
+   *  every unattended purchase at this rate (#172). Absent ⇒ no membership step anywhere and
+   *  every grant prices at full catalog price, exactly as before. The rate is SEALED into each
+   *  grant when it authorizes, so changing it here never re-prices a grant already authorized. */
   loyaltyDiscountPct?: number;
 }
 
@@ -191,27 +275,61 @@ export class Grants {
   private readonly locks = new KeyedMutex();
   private gate?: DelegatedGate;
   private served = false;
-  /** Set by the grant-credential rail when `mount()` registers it (#172). The approve page offers
-   *  its "present your credential" buttons ONLY when the ceremonies are actually reachable — a
-   *  host that calls `grants.serve(app)` without `mount(app)` gets the disclosure alone, never a
-   *  link to a 404. */
-  _credentialRailMounted = false;
-
-  /** The brand the approve page wears (read by `serveGrants`). */
-  get _branding(): Branding | undefined {
-    return this.deps.branding;
-  }
+  /** Stable secret that seals the intent-sign reader context (spec 012). */
+  readonly signingSecret: string;
 
   /** The configured loyalty rate, or undefined when the host runs no programme (#172). Read by
-   *  the approve page and the grant-credential rail to decide whether a membership step exists. */
+   *  the page and the grant-credential rail to decide whether a membership step exists at all.
+   *  Fail-closed on a nonsensical configuration rather than offer a rate that can't be honoured:
+   *  a discount must be a real percentage strictly between 0 and 100. */
   get _loyaltyDiscountPct(): number | undefined {
     const pct = this.deps.loyaltyDiscountPct;
-    // Fail-closed on a nonsensical configuration rather than seal a rate that can't be honoured:
-    // a discount must be a real percentage strictly between 0 and 100.
     return typeof pct === "number" && Number.isFinite(pct) && pct > 0 && pct < 100 ? pct : undefined;
   }
 
-  constructor(private readonly deps: GrantsDeps) {}
+  constructor(private readonly deps: GrantsDeps) {
+    this.signingSecret = deps.signingKey ?? globalThis.crypto.randomUUID();
+  }
+
+  /** Config the rails `grants.serve(app)` registers read — the intent-sign rail (spec 012) and
+   *  the grant-credential rail (#172). One object, so a page and its ceremonies can never be
+   *  configured differently. */
+  get railConfig(): { walletOrigin: string; secret: string; readerIdentity?: ReaderIdentity; branding?: Branding; loyaltyDiscountPct?: number } {
+    const loyaltyDiscountPct = this._loyaltyDiscountPct;
+    return {
+      walletOrigin: this.deps.walletOrigin,
+      secret: this.signingSecret,
+      ...(this.deps.readerIdentity ? { readerIdentity: this.deps.readerIdentity } : {}),
+      ...(this.deps.branding ? { branding: this.deps.branding } : {}),
+      ...(loyaltyDiscountPct != null ? { loyaltyDiscountPct } : {}),
+    };
+  }
+
+  /** The grant's signed BOUNDS (spec 012) — assembled from the SERVER's record, never the
+   *  client. `null` when the grant is unknown. The intent-sign rail re-derives boundsHash
+   *  from this at /verify and requires equality with the value sealed at /request. */
+  _boundsInputFor(id: string): IntentBoundsInput | null {
+    const rec = this.records.get(id);
+    if (!rec) return null;
+    return {
+      grantId: rec.id,
+      merchant: rec.opts.merchant,
+      budget: rec.opts.budget,
+      perSpend: rec.opts.perSpend,
+      ...(rec.opts.allow ? { allow: rec.opts.allow } : {}),
+      createdAt: rec.createdAt,
+      // The credentials the human presented before signing are TERMS of the grant, and the page
+      // shows them — so they ride the signed bytes (#172). Taken from the SERVER's record, like
+      // every other field here; a claim recorded between /request and /verify changes the hash
+      // and the signature stops verifying, rather than silently riding a signature the human
+      // gave for different terms.
+      ...(rec.ageProof ? { ageProof: { provenAge: rec.ageProof.provenAge, ...(rec.ageProof.expiresAt ? { expiresAt: rec.ageProof.expiresAt } : {}) } } : {}),
+      ...(rec.membershipProof
+        ? { membershipProof: { membershipNumber: rec.membershipProof.membershipNumber, discountPct: rec.membershipProof.discountPct } }
+        : {}),
+      nonce: rec.boundsNonce,
+    };
+  }
 
   private engineGate(): DelegatedGate {
     if (!this.deps.catalog) {
@@ -249,8 +367,21 @@ export class Grants {
     // SNAPSHOT + FREEZE the bounds at create (a P1 on #112): the record and the exposed handle
     // share this immutable copy, so neither a caller mutating `grant.allow` nor the original
     // options object can widen what the human approved after the fact.
-    const sealed: CreateGrantOptions = deepFreeze(structuredClone(opts));
-    const rec: GrantRecord = { id, status: "pending", opts: sealed, cache: new Map() };
+    // Resolve `signing` HERE, once, so every downstream branch reads a concrete mode and the
+    // default lives in exactly one place. Sealed with the rest of the bounds: how the human
+    // authorizes is part of what they authorize, and is frozen against later widening.
+    const sealed: CreateGrantOptions = deepFreeze(structuredClone({ ...opts, signing: opts.signing ?? "device" }));
+    const rec: GrantRecord = {
+      id,
+      status: "pending",
+      opts: sealed,
+      // The bounds a device signs over (spec 012): a creation timestamp + a random salt, so
+      // re-creating identical bounds still hashes distinctly. Minted for every grant (inert
+      // for page mode — it never computes boundsHash).
+      createdAt: new Date().toISOString(),
+      boundsNonce: globalThis.crypto.randomUUID(),
+      cache: new Map(),
+    };
     this.records.set(id, rec);
     return this.view(rec);
   }
@@ -273,6 +404,11 @@ export class Grants {
     return this.locks.run(id, async () => {
       const rec = this.records.get(id);
       if (!rec || rec.status !== "pending") return false;
+      // A device-mode grant NEVER authorizes through the page-approve seam (spec 012, FR-3):
+      // only a verified device signature (_authorizeDevice) can seal it. Refuse here — the
+      // grant stays pending — so "signed by the device first" cannot be side-stepped by
+      // clicking the old approve button. (Bypass test (d) deletes this guard.)
+      if (rec.opts.signing === "device") return false;
       rec.engine = await this.engineGate().preApprove({
         merchant: rec.opts.merchant,
         perOrder: toCents(rec.opts.perSpend),
@@ -290,10 +426,10 @@ export class Grants {
   }
 
   /**
-   * The age seam (#172) — called by the grant-credential rail when the human's wallet proves an over-age
-   * claim on the approve page, BEFORE they tap Approve. The wallet ceremony and the instant-demo
-   * path both land here; neither may pass a threshold of its own choosing (the rail re-derives it
-   * from the catalog).
+   * The age seam (#172) — called by the grant-credential rail when the human's wallet proves an
+   * over-age claim, BEFORE the grant authorizes (before the Approve tap in page mode, before the
+   * signature in device mode). The wallet ceremony and the instant-demo path both land here;
+   * neither may pass a threshold of its own choosing (the rail re-derives it from the catalog).
    *
    * PENDING ONLY, and serialized with the rest of the lifecycle: an already-authorized grant can
    * never gain a capability the human didn't approve, and a proof can't race the approve tap.
@@ -321,14 +457,14 @@ export class Grants {
 
   /**
    * The membership seam (#172) — called by the grant-credential rail when the human's wallet
-   * discloses a loyalty membership on the approve page, BEFORE they tap Approve. Its effect is
-   * the mirror of the age proof's: where age UNLOCKS items, this LOWERS the price of every
-   * purchase the agent later makes under the grant.
+   * discloses a loyalty membership, BEFORE the grant authorizes. Its effect is the mirror of the
+   * age proof's: where age UNLOCKS items, this LOWERS the price of every purchase the agent
+   * later makes under the grant.
    *
    * PENDING ONLY and serialized with the rest of the lifecycle, for the same reason: an already
-   * approved grant must never gain terms the human didn't approve. The rate is taken from THIS
-   * instance's configuration and sealed with the claim — never from the request — so a later
-   * config change cannot re-price a grant that is already sealed.
+   * authorized grant must never gain terms the human didn't authorize. The rate is taken from
+   * THIS instance's configuration and sealed with the claim — never from the request — so a
+   * later config change cannot re-price a grant that is already sealed.
    */
   async _recordMembershipProof(id: string, proof: { membershipNumber: string }): Promise<boolean> {
     return this.locks.run(id, async () => {
@@ -346,6 +482,39 @@ export class Grants {
         // HONESTY: the wire crypto is real, the issuer trust anchor is not (#14).
         trust_level: "presence-only-demo",
       };
+      return true;
+    });
+  }
+
+  /**
+   * The DEVICE authorize seam (spec 012) — called by the intent-sign rail's /verify ONLY
+   * after it verified the wallet's device signature over this grant's exact bounds. Seals the
+   * engine with the evidence's trust level (relayed verbatim — the gate never upgrades it) and
+   * records the mandate. A page-mode grant, or a grant not pending, is refused — so a
+   * device-signed authorization can never be forged around the verified-evidence path.
+   */
+  async _authorizeDevice(id: string, evidence: GrantMandateEvidence): Promise<boolean> {
+    return this.locks.run(id, async () => {
+      const rec = this.records.get(id);
+      if (!rec || rec.status !== "pending" || rec.opts.signing !== "device") return false;
+      rec.engine = await this.engineGate().preApprove({
+        merchant: rec.opts.merchant,
+        perOrder: toCents(rec.opts.perSpend),
+        total: toCents(rec.opts.budget),
+        description:
+          rec.opts.description ?? `Up to $${rec.opts.budget} at ${rec.opts.merchant}, $${rec.opts.perSpend}/purchase`,
+        // Honesty carried in the SEALED record: real consent + the attested trust level.
+        presence: "delegated",
+        trustLevel: evidence.trustLevel,
+        // The credentials the human proved BEFORE signing ride the sealed bounds too (#172) —
+        // and, because they are part of `canonicalIntentBounds`, the device signature covers
+        // them: the wallet signed the exact terms the page showed, proofs included.
+        ...(rec.ageProof ? { ageProof: rec.ageProof } : {}),
+        ...(rec.membershipProof ? { membershipProof: rec.membershipProof } : {}),
+      });
+      rec.status = "authorized";
+      rec.mandate = evidence;
+      rec.mandateId = rec.engine.id;
       return true;
     });
   }
@@ -408,7 +577,16 @@ export class Grants {
         // The engine runs in cents (fix 2); convert its amount/remaining back to the plain-dollar
         // public surface. Division by 100 of an integer-cent value is exact for any cent amount.
         const door: SpendDoor = r.ok
-          ? { ok: true, amount: r.amount / 100, remaining: r.remaining / 100, replayed: false, authorization: "delegated", ...(r.delegationId ? { delegationId: r.delegationId } : {}) }
+          ? {
+              ok: true,
+              amount: r.amount / 100,
+              remaining: r.remaining / 100,
+              replayed: false,
+              authorization: "delegated",
+              ...(r.delegationId ? { delegationId: r.delegationId } : {}),
+              // Trace the spend to the signed Intent Mandate (spec 012, FR-5) — device grants only.
+              ...(rec.mandate && rec.mandateId ? { mandate: { id: rec.mandateId, boundsHash: rec.mandate.boundsHash } } : {}),
+            }
           : { ok: false, code: CODE_MAP[r.reason ?? ""] ?? "refused", remaining: r.remaining / 100, ...(r.retryable ? { retryable: r.retryable } : {}) };
         rec.cache.set(idempotencyKey, door);
         return door;
@@ -425,16 +603,31 @@ export class Grants {
       perSpend: rec.opts.perSpend,
       allow: rec.opts.allow,
       description: rec.opts.description,
+      signing: rec.opts.signing as GrantSigning, // resolved + sealed at create()
       presence: rec.engine?.presence ?? "delegated-demo",
-      trustLevel: rec.engine?.trustLevel ?? "server-issued-demo",
-      // Derived HERE, from the sealed bounds against the live catalog — never reported by the
-      // agent (#172). Re-derived per handle read, so a catalog change is reflected at the next
-      // `retrieve()`; it is disclosure, not the control (grants-age.ts documents the limit).
+      // Derived HERE, from the products the bounds NAME, read against the live catalog — never
+      // reported by the agent (#172). Re-derived per handle read, so a catalog change shows up at
+      // the next `retrieve()`. Disclosure, not the control.
       ageScope: ageScopeFor(rec.opts.allow, this.deps.catalog),
       // The sealed intent is the authority once authorized; before that, the pending record's
-      // claim is what the approve page reflects back to the human.
+      // claim is what the page reflects back to the human.
       ageProof: rec.engine?.ageProof ?? rec.ageProof,
       membershipProof: rec.engine?.membershipProof ?? rec.membershipProof,
+      // The trust axis carries the honesty (spec 012): a device-signed grant relays the
+      // evidence's level ("device-signed", or a verifier's attested level); page mode stays
+      // "server-issued-demo". The TYPE, not copy, tells the two apart (FR-3).
+      trustLevel: rec.mandate?.trustLevel ?? rec.engine?.trustLevel ?? "server-issued-demo",
+      // The device-signature evidence (spec 012) — present only once a device grant is signed.
+      ...(rec.mandate ? { mandate: { boundsHash: rec.mandate.boundsHash, signedAt: rec.mandate.signedAt, credentialDoctype: rec.mandate.credentialDoctype, verifiedBy: rec.mandate.verifiedBy } } : {}),
+      usage: async (): Promise<GrantUsage> => {
+        const budget = rec.opts.budget;
+        // Before authorize there is no engine ledger yet: nothing has been drawn, so the
+        // full budget is available. After authorize (incl. once revoked) the engine's
+        // committed-draws ledger is the authority — convert its cents back to dollars.
+        if (!rec.engine) return { budget, spent: 0, remaining: budget };
+        const { spent, remaining } = await rec.engine.usage();
+        return { budget, spent: spent / 100, remaining: remaining / 100 };
+      },
       spend,
       revoke: async () => {
         // Revoke the engine's ledger IMMEDIATELY — OUTSIDE the per-grant queue — so a spend
@@ -466,20 +659,33 @@ export interface Grant {
   perSpend: number;
   allow?: GrantAllow;
   description?: string;
+  /** How the human authorizes this grant (spec 012) — "device" (default: their wallet signs these
+   *  exact bounds) or "page" (the click-to-approve stand-in, an explicit opt-in for demos/CI). */
+  readonly signing: GrantSigning;
   /** When/how consent happened — "delegated-demo" until the wallet ceremony lands (honesty axis). */
   presence: string;
+  /** How strongly the authorization is bound (honesty axis): "server-issued-demo" for page mode,
+   *  "device-signed" once a device grant is wallet-signed (or a verifier's relayed level). */
   trustLevel: string;
-  /** What these bounds cover, age-wise — the fact the approve page discloses BEFORE the human
-   *  taps Approve (#172). `{ minimumAge: null, items: [] }` when nothing in scope is restricted.
-   *  A forecast for a category grant, and DISCLOSURE only: the spend-time refusal is unchanged. */
+  /** The age-restricted products these bounds NAME, so the page can say so before the human
+   *  authorizes (#172). `{ minimumAge: null, items: [] }` when the grant names no restricted
+   *  product. DISCLOSURE only: the spend-time refusal is unchanged. */
   readonly ageScope: GrantAgeScope;
-  /** The age claim the human proved at approval time, if they did (#172). Absent ⇒ an
+  /** The age claim the human proved before authorizing, if they did (#172). Absent ⇒ an
    *  age-restricted purchase steps up. Read it to answer "may this grant buy that?" the way the
    *  gate does — pair it with `ageProofCovers(proof, requiredAge)`. */
   readonly ageProof?: SealedAgeProof;
-  /** The loyalty membership the human proved at approval time, if they did (#172). Present ⇒
+  /** The loyalty membership the human proved before authorizing, if they did (#172). Present ⇒
    *  every purchase under this grant is priced at `discountPct` off, on every path. */
   readonly membershipProof?: SealedMembershipProof;
+  /** The device-signature evidence (spec 012) — present ONLY once a device-mode grant is signed:
+   *  the exact bounds the device signed (`boundsHash`), when, which credential doctype, and who
+   *  verified. Absent on page-mode grants and unsigned device grants. */
+  readonly mandate?: { boundsHash: string; signedAt: string; credentialDoctype: string; verifiedBy: string };
+  /** Live money read (dollars) for a display/projection — `{ budget, spent, remaining }`. Async
+   *  because the engine's committed-draws ledger is the authority (it may be remote later); a
+   *  pending grant reads `{ spent: 0, remaining: budget }`. Feeds {@link grantLifecycle}. */
+  usage(): Promise<GrantUsage>;
   spend(input: SpendItems): Promise<SpendDoor>;
   revoke(): Promise<void>;
 }

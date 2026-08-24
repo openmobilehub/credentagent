@@ -47,13 +47,20 @@ export interface PreApproveOptions {
   description?: string;
   /** Who delegated — informational in v0.1 (an audit key; not yet an enforced identity). */
   subject?: string;
-  /** An age claim the HUMAN proved at approval time, sealed into the grant's bounds (#172).
+  /** An age claim the HUMAN proved before authorizing, sealed into the grant's bounds (#172).
    *  Absent ⇒ an age-restricted purchase steps up exactly as before. Present ⇒ purchases at or
    *  below its proven threshold complete unattended; anything above still steps up. */
   ageProof?: SealedAgeProof;
-  /** A loyalty membership the HUMAN proved at approval time (#172). Present ⇒ every purchase
+  /** A loyalty membership the HUMAN proved before authorizing (#172). Present ⇒ every purchase
    *  under this grant prices at its sealed rate, on BOTH the signing and the re-pricing side. */
   membershipProof?: SealedMembershipProof;
+  /** Honesty override (spec 012): how consent happened / how strongly it is bound. Default
+   *  "delegated-demo" / "server-issued-demo" (the demo approve page). A device-signed grant
+   *  passes "delegated" / "device-signed" so the SEALED bounds carry the real trust level —
+   *  honesty lives in the content-addressed record, not just the handle. Additive: page-mode
+   *  callers pass neither and the sealed bounds are byte-identical to today. */
+  presence?: "delegated" | "delegated-demo";
+  trustLevel?: string;
 }
 
 export interface Purchase {
@@ -163,12 +170,12 @@ export class DelegatedGate {
       totalAmount: opts.total,
       subject: opts.subject,
       delegate,
-      // Sealed WITH the bounds: `sealIntent` content-addresses the whole object, so the proof is
+      // Sealed WITH the bounds: `sealIntent` content-addresses the whole object, so a proof is
       // part of this grant's identity and cannot be attached or raised afterwards (#172).
       ...(opts.ageProof ? { ageProof: opts.ageProof } : {}),
       ...(opts.membershipProof ? { membershipProof: opts.membershipProof } : {}),
-      presence: "delegated-demo",
-      trust_level: "server-issued-demo",
+      presence: opts.presence ?? "delegated-demo",
+      trust_level: opts.trustLevel ?? "server-issued-demo",
     });
     return new DelegatedGrant(grant, privateKey, this.catalog, this.ctx);
   }
@@ -260,6 +267,16 @@ export class DelegatedGrant {
     if (res.completed) return { ok: true, amount: order.total, remaining, delegationId: res.delegationId };
     const refusal = res.refusals?.[0];
     return { ok: false, amount: order.total, remaining, reason: refusal?.code, retryable: refusal?.retryable };
+  }
+
+  /** Live money read for a projection/display: how much this grant has drawn down so far and
+   *  how much cumulative headroom is left. Reads the SAME committed-draws ledger `spend()`
+   *  returns `remaining` from, so a projection never re-derives money the engine owns. In the
+   *  engine's integer cents (the caller converts to its display units). */
+  async usage(): Promise<{ spent: number; remaining: number }> {
+    const committed = await this.ctx.revocation!.priorDraws(this.grant.intentId);
+    const spent = committed.reduce((sum, d) => sum + d.amount, 0);
+    return { spent, remaining: this.grant.totalAmount - spent };
   }
 
   /** Revoke the grant — the very next spend is refused, fail-closed. Async so a remote

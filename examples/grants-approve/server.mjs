@@ -61,7 +61,11 @@ credentagent.mount(store.app); // the /credentagent/* rails — incl. the grant 
 credentagent.grants.serve(store.app); // grant.approveUrl → the real approve page
 
 const grants = credentagent.grants;
-const bar = (description, allow) => grants.create({ merchant: "utopia", budget: 300, perSpend: 150, allow, description });
+// The grant NAMES its product (#175 — the storefront pins it before the link exists), which is
+// what the age step reads. `signing: "page"` keeps these states on the click-to-approve page; the
+// default is a device signature, and the last state below shows that page instead.
+const bar = (description, allow, signing = "page") =>
+  grants.create({ merchant: "utopia", budget: 300, perSpend: 150, allow, description, signing });
 
 // ── the states ───────────────────────────────────────────────────────────────
 // `_recordAgeProof` / `_recordMembershipProof` are what the ceremony calls when the human's wallet
@@ -69,24 +73,26 @@ const bar = (description, allow) => grants.create({ merchant: "utopia", budget: 
 // on grant 1 run the real thing.
 const BAR = "Your shopping agent wants to restock the bar cart while you're away.";
 
-const nothing = await bar(BAR, { categories: ["Beverages"] });
+const WHISKEY = { skus: ["oak-whiskey"] };
 
-const aged = await bar(BAR, { categories: ["Beverages"] });
+const nothing = await bar(BAR, WHISKEY);
+
+const aged = await bar(BAR, WHISKEY);
 await grants._recordAgeProof(aged.id, { provenAge: 21 });
 
-const member = await bar(BAR, { categories: ["Beverages"] });
+const member = await bar(BAR, WHISKEY);
 await grants._recordMembershipProof(member.id, { membershipNumber: "GOLD-0001" });
 
-const both = await bar(BAR, { categories: ["Beverages"] });
+const both = await bar(BAR, WHISKEY);
 await grants._recordAgeProof(both.id, { provenAge: 21 });
 await grants._recordMembershipProof(both.id, { membershipNumber: "GOLD-0001" });
 
-const unrestricted = await grants.create({
-  merchant: "utopia", budget: 300, perSpend: 150, allow: { categories: ["Electronics"] },
-  description: "Your shopping agent wants to replace your mouse.",
-});
+const unrestricted = await bar("Your shopping agent wants to replace your mouse.", { skus: ["drift-mouse"] });
 
-const approved = await bar(BAR, { categories: ["Beverages"] });
+// The DEFAULT mode: the page is the wallet signing ceremony, with the same steps above it.
+const deviceSigned = await bar(BAR, WHISKEY, "device");
+
+const approved = await bar(BAR, WHISKEY);
 await grants._authorize(approved.id);
 
 const AGE = { label: "Age" };
@@ -98,7 +104,8 @@ const STATES = [
   { label: "Membership proved", note: "Membership ✓ — 10% off every purchase, shown as a term in the limits.", grant: member, rail: [AGE, { ...MEMBER, done: true }, APPROVE] },
   { label: "Both proved", note: "The full stepper ticked, and a plain “Approve”.", grant: both, rail: [{ ...AGE, done: true }, { ...MEMBER, done: true }, APPROVE] },
   { label: "Nothing restricted", note: "No age step — just membership and the decision.", grant: unrestricted, rail: [MEMBER, APPROVE] },
-  { label: "Already approved", note: "The terminal state.", grant: approved, rail: [] },
+  { label: "Device-signed (the default)", note: "The same steps, above a wallet signature instead of a tap.", grant: deviceSigned, rail: [{ ...AGE }, { ...MEMBER }, { label: "Sign" }] },
+  { label: "Already authorized", note: "The terminal state.", grant: approved, rail: [] },
 ];
 
 // ── an index so you can walk the states ──────────────────────────────────────
