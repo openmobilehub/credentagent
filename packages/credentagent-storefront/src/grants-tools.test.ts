@@ -77,11 +77,40 @@ describe("grant tools over MCP (human-not-present)", () => {
     }
   });
 
+  // spec 012 (#144): a grant can require the human's WALLET to sign its exact bounds before
+  // anything can be spent. The rail lives in the gate, but it is only reachable end-to-end if the
+  // AGENT can ask for it — otherwise a device grant must be minted out-of-band by the host, and
+  // "agent creates → human signs on the phone → agent spends" is never actually exercised.
+  it("defaults to DEVICE signing; \"page\" is an explicit opt-in", async () => {
+    const ca = new CredentAgent({ walletOrigin: "http://localhost:3005", catalog: GATE_CATALOG });
+    const c = await client(ca);
+
+    const dflt = sc(await c.callTool({ name: "create-spending-grant", arguments: { budget: 200, perSpend: 60 } }));
+    expect((await ca.grants.retrieve(dflt.id))?.signing).toBe("device"); // the DEFAULT is a signature
+
+    const device = sc(await c.callTool({ name: "create-spending-grant", arguments: { budget: 200, perSpend: 60, signing: "device" } }));
+    expect((await ca.grants.retrieve(device.id))?.signing).toBe("device");
+  });
+
+  // BYPASS: asking for a wallet signature must never become a way to SKIP one. A device grant the
+  // wallet never signed spends nothing, and the page-approve seam must refuse to authorize it —
+  // otherwise an agent could create a device grant and then walk it through the easier door.
+  it("BYPASS: a device grant cannot be spent, nor page-approved, until a WALLET signs it", async () => {
+    const ca = new CredentAgent({ walletOrigin: "http://localhost:3005", catalog: GATE_CATALOG });
+    const c = await client(ca);
+    const g = sc(await c.callTool({ name: "create-spending-grant", arguments: { budget: 200, perSpend: 60, signing: "device" } }));
+
+    expect(await ca.grants._authorize(g.id)).toBe(false); // the page door is CLOSED for device grants
+
+    const s = sc(await c.callTool({ name: "spend-from-grant", arguments: { grantId: g.id, productId: "drift-mouse" } }));
+    expect(s.spend).toMatchObject({ ok: false, code: "not-authorized" });
+  });
+
   it("create returns a PENDING GrantViewData + approveUrl; spending before approval refuses not-authorized", async () => {
     const ca = new CredentAgent({ walletOrigin: "http://localhost:3005", catalog: GATE_CATALOG });
     const c = await client(ca);
 
-    const g = sc(await c.callTool({ name: "create-spending-grant", arguments: { budget: 200, perSpend: 60, categories: ["Electronics"] } }));
+    const g = sc(await c.callTool({ name: "create-spending-grant", arguments: { budget: 200, perSpend: 60, categories: ["Electronics"] , signing: "page" } }));
     expect(g.kind).toBe("credentagent.grant");
     expect(g.status).toBe("pending");
     expect(g.lifecycle).toBe("pending");
@@ -99,7 +128,7 @@ describe("grant tools over MCP (human-not-present)", () => {
     const ca = new CredentAgent({ walletOrigin: "http://localhost:3005", catalog: GATE_CATALOG });
     const c = await client(ca);
 
-    const g = sc(await c.callTool({ name: "create-spending-grant", arguments: { budget: 200, perSpend: 60, categories: ["Electronics", "Beverages"] } }));
+    const g = sc(await c.callTool({ name: "create-spending-grant", arguments: { budget: 200, perSpend: 60, categories: ["Electronics", "Beverages"] , signing: "page" } }));
     await ca.grants._authorize(g.id); // the human's one-time approval (the approveUrl page calls this same seam)
     expect(sc(await c.callTool({ name: "get-grant-status", arguments: { grantId: g.id } })).status).toBe("authorized");
 
@@ -147,7 +176,7 @@ describe("grant tools — GrantViewData projection (spec 011)", () => {
   it("create with `products` binds allow.skus and resolves the single product from the live catalog", async () => {
     const ca = new CredentAgent({ walletOrigin: "http://localhost:3005", catalog: GATE_CATALOG });
     const c = await connect(createStorefront({ grants: ca.grants, merchant: "Utopia" }));
-    const g = sc(await c.callTool({ name: "create-spending-grant", arguments: { budget: 200, perSpend: 60, products: ["drift-mouse"] } }));
+    const g = sc(await c.callTool({ name: "create-spending-grant", arguments: { budget: 200, perSpend: 60, products: ["drift-mouse"] , signing: "page" } }));
     expect(g.allow).toMatchObject({ skus: ["drift-mouse"], categories: [] });
     // A single-SKU grant is the flagship: the resolved product carries name/price/category (not just the id).
     expect(g.product).toMatchObject({ id: "drift-mouse", name: "Drift Wireless Mouse", price: 49, category: "Electronics" });
@@ -159,7 +188,7 @@ describe("grant tools — GrantViewData projection (spec 011)", () => {
   it("BYPASS: a `products`-scoped grant refuses a spend on any other product (not-allowed)", async () => {
     const ca = new CredentAgent({ walletOrigin: "http://localhost:3005", catalog: GATE_CATALOG });
     const c = await client(ca);
-    const g = sc(await c.callTool({ name: "create-spending-grant", arguments: { budget: 200, perSpend: 60, products: ["drift-mouse"] } }));
+    const g = sc(await c.callTool({ name: "create-spending-grant", arguments: { budget: 200, perSpend: 60, products: ["drift-mouse"] , signing: "page" } }));
     await ca.grants._authorize(g.id);
     // ✓ the bound product spends
     const ok = await c.callTool({ name: "spend-from-grant", arguments: { grantId: g.id, productId: "drift-mouse", idempotencyKey: "p1" } });
@@ -173,7 +202,7 @@ describe("grant tools — GrantViewData projection (spec 011)", () => {
     // A small budget so two $49 mouse spends cross 20% and then spend out. perSpend 49; budget 100.
     const ca = new CredentAgent({ walletOrigin: "http://localhost:3005", catalog: GATE_CATALOG });
     const c = await client(ca);
-    const g = sc(await c.callTool({ name: "create-spending-grant", arguments: { budget: 100, perSpend: 49, products: ["drift-mouse"] } }));
+    const g = sc(await c.callTool({ name: "create-spending-grant", arguments: { budget: 100, perSpend: 49, products: ["drift-mouse"] , signing: "page" } }));
     expect(g.lifecycle).toBe("pending");
     await ca.grants._authorize(g.id);
     expect(sc(await c.callTool({ name: "get-grant-status", arguments: { grantId: g.id } })).lifecycle).toBe("active");
@@ -195,7 +224,7 @@ describe("grant tools — GrantViewData projection (spec 011)", () => {
   it("money-origin: the projection's remaining IS the spend door's engine value, not a re-derivation", async () => {
     const ca = new CredentAgent({ walletOrigin: "http://localhost:3005", catalog: GATE_CATALOG });
     const c = await client(ca);
-    const g = sc(await c.callTool({ name: "create-spending-grant", arguments: { budget: 200, perSpend: 60, products: ["drift-mouse"] } }));
+    const g = sc(await c.callTool({ name: "create-spending-grant", arguments: { budget: 200, perSpend: 60, products: ["drift-mouse"] , signing: "page" } }));
     await ca.grants._authorize(g.id);
     const r = await c.callTool({ name: "spend-from-grant", arguments: { grantId: g.id, productId: "drift-mouse", idempotencyKey: "m1" } });
     expect(door(r)).toMatchObject({ ok: true, remaining: 151 }); // 200 − 49 (the catalog price), from the engine
@@ -233,7 +262,7 @@ describe("grant tools — merchant config & live-catalog re-pricing (Codex #118)
   it("seals the grant with the CONFIGURED merchant, not a hardcoded default", async () => {
     const ca = new CredentAgent({ walletOrigin: wallet, catalog: GATE_CATALOG });
     const c = await connect(createStorefront({ grants: ca.grants, merchant: "acme-co" }));
-    const g = sc(await c.callTool({ name: "create-spending-grant", arguments: { budget: 100, perSpend: 50 } }));
+    const g = sc(await c.callTool({ name: "create-spending-grant", arguments: { budget: 100, perSpend: 50 , signing: "page" } }));
     // g.merchant is read from the SEALED grant record — a hardcoded "utopia" would fail this.
     expect(g.merchant).toBe("acme-co");
   });
@@ -241,14 +270,14 @@ describe("grant tools — merchant config & live-catalog re-pricing (Codex #118)
   it("defaults the merchant to a neutral 'storefront' for the generic package", async () => {
     const ca = new CredentAgent({ walletOrigin: wallet, catalog: GATE_CATALOG });
     const c = await connect(createStorefront({ grants: ca.grants }));
-    const g = sc(await c.callTool({ name: "create-spending-grant", arguments: { budget: 100, perSpend: 50 } }));
+    const g = sc(await c.callTool({ name: "create-spending-grant", arguments: { budget: 100, perSpend: 50 , signing: "page" } }));
     expect(g.merchant).toBe("storefront");
   });
 
   it("refuses an unknown product with a typed invalid-request, not a thrown tool exception", async () => {
     const ca = new CredentAgent({ walletOrigin: wallet, catalog: GATE_CATALOG });
     const c = await client(ca);
-    const g = sc(await c.callTool({ name: "create-spending-grant", arguments: { budget: 100, perSpend: 50 } }));
+    const g = sc(await c.callTool({ name: "create-spending-grant", arguments: { budget: 100, perSpend: 50 , signing: "page" } }));
     await ca.grants._authorize(g.id);
     const r = await c.callTool({ name: "spend-from-grant", arguments: { grantId: g.id, productId: "ghost-item" } });
     expect(r.isError).toBeFalsy(); // a typed door, not a generic exception the agent can't branch on
@@ -262,7 +291,7 @@ describe("grant tools — merchant config & live-catalog re-pricing (Codex #118)
     const ca = new CredentAgent({ walletOrigin: wallet, catalog: { widget: { price: 20, category: "Gadgets" } } });
     const store = createStorefront({ grants: ca.grants, catalog: [prod({ id: "widget", price: 20, category: "Gadgets", minimumAge: 21 })] });
     const c = await connect(store);
-    const g = sc(await c.callTool({ name: "create-spending-grant", arguments: { budget: 100, perSpend: 50, categories: ["Gadgets"] } }));
+    const g = sc(await c.callTool({ name: "create-spending-grant", arguments: { budget: 100, perSpend: 50, categories: ["Gadgets"] , signing: "page" } }));
     await ca.grants._authorize(g.id);
     const s = await c.callTool({ name: "spend-from-grant", arguments: { grantId: g.id, productId: "widget" } });
     expect(door(s)).toMatchObject({ ok: false, code: "step-up" });
@@ -274,7 +303,7 @@ describe("grant tools — merchant config & live-catalog re-pricing (Codex #118)
     const ca = new CredentAgent({ walletOrigin: wallet, catalog: { widget: { price: 20, category: "Gadgets" } } });
     const store = createStorefront({ grants: ca.grants, catalog: [prod({ id: "widget", price: 500, category: "Gadgets" })] });
     const c = await connect(store);
-    const g = sc(await c.callTool({ name: "create-spending-grant", arguments: { budget: 1000, perSpend: 50, categories: ["Gadgets"] } }));
+    const g = sc(await c.callTool({ name: "create-spending-grant", arguments: { budget: 1000, perSpend: 50, categories: ["Gadgets"] , signing: "page" } }));
     await ca.grants._authorize(g.id);
     const s = await c.callTool({ name: "spend-from-grant", arguments: { grantId: g.id, productId: "widget" } });
     expect(door(s)).toMatchObject({ ok: false, code: "per-spend-exceeded" });
@@ -285,7 +314,7 @@ describe("grant tools — merchant config & live-catalog re-pricing (Codex #118)
     const ca = new CredentAgent({ walletOrigin: wallet, catalog: { widget: { price: 20, category: "Gadgets" } } });
     const store = createStorefront({ grants: ca.grants, catalog: [prod({ id: "widget", price: 20, category: "Gadgets" })] });
     const c = await connect(store);
-    const g = sc(await c.callTool({ name: "create-spending-grant", arguments: { budget: 100, perSpend: 50, categories: ["Gadgets"] } }));
+    const g = sc(await c.callTool({ name: "create-spending-grant", arguments: { budget: 100, perSpend: 50, categories: ["Gadgets"] , signing: "page" } }));
     await ca.grants._authorize(g.id);
     const s = await c.callTool({ name: "spend-from-grant", arguments: { grantId: g.id, productId: "widget", idempotencyKey: "w1" } });
     expect(door(s)).toMatchObject({ ok: true, amount: 20, remaining: 80 });

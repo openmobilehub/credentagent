@@ -76,9 +76,12 @@ export interface CreateGrantOptions {
   allow?: GrantAllow;
   /** The human sentence shown at approve time. */
   description?: string;
-  /** How the human authorizes (spec 012). Default "page" — today's behavior, byte-for-byte.
-   *  "device" opts into wallet signing: the grant's approveUrl serves the signing ceremony and
-   *  the grant only authorizes on a verified device signature over its exact bounds. Additive. */
+  /** How the human authorizes (spec 012). Defaults to **"device"**: the grant's approveUrl serves
+   *  the wallet signing ceremony, and the grant only authorizes on a verified device signature over
+   *  its exact bounds. Pass "page" to opt INTO the click-to-approve stand-in — it takes the human's
+   *  word for it (`trustLevel: "server-issued-demo"`) and exists for demos, examples and CI, where
+   *  no phone is in the loop. Approving a grant is a signature by default; the weaker door must be
+   *  asked for by name. */
   signing?: GrantSigning;
 }
 
@@ -324,7 +327,10 @@ export class Grants {
     // SNAPSHOT + FREEZE the bounds at create (a P1 on #112): the record and the exposed handle
     // share this immutable copy, so neither a caller mutating `grant.allow` nor the original
     // options object can widen what the human approved after the fact.
-    const sealed: CreateGrantOptions = deepFreeze(structuredClone(opts));
+    // Resolve `signing` HERE, once, so every downstream branch reads a concrete mode and the
+    // default lives in exactly one place. Sealed with the rest of the bounds: how the human
+    // authorizes is part of what they authorize, and is frozen against later widening.
+    const sealed: CreateGrantOptions = deepFreeze(structuredClone({ ...opts, signing: opts.signing ?? "device" }));
     const rec: GrantRecord = {
       id,
       status: "pending",
@@ -493,7 +499,7 @@ export class Grants {
       perSpend: rec.opts.perSpend,
       allow: rec.opts.allow,
       description: rec.opts.description,
-      signing: rec.opts.signing ?? "page",
+      signing: rec.opts.signing as GrantSigning, // resolved + sealed at create()
       presence: rec.engine?.presence ?? "delegated-demo",
       // The trust axis carries the honesty (spec 012): a device-signed grant relays the
       // evidence's level ("device-signed", or a verifier's attested level); page mode stays
@@ -541,7 +547,8 @@ export interface Grant {
   perSpend: number;
   allow?: GrantAllow;
   description?: string;
-  /** How the human authorizes this grant (spec 012) — "page" (default) or "device". */
+  /** How the human authorizes this grant (spec 012) — "device" (default: their wallet signs these
+   *  exact bounds) or "page" (the click-to-approve stand-in, an explicit opt-in for demos/CI). */
   readonly signing: GrantSigning;
   /** When/how consent happened — "delegated-demo" until the wallet ceremony lands (honesty axis). */
   presence: string;

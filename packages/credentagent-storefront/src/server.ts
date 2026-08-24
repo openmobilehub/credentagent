@@ -690,18 +690,24 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
             "a per-purchase cap, and optionally which specific PRODUCTS (by id) or product CATEGORIES are allowed. A " +
             "product-specific grant — 'buy me THIS one thing while I'm away' — is the sharpest kind: pass one product id. " +
             "Returns an approveUrl — SEND IT TO THE HUMAN; nothing can be spent until they approve there (status pending → " +
-            "authorized). Amounts are dollars.",
+            "authorized). Amounts are dollars. Approval is a WALLET SIGNATURE by default: the approveUrl serves a signing " +
+            "ceremony and the grant authorizes only on a real device signature over these exact bounds. Pass " +
+            "signing:\"page\" ONLY when the human has no phone in the loop and accepts a click-to-approve stand-in.",
           inputSchema: {
             budget: z.number().positive().describe("total budget in dollars"),
             perSpend: z.number().positive().describe("max dollars per single purchase"),
             products: z.array(z.string()).optional().describe("allowed product ids (e.g. oak-whiskey); one id = a product-specific grant; omit = any"),
             categories: z.array(z.string()).optional().describe("allowed product categories (e.g. Beverages); omit = any"),
             description: z.string().optional().describe("the human-readable sentence shown at approval"),
+            signing: z
+              .enum(["page", "device"])
+              .optional()
+              .describe('how the human authorizes: "device" (default — their phone wallet signs these exact bounds) or "page" (a click-to-approve stand-in; ask for it only when no phone is in the loop)'),
           },
           annotations: { readOnlyHint: false },
           _meta: UI_META,
         },
-        async ({ budget, perSpend, products, categories, description }): Promise<CallToolResult> => {
+        async ({ budget, perSpend, products, categories, description, signing }): Promise<CallToolResult> => {
           // Fold `products` → allow.skus and `categories` → allow.categories; omit `allow`
           // entirely when neither is given (no bounds ⇒ merchant-wide, the openGrantCard).
           const allow = {
@@ -714,8 +720,14 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
             perSpend,
             ...(Object.keys(allow).length ? { allow } : {}),
             ...(description ? { description } : {}),
+            ...(signing ? { signing } : {}),
           });
-          return grantResult(g, { note: "PENDING — send approveUrl to the human; spending refuses until they approve." });
+          return grantResult(g, {
+            note:
+              g.signing === "device"
+                ? "PENDING — send approveUrl to the human; it opens a WALLET SIGNING ceremony. Spending refuses until their device signs these bounds."
+                : "PENDING — send approveUrl to the human; spending refuses until they approve.",
+          });
         },
       );
       registerAppTool(

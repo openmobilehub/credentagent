@@ -16,7 +16,7 @@ const client = () => new CredentAgent({ walletOrigin: "http://localhost:4000", c
 
 /** create + approve (the demo authorize seam) in one step, for tests past the lifecycle. */
 async function authorizedGrant(ca: CredentAgent, allow?: { skus?: string[]; categories?: string[] }): Promise<Grant> {
-  const g = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30, ...(allow ? { allow } : {}) });
+  const g = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30, ...(allow ? { allow } : {}), signing: "page" });
   await ca.grants._authorize(g.id);
   return (await ca.grants.retrieve(g.id))!;
 }
@@ -24,7 +24,7 @@ async function authorizedGrant(ca: CredentAgent, allow?: { skus?: string[]; cate
 describe("credentagent.grants — lifecycle (FR-007)", () => {
   it("create() returns a pending grant with an id + approveUrl; authorize flips it", async () => {
     const ca = client();
-    const g = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30 });
+    const g = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30 , signing: "page" });
     expect(g.id).toMatch(/^grant_/);
     expect(g.status).toBe("pending");
     expect(g.approveUrl).toContain(`/credentagent/grants/${g.id}`);
@@ -37,14 +37,14 @@ describe("credentagent.grants — lifecycle (FR-007)", () => {
   // would reach the engine... which was never minted — worse, an attacker-created record spends.
   it("BYPASS: a PENDING grant cannot spend — refused not-authorized", async () => {
     const ca = client();
-    const g = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30 });
+    const g = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30 , signing: "page" });
     const s = await g.spend({ idempotencyKey: "p1", items: [{ sku: "coffee" }] });
     expect(s).toMatchObject({ ok: false, code: "not-authorized" });
   });
 
   it("denied is TERMINAL: authorize after deny fails; spending refuses", async () => {
     const ca = client();
-    const g = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30 });
+    const g = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30 , signing: "page" });
     expect(await ca.grants._deny(g.id)).toBe(true);
     expect(await ca.grants._authorize(g.id)).toBe(false); // never authorizable after deny
     const s = await (await ca.grants.retrieve(g.id))!.spend({ idempotencyKey: "d1", items: [{ sku: "coffee" }] });
@@ -158,7 +158,7 @@ describe("credentagent.grants — the approve page (grants.serve, #112 P1)", () 
     const ca = client();
     const app = fakeApp();
     ca.grants.serve(app);
-    const g = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30, allow: { categories: ["Beverages"] } });
+    const g = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30, allow: { categories: ["Beverages"] }, signing: "page" });
 
     let res = fakeRes();
     await app._get.get("/credentagent/grants/:id")!({ params: { id: g.id } }, res);
@@ -169,7 +169,7 @@ describe("credentagent.grants — the approve page (grants.serve, #112 P1)", () 
     await app._post.get("/credentagent/grants/:id/approve")!({ params: { id: g.id } }, fakeRes());
     expect((await ca.grants.retrieve(g.id))!.status).toBe("authorized");
 
-    const g2 = await ca.grants.create({ merchant: "utopia", budget: 50, perSpend: 10 });
+    const g2 = await ca.grants.create({ merchant: "utopia", budget: 50, perSpend: 10 , signing: "page" });
     await app._post.get("/credentagent/grants/:id/deny")!({ params: { id: g2.id } }, fakeRes());
     expect((await ca.grants.retrieve(g2.id))!.status).toBe("denied");
 
@@ -208,7 +208,7 @@ describe("credentagent.grants — concurrency + money boundary (#104 port-forwar
   // red (status "authorized", spend ok). Order matters: authorize is started first so it is mid-flight.
   it("BYPASS: a revoke landing while authorize is in flight never leaves a spendable grant", async () => {
     const ca = client();
-    const gc = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30 });
+    const gc = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30 , signing: "page" });
     const g = (await ca.grants.retrieve(gc.id))!;
     await Promise.all([ca.grants._authorize(gc.id), g.revoke()]); // authorize in flight, revoke lands
     expect((await ca.grants.retrieve(gc.id))!.status).toBe("revoked");
@@ -221,7 +221,7 @@ describe("credentagent.grants — concurrency + money boundary (#104 port-forwar
   // and this goes red (the third spend refuses). (Control now lives in toCents/centsCatalogView.)
   it("BYPASS: $4.90 × 3 spends exactly to a $14.70 budget without a false refusal", async () => {
     const ca = new CredentAgent({ walletOrigin: "http://localhost:4000", catalog: { latte: 4.9 } });
-    const gc = await ca.grants.create({ merchant: "utopia", budget: 14.7, perSpend: 4.9 });
+    const gc = await ca.grants.create({ merchant: "utopia", budget: 14.7, perSpend: 4.9 , signing: "page" });
     await ca.grants._authorize(gc.id);
     const g = (await ca.grants.retrieve(gc.id))!;
     for (const k of ["a", "b", "c"]) {
@@ -235,7 +235,7 @@ describe("credentagent.grants — concurrency + money boundary (#104 port-forwar
   // the lock did not weaken the engine's cumulative-cap atomicity.
   it("concurrent DISTINCT-key spends never exceed the budget (exactly one settles)", async () => {
     const ca = client();
-    const gc = await ca.grants.create({ merchant: "utopia", budget: 20, perSpend: 20 }); // room for ONE $18
+    const gc = await ca.grants.create({ merchant: "utopia", budget: 20, perSpend: 20 , signing: "page" }); // room for ONE $18
     await ca.grants._authorize(gc.id);
     const g = (await ca.grants.retrieve(gc.id))!;
     const [a, b] = await Promise.all([
@@ -249,7 +249,7 @@ describe("credentagent.grants — concurrency + money boundary (#104 port-forwar
   // rebind to a fresh, empty ledger that would allow 2× the budget).
   it("a concurrent double-approve seals one grant; the budget cap still holds", async () => {
     const ca = client();
-    const gc = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30 });
+    const gc = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30 , signing: "page" });
     await Promise.all([ca.grants._authorize(gc.id), ca.grants._authorize(gc.id)]);
     const g = (await ca.grants.retrieve(gc.id))!;
     expect(g.status).toBe("authorized");
@@ -276,7 +276,7 @@ describe("credentagent.grants — concurrency + money boundary (#104 port-forwar
   it("BYPASS: prices each spend from the LIVE catalog — a re-price is honoured and the cap enforced against it", async () => {
     const catalog: Record<string, { price: number; category: string }> = { coffee: { price: 18, category: "Beverages" } };
     const ca = new CredentAgent({ walletOrigin: "http://localhost:4000", catalog });
-    const gc = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 40 });
+    const gc = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 40 , signing: "page" });
     await ca.grants._authorize(gc.id);
     const g = (await ca.grants.retrieve(gc.id))!;
     expect(await g.spend({ idempotencyKey: "p1", items: [{ sku: "coffee" }] })).toMatchObject({ ok: true, amount: 18 });
@@ -290,9 +290,9 @@ describe("credentagent.grants — concurrency + money boundary (#104 port-forwar
   // with a clear error, never silently rounded. Make toCents round instead of throw and both legs
   // go red (create resolves; the sub-cent price prices as $0.01 instead of throwing).
   it("BYPASS: rejects sub-cent precision — at config for a cap, and when a sub-cent price is used", async () => {
-    await expect(client().grants.create({ merchant: "utopia", budget: 100, perSpend: 0.006 })).rejects.toThrow(/sub-cent/);
+    await expect(client().grants.create({ merchant: "utopia", budget: 100, perSpend: 0.006 , signing: "page" })).rejects.toThrow(/sub-cent/);
     const ca = new CredentAgent({ walletOrigin: "http://localhost:4000", catalog: { trinket: 0.006 } });
-    const gc = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30 });
+    const gc = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30 , signing: "page" });
     await ca.grants._authorize(gc.id);
     const g = (await ca.grants.retrieve(gc.id))!;
     await expect(g.spend({ idempotencyKey: "p1", items: [{ sku: "trinket" }] })).rejects.toThrow(/sub-cent/);
@@ -305,7 +305,7 @@ describe("credentagent.grants — concurrency + money boundary (#104 port-forwar
 describe("credentagent.grants — usage() live money read (spec 011 FR-1)", () => {
   it("a pending grant reads the full budget: spent 0, remaining = budget", async () => {
     const ca = client();
-    const g = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30 });
+    const g = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30 , signing: "page" });
     expect(await g.usage()).toEqual({ budget: 100, spent: 0, remaining: 100 });
   });
 
@@ -343,7 +343,7 @@ describe("grantLifecycle() — the ONE display-lifecycle derivation (spec 011 A2
   it("end-to-end: a real grant transitions pending → active → low → exhausted as it drains", async () => {
     const ca = client();
     // budget 36, perSpend 18: two $18 coffees take it exactly to 0.
-    const created = await ca.grants.create({ merchant: "utopia", budget: 36, perSpend: 18 });
+    const created = await ca.grants.create({ merchant: "utopia", budget: 36, perSpend: 18 , signing: "page" });
     const pendingUsage = await created.usage();
     expect(grantLifecycle({ status: created.status, ...pendingUsage })).toBe("pending");
 
@@ -355,7 +355,7 @@ describe("grantLifecycle() — the ONE display-lifecycle derivation (spec 011 A2
     await g.spend({ idempotencyKey: "l1", items: [{ sku: "coffee" }] }); // remaining 18 (= 50%)… still active
     await g.spend({ idempotencyKey: "l2", items: [{ sku: "espresso-machine" }] }).catch(() => {}); // over budget → refused
     // Take it into the low band with a small draw against a fresh low-budget grant instead:
-    const low = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 18 });
+    const low = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 18 , signing: "page" });
     await ca.grants._authorize(low.id);
     const lg = (await ca.grants.retrieve(low.id))!;
     for (const k of ["a", "b", "c", "d", "e"]) await lg.spend({ idempotencyKey: k, items: [{ sku: "coffee" }] }); // 5×18 = 90

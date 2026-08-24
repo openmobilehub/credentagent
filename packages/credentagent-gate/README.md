@@ -485,18 +485,27 @@ clickable in [`examples/demo-hub/`](https://github.com/openmobilehub/credentagen
 
 ### Device-signed grants — the wallet signs the grant first (spec 012)
 
-By default the human authorizes a grant with **one click** on its approve page — the server takes
-their word for it (`trustLevel: "server-issued-demo"`). Pass **`signing: "device"`** and approval
-becomes **cryptographic**: the grant's `approveUrl` serves a signing ceremony, and the grant only
-reaches `"authorized"` once a wallet on the phone **signs its exact bounds** (an ISO mdoc DeviceAuth
-signature over the budget / per-purchase cap / allowed items). This is fully **additive** — existing
-callers pass nothing and behave byte-for-byte as before.
+**Approving a grant is a signature.** A grant's `approveUrl` serves a signing ceremony, and the
+grant only reaches `"authorized"` once a wallet on the phone **signs its exact bounds** (an ISO mdoc
+DeviceAuth signature over the budget / per-purchase cap / allowed items). Nothing can be spent
+against a grant no device signed.
+
+Pass **`signing: "page"`** to opt into the older **click-to-approve** stand-in, where the server
+takes the human's word for it (`trustLevel: "server-issued-demo"`). It exists for demos, examples
+and CI — anywhere no phone is in the loop. The weaker door is still there; it just has to be asked
+for by name.
+
+> **What the signature does and does not prove.** It proves **holder-of-key** and **binding**: the
+> device key signed over *these* bounds, so a spend always traces to what the human authorized. It
+> does **not** yet prove **trust** — there is no issuer anchor, so a self-minted credential passes
+> ([#14](https://github.com/openmobilehub/credentagent/issues/14)). `trustLevel` says
+> `"device-signed"`, never `"issuer-verified"`.
 
 ```ts
 const grant = await credentagent.grants.create({
   merchant: "utopia", budget: 200, perSpend: 130,
   allow: { categories: ["Beverages"] },
-  signing: "device",                                  // ← opt in; omit for today's page-approve
+  // signing defaults to "device" — pass signing: "page" for the click-to-approve stand-in
 });
 sendToUser(grant.approveUrl);                         // → the signing ceremony (not click-to-approve)
 // …the human signs on their phone…
