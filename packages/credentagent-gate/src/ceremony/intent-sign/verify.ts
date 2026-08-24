@@ -20,7 +20,7 @@
 // which is exactly what the FR-6(a)/(c) bypass test pins.
 import * as jose from "jose";
 import { openReaderContext } from "../mdoc/readerContext.js";
-import { PAYMENT_CREDENTIAL_DOCTYPE } from "./dcql.js";
+import { PAYMENT_CREDENTIAL_DOCTYPE, PAYMENT_INSTRUMENT_CLAIM } from "./dcql.js";
 import { boundsHash, deriveNonce, type IntentBoundsInput } from "./bounds.js";
 import { buildIntentSessionTranscript, verifyDeviceAuth } from "./deviceAuth.js";
 import type { TrustLevel } from "../../types.js";
@@ -165,6 +165,20 @@ export async function verifyIntentPresentation(args: {
   }
   if (!deviceResponseB64url) return { ok: false, reason: "no DeviceResponse in vp_token" };
 
+  // On-device interop debug (off by default — set INTENT_DEBUG_DEVICE_RESPONSE=<path>).
+  // Dumps the wallet's DeviceResponse + the handover inputs the gate used, so a failed
+  // on-device signature can be solved OFFLINE (which transcript shape does the wallet's
+  // real signature verify against?) instead of guessing through redeploy-and-retry.
+  // Pure observability, same fence as INTENT_DEBUG_TRANSCRIPT: it does not change the
+  // returned bytes or the verification outcome. See on-device-interop.md §5.
+  if (process.env.INTENT_DEBUG_DEVICE_RESPONSE) {
+    const thumb = await jose.calculateJwkThumbprint(ctx.ecdhPrivateJwk, "sha256");
+    await (await import("node:fs/promises")).writeFile(
+      process.env.INTENT_DEBUG_DEVICE_RESPONSE,
+      JSON.stringify({ deviceResponseB64url, origin: origin.origin, rpID: new URL(origin.origin).hostname, nonce, thumbprint: thumb }, null, 2),
+    );
+  }
+
   // Build the transcript from the bounds-bound nonce + the response-encryption key's JWK
   // thumbprint (the DC API HandoverInfo's third element — deviceAuth.ts). RFC 7638 via jose's
   // calculateJwkThumbprint (NOT hand-rolled) so the member canonicalization matches the wallet;
@@ -174,15 +188,15 @@ export async function verifyIntentPresentation(args: {
   const verdict = await backend({ deviceResponseB64url, sessionTranscript });
   if (!verdict.ok) return { ok: false, reason: verdict.reason ?? "presentation not verified" };
 
-  // Require the payment credential — the right doctype AND its account claim disclosed
+  // Require the payment credential — the right doctype AND its instrument claim disclosed
   // (invariant 5: an explicit positive claim, not merely "a token was present").
   const docType = verdict.docType ?? "";
   if (docType !== PAYMENT_CREDENTIAL_DOCTYPE) {
     return { ok: false, reason: `wrong credential: expected ${PAYMENT_CREDENTIAL_DOCTYPE}, got ${docType || "∅"}` };
   }
-  const account = verdict.disclosed?.account;
-  if (account == null || (typeof account === "string" && account.length === 0)) {
-    return { ok: false, reason: "payment credential did not disclose an account" };
+  const instrumentId = verdict.disclosed?.[PAYMENT_INSTRUMENT_CLAIM];
+  if (instrumentId == null || (typeof instrumentId === "string" && instrumentId.length === 0)) {
+    return { ok: false, reason: `payment credential did not disclose ${PAYMENT_INSTRUMENT_CLAIM}` };
   }
 
   // Single-use: consume the nonce LAST, so a failed verify does not burn it (a genuine

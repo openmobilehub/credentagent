@@ -55,7 +55,7 @@ describe("intent-sign REAL device-signed presentation", () => {
       expect(out.trustLevel).toBe("device-signed");
       expect(out.verifiedBy).toBe("gate");
       expect(out.boundsHash).toBe(boundsHash(b));
-      expect(out.credentialDoctype).toBe("org.openwallet.payment.1");
+      expect(out.credentialDoctype).toBe("org.multipaz.payment.sca.1");
       expect(typeof out.signedAt).toBe("string");
     }
   });
@@ -122,12 +122,12 @@ describe("intent-sign REAL device-signed presentation", () => {
     if (!out.ok) expect(out.reason).toMatch(/wrong credential/);
   });
 
-  it("refuses when the payment credential discloses no account", async () => {
+  it("refuses when the payment credential discloses no instrument id", async () => {
     const b = bounds();
-    const { req, result } = await signFor(b, { omitAccount: true });
+    const { req, result } = await signFor(b, { omitInstrumentId: true });
     const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, nonceGuard: memoryNonceGuard() });
     expect(out.ok).toBe(false);
-    if (!out.ok) expect(out.reason).toMatch(/account/);
+    if (!out.ok) expect(out.reason).toMatch(/payment_instrument_id/);
   });
 });
 
@@ -168,8 +168,8 @@ describe("intent-sign verify seam (FR-4) — no self-upgrade, verbatim relay", (
       ok: true,
       trustLevel: "issuer-verified",
       verifiedBy: "upay-verifier",
-      docType: "org.openwallet.payment.1",
-      disclosed: { account: "acct_delegated" },
+      docType: "org.multipaz.payment.sca.1",
+      disclosed: { payment_instrument_id: "instrument_delegated" },
     });
     const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, nonceGuard: memoryNonceGuard(), backend: delegated });
     expect(out.ok).toBe(true);
@@ -182,7 +182,7 @@ describe("intent-sign verify seam (FR-4) — no self-upgrade, verbatim relay", (
   it("still enforces the gate's OWN checks even under a delegated backend (bounds equality holds)", async () => {
     const b = bounds({ budget: 200 });
     const { req, result } = await signFor(b);
-    const delegated: IntentVerifyBackend = async () => ({ ok: true, trustLevel: "issuer-verified", verifiedBy: "upay-verifier", docType: "org.openwallet.payment.1", disclosed: { account: "x" } });
+    const delegated: IntentVerifyBackend = async () => ({ ok: true, trustLevel: "issuer-verified", verifiedBy: "upay-verifier", docType: "org.multipaz.payment.sca.1", disclosed: { payment_instrument_id: "x" } });
     // A tampered record (2000 vs the sealed 200) is refused BEFORE the backend runs — delegation
     // moves TRUST, never BINDING (the gate still re-derives boundsHash and requires equality).
     const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: bounds({ budget: 2000 }), origin: ORIGIN, nonceGuard: memoryNonceGuard(), backend: delegated });

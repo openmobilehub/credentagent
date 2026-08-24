@@ -9,8 +9,9 @@
 Approving a spending grant today is one click on a server page — the server takes the human's
 word for it (`trustLevel: "server-issued-demo"`). This spec makes approval **cryptographic**:
 the grant — an AP2 **Intent Mandate**, the "here is what I authorize" record — is signed by a
-key stored on the phone, inside the **Multipaz wallet**, presenting the **Digital Payment
-Credential** (`org.openwallet.payment.1`, already importable via the demo-PKI `payment.mpzpass`).
+key stored on the phone, inside the **Multipaz wallet**, presenting the **SCA payment
+credential** (`org.multipaz.payment.sca.1` — the doctype the demo-PKI `payment.mpzpass`
+mints, and the one the dc-payment rail already requests).
 
 **The invariant this establishes: signed by the device first, spent by the agent second.**
 A device-mode grant that was never device-signed can never be spent; a spend can always be
@@ -67,7 +68,8 @@ stability test (key order, array order, number formatting). `boundsHash` is its 
 **FR-2 — The intent rail** (`src/ceremony/intent-sign/`, mirroring the
 `dcql`/`request`/`verify`/`page`/`routes` rail split; REUSE shared helpers — `dcql()`,
 `makeEncryptionKey`, the sealed-context and `mdoc/` parsers, the reader identity):
-- `dcql`: requests the payment credential (`org.openwallet.payment.1`).
+- `dcql`: requests the payment credential (`org.multipaz.payment.sca.1`), reusing the
+  dc-payment rail's query so both rails ask a wallet for the same thing.
 - `request`: OpenID4VP request whose nonce is bounds-bound as above; same-device (Digital
   Credentials API) and cross-device (QR) both served, exactly like the credential rail.
 - `verify`: decrypt the vp_token, parse the mdoc, check the DeviceAuth signature covers the

@@ -18,7 +18,7 @@ import { webcrypto } from "node:crypto";
 import * as jose from "jose";
 import { coseKeyFromJwk } from "../mdoc/mdoc-iso.js";
 import { buildIntentSessionTranscript } from "./deviceAuth.js";
-import { PAYMENT_CREDENTIAL_DOCTYPE } from "./dcql.js";
+import { PAYMENT_CREDENTIAL_DOCTYPE, PAYMENT_INSTRUMENT_CLAIM } from "./dcql.js";
 import type { SignedIntentRequest } from "./request.js";
 
 const enc = new Encoder({ useRecords: false, variableMapSize: true, useTag259ForMaps: false } as ConstructorParameters<typeof Encoder>[0]);
@@ -44,15 +44,15 @@ export interface SimulateOptions {
   request: Pick<SignedIntentRequest, "request" | "dcql_query">;
   /** The web origin the wallet binds the transcript to (must match the gate's origin). */
   origin: string;
-  /** The payment account the credential discloses (default a demo reference). */
-  account?: string;
+  /** The payment instrument id the credential discloses (default the demo-PKI fixture's). */
+  instrumentId?: string;
   /** TEST-ONLY: sign over a DIFFERENT nonce than the request asked for (drives the
    *  replay/tamper bypass tests — the device signature then won't verify). */
   overrideNonce?: string;
   /** TEST-ONLY: present a different doctype (drives the wrong-credential refusal). */
   overrideDocType?: string;
-  /** TEST-ONLY: omit the account claim (drives the missing-claim refusal). */
-  omitAccount?: boolean;
+  /** TEST-ONLY: omit the instrument claim (drives the missing-claim refusal). */
+  omitInstrumentId?: boolean;
 }
 
 /**
@@ -64,7 +64,7 @@ export async function devSimulateWalletSignature(
 ): Promise<{ protocol: "openid4vp-v1-signed"; data: { response: string } }> {
   const { request, origin } = opts;
   const docType = opts.overrideDocType ?? PAYMENT_CREDENTIAL_DOCTYPE;
-  const account = opts.account ?? "acct_demo_01";
+  const instrumentId = opts.instrumentId ?? "demo-instrument-0001";
 
   // Read the response-encryption key + nonce out of the signed request.
   const payload = jose.decodeJwt(request.request) as {
@@ -80,7 +80,7 @@ export async function devSimulateWalletSignature(
   const devicePub = (await subtle.exportKey("jwk", deviceKp.publicKey)) as { x: string; y: string };
 
   const issuerKp = await subtle.generateKey(ALG, true, ["sign", "verify"]);
-  const isi = cbor({ digestID: 0, random: webcrypto.getRandomValues(new Uint8Array(16)), elementIdentifier: "account", elementValue: account });
+  const isi = cbor({ digestID: 0, random: webcrypto.getRandomValues(new Uint8Array(16)), elementIdentifier: PAYMENT_INSTRUMENT_CLAIM, elementValue: instrumentId });
   const now = new Date();
   const mso = {
     version: "1.0",
@@ -116,7 +116,7 @@ export async function devSimulateWalletSignature(
       {
         docType,
         issuerSigned: {
-          nameSpaces: opts.omitAccount ? {} : { [docType]: [new Tag(isi, 24)] },
+          nameSpaces: opts.omitInstrumentId ? {} : { [docType]: [new Tag(isi, 24)] },
           issuerAuth,
         },
         deviceSigned: { nameSpaces: deviceNameSpaces, deviceAuth: { deviceSignature } },

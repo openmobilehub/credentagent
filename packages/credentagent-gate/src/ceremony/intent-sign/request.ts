@@ -42,19 +42,18 @@ export interface SignedIntentRequest {
 
 /**
  * Build the REAL signed OpenID4VP request for signing a grant's Intent Mandate. The
- * request asks for the payment credential (`org.openwallet.payment.1`) and binds its
- * nonce to the grant bounds. `secret` seals the reader context; `currency` shapes only
- * the reused payment DCQL.
+ * request asks for the SCA payment credential (`org.multipaz.payment.sca.1` — the
+ * doctype `payment.mpzpass` mints, shared with the dc-payment rail) and binds its
+ * nonce to the grant bounds. `secret` seals the reader context.
  */
 export async function buildIntentSignRequest(args: {
   bounds: IntentBoundsInput;
   origin: Origin;
   secret: string;
-  currency?: string;
   readerIdentity?: ReaderIdentity;
 }): Promise<SignedIntentRequest> {
   const { bounds, origin, secret } = args;
-  const dcql = buildIntentSignDcql(args.currency);
+  const dcql = buildIntentSignDcql();
   const { x5c, privateKey } = await makeReaderCert(origin.rpID, args.readerIdentity);
   const { encJwk, ecdhPrivateJwk } = await makeEncryptionKey();
 
