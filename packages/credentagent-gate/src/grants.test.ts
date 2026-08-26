@@ -235,6 +235,33 @@ describe("credentagent.grants — the approve page (grants.serve, #112 P1)", () 
     expect(res._body).toContain("delegated-demo");
   });
 
+  it("offers the age step for a CATEGORY grant, and says the list is what the shelf holds today", async () => {
+    const ca = client();
+    const app = fakeApp();
+    ca.grants.serve(app);
+    const g = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30, allow: { categories: ["Beverages"] }, signing: "page" });
+
+    const res = fakeRes();
+    await app._get.get("/credentagent/grants/:id")!({ params: { id: g.id } }, res);
+    expect(res._body).toContain("Beverages includes age-restricted items (21+)");
+    expect(res._body).toContain("wine");
+    expect(res._body).toContain("Verify 21+ with your wallet");
+    // The honest limit, stated only for a scan — never implied to be a closed list.
+    expect(res._body).toContain("what this category holds today");
+  });
+
+  it("a NAMED grant states a closed list — no forecast caveat", async () => {
+    const ca = client();
+    const app = fakeApp();
+    ca.grants.serve(app);
+    const g = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30, allow: { skus: ["wine"] }, signing: "page" });
+
+    const res = fakeRes();
+    await app._get.get("/credentagent/grants/:id")!({ params: { id: g.id } }, res);
+    expect(res._body).toContain("This grant is for age-restricted items (21+)");
+    expect(res._body).not.toContain("holds today");
+  });
+
   it("shows a Membership step only when the host runs a loyalty programme", async () => {
     // No programme configured ⇒ the step doesn't exist anywhere on the page.
     const plain = fakeApp();
@@ -292,7 +319,10 @@ describe("credentagent.grants — the approve page (grants.serve, #112 P1)", () 
     const res = fakeRes();
     await app._get.get("/credentagent/grants/:id")!({ params: { id: g.id } }, res);
     expect(res._body).toContain("✓ Age verified — 21+");
-    expect(res._body).toContain("may buy the age-restricted items above while you're away");
+    // The verified copy now states the CEILING, not "the items above" — with a category grant the
+    // list above is a forecast, so what the proof actually bought is "up to 21+".
+    expect(res._body).toContain("may buy age-restricted items up to 21+ while you're away");
+    expect(res._body).toContain("Anything stricter still comes back to you");
     expect(res._body).toContain("✓ Approve"); // no longer "Approve without them"
     // The rail agrees with the card: Age ticked, Approve current.
     expect(res._body).toContain(`<div class="rail-step done"><div class="rail-dot">✓</div><div class="rail-label">Age</div>`);
@@ -381,6 +411,26 @@ describe("credentagent.grants — the age claim sealed at approval (#172)", () =
     const g = await grantWithAgeProof(client(), 21);
     expect(g.ageProof).toMatchObject({ provenAge: 21, trust_level: "presence-only-demo" });
     expect(typeof g.ageProof!.verifiedAt).toBe("string");
+  });
+
+  // The reviewer's question on #173: is it safe to offer the age step on a CATEGORY grant, when
+  // the page can only forecast what that category holds? Yes — and this is why. The proof is
+  // sealed with the threshold PROVED, and every purchase re-derives its OWN threshold from the
+  // priced line. So a forecast that missed something can only fail to offer the step; it can
+  // never let a stricter item through. Delete the threshold comparison in `ageProofCovers` and
+  // this goes red.
+  it("BYPASS: a category grant's forecast cannot over-grant — a stricter item added later still steps up", async () => {
+    // The human sees Beverages at 21+ (wine), proves 21+, and approves.
+    const ca = new CredentAgent({ walletOrigin: "http://localhost:4000", catalog: { ...CATALOG, absinthe: { price: 60, minAge: 25, category: "Beverages" } } });
+    const g = await ca.grants.create({ merchant: "utopia", budget: 200, perSpend: 100, allow: { categories: ["Beverages"] }, signing: "page" });
+    await ca.grants._recordAgeProof(g.id, { provenAge: 21 });
+    await ca.grants._authorize(g.id);
+    const live = (await ca.grants.retrieve(g.id))!;
+
+    // What they proved for completes…
+    expect(await live.spend({ idempotencyKey: "cat-wine", items: [{ sku: "wine" }] })).toMatchObject({ ok: true, amount: 21 });
+    // …and the 25+ bottle in the same category does NOT, proof or no proof.
+    expect(await live.spend({ idempotencyKey: "cat-absinthe", items: [{ sku: "absinthe" }] })).toMatchObject({ ok: false, code: "step-up" });
   });
 
   it("changes NOTHING for an unrestricted purchase", async () => {

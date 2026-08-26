@@ -102,9 +102,15 @@ const ageProved = (g: Grant, scope: GrantAgeScope) =>
 /**
  * The age step (#172) — mirroring the checkout hub's numbered gate card.
  *
- * UNPROVED: it NAMES the age-restricted products this grant is for (the storefront pins the exact
- * product before the link exists — #175), and offers the wallet ceremony.
- * PROVED: one ✓ row, plus what it bought the human.
+ * The copy tells the human WHICH question this is answering, because the two are different
+ * promises. A grant that NAMES its products (the storefront pins the exact one before the link
+ * exists — #175) gets a closed list: this is what it's for. A grant bounded by a CATEGORY gets
+ * what that category holds today, said as such — a product added to it next week could not have
+ * been predicted, and the page must not imply a guarantee it can't keep.
+ *
+ * Either way the offer is the same and so is the enforcement: the proof is threshold-checked
+ * against each purchase's OWN product at spend time, so an incomplete forecast can only fail to
+ * offer this step — never let something through that wasn't proved for.
  */
 function ageCard(g: Grant, scope: GrantAgeScope, n: number): string {
   const minimumAge = scope.minimumAge;
@@ -114,17 +120,26 @@ function ageCard(g: Grant, scope: GrantAgeScope, n: number): string {
   if (ageProved(g, scope)) {
     return `<div class="card">
     <div class="row-ok">${no} ✓ Age verified — ${g.ageProof!.provenAge}+</div>
-    <p class="small" style="margin:10px 0 0">Your agent may buy the age-restricted items above while you're away.</p>
+    <p class="small" style="margin:10px 0 0">Your agent may buy age-restricted items up to ${g.ageProof!.provenAge}+ while you're away. Anything stricter still comes back to you.</p>
   </div>`;
   }
   const rows = scope.items
     .map((i) => `<tr class="line"><td>${esc(i.name ?? i.sku)}</td><td class="num">${usd(i.price)}</td></tr>`)
     .join("\n      ");
+  const scanned = scope.from === "scanned";
+  const categories = g.allow?.categories;
+  const lede = scanned
+    ? `🔒 ${categories?.length ? `${esc(categories.join(", "))} includes` : "This store includes"} age-restricted items (${minimumAge}+). Your agent can't buy them unless you prove your age:`
+    : `🔒 This grant is for age-restricted items (${minimumAge}+). Your agent can't buy them unless you prove your age:`;
+  // The honest limit, stated only where it applies: a scan is what the shelf holds right now.
+  const caveat = scanned
+    ? `<p class="small" style="margin:10px 0 0">That's what this ${categories?.length ? "category holds" : "store holds"} today. If something stricter is added later, it comes back to you even after you verify.</p>`
+    : "";
   return `<div class="card summary">
-    <div class="row-pending">${no} 🔒 This grant is for age-restricted items (${minimumAge}+). Your agent can't buy them unless you prove your age:</div>
+    <div class="row-pending">${no} ${lede}</div>
     <table style="margin-top:10px">
       ${rows}
-    </table>
+    </table>${caveat}
     <div style="margin-top:12px;"><a class="btn btn-primary" href="/credentagent/grants/${encodeURIComponent(g.id)}/age">Verify ${minimumAge}+ with your wallet</a></div>
   </div>`;
 }
