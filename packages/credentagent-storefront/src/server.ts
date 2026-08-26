@@ -85,6 +85,7 @@ import {
   type VerificationManifestEntry,
   type VerificationRecord,
   type VerificationStore,
+  ageProofCovers,
 } from "@openmobilehub/credentagent-gate";
 
 /** Given a priced order, return the `requires` manifest (or `undefined` = ungated). */
@@ -191,7 +192,8 @@ export interface StorefrontOptions {
    * `create-spending-grant`, `get-grant-status`, `spend-from-grant`, `revoke-grant` — so an AI
    * agent can be granted a bounded spending authority ONCE by the human (grant.approveUrl) and
    * then buy unattended within it, every rule enforced server-side (caps, allow-bounds,
-   * revocation; age-restricted items NEVER delegate — they refuse `step-up`). Omit ⇒ no grant
+   * revocation; an age-restricted item refuses `step-up` unless the human proved their age on
+   * the approve page — #172). Omit ⇒ no grant
    * tools (additive). Serve the approve page with `credentagent.grants.serve(store.app)`.
    */
   grants?: Grants;
@@ -749,7 +751,9 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
               "IMMEDIATELY call create-spending-grant again with the EXACT same arguments plus this requestState " +
               "(change nothing else). That call holds the line server-side and returns the moment the human " +
               "approves — keep redialing until the status changes, and never mint a new grant while this one is " +
-              "pending. Your answer is only a wake-up signal: approval is re-read server-side, never taken from it.",
+              "pending. Your answer is only a wake-up signal: approval is re-read server-side, never taken from it. " +
+              "When it returns, READ `credentials`: if the human proved their age there, age-restricted items in " +
+              "these bounds can be bought unattended — don't tell them otherwise.",
           },
         );
 
@@ -825,8 +829,8 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
             return grantResult(g, {
               note:
                 g.signing === "device"
-                  ? "PENDING — send approveUrl to the human; it opens a WALLET SIGNING ceremony. Spending refuses until their device signs these bounds."
-                  : "PENDING — send approveUrl to the human; spending refuses until they approve.",
+                  ? "PENDING — send approveUrl to the human; it opens a WALLET SIGNING ceremony. Spending refuses until their device signs these bounds. On that page they can also present credentials: proving their age unlocks age-restricted items for unattended purchase, and a loyalty card discounts every purchase. Re-read `credentials` afterwards rather than assuming."
+                  : "PENDING — send approveUrl to the human; spending refuses until they approve. On that page they can also present credentials: proving their age unlocks age-restricted items for unattended purchase, and a loyalty card discounts every purchase. Re-read `credentials` afterwards rather than assuming.",
             });
           }
 
@@ -987,7 +991,12 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
         "get-grant-status",
         {
           title: "Get Grant Status",
-          description: "Read a spending grant: status (pending | authorized | denied | revoked), its live budget/spend, and its sealed bounds.",
+          description:
+            "Read a spending grant: status (pending | authorized | denied | revoked), its live budget/spend, its sealed " +
+            "bounds, and `credentials` — what the human proved from their wallet before authorizing it. " +
+            "`credentials.ageVerified` is the age they proved (null if none): an age-restricted product at or below that " +
+            "number CAN be bought unattended, so do not tell the human they must be present for it. " +
+            "`credentials.loyaltyDiscountPct` (null if none) is applied to every purchase.",
           inputSchema: { grantId: z.string() },
           annotations: { readOnlyHint: true },
           _meta: UI_META,
@@ -1007,8 +1016,10 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
             "Buy ONE product unattended against an authorized grant. The server re-prices from the catalog and enforces " +
             "every sealed rule; a refusal returns a typed code (in the result's `spend`): not-authorized (human never " +
             "approved), not-allowed (outside the allowed products/categories), per-spend-exceeded, budget-exceeded, step-up " +
-            "(age-restricted — NEVER delegable: hand back to the human), revoked. Pass a stable idempotencyKey to make " +
-            "retries safe (same key replays the SAME outcome).",
+            "(age-restricted, and the human proved no age for this grant or proved a lower one — hand back to the human), " +
+            "revoked. Before saying a purchase needs the human present, check the grant's `credentials.ageVerified` — " +
+            "if they proved an age at or above the product's, this tool completes it unattended. Pass a stable " +
+            "idempotencyKey to make retries safe (same key replays the SAME outcome).",
           inputSchema: {
             grantId: z.string(),
             productId: z.string(),
@@ -1035,8 +1046,23 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
           await source.load();
           const live = getProduct(source.current(), productId);
           if (!live) return spent({ ok: false, code: "invalid-request", reason: "unknown product" }); // P2: typed, not a throw
-          if (live.minimumAge != null) return spent({ ok: false, code: "step-up" }); // age NEVER delegates
-          if (live.price * qty > g.perSpend) return spent({ ok: false, code: "per-spend-exceeded" }); // live price vs sealed cap
+          // Age completes unattended ONLY against a proof the human sealed into THIS grant before
+          // authorizing it (#172), tested at the LIVE catalog's threshold — so a product newly
+          // marked 21+, or raised from 18+ to 21+, still steps up even though the grant's own
+          // snapshot predates the change. No proof, or one below the bar ⇒ step-up as before.
+          if (live.minimumAge != null && !ageProofCovers(g.ageProof, live.minimumAge)) return spent({ ok: false, code: "step-up" });
+          // Live price vs the sealed cap — measured on what the human is actually CHARGED, so the
+          // grant's own loyalty discount (#172) is applied here exactly as the engine applies it
+          // when it prices and signs the draw. Comparing the list price instead would refuse a
+          // purchase the gate would have completed: a discount one path honours and another
+          // refuses is precisely the drift invariant 3 forbids. Computed in integer CENTS, the
+          // units the engine prices in — rounding the same discount in dollars would land a cent
+          // or two off and refuse purchases inside that band.
+          const cents = (dollars: number) => Math.round(dollars * 100);
+          const listed = cents(live.price) * qty;
+          const pct = g.membershipProof?.discountPct ?? 0;
+          const charged = pct > 0 ? listed - Math.round((listed * pct) / 100) : listed;
+          if (charged > cents(g.perSpend)) return spent({ ok: false, code: "per-spend-exceeded" });
 
           try {
             const s = await g.spend({

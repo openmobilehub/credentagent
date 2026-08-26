@@ -38,6 +38,10 @@ export type { OrderStore, CreatedOrder, CompletedOrder, OrderDoor, OrderDoorCode
 // REAL engine (per-spend cap, budget, single-use, revocation, age-non-delegable) → typed door.
 export { Grants, grantLifecycle } from "./grants.js";
 export type { Grant, GrantStatus, GrantLifecycle, GrantUsage, GrantDoorCode, GrantAllow, CreateGrantOptions, GrantSigning, GrantMandateEvidence, SpendDoor, SpendItems } from "./grants.js";
+// `grant.ageScope` — the age-restricted products a grant's bounds NAME, so the page can say so
+// before the human authorizes (#172). Read straight from the catalog; disclosure, not enforcement.
+export { ageScopeFor } from "./grants-age.js";
+export type { GrantAgeScope, AgeRestrictedItem } from "./grants-age.js";
 
 // ── Device-signed grants (spec 012, #144) — the wallet SIGNS the Intent Mandate first ──
 // Opt a grant into wallet signing with `grants.create({ …, signing: "device" })`: its
@@ -74,6 +78,7 @@ export type {
   OpenRoundArgs,
   Round,
 } from "./mrtr.js";
+
 
 // ── Webhooks (spec 010) — the REAL HTTP completion signal ───────────────────
 // SEND: `new CredentAgent({ webhooks: { endpoints: [{ url, secret }] } })` → every settled order
@@ -124,6 +129,13 @@ export type { PaymentBinding, ReconcileRefusal, ReconcileVerdict } from "./cerem
 // polished, route-agnostic page driven by the `requires` manifest (each gate links
 // to its OWN approveUrl) so the two surfaces never drift (T030).
 export { renderRequirements } from "./ceremony/checkout-page.js";
+// The design-system primitives every ceremony page is built from — the page shell + CSS, the
+// brand row, and the step rail. Exported so a HOST page that sits inside the same flow (a grant
+// index, a landing step, a confirmation) can match the rails instead of re-copying their CSS and
+// drifting from it. `trustFooter` is deliberately NOT here: that honesty line belongs to the
+// OpenID4VP rails and must not be pasted onto a page making a different claim.
+export { pageHead, brandHeader, progressRail } from "./ceremony/theme.js";
+export type { RailStep } from "./ceremony/theme.js";
 export type {
   RenderOrder,
   RenderOrderLine,
@@ -170,6 +182,11 @@ export type { Refusal, RefusalCode, RefusalEnforcer, RefusalRetryable } from "./
 // completeOrder) is bundled. Demo-fenced today; stable surface for the wallet-server increment.
 export { DelegatedGate, DelegatedGrant } from "./delegated.js";
 export type { DelegatedGateOptions, PreApproveOptions, Purchase, SpendResult, CatalogEntry } from "./delegated.js";
+// The age claim a human seals into a grant at approval time (#172) + the ONE predicate that
+// answers "does it cover an order demanding N?" — so a host pre-check can ask the same question
+// the gate's completion path asks, rather than inventing a second, drifting rule.
+export { ageProofCovers } from "./ceremony/mandate.js";
+export type { SealedAgeProof, SealedMembershipProof } from "./ceremony/mandate.js";
 export type {
   CeremonyOrder,
   CeremonyOrderLine,

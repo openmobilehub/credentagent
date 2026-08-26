@@ -8,8 +8,13 @@
 //   await g.revoke();                                // the very next spend is refused, fail-closed
 //
 // It wraps the REAL DelegatedGate engine (per-spend cap, cumulative budget, single-use ledger,
-// revocation, age-non-delegable) — this file adds the lifecycle (pending → authorized/denied →
+// revocation, the age gate) — this file adds the lifecycle (pending → authorized/denied →
 // revoked), the `allow` item bounds, and the spec-009 door vocabulary over the engine's refusals.
+//
+// AGE (#172): a grant discloses what its bounds cover age-wise (`ageScope`) so the approve page can
+// say so BEFORE the human taps Approve, and carries an age claim the human proved on that page
+// (`ageProof`) so their agent can buy those items later. No proof ⇒ an age-restricted item still
+// refuses `step-up`, exactly as before.
 //
 // HONESTY: the authorize ceremony today is a DEMO step (the intent is sealed server-side when the
 // human clicks approve — presence "delegated-demo", trust "server-issued-demo"). The wallet
@@ -17,6 +22,8 @@
 
 import { DelegatedGate, DelegatedGrant, type CatalogEntry } from "./delegated.js";
 import { serveGrants, type GrantsApp } from "./grants-serve.js";
+import { ageScopeFor, skuAllowed, type GrantAgeScope } from "./grants-age.js";
+import type { SealedAgeProof, SealedMembershipProof } from "./ceremony/mandate.js";
 import type { IntentBoundsInput } from "./ceremony/intent-sign/bounds.js";
 import type { Branding, ReaderIdentity, TrustLevel } from "./types.js";
 
@@ -168,6 +175,11 @@ interface GrantRecord {
   boundsNonce: string;
   /** Minted at AUTHORIZE time (the intent is sealed when the human approves, not before). */
   engine?: DelegatedGrant;
+  /** The age claim the human proved before authorizing, held until the grant seals it into the
+   *  intent (#172). Writable ONLY while the grant is pending — see `_recordAgeProof`. */
+  ageProof?: SealedAgeProof;
+  /** The loyalty membership the human proved before authorizing, same lifecycle (#172). */
+  membershipProof?: SealedMembershipProof;
   /** Device-signature evidence (spec 012) — present once a device-mode grant authorizes. */
   mandate?: GrantMandateEvidence;
   /** The content-addressed Intent Mandate id (the engine's id) a device spend references. */
@@ -187,6 +199,12 @@ export interface GrantsDeps {
   readerIdentity?: ReaderIdentity;
   /** Host brand for the signing page (absent ⇒ the built-in look; never brands the trust line). */
   branding?: Branding;
+  /** Your loyalty programme's discount, as a percentage (e.g. `10`). Setting it OPTS IN: the
+   *  page grows a "present your membership" step, and a grant the human proves one on prices
+   *  every unattended purchase at this rate (#172). Absent ⇒ no membership step anywhere and
+   *  every grant prices at full catalog price, exactly as before. The rate is SEALED into each
+   *  grant when it authorizes, so changing it here never re-prices a grant already authorized. */
+  loyaltyDiscountPct?: number;
 }
 
 const genGrantId = (): string => `grant_${globalThis.crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
@@ -260,17 +278,30 @@ export class Grants {
   /** Stable secret that seals the intent-sign reader context (spec 012). */
   readonly signingSecret: string;
 
+  /** The configured loyalty rate, or undefined when the host runs no programme (#172). Read by
+   *  the page and the grant-credential rail to decide whether a membership step exists at all.
+   *  Fail-closed on a nonsensical configuration rather than offer a rate that can't be honoured:
+   *  a discount must be a real percentage strictly between 0 and 100. */
+  get _loyaltyDiscountPct(): number | undefined {
+    const pct = this.deps.loyaltyDiscountPct;
+    return typeof pct === "number" && Number.isFinite(pct) && pct > 0 && pct < 100 ? pct : undefined;
+  }
+
   constructor(private readonly deps: GrantsDeps) {
     this.signingSecret = deps.signingKey ?? globalThis.crypto.randomUUID();
   }
 
-  /** Config the intent-sign rail (spec 012) reads via `grants.serve(app)`. */
-  get railConfig(): { walletOrigin: string; secret: string; readerIdentity?: ReaderIdentity; branding?: Branding } {
+  /** Config the rails `grants.serve(app)` registers read — the intent-sign rail (spec 012) and
+   *  the grant-credential rail (#172). One object, so a page and its ceremonies can never be
+   *  configured differently. */
+  get railConfig(): { walletOrigin: string; secret: string; readerIdentity?: ReaderIdentity; branding?: Branding; loyaltyDiscountPct?: number } {
+    const loyaltyDiscountPct = this._loyaltyDiscountPct;
     return {
       walletOrigin: this.deps.walletOrigin,
       secret: this.signingSecret,
       ...(this.deps.readerIdentity ? { readerIdentity: this.deps.readerIdentity } : {}),
       ...(this.deps.branding ? { branding: this.deps.branding } : {}),
+      ...(loyaltyDiscountPct != null ? { loyaltyDiscountPct } : {}),
     };
   }
 
@@ -287,6 +318,15 @@ export class Grants {
       perSpend: rec.opts.perSpend,
       ...(rec.opts.allow ? { allow: rec.opts.allow } : {}),
       createdAt: rec.createdAt,
+      // The credentials the human presented before signing are TERMS of the grant, and the page
+      // shows them — so they ride the signed bytes (#172). Taken from the SERVER's record, like
+      // every other field here; a claim recorded between /request and /verify changes the hash
+      // and the signature stops verifying, rather than silently riding a signature the human
+      // gave for different terms.
+      ...(rec.ageProof ? { ageProof: { provenAge: rec.ageProof.provenAge, ...(rec.ageProof.expiresAt ? { expiresAt: rec.ageProof.expiresAt } : {}) } } : {}),
+      ...(rec.membershipProof
+        ? { membershipProof: { membershipNumber: rec.membershipProof.membershipNumber, discountPct: rec.membershipProof.discountPct } }
+        : {}),
       nonce: rec.boundsNonce,
     };
   }
@@ -375,8 +415,73 @@ export class Grants {
         total: toCents(rec.opts.budget),
         description:
           rec.opts.description ?? `Up to $${rec.opts.budget} at ${rec.opts.merchant}, $${rec.opts.perSpend}/purchase`,
+        // Whatever age claim the human proved BEFORE tapping Approve is sealed with the bounds
+        // (#172) — one atomic act of consent, covered by the content-addressed intentId.
+        ...(rec.ageProof ? { ageProof: rec.ageProof } : {}),
+        ...(rec.membershipProof ? { membershipProof: rec.membershipProof } : {}),
       });
       rec.status = "authorized";
+      return true;
+    });
+  }
+
+  /**
+   * The age seam (#172) — called by the grant-credential rail when the human's wallet proves an
+   * over-age claim, BEFORE the grant authorizes (before the Approve tap in page mode, before the
+   * signature in device mode). The wallet ceremony and the instant-demo path both land here;
+   * neither may pass a threshold of its own choosing (the rail re-derives it from the catalog).
+   *
+   * PENDING ONLY, and serialized with the rest of the lifecycle: an already-authorized grant can
+   * never gain a capability the human didn't approve, and a proof can't race the approve tap.
+   * Returns false when the grant is unknown or past pending — the caller surfaces that, it is
+   * never a silent no-op.
+   */
+  async _recordAgeProof(id: string, proof: { provenAge: number; expiresAt?: string }): Promise<boolean> {
+    return this.locks.run(id, async () => {
+      const rec = this.records.get(id);
+      if (!rec || rec.status !== "pending") return false;
+      if (typeof proof.provenAge !== "number" || !Number.isFinite(proof.provenAge) || proof.provenAge <= 0) return false;
+      // Keep the STRICTEST proof if the human verifies twice — a second, weaker ceremony must
+      // never lower what the first one established.
+      if (rec.ageProof && rec.ageProof.provenAge >= proof.provenAge) return true;
+      rec.ageProof = {
+        provenAge: proof.provenAge,
+        verifiedAt: new Date().toISOString(),
+        ...(proof.expiresAt ? { expiresAt: proof.expiresAt } : {}),
+        // HONESTY: the wire crypto is real, the issuer trust anchor is not (#14).
+        trust_level: "presence-only-demo",
+      };
+      return true;
+    });
+  }
+
+  /**
+   * The membership seam (#172) — called by the grant-credential rail when the human's wallet
+   * discloses a loyalty membership, BEFORE the grant authorizes. Its effect is the mirror of the
+   * age proof's: where age UNLOCKS items, this LOWERS the price of every purchase the agent
+   * later makes under the grant.
+   *
+   * PENDING ONLY and serialized with the rest of the lifecycle, for the same reason: an already
+   * authorized grant must never gain terms the human didn't authorize. The rate is taken from
+   * THIS instance's configuration and sealed with the claim — never from the request — so a
+   * later config change cannot re-price a grant that is already sealed.
+   */
+  async _recordMembershipProof(id: string, proof: { membershipNumber: string }): Promise<boolean> {
+    return this.locks.run(id, async () => {
+      const rec = this.records.get(id);
+      if (!rec || rec.status !== "pending") return false;
+      const discountPct = this._loyaltyDiscountPct;
+      // No programme configured ⇒ there is no rate to seal, so there is nothing to record.
+      if (discountPct === undefined) return false;
+      // Invariant 5: a real, non-empty membership id — never a bare "a token was present".
+      if (typeof proof.membershipNumber !== "string" || proof.membershipNumber.trim() === "") return false;
+      rec.membershipProof = {
+        membershipNumber: proof.membershipNumber,
+        discountPct,
+        verifiedAt: new Date().toISOString(),
+        // HONESTY: the wire crypto is real, the issuer trust anchor is not (#14).
+        trust_level: "presence-only-demo",
+      };
       return true;
     });
   }
@@ -401,6 +506,11 @@ export class Grants {
         // Honesty carried in the SEALED record: real consent + the attested trust level.
         presence: "delegated",
         trustLevel: evidence.trustLevel,
+        // The credentials the human proved BEFORE signing ride the sealed bounds too (#172) —
+        // and, because they are part of `canonicalIntentBounds`, the device signature covers
+        // them: the wallet signed the exact terms the page showed, proofs included.
+        ...(rec.ageProof ? { ageProof: rec.ageProof } : {}),
+        ...(rec.membershipProof ? { membershipProof: rec.membershipProof } : {}),
       });
       rec.status = "authorized";
       rec.mandate = evidence;
@@ -420,17 +530,11 @@ export class Grants {
   }
 
   /** Is this sku inside the grant's `allow` bounds? Fail-closed: with bounds set, an unknown or
-   *  uncategorized item does NOT pass. No bounds ⇒ everything in the catalog is allowed. */
+   *  uncategorized item does NOT pass. No bounds ⇒ everything in the catalog is allowed.
+   *  Delegates to the SHARED predicate the approve page's age disclosure reads (grants-age.ts),
+   *  so what the page says a grant covers is exactly what this enforces (#172). */
   private allowed(rec: GrantRecord, sku: string): boolean {
-    const allow = rec.opts.allow;
-    if (!allow || (!allow.skus && !allow.categories)) return true;
-    if (allow.skus?.includes(sku)) return true;
-    if (allow.categories) {
-      const entry = this.deps.catalog?.[sku];
-      const category = typeof entry === "object" ? (entry as { category?: string }).category : undefined;
-      if (category && allow.categories.includes(category)) return true;
-    }
-    return false;
+    return skuAllowed(rec.opts.allow, sku, this.deps.catalog ?? {});
   }
 
   private view(rec: GrantRecord): Grant {
@@ -501,6 +605,14 @@ export class Grants {
       description: rec.opts.description,
       signing: rec.opts.signing as GrantSigning, // resolved + sealed at create()
       presence: rec.engine?.presence ?? "delegated-demo",
+      // Derived HERE, from the products the bounds NAME, read against the live catalog — never
+      // reported by the agent (#172). Re-derived per handle read, so a catalog change shows up at
+      // the next `retrieve()`. Disclosure, not the control.
+      ageScope: ageScopeFor(rec.opts.allow, this.deps.catalog),
+      // The sealed intent is the authority once authorized; before that, the pending record's
+      // claim is what the page reflects back to the human.
+      ageProof: rec.engine?.ageProof ?? rec.ageProof,
+      membershipProof: rec.engine?.membershipProof ?? rec.membershipProof,
       // The trust axis carries the honesty (spec 012): a device-signed grant relays the
       // evidence's level ("device-signed", or a verifier's attested level); page mode stays
       // "server-issued-demo". The TYPE, not copy, tells the two apart (FR-3).
@@ -555,6 +667,17 @@ export interface Grant {
   /** How strongly the authorization is bound (honesty axis): "server-issued-demo" for page mode,
    *  "device-signed" once a device grant is wallet-signed (or a verifier's relayed level). */
   trustLevel: string;
+  /** The age-restricted products these bounds NAME, so the page can say so before the human
+   *  authorizes (#172). `{ minimumAge: null, items: [] }` when the grant names no restricted
+   *  product. DISCLOSURE only: the spend-time refusal is unchanged. */
+  readonly ageScope: GrantAgeScope;
+  /** The age claim the human proved before authorizing, if they did (#172). Absent ⇒ an
+   *  age-restricted purchase steps up. Read it to answer "may this grant buy that?" the way the
+   *  gate does — pair it with `ageProofCovers(proof, requiredAge)`. */
+  readonly ageProof?: SealedAgeProof;
+  /** The loyalty membership the human proved before authorizing, if they did (#172). Present ⇒
+   *  every purchase under this grant is priced at `discountPct` off, on every path. */
+  readonly membershipProof?: SealedMembershipProof;
   /** The device-signature evidence (spec 012) — present ONLY once a device-mode grant is signed:
    *  the exact bounds the device signed (`boundsHash`), when, which credential doctype, and who
    *  verified. Absent on page-mode grants and unsigned device grants. */

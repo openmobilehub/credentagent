@@ -231,12 +231,100 @@ export interface IntentBounds {
   intentExpiry?: string;
   notBefore?: string;
   delegate: DelegateJwk;
-  /** Credentials the agent MAY present under this grant. Age is NEVER delegable → never listed. */
+  /** Credentials the agent MAY present under this grant. An identity claim is never something
+   *  the AGENT presents — an age proof rides `ageProof` below, captured from the human's own
+   *  wallet at approval time. */
   mayPresent?: string[];
+  /** The human's age claim, proved at approval time and sealed into these bounds (#172). Absent
+   *  ⇒ an age-restricted draw steps up exactly as before. Covered by `intentId`. */
+  ageProof?: SealedAgeProof;
+  /** The human's loyalty membership, proved at approval time and sealed into these bounds (#172).
+   *  Absent ⇒ every draw prices at full catalog price, exactly as before. Covered by `intentId`,
+   *  so the rate cannot move after the human approved it. */
+  membershipProof?: SealedMembershipProof;
   /** Honesty axes (constitution VII v1.1.0): when consent happened / how strongly bound. */
   presence: "delegated" | "delegated-demo";
   trust_level: string;
   subject?: string;
+}
+
+/**
+ * An age claim the human proved AT APPROVAL TIME, sealed into the intent (issue #172).
+ *
+ * The delegation rule this reverses: age used to be non-delegable, full stop — an agent could
+ * never buy an age-restricted item, so a grant scoped to a category of 21+ goods could spend
+ * nothing and the human had no way to unblock it. The reversal is narrow: the human proves age
+ * ONCE, on their own phone, with their own wallet, at the exact moment they grant the authority.
+ * Nothing is delegated to the agent — the identity claim is the human's, captured while they are
+ * present, and it rides the grant rather than the agent.
+ *
+ * Because `sealIntent` content-addresses the WHOLE bounds object into `intentId`, this field is
+ * covered by the grant's identity: it cannot be added, raised, or extended after the fact
+ * without producing a different grant.
+ *
+ * HONESTY: `trust_level` is "presence-only-demo" — the wire crypto behind the proof is real
+ * (signed OpenID4VP request, sealed nonce, JWE/HPKE decrypt, ISO-mdoc parse) but there is NO
+ * issuer trust anchor yet, so a self-crafted mdoc would pass. This is DISCLOSURE + BINDING, not
+ * a real safety control, until issuer-verified trust lands (#14).
+ */
+export interface SealedAgeProof {
+  /** The threshold actually disclosed (`age_over_N === true`). A draw whose order demands a
+   *  HIGHER threshold still steps up — an 18+ proof never opens a 21+ item. */
+  provenAge: number;
+  /** When the ceremony ran (ISO 8601) — the audit line on the sealed record. */
+  verifiedAt: string;
+  /** The underlying credential's own validity horizon (ISO 8601). Past ⇒ fail closed. UNSET
+   *  today: the mdoc's validity window is not parsed yet, so nothing may claim one (#14). */
+  expiresAt?: string;
+  /** Honesty axis — how strongly the claim is bound. "presence-only-demo" in v0.1. */
+  trust_level: string;
+}
+
+/**
+ * Does a sealed age proof cover an order that demands `requiredAge`? The ONE definition, read by
+ * the delegated-draw branch of `completeOrder` and by any host pre-check that wants to answer the
+ * same question before spending (the storefront's `spend-from-grant`).
+ *
+ * FAIL-CLOSED on every axis: no proof, a malformed/non-finite threshold, a threshold BELOW what
+ * the order demands, or a credential whose stated validity has passed. `requiredAge` must always
+ * be re-derived from the catalog-priced lines — never read off a token or a request body.
+ * `nowMs` is epoch milliseconds (the same clock seam `checkDraw` reads).
+ */
+export function ageProofCovers(proof: SealedAgeProof | undefined, requiredAge: number, nowMs: number = Date.now()): boolean {
+  if (!proof || typeof proof.provenAge !== "number" || !Number.isFinite(proof.provenAge)) return false;
+  if (proof.provenAge < requiredAge) return false;
+  if (proof.expiresAt !== undefined) {
+    const expiry = Date.parse(proof.expiresAt);
+    // An unparseable expiry is a malformed proof, not an absent one — refuse rather than ignore.
+    if (!Number.isFinite(expiry) || expiry <= nowMs) return false;
+  }
+  return true;
+}
+
+/**
+ * A loyalty membership the human proved AT APPROVAL TIME, sealed into the intent (issue #172).
+ *
+ * Same shape of consent as {@link SealedAgeProof}: the credential is the HUMAN's, presented by
+ * THEIR wallet while they are present, and the agent never holds or presents one. Where the age
+ * proof UNLOCKS items, this one LOWERS the price of every purchase made under the grant.
+ *
+ * `discountPct` is sealed here rather than read from config at spend time on purpose. The rate is
+ * part of what the human approved ("10% off"), so it must be tamper-evident — and BOTH sides of
+ * the amount binding read this one number: the draw signer prices with it, and `completeOrder`
+ * re-prices with it. A rate that could move between those two moments would break invariant 3
+ * (the line sum, the order total and the signed amount must agree on every path).
+ *
+ * HONESTY: `trust_level` is "presence-only-demo" — real wire crypto, no issuer trust anchor yet.
+ */
+export interface SealedMembershipProof {
+  /** The membership id the wallet disclosed — a real, non-empty one (invariant 5). */
+  membershipNumber: string;
+  /** The percentage off, as approved and shown to the human. Sealed; never re-read from config. */
+  discountPct: number;
+  /** When the ceremony ran (ISO 8601) — the audit line on the sealed record. */
+  verifiedAt: string;
+  /** Honesty axis — how strongly the claim is bound. "presence-only-demo" in v0.1. */
+  trust_level: string;
 }
 
 /** One draw — the per-purchase spend against an intent, signed by the delegate key. */

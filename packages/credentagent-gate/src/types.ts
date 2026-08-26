@@ -298,8 +298,17 @@ export interface CredentAgentOptions {
   /**
    * The priced catalog (dollars) the `grants` resource prices + bounds delegated spends from —
    * the ONE price source (invariant 2: a caller never passes an amount). Entries may carry
-   * `minAge` (age-restricted → non-delegable) and `category` (feeds a grant's `allow` bounds).
-   * Omit if you don't use `grants`.
+   * `minAge` (age-restricted — the human unlocks these by proving their age when they approve a
+   * grant), `category` (feeds a grant's `allow` bounds) and `name` (what the approve page calls
+   * the product). Omit if you don't use `grants`.
    */
   catalog?: Record<string, CatalogEntry>;
+  /**
+   * Your loyalty programme's discount, as a percentage (e.g. `10`). Setting it OPTS IN: a grant's
+   * approve page grows a "present your membership" step, and a grant the human proves one on
+   * prices every unattended purchase at this rate (#172). Omit ⇒ no membership step and full
+   * catalog price, exactly as before. The rate is SEALED into each grant when the human approves
+   * it, so changing this never re-prices a grant that is already approved.
+   */
+  loyaltyDiscountPct?: number;
 }

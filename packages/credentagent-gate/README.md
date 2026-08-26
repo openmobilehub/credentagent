@@ -478,9 +478,8 @@ if (g.status === "authorized") {
 
 The refusal `code` is a **typed union** (`GrantDoorCode`) — a typo fails to compile. A retried
 `idempotencyKey` replays the ORIGINAL outcome, refusal included, so a key can never be repurposed.
-The sealed bounds are **immutable** after create. **Age is non-delegable** — an age-restricted item
-refuses `step-up` no matter the budget: buying wine always needs a live human. Try all of it
-clickable in [`examples/demo-hub/`](https://github.com/openmobilehub/credentagent/tree/main/examples/demo-hub)
+The sealed bounds are **immutable** after create. Try all of it clickable in
+[`examples/demo-hub/`](https://github.com/openmobilehub/credentagent/tree/main/examples/demo-hub)
 (Section 3) or the two-pane [`examples/grants-proto/`](https://github.com/openmobilehub/credentagent/tree/main/examples/grants-proto).
 
 ### Asking for what's missing first — MRTR (multi round-trip)
@@ -585,6 +584,63 @@ Test the whole flow **with no phone** using the exported simulated wallet — se
 for a real card). The **on-device** path — import `payment.mpzpass` into Multipaz and sign on a
 phone — is verified separately.
 
+### Credentials on a grant — presented before you authorize, or not at all
+
+The storefront pins the exact product before the link exists (above), so a grant can be *for* a
+bottle of whiskey. That used to be a grant that could spend **$0.00**: every purchase refused
+`step-up`, and nothing told the human before they authorized it. Two things fix that, on the page
+they were already opening.
+
+**It tells you.** `grant.ageScope` reads the products the grant NAMES against your catalog — the
+agent is never asked — and the page names them back:
+
+```ts
+grant.ageScope  // → { minimumAge: 21, items: [{ sku: "oak-whiskey", name: "Oak Reserve Whiskey", price: 124, minAge: 21 }] }
+```
+
+It does **not** guess. A grant bounded by category alone names no product, so it gets no age step:
+a page that warned "this category MIGHT contain something 21+" would be warning about an item
+nobody chose, and would be wrong the moment the catalog changed.
+
+**It lets you unlock them.** The page grows a *"Verify 21+ with your wallet"* step — the same
+OpenID4VP ceremony as the checkout age gate, run at the one moment the human is holding their
+phone. What they prove is sealed into the grant, and their agent can then buy those items while
+they're away. Decline, and *"Approve without them"* gives you exactly today's grant.
+
+**The same moment can carry your loyalty card.** Set `loyaltyDiscountPct` and the page grows a
+second, optional step — present your membership, and every purchase the agent makes under that
+grant is discounted:
+
+```ts
+const credentagent = new CredentAgent({ catalog, loyaltyDiscountPct: 10 });
+const s = await g.spend({ idempotencyKey: "o-1", items: [{ sku: "coffee" }] });
+//  → { ok: true, amount: 16.2, remaining: 83.8, … }     // $18 − 10%
+```
+
+The rate is **sealed into the grant** when it authorizes, not read from config at spend time — so
+changing your programme never re-prices a grant somebody already agreed to. And it is the *same*
+sealed number on both sides of the money: the delegate key signs the discounted amount, and
+`completeOrder` re-derives it independently and refuses the draw unless they match to the cent. The
+per-purchase cap is measured on what the human is actually **charged**, not the shelf price.
+
+Nothing about identity is delegated to the agent: the credential is the **human's**, presented by
+**their** wallet while they are **present**. Without an age proof, an age-restricted item still
+refuses `step-up` — and a proof only ever opens items at or below what it proved, so an 18+ proof
+never opens a 21+ item.
+
+On a **device-signed** grant these steps sit above the signature, and the claims are inside
+`canonicalIntentBounds` — so the wallet's signature covers the exact terms the page showed,
+credentials included. A claim recorded after the request was sealed changes the hash and the
+signature stops verifying, rather than riding a signature given for different terms.
+
+> **Honesty:** the wire crypto is real (signed OpenID4VP request, sealed nonce, JWE/HPKE decrypt,
+> ISO-mdoc parse) but there is **no issuer trust anchor** yet — `trust_level` is
+> `"presence-only-demo"` and a self-crafted credential would pass. This is disclosure and binding,
+> **not** a real age-safety control, until issuer-verified trust lands.
+
+See it in every state: [`examples/grants-approve/`](https://github.com/openmobilehub/credentagent/tree/main/examples/grants-approve).
+
+
 ### Under the hood — the delegated-draw seams (005)
 
 `grants` wraps **`DelegatedGate`** (`preApprove`/`spend`/`revoke`), which remains exported for
@@ -602,7 +658,9 @@ Under that facade are **signer-agnostic seams** for redeeming a user-sealed
 (pure, total, typed refusals), a `RevocationStore` (per-intent + subject kill-switch, atomic
 single-use consume), and an additive, fail-closed **draw branch** in `completeOrder` that re-runs
 every bounds + revocation check server-side, writes a `delegationId`, and **suppresses settlement**.
-Age is **non-delegable** — an age-restricted cart always steps up to a live ceremony.
+An age-restricted cart completes on that branch **only** against an age claim the human sealed into
+the intent at approval time, tested at the order's re-derived threshold — absent, too low, or past
+its stated validity, it steps up to a live ceremony (`ageProofCovers` is the one predicate).
 
 Honesty (Principle VII, constitution v1.1.0): draws carry a **`presence`** axis (`"delegated"` /
 `"delegated-demo"`) — *when* consent happened — separate from `trust_level` — *how strongly it's

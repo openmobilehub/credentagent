@@ -25,6 +25,12 @@ export interface IntentSignPageArgs {
   /** Where to send the human after the grant authorizes (absent ⇒ just show "done"). */
   returnUrl?: string;
   branding?: Branding;
+  /** The progress rail for this grant's steps (#172), rendered by `grants.serve`. Absent ⇒ none. */
+  rail?: string;
+  /** Optional step cards shown ABOVE the signature (#172) — the wallet credentials the human may
+   *  present before signing. They belong above it because what they prove is part of what they
+   *  sign: the proofs are inside `canonicalIntentBounds`, so the signature covers them. */
+  steps?: string;
 }
 
 function escapeHtml(s: string): string {
@@ -59,6 +65,8 @@ ${pageHead(title, extraCss, args.branding)}
 <body>
   <div class="wrap">
   ${brandHeader({ h1: title, tagline: "Sign with your wallet" }, args.branding)}
+  ${args.rail ?? ""}
+  ${args.steps ?? ""}
   <div class="card">
     <p class="lede">${lede}</p>
     <div class="bounds">${bounds}</div>

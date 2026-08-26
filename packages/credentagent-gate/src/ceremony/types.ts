@@ -67,6 +67,11 @@ export interface CartItemRef {
 export interface RepriceOpts {
   ageVerified?: boolean;
   loyaltyApplied?: boolean;
+  /** The exact discount rate to apply when `loyaltyApplied` — for a delegated draw this is the
+   *  percentage SEALED into the grant at approval time (#172), so the amount the delegate key
+   *  signed and the amount `completeOrder` re-derives are computed from one number and can never
+   *  disagree (invariant 3). Absent ⇒ the catalog applies its own rate, as it always has. */
+  loyaltyDiscountPct?: number;
 }
 
 export interface CeremonyCatalog {

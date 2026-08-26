@@ -309,6 +309,110 @@ describe("grant tools — merchant config & live-catalog re-pricing (Codex #118)
     expect(door(s)).toMatchObject({ ok: false, code: "per-spend-exceeded" });
   });
 
+  // ── #172: the human proved their age on the approve page, so the agent may buy the 21+ item ──
+
+  // The positive path for the reversal, over the real MCP wire: without it the whole feature is
+  // unproven — the point of #172 is that a grant the human proved for CAN spend.
+  it("a grant carrying a 21+ proof buys the age-restricted item over MCP", async () => {
+    const ca = new CredentAgent({ walletOrigin: wallet, catalog: GATE_CATALOG });
+    const c = await client(ca);
+    const g = sc(await c.callTool({ name: "create-spending-grant", arguments: { budget: 300, perSpend: 150, categories: ["Beverages"], signing: "page" } }));
+    // What the grant-age rail does when the human's wallet proves age on the approve page.
+    expect(await ca.grants._recordAgeProof(g.id, { provenAge: 21 })).toBe(true);
+    await ca.grants._authorize(g.id);
+    const s = await c.callTool({ name: "spend-from-grant", arguments: { grantId: g.id, productId: "oak-whiskey", idempotencyKey: "w172" } });
+    expect(door(s)).toMatchObject({ ok: true, amount: 124, remaining: 176 });
+  });
+
+  // BYPASS — the live-catalog pre-check must still refuse a grant with NO proof. Delete the
+  // `!ageProofCovers(...)` half of that condition and this goes red: every grant would buy 21+.
+  it("BYPASS: a grant with no age proof still refuses the 21+ item over MCP", async () => {
+    const ca = new CredentAgent({ walletOrigin: wallet, catalog: GATE_CATALOG });
+    const c = await client(ca);
+    const g = sc(await c.callTool({ name: "create-spending-grant", arguments: { budget: 300, perSpend: 150, categories: ["Beverages"], signing: "page" } }));
+    await ca.grants._authorize(g.id);
+    const s = await c.callTool({ name: "spend-from-grant", arguments: { grantId: g.id, productId: "oak-whiskey" } });
+    expect(door(s)).toMatchObject({ ok: false, code: "step-up" });
+  });
+
+  // BYPASS — the pre-check must test the proof against the LIVE threshold, not the grant's stale
+  // snapshot. The human proved 18+; the storefront has since raised this product to 21+. Drop the
+  // threshold comparison (or read the snapshot's age) and this goes red.
+  it("BYPASS: an 18+ proof cannot buy a product the LIVE catalog raised to 21+", async () => {
+    const ca = new CredentAgent({ walletOrigin: wallet, catalog: { widget: { price: 20, minAge: 18, category: "Gadgets" } } });
+    const store = createStorefront({ grants: ca.grants, catalog: [prod({ id: "widget", price: 20, category: "Gadgets", minimumAge: 21 })] });
+    const c = await connect(store);
+    const g = sc(await c.callTool({ name: "create-spending-grant", arguments: { budget: 100, perSpend: 50, categories: ["Gadgets"], signing: "page" } }));
+    await ca.grants._recordAgeProof(g.id, { provenAge: 18 });
+    await ca.grants._authorize(g.id);
+    const s = await c.callTool({ name: "spend-from-grant", arguments: { grantId: g.id, productId: "widget" } });
+    expect(door(s)).toMatchObject({ ok: false, code: "step-up" });
+  });
+
+  // BYPASS (the agent-facing surface): the enforcement changing is not enough — the PROJECTION has
+  // to carry it. Without `credentials` on the view, an authorized grant looks identical whether or
+  // not the human proved their age, so an agent falls back on "age can't be delegated" and tells
+  // them their purchase still needs them present — while this very tool would have completed it.
+  // Found in a live Claude-mobile test. Delete `credentials` from projectGrantView → red.
+  it("BYPASS: the grant an agent READS says whether the human proved their age", async () => {
+    const ca = new CredentAgent({ walletOrigin: wallet, catalog: GATE_CATALOG, loyaltyDiscountPct: 10 });
+    const c = await client(ca);
+    const g = sc(await c.callTool({ name: "create-spending-grant", arguments: { budget: 300, perSpend: 150, products: ["oak-whiskey"], signing: "page" } }));
+    // Before: the agent can see there is no proof — as a fact, not a missing key.
+    expect(sc(await c.callTool({ name: "get-grant-status", arguments: { grantId: g.id } })).credentials)
+      .toEqual({ ageVerified: null, loyaltyDiscountPct: null });
+
+    await ca.grants._recordAgeProof(g.id, { provenAge: 21 });
+    await ca.grants._recordMembershipProof(g.id, { membershipNumber: "GOLD-0001" });
+    await ca.grants._authorize(g.id);
+
+    // After: the same read tells it the purchase it was about to refuse is available.
+    const after = sc(await c.callTool({ name: "get-grant-status", arguments: { grantId: g.id } }));
+    expect(after.credentials).toMatchObject({ ageVerified: 21, loyaltyDiscountPct: 10, trustLevel: "presence-only-demo" });
+
+    // …and the spend agrees with what the projection promised — 21+ item, discounted.
+    const s = await c.callTool({ name: "spend-from-grant", arguments: { grantId: g.id, productId: "oak-whiskey", idempotencyKey: "surface1" } });
+    expect(door(s)).toMatchObject({ ok: true, amount: 111.6 });
+  });
+
+  // ── #172: the loyalty membership the human proved on the approve page ──────────────────────
+  // The risk is invariant 3 — the line sum, the order total and the SIGNED draw amount must agree
+  // on every path. These run it over the real MCP wire, where the storefront's live-catalog
+  // pre-check and the engine both have to reach the same number.
+
+  it("a grant carrying a membership is charged the discounted amount over MCP", async () => {
+    const ca = new CredentAgent({ walletOrigin: wallet, catalog: GATE_CATALOG, loyaltyDiscountPct: 10 });
+    const c = await client(ca);
+    const g = sc(await c.callTool({ name: "create-spending-grant", arguments: { budget: 200, perSpend: 100, categories: ["Electronics"], signing: "page" } }));
+    expect(await ca.grants._recordMembershipProof(g.id, { membershipNumber: "GOLD-0001" })).toBe(true);
+    await ca.grants._authorize(g.id);
+    const s = await c.callTool({ name: "spend-from-grant", arguments: { grantId: g.id, productId: "drift-mouse", idempotencyKey: "m172" } });
+    expect(door(s)).toMatchObject({ ok: true, amount: 44.1, remaining: 155.9 }); // $49 − 10%
+  });
+
+  // BYPASS — the storefront's per-spend pre-check must measure what is CHARGED, not the list price.
+  // Compare the list price instead and this goes red: a purchase the gate would have completed is
+  // refused by the storefront, which is exactly the cross-path drift invariant 3 forbids.
+  it("BYPASS: the per-spend pre-check honours the discount, so a discounted purchase is not refused", async () => {
+    const ca = new CredentAgent({ walletOrigin: wallet, catalog: GATE_CATALOG, loyaltyDiscountPct: 10 });
+    const c = await client(ca);
+    // drift-mouse lists at $49 — over the $45 cap — but bills at $44.10.
+    const g = sc(await c.callTool({ name: "create-spending-grant", arguments: { budget: 200, perSpend: 45, categories: ["Electronics"], signing: "page" } }));
+    await ca.grants._recordMembershipProof(g.id, { membershipNumber: "GOLD-0001" });
+    await ca.grants._authorize(g.id);
+    const s = await c.callTool({ name: "spend-from-grant", arguments: { grantId: g.id, productId: "drift-mouse", idempotencyKey: "cap172" } });
+    expect(door(s)).toMatchObject({ ok: true, amount: 44.1 });
+  });
+
+  it("no membership ⇒ full catalog price, exactly as before", async () => {
+    const ca = new CredentAgent({ walletOrigin: wallet, catalog: GATE_CATALOG, loyaltyDiscountPct: 10 });
+    const c = await client(ca);
+    const g = sc(await c.callTool({ name: "create-spending-grant", arguments: { budget: 200, perSpend: 100, categories: ["Electronics"], signing: "page" } }));
+    await ca.grants._authorize(g.id);
+    const s = await c.callTool({ name: "spend-from-grant", arguments: { grantId: g.id, productId: "drift-mouse", idempotencyKey: "nom172" } });
+    expect(door(s)).toMatchObject({ ok: true, amount: 49 });
+  });
+
   // The happy path still works when the two catalogs AGREE: an in-scope, in-cap, unrestricted item spends.
   it("spends when the live catalog agrees (in scope, under cap, no age gate)", async () => {
     const ca = new CredentAgent({ walletOrigin: wallet, catalog: { widget: { price: 20, category: "Gadgets" } } });

@@ -146,13 +146,15 @@ export class CredentAgent {
     // The delegated-spend resource (spec 009): needs the priced catalog to bound + price spends.
     // The intent-sign rail (spec 012) also reads the gate secret (seals the signing ceremony),
     // the reader identity (the signed request's verifier cert), and branding (the signing page) —
-    // all threaded from the same configure-once options.
+    // all threaded from the same configure-once options. `loyaltyDiscountPct` (#172) opts the
+    // approve/signing page in to the membership step.
     this.grants = new Grants({
       walletOrigin: this.walletOrigin,
       ...(opts.catalog ? { catalog: opts.catalog } : {}),
       ...(opts.gateSecret ? { signingKey: opts.gateSecret } : {}),
       ...(opts.readerIdentity ? { readerIdentity: opts.readerIdentity } : {}),
       ...(opts.branding ? { branding: opts.branding } : {}),
+      ...(opts.loyaltyDiscountPct != null ? { loyaltyDiscountPct: opts.loyaltyDiscountPct } : {}),
     });
     this.orders = new Orders({
       walletOrigin: this.walletOrigin,

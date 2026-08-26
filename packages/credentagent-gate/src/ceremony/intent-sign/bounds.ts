@@ -38,6 +38,16 @@ export interface IntentBoundsInput {
   /** A per-grant random salt, so the hash cannot be precomputed from the public
    *  bounds alone (minted once at create, sealed in the record). */
   nonce: string;
+  /** The wallet credentials the human presented BEFORE signing (#172) — an age proof that
+   *  unlocks restricted items, a membership that discounts every purchase. These are TERMS of
+   *  the grant, shown on the signing page, so they must be inside the signed bytes: without
+   *  them here, a claim recorded between /request and /verify would ride a signature the human
+   *  gave for different terms. Only the load-bearing fields are encoded (the threshold, the
+   *  rate) — `verifiedAt` is an audit timestamp, not a term, and would make the hash unstable
+   *  between the two round trips. Absent ⇒ omitted from the bytes entirely, so a grant with no
+   *  credentials hashes exactly as it did before this field existed. */
+  ageProof?: { provenAge: number; expiresAt?: string };
+  membershipProof?: { membershipNumber: string; discountPct: number };
 }
 
 /**
@@ -62,6 +72,12 @@ export function canonicalIntentBounds(input: IntentBoundsInput): string {
     // `canonical()` drops an undefined value, so an absent expiry simply isn't in
     // the bytes — no need to branch here, but we keep it explicit for the reader.
     ...(input.expiresAt ? { expiresAt: input.expiresAt } : {}),
+    // The credentials the human presented before signing are TERMS, so they are signed over
+    // (#172). Spread-when-present keeps a credential-less grant byte-identical to before.
+    ...(input.ageProof ? { ageProof: { provenAge: input.ageProof.provenAge, ...(input.ageProof.expiresAt ? { expiresAt: input.ageProof.expiresAt } : {}) } } : {}),
+    ...(input.membershipProof
+      ? { membershipProof: { membershipNumber: input.membershipProof.membershipNumber, discountPct: input.membershipProof.discountPct } }
+      : {}),
     nonce: input.nonce,
   });
 }

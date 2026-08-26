@@ -80,3 +80,40 @@ describe("deriveNonce — bounds-bound ceremony nonce", () => {
     expect(deriveNonce(CHAL_A, h)).not.toBe(deriveNonce(CHAL_A, h2));
   });
 });
+
+// ── #172: the wallet credentials the human presents before signing are TERMS ────────────────
+// The page shows them, so the signature has to cover them. Without that, a claim recorded between
+// /request and /verify would ride a signature the human gave for different terms — and the grant
+// would authorize carrying a proof they never saw. Each of these goes red if the corresponding
+// field is dropped from `canonicalIntentBounds`.
+describe("canonicalIntentBounds — wallet credentials are inside the signed bytes (#172)", () => {
+  it("a grant with NO credentials hashes exactly as it did before the fields existed", () => {
+    // Additive by construction: absent ⇒ omitted from the bytes, so main's pins above still hold.
+    expect(canonicalIntentBounds(BASE)).toBe(canonicalIntentBounds({ ...BASE, ageProof: undefined, membershipProof: undefined }));
+  });
+
+  it("BYPASS: attaching an age proof CHANGES the hash — a signature given without it stops verifying", () => {
+    const before = boundsHash(BASE);
+    const after = boundsHash({ ...BASE, ageProof: { provenAge: 21 } });
+    expect(after).not.toBe(before);
+  });
+
+  it("BYPASS: raising the proven age CHANGES the hash — 18+ and 21+ are different terms", () => {
+    expect(boundsHash({ ...BASE, ageProof: { provenAge: 18 } })).not.toBe(boundsHash({ ...BASE, ageProof: { provenAge: 21 } }));
+  });
+
+  it("BYPASS: attaching a membership, or moving its rate, CHANGES the hash", () => {
+    const none = boundsHash(BASE);
+    const ten = boundsHash({ ...BASE, membershipProof: { membershipNumber: "GOLD-1", discountPct: 10 } });
+    const fifty = boundsHash({ ...BASE, membershipProof: { membershipNumber: "GOLD-1", discountPct: 50 } });
+    expect(ten).not.toBe(none);
+    expect(fifty).not.toBe(ten); // the RATE is a term, not a detail
+  });
+
+  it("is stable across the two round trips: the same credentials re-encode identically", () => {
+    // /request seals the nonce from these bytes and /verify re-derives them from the same record;
+    // an audit timestamp inside would make the two disagree, which is why only terms are encoded.
+    const withCreds = { ...BASE, ageProof: { provenAge: 21 }, membershipProof: { membershipNumber: "GOLD-1", discountPct: 10 } };
+    expect(canonicalIntentBounds(withCreds)).toBe(canonicalIntentBounds({ ...withCreds }));
+  });
+});
