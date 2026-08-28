@@ -156,33 +156,46 @@ curl -sD - -o /dev/null https://<host>/credentials/mdl.mpzpass | grep -i content
 
 ## 5. Wire the verifier (gate) — present the reader identity
 
-For the wallet to see the gate as a *trusted verifier* (not just "presence"), the
-gate must **authenticate as the reader on the RICAL** — sign its OpenID4VP / DC-API
-request with the reader key and present the reader cert chain.
+Three files, two destinations. All three are needed; any one alone does nothing.
 
-**The gate needs exactly two files from here — and only these:**
+| File (from step 1 / step 3) | Goes to | Role |
+|------|---------|------|
+| `certs/reader-cert.pem` | the gate | what it **presents** (rides in `x5c` / `x5chain`) |
+| `keys/reader-key.pem` | the gate | what it **signs** with |
+| `out/utopia.rical` | the wallet | the list the wallet checks the cert against |
 
-| Copy to the gate | Role |
-|------------------|------|
-| `keys/reader-key.pem` | **private** — the gate ES256-signs the request JWT + ISO `ReaderAuthAll` with it |
-| `certs/reader-cert.pem` | public — rides in the `x5c` / `x5chain` header so the wallet matches it to the RICAL |
+Never put the RICAL on the gate — it never reads one. Never put any other key there:
+`ds-key` / `iaca-key` mint credentials, `list-signer-key` forges trust lists.
 
-`certs/reader-root-cert.pem` (public) too, only if you present the full chain
-`[reader-cert, reader-root]`. **Keep every other key off the gate** — `ds-key` /
-`iaca-key` mint credentials, `reader-root-key` mints readers, `list-signer-key`
-forges trust lists; none belong on the verifier, so a compromised gate can only
-impersonate the demo reader, nothing more.
+**Gate:**
 
-> **Pending code hook (#51).** The gate today mints an *ephemeral self-signed*
-> reader cert per request (`makeReaderCert` in
-> `packages/credentagent-gate/src/ceremony/mdoc/reader.ts`, and
-> `makeMdocReaderCert` in `.../mdoc/mdoc-iso.ts`), so there is **not yet** a config
-> point to inject these files — the RICAL match won't happen until that lands.
-> Tracked in **#51**: load `reader-key.pem` + `reader-cert.pem` from env/config
-> instead of self-signing. Until then, step 5 is documented intent, not a working
-> knob.
+```js
+new CredentAgent({
+  walletOrigin: "http://localhost:3007",
+  readerIdentity: {
+    key: readFileSync("reader-key.pem", "utf8"),
+    cert: readFileSync("reader-cert.pem", "utf8"),
+  },
+});
+```
 
-Reminder: the gate's serving origin must match a name in the reader SAN (step 1).
+On a hosted deployment, pass the file contents as environment variables. Omit
+`readerIdentity` and the gate self-signs per request — the ceremony still completes, the
+wallet just shows the verifier as unknown.
+
+**Wallet:** Multipaz → Settings → Trust manager → add entry → import the RICAL. Remove any
+previously imported RICAL first.
+
+> A RICAL is only as good as the key behind it: it names a reader, and some gate has to
+> sign as that reader. A list whose reader key nobody holds cannot clear the warning —
+> which is why the RICAL and the reader key must be built and distributed together.
+
+The gate's serving origin must match a name in the reader cert's SAN (`READER_DNS`,
+step 1). Change it and you must rebuild the RICAL (step 3) and re-import it.
+
+**Check it without a phone:** `node tools/demo-pki/verify-reader-trust.mjs` — proves the
+cert rides in `x5c`, the signature verifies under it, the origin matches, and the RICAL
+names that cert.
 
 ## 6. Import trust + credentials on the phone
 
@@ -190,7 +203,7 @@ Open the deployed site on the phone → import the **VICAL + RICAL first** (so c
 land already-trusted) → then open each **`.mpzpass`**. Then run a ceremony and
 confirm **no red trust warning**. Detailed device steps + the adb fallback live in
 the guide: [`docs/guides/testing-on-device.md`](../../docs/guides/testing-on-device.md)
-(and the verifier-warning caveat is #51).
+— including why the verifier warning survives a fresh clone.
 
 **Done when:** a ceremony (e.g. the `age_over_65` senior-discount flow) completes
 against the gate with no red issuer *or* verifier warning.
