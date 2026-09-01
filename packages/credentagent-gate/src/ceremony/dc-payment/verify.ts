@@ -30,6 +30,11 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
+/** First bytes of a base64url digest — enough to compare two hashes by eye. */
+function abbrev(hash: string | null): string {
+  return hash ? hash.slice(0, 12) + "…" : "∅";
+}
+
 function claimText(v: unknown): string | null {
   if (v == null) return null;
   if (typeof v === "object" && "value" in (v as Record<string, unknown>)) return String((v as { value: unknown }).value);
@@ -162,6 +167,18 @@ export function runDcGates(mandate: DcMandate, origin: Origin, opts: { loyaltyDi
   const nodeAlg = txHashNameFromCose(ua.transactionDataHashAlg);
   const recomputed = nodeAlg ? hashTransactionData(ua.transactionData, nodeAlg) : null;
   const hashOk = nodeAlg !== null && ua.transactionDataHash === recomputed;
+  // WHY it failed, in the detail itself, so one screenshot is enough evidence (#180).
+  // "No hash at all" and "a hash over other bytes" are different problems: a wallet
+  // whose build predates the mdoc transaction binding accepts the request, returns a
+  // valid credential, and silently signs nothing — that buyer needs a wallet update,
+  // not a debugging session. Either way the gate still refuses (no fallback).
+  const hashDetail = hashOk
+    ? `hash ✓ (${nodeAlg})`
+    : ua.transactionDataHash == null
+      ? "hash ✗ — this wallet signed no transaction_data_hash: it does not bind the amount (update the wallet app)"
+      : nodeAlg === null
+        ? `hash ✗ — the wallet used an unsupported hash algorithm (COSE ${ua.transactionDataHashAlg})`
+        : `hash ✗ — mismatch (${nodeAlg}: wallet ${abbrev(ua.transactionDataHash)} vs ours ${abbrev(recomputed)})`;
   const txd = decodeTransactionData(ua.transactionData);
   const amountOk = discountOk && payable === cart.total && payable === mandate.payment.amount && Number(txd.payload.amount) === payable;
   const currencyOk = txd.payload.currency === cart.currency;
@@ -172,7 +189,7 @@ export function runDcGates(mandate: DcMandate, origin: Origin, opts: { loyaltyDi
   results.push({
     gate: "Amount binding",
     pass: hashOk && amountOk && currencyOk && payeeOk,
-    detail: `hash ${hashOk ? "✓" : "✗"} (${nodeAlg ?? "unknown-alg"}) · amount ${amountOk ? "✓" : "✗"} (${txd.payload.amount}/${mandate.payment.amount} vs ${payable}) · currency ${currencyOk ? "✓" : "✗"} · payee ${payeeOk ? "✓" : "✗"} (${txd.payload.payee?.id} vs ${expectedPayee})`,
+    detail: `${hashDetail} · amount ${amountOk ? "✓" : "✗"} (${txd.payload.amount}/${mandate.payment.amount} vs ${payable}) · currency ${currencyOk ? "✓" : "✗"} · payee ${payeeOk ? "✓" : "✗"} (${txd.payload.payee?.id} vs ${expectedPayee})`,
   });
 
   // Gate 2 — authorization present. On the REAL path, the wallet's mdoc carries

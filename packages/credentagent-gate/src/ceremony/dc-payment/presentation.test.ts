@@ -146,6 +146,8 @@ describe("dc-payment REAL OpenID4VP presentation", () => {
     });
     const amountGate = out.gates.find((g) => g.gate === "Amount binding");
     expect(amountGate?.pass).toBe(false); // FAILS if the gate stopped re-checking the device-signed hash
+    // The detail must name WHICH failure this is — a hash that is present but wrong (#180).
+    expect(amountGate?.detail).toContain("mismatch");
   });
 
   it("REJECTS a DeviceResponse with no device-signed transaction_data_hash at all", async () => {
@@ -161,7 +163,12 @@ describe("dc-payment REAL OpenID4VP presentation", () => {
       readerContextToken: req.readerContextToken,
       secret: SECRET,
     });
-    expect(out.gates.find((g) => g.gate === "Amount binding")?.pass).toBe(false);
+    const amountGate = out.gates.find((g) => g.gate === "Amount binding");
+    expect(amountGate?.pass).toBe(false);
+    // A wallet too old to bind the transaction says so in plain language, so a single
+    // screenshot tells a tester to update the wallet instead of filing a crypto bug (#180).
+    expect(amountGate?.detail).toContain("signed no transaction_data_hash");
+    expect(amountGate?.detail).not.toContain("mismatch");
   });
 
   it("HONORS a non-SHA-256 transaction_data_hash_alg: a SHA-384-bound wallet response verifies", async () => {
@@ -202,6 +209,8 @@ describe("dc-payment REAL OpenID4VP presentation", () => {
       readerContextToken: req.readerContextToken,
       secret: SECRET,
     });
-    expect(out.gates.find((g) => g.gate === "Amount binding")?.pass).toBe(false);
+    const amountGate = out.gates.find((g) => g.gate === "Amount binding");
+    expect(amountGate?.pass).toBe(false);
+    expect(amountGate?.detail).toContain("unsupported hash algorithm");
   });
 });
