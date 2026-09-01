@@ -191,11 +191,22 @@ previously imported RICAL first.
 > which is why the RICAL and the reader key must be built and distributed together.
 
 The gate's serving origin must match a name in the reader cert's SAN (`READER_DNS`,
-step 1). Change it and you must rebuild the RICAL (step 3) and re-import it.
+step 1). Change it and you must rebuild the RICAL (step 3) and re-import it. On Vercel the
+gate's `walletOrigin` is `https://${VERCEL_PROJECT_PRODUCTION_URL}`, and this repo's
+shipped cert covers only `credentagent-demo.vercel.app` + `localhost`. Deploy under a
+**custom production domain** and that host isn't on the SAN, so the "unknown verifier"
+warning never clears — yet a SAN mismatch only logs a `console.warn` at boot (it does
+**not** fail the gate), so check the startup log if a deploy you expected to fix it
+doesn't. **Preview** URLs are a separate trap: `VERCEL_PROJECT_PRODUCTION_URL` stays the
+*production* host, so a ceremony opened on a preview deployment is bound to the wrong
+origin and won't clear either — and this one logs nothing.
 
-**Check it without a phone:** `node tools/demo-pki/verify-reader-trust.mjs` — proves the
-cert rides in `x5c`, the signature verifies under it, the origin matches, and the RICAL
-names that cert.
+**Check it without a phone** — first `./gen-pki.sh` (mints the reader **private** key,
+which is gitignored) and build the gate (`cd packages/credentagent-gate && npm run build`,
+which produces the un-committed `dist/`), then run
+`node tools/demo-pki/verify-reader-trust.mjs`. It proves the cert rides in `x5c`, the
+signature verifies under it, the origin matches, and the RICAL names that cert. A bare
+clone can't run it — both inputs are absent by design.
 
 ## 6. Import trust + credentials on the phone
 
