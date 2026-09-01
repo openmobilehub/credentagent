@@ -25,7 +25,18 @@ const grantCatalog = Object.fromEntries(
   SAMPLE_CATALOG.map((p) => [p.id, { price: p.price, category: p.category, ...(p.minimumAge ? { minAge: p.minimumAge } : {}) }]),
 );
 // The grants resource lives on the CredentAgent, so construct it BEFORE the storefront wires it in.
-const credentagent = new CredentAgent({ walletOrigin, catalog: grantCatalog });
+// The reader identity this gate presents (#51). Supplied, it signs each wallet request as a
+// reader named on a trust list (RICAL) the wallet imported, so the wallet resolves the
+// verifier instead of warning that the site asking for the data is unknown. Absent, the gate
+// self-signs a throwaway cert per request — the ceremony still completes, the wallet just
+// shows the verifier as unknown. The cert's SubjectAltName MUST include this origin's host.
+// Only the READER key belongs on a verifier: no issuer key is involved, so a popped gate can
+// impersonate this reader and nothing else.
+const readerIdentity =
+  process.env.CREDENTAGENT_READER_KEY && process.env.CREDENTAGENT_READER_CERT
+    ? { key: process.env.CREDENTAGENT_READER_KEY, cert: process.env.CREDENTAGENT_READER_CERT }
+    : undefined;
+const credentagent = new CredentAgent({ walletOrigin, catalog: grantCatalog, ...(readerIdentity ? { readerIdentity } : {}) });
 
 const store = createStorefront({
   signingKey: process.env.GATE_SECRET,
