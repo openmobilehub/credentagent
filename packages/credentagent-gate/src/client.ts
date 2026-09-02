@@ -4,6 +4,8 @@
 
 import * as x509 from "@peculiar/x509";
 import type { Branding, Credential, CredentAgentOptions, GateOrder, ReaderIdentity, Step, VerificationManifestEntry, VerificationStore } from "./types.js";
+import { Ap2Issuer } from "./ap2/issue.js";
+import { didDocument, resolveSigningKey, type GateSigningKey } from "./ap2/keys.js";
 import { resolveRequirements } from "./manifest.js";
 import { MemoryVerificationStore } from "./store.js";
 import { mountCeremony, type CeremonyApp, type CeremonySeams } from "./ceremony/mount.js";
@@ -49,6 +51,8 @@ export class CredentAgent {
   // exist on this server). `requirements()` then emits approve links that resolve
   // to those mounted routes rather than the legacy `/credential-gate/*` shape.
   private mountedRoutes = false;
+  // Idempotence for the did.json route — mount() may be called more than once.
+  private didServed = false;
   // True once a `verifier` seam has been wired at mount() (008). `requirements()` then
   // routes the PAYMENT (authorize) approve link to the single `/credentagent/delegated`
   // ceremony (the external-verifier round-trip) instead of the built-in dc-payment rail.
@@ -81,6 +85,11 @@ export class CredentAgent {
   // flags would miss. Capture what's visible so a correctly configured composition isn't flagged, and
   // record that a host owns the serving surface (its order persistence lives in its completion seam).
   private mountSigningKey = false;
+  // The AP2 mandate key + issuer (spec 013), resolved AT CONSTRUCTION. Eager and synchronous
+  // on purpose: `mount()` publishes the public half onto `app.locals` for the completion seam,
+  // and a key that arrived a tick later would leave a window where a chain could not be checked.
+  readonly mandateKey: GateSigningKey;
+  private readonly ap2Issuer: Ap2Issuer;
   private mountSharedStore = false;
   private composedWithHost = false;
 
@@ -117,6 +126,8 @@ export class CredentAgent {
     this.sharedVerificationStore = opts.store !== undefined && !(opts.store instanceof MemoryVerificationStore);
     this.hasGateSecret = typeof opts.gateSecret === "string" && opts.gateSecret.length > 0;
     this.readerIdentity = opts.readerIdentity;
+    this.mandateKey = resolveSigningKey(this.walletOrigin, opts.mandateSigningKey);
+    this.ap2Issuer = new Ap2Issuer(this.mandateKey);
     // Host brand for the ceremony pages — threaded into every mount path below. Kept raw;
     // theme.ts sanitizes each field at the one point it is interpolated into a page.
     if (opts.branding) this.branding = opts.branding;
@@ -149,6 +160,7 @@ export class CredentAgent {
     // all threaded from the same configure-once options. `loyaltyDiscountPct` (#172) opts the
     // approve/signing page in to the membership step.
     this.grants = new Grants({
+      mandateIssuer: this.ap2Issuer,
       walletOrigin: this.walletOrigin,
       ...(opts.catalog ? { catalog: opts.catalog } : {}),
       ...(opts.gateSecret ? { signingKey: opts.gateSecret } : {}),
@@ -264,6 +276,7 @@ export class CredentAgent {
    */
   doctor(opts: { print?: boolean } = {}): DoctorReport {
     const report = runDoctor({
+      hasSigningKey: !this.mandateKey.ephemeral,
       walletOrigin: this.walletOrigin,
       // Effective config: the constructor value OR what a mounted host/composed storefront supplied.
       hasGateSecret: this.hasGateSecret || this.mountSigningKey,
@@ -296,8 +309,12 @@ export class CredentAgent {
    * when seams are supplied; with none extracted yet, that path attaches no routes.
    */
   mount(app: ExpressApp, ceremony?: MountCeremony): void {
+    // Publish the DID document + the public mandate key FIRST: mountCeremony re-exposes the
+    // resolved seams on app.locals, and a later write would drop the key the completion seam
+    // needs to check an inbound chain.
+    this.#serveDidDocument(app);
     if (ceremony) {
-      mountCeremony(app as CeremonyApp, { ...ceremony, verificationStore: this.store, readerIdentity: this.readerIdentity, credentialRegistry: this.registry, orderPolicies: this.orderPolicies, ...(this.branding ? { branding: this.branding } : {}) });
+      mountCeremony(app as CeremonyApp, { ...ceremony, mandatePublicJwk: this.mandateKey.publicJwk, mandateIssuer: this.ap2Issuer, verificationStore: this.store, readerIdentity: this.readerIdentity, credentialRegistry: this.registry, orderPolicies: this.orderPolicies, ...(this.branding ? { branding: this.branding } : {}) });
       this.mountedRoutes = true;
       if (ceremony.verifier) this.delegated = true;
       // #25 doctor(): a host owns the serving surface here; capture the signing key it supplied via
@@ -313,7 +330,7 @@ export class CredentAgent {
     // rails write (invariant 4). Falls back to CredentAgent's own store otherwise.
     const locals = (app.locals.credentagent ?? {}) as Partial<CeremonySeams>;
     if (locals.orderStore && locals.catalog && locals.completion) {
-      mountCeremony(app as CeremonyApp, { readerIdentity: this.readerIdentity, credentialRegistry: this.registry, orderPolicies: this.orderPolicies, ...(this.branding ? { branding: this.branding } : {}), ...(locals.verificationStore ? {} : { verificationStore: this.store }) });
+      mountCeremony(app as CeremonyApp, { mandatePublicJwk: this.mandateKey.publicJwk, mandateIssuer: this.ap2Issuer, readerIdentity: this.readerIdentity, credentialRegistry: this.registry, orderPolicies: this.orderPolicies, ...(this.branding ? { branding: this.branding } : {}), ...(locals.verificationStore ? {} : { verificationStore: this.store }) });
       this.mountedRoutes = true;
       // The host published a verifier on app.locals (createStorefront({ verifier })): route the
       // manifest's gate/authorize links to the delegated ceremony (008).
@@ -328,10 +345,55 @@ export class CredentAgent {
     }
     // Legacy (no seams): expose the per-order store so a host's existing
     // fail-closed routes resolve verification THROUGH CredentAgent.
-    const existing = app.locals.credentagent as { store?: VerificationStore } | undefined;
-    if (existing?.store === this.store) return; // idempotent
-    app.locals.credentagent = { store: this.store, walletOrigin: this.walletOrigin, credentialRegistry: this.registry };
+    const existing = (app.locals.credentagent ?? {}) as Record<string, unknown> & { store?: VerificationStore };
+    if (existing.store === this.store) return; // idempotent
+    // MERGE, never replace: #serveDidDocument already put the mandate key + issuer here, and
+    // overwriting them would silently disable chain verification on this app.
+    app.locals.credentagent = { ...existing, store: this.store, walletOrigin: this.walletOrigin, credentialRegistry: this.registry };
   }
+
+  /**
+   * The AP2 mandate issuer for this gate — configured once, from `{ mandateSigningKey }` or an
+   * ephemeral key. Every rail mints through this one issuer, so every mandate this server
+   * emits carries the same `kid` and verifies against the same published DID document.
+   */
+  get ap2(): Ap2Issuer {
+    return this.ap2Issuer;
+  }
+
+  /**
+   * Publish the gate's public signing key at `/.well-known/did.json` (spec 013 decision #2).
+   *
+   * Without this a mandate signature is checkable only by us, which would make "real
+   * signatures" a hollow claim. Called from every `mount()` path; safe to call twice.
+   */
+  #serveDidDocument(app: ExpressApp): void {
+    // Publish BOTH halves on app.locals: the public JWK so a composed host's completion seam
+    // can VERIFY a chain, and the issuer so it can MINT one with the very same key. A host
+    // that minted with its own key would produce chains this gate refuses — the two must be
+    // the same key, and sharing the issuer is what guarantees it.
+    const locals = (app.locals.credentagent ?? {}) as Record<string, unknown>;
+    app.locals.credentagent = {
+      ...locals,
+      mandatePublicJwk: this.mandateKey.publicJwk,
+      mandateIssuer: this.ap2Issuer,
+    };
+
+    const routed = app as ExpressApp & { get?(path: string, handler: (req: unknown, res: DidResponse) => void): unknown };
+    if (typeof routed.get !== "function" || this.didServed) return;
+    this.didServed = true;
+    const doc = didDocument(this.mandateKey);
+    routed.get("/.well-known/did.json", (_req, res) => {
+      res.setHeader?.("content-type", "application/did+json");
+      res.json(doc);
+    });
+  }
+}
+
+/** The sliver of a response object `#serveDidDocument` needs — no express import. */
+interface DidResponse {
+  setHeader?(name: string, value: string): void;
+  json(body: unknown): void;
 }
 
 /** DNS SAN entries on a reader leaf cert (empty if none / unparseable). */

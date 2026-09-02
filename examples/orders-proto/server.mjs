@@ -16,34 +16,26 @@ import { existsSync, readFileSync } from "node:fs";
 import { EventEmitter } from "node:events";
 import { createStorefront } from "@openmobilehub/credentagent-storefront/server";
 import { createOrder, SAMPLE_CATALOG } from "@openmobilehub/credentagent-storefront";
-import { CredentAgent, age, payment, required, issueCartMandate } from "@openmobilehub/credentagent-gate";
+import { CredentAgent, age, payment, required, issueOrderChain } from "@openmobilehub/credentagent-gate";
 
-const SIGNING_KEY = "orders-proto-secret";
-const b64u = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
 
-// Build the REAL mandate bundle for a settled order (increment A): the cartMandate is a
-// genuinely signed ap2.CartMandate (issueCartMandate over the order's lines); the paymentMandate
-// is assembled from the real settlement record. intentMandate is absent on a human-present order.
-function buildMandateBundle(order, rec) {
-  const cart = issueCartMandate(
-    { orderId: order.id, lines: order.lines, currency: order.currency ?? rec.currency, total: order.total ?? rec.amount },
-    SIGNING_KEY,
-  );
-  const cartMandate = { ...cart, serialize() { return b64u(cart); } };
-  const pay = {
-    type: "ap2.PaymentMandate",
-    orderId: order.id,
-    amount: { amount: rec.amount, currency: rec.currency },
-    method: rec.method,
-    presenceMode: "human_present",
-    authorization: "direct",
-    cart: cart.id,
-    ...(rec.txId ? { txId: rec.txId } : {}),
-    ...(rec.network ? { network: rec.network } : {}),
-    trust_level: "presence-only-demo",
+// Build the REAL mandate bundle for a settled order: two genuinely signed AP2 mandates —
+// a `mandate.checkout.1` over the order's lines and the `mandate.payment.1` bound to it,
+// both ES256 SD-JWTs verifiable against the gate's /.well-known/did.json. The "open"
+// mandates are absent on a human-present order (they are the grant pair).
+async function buildMandateBundle(order, rec) {
+  const { chain } = await issueOrderChain({
+    issuer: credentagent.ap2,
+    order: { ...order, currency: order.currency ?? rec.currency, total: order.total ?? rec.amount },
+    origin: BASE,
+    merchantName: "Orders Proto",
+  });
+  return {
+    checkoutMandate: { serialized: chain.checkout },
+    paymentMandate: { serialized: chain.payment, method: rec.method, presenceMode: "human_present", authorization: "direct", ...(rec.txId ? { txId: rec.txId } : {}), ...(rec.network ? { network: rec.network } : {}) },
+    trustLevel: "server-issued-demo",
+    presence: "live",
   };
-  const paymentMandate = { ...pay, serialize() { return b64u(pay); } };
-  return { intentMandate: undefined, cartMandate, paymentMandate, trustLevel: "presence-only-demo" };
 }
 
 const PORT = Number(process.env.PORT ?? 4010);
@@ -109,8 +101,9 @@ store.app.get("/api/order/:id", async (req, res) => {
     ? {
         ok: true,
         authorization: "direct",
-        trustLevel: "presence-only-demo",
-        mandateBundle: order ? serializeBundle(buildMandateBundle(order, rec)) : undefined,   // increment A
+        trustLevel: "server-issued-demo",
+        presence: "live",
+        mandateBundle: order ? await buildMandateBundle(order, rec) : undefined,
         completion: { amount: rec.amount, currency: rec.currency, method: rec.method, txId: rec.txId ?? null, network: rec.network ?? null, completedAt: rec.completedAt },
       }
     : (order
@@ -118,16 +111,6 @@ store.app.get("/api/order/:id", async (req, res) => {
         : { ok: false, code: "not-found", trustLevel: "presence-only-demo" });
   res.json({ door, log });
 });
-
-// JSON-safe view of the bundle for the wire (calls the mandates' serialize()).
-function serializeBundle(b) {
-  return {
-    intentMandate: b.intentMandate ?? null,
-    cartMandate: { type: b.cartMandate.type, id: b.cartMandate.id, total: b.cartMandate.total, trust_level: b.cartMandate.trust_level, serialized: b.cartMandate.serialize() },
-    paymentMandate: { type: b.paymentMandate.type, amount: b.paymentMandate.amount, method: b.paymentMandate.method, presenceMode: b.paymentMandate.presenceMode, authorization: b.paymentMandate.authorization, trust_level: b.paymentMandate.trust_level, serialized: b.paymentMandate.serialize() },
-    trustLevel: b.trustLevel,
-  };
-}
 
 // TEST-ONLY: simulate a ceremony completion so the ok-branch (+ mandateBundle) is verifiable
 // without a phone. Writes the completed store exactly as the real rail does → fires order.settled.
@@ -204,7 +187,7 @@ async function poll(){
   if(door.ok){st.className='pill p-ok';st.textContent='ok';clearInterval(timer);
     const mb=door.mandateBundle;
     el('result').innerHTML=\`<div class=row style="margin-top:.6rem"><span class=k>authorization</span><code>\${door.authorization}</code><span class="pill p-ok">trust: \${door.trustLevel}</span></div>
-    <pre>res.mandateBundle = \${JSON.stringify({intentMandate:mb?.intentMandate,cartMandate:{type:mb?.cartMandate.type,id:mb?.cartMandate.id,total:mb?.cartMandate.total,trust_level:mb?.cartMandate.trust_level,'serialize()':(mb?.cartMandate.serialized||'').slice(0,32)+'…'},paymentMandate:{...mb?.paymentMandate,serialized:(mb?.paymentMandate.serialized||'').slice(0,32)+'…'}},null,2)}</pre>
+    <pre>res.mandateBundle = \${JSON.stringify({checkoutMandate:{serialized:(mb?.checkoutMandate?.serialized||'').slice(0,44)+'…'},paymentMandate:{...mb?.paymentMandate,serialized:(mb?.paymentMandate?.serialized||'').slice(0,44)+'…'}},null,2)}</pre>
     <pre>res.completion = \${JSON.stringify(door.completion,null,2)}</pre>\`;}
 }
 </script></body></html>`;

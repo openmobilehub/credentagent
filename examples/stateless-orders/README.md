@@ -1,8 +1,8 @@
 # Example — `statelessOrders` (Cart Mandate as the order transport)
 
 A runnable, hands-on way to exercise what the gate does when the order isn't stored server-side: the
-**signed cart mandate** carries the order, and a checkout completes on an instance whose order store is
-**empty** (serverless / multi-instance). See [FR-007](../../specs/004-cart-mandate/spec.md) and the
+**signed AP2 chain** carries the order, and a checkout completes on an instance whose order store is
+**empty** (serverless / multi-instance). See [FR-007](../../specs/004-cart-mandate/spec.md) (superseded on the wire by [spec 013](../../specs/013-ap2-v2-wire-format/spec.md)) and the
 [`statelessOrders` reference](../../docs/reference/api.md#statelessorders-mount-seam-option-default-off).
 
 ## Run it
@@ -21,20 +21,20 @@ bash examples/stateless-orders/demo.sh
 ## What you should see
 
 ```
-① mint a signed cart mandate …            cart param length: ~442 chars
+① mint a signed AP2 chain …               chain param length: ~1.4k chars
 ② GET the gate page …                      HTTP 200   (empty/throwing store never touched)
 ③ POST verify … → completed: true          (all four amount/auth gates pass)
-④ BYPASS: tamper the cart …                completed: false   (fails closed)
+④ BYPASS: tamper the chain …               completed: false   (fails closed)
 ```
 
 The order-store in the example **throws** on read, so a `200` / `completed:true` *proves* no
-server-side order state was used — the signed cart was the whole transport. Tampering any field breaks
-the HMAC signature, so `verifyCartMandate` refuses and the order won't resolve.
+server-side order state was used — the signed chain was the whole transport. Tampering any field breaks
+the ES256 signature, so `verifyChain` refuses and the order won't resolve.
 
 ## The wire contract (what the client sends)
 
-- **GET** page / request — `?order=<id>&cart=<base64url(JSON mandate)>`
-- **POST** `/credentagent/dc-payment/verify` — `{ "order": "<id>", "cartMandate": { … }, "claims": { … } }`
+- **GET** page / request — `?order=<id>&chain=<base64url(JSON chain)>`
+- **POST** `/credentagent/dc-payment/verify` — `{ "order": "<id>", "chain": { "checkout": "…", "payment": "…" }, "claims": { … } }`
 
 The catalog **still re-prices** — the mandate carries the *items*, never the *price*. Turn the mode off
 (default) and the same host uses the order store instead; the client then carries only the order id.

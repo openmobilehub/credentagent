@@ -26,7 +26,7 @@ export function renderPasskeyPage(args: { order: CeremonyOrder; crossDevice?: bo
   // the paid state (a forward, fresh GET — so the buyer never browser-backs onto a
   // stale, re-payable checkout). Defaults to this server's `/checkout?order=<id>`.
   // statelessOrders: carry the cart mandate back so the store-less hub can re-resolve.
-  const returnUrl = args.returnUrl ?? `/checkout?order=${encodeURIComponent(order.id)}${args.cart ? `&cart=${args.cart}` : ""}`;
+  const returnUrl = args.returnUrl ?? `/checkout?order=${encodeURIComponent(order.id)}${args.cart ? `&chain=${args.cart}` : ""}`;
   const total = money(order.total, order.currency);
 
   // The shared order summary card (line items + bold Total) — same chrome as the hub.
@@ -48,7 +48,7 @@ export function renderPasskeyPage(args: { order: CeremonyOrder; crossDevice?: bo
   const optionsUrl = crossDevice ? "/credentagent/passkey/options?xdev=1" : "/credentagent/passkey/options";
   // statelessOrders: keep the cart mandate on the same-device ⇄ cross-device toggle so the
   // store-less server can still resolve THIS order after switching.
-  const cartQ = args.cart ? `&cart=${args.cart}` : "";
+  const cartQ = args.cart ? `&chain=${args.cart}` : "";
   const toggleHref = crossDevice ? `/credentagent/passkey?order=${encodeURIComponent(order.id)}${cartQ}` : `/credentagent/passkey?order=${encodeURIComponent(order.id)}&xdev=1${cartQ}`;
   const toggleText = crossDevice ? "← Use this device instead" : "Use my phone instead (scan a QR) →";
 
@@ -81,9 +81,9 @@ ${pageHead(`Authorize payment · ${order.id}`, extraCss, args.branding)}
   <script type="module">
     import { startRegistration } from "/credentagent/lib/sw/index.js";
     const ORDER_ID = ${JSON.stringify(order.id)};
-    // statelessOrders: forward the signed cart mandate (?cart=… in this page's URL) so a
+    // statelessOrders: forward the signed AP2 chain (?chain=… in this page's URL) so a
     // store-less server can reconstruct THIS order on verify.
-    const CART = new URLSearchParams(location.search).get("cart");
+    const CHAIN = new URLSearchParams(location.search).get("chain");
     const OPTIONS_URL = ${JSON.stringify(optionsUrl)};
     const RETURN_URL = ${JSON.stringify(returnUrl)};
     const DONE_BANNER = ${JSON.stringify(completionHandoffBanner(returnUrl))};
@@ -104,7 +104,7 @@ ${pageHead(`Authorize payment · ${order.id}`, extraCss, args.branding)}
         const out = await fetch("/credentagent/passkey/verify", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ response, challengeToken, order: ORDER_ID, cart: CART }),
+          body: JSON.stringify({ response, challengeToken, order: ORDER_ID, chain: CHAIN }),
         }).then((r) => r.json()).finally(() => settling.classList.remove("on"));
         if (!out.mandate) throw new Error(out.error || "authorization failed");
         step("✓ authorized · mandate built (" + out.trust_level + ")", "ok");

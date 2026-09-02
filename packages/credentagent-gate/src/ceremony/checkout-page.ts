@@ -406,9 +406,9 @@ function renderPlaceScript(order: RenderOrder, methods: PaymentMethod[], payment
     const PAY_LABEL = ${JSON.stringify(payLabel)};
     const PLACE_PATH = ${JSON.stringify(placePath)};
     const ORDER_TOKEN = ${JSON.stringify(token)};
-    // statelessOrders: forward the signed cart mandate (?cart=… in this page's URL) so the
+    // statelessOrders: forward the signed AP2 chain (?chain=… in this page's URL) so the
     // store-less server can reconstruct the order on the instant-demo place-order path.
-    const CART = new URLSearchParams(location.search).get('cart');
+    const CHAIN = new URLSearchParams(location.search).get('chain');
     const pay = document.getElementById('pay');
     if (pay) {
       const selected = () => document.querySelector('input[name="pm"]:checked').value;
@@ -427,7 +427,7 @@ function renderPlaceScript(order: RenderOrder, methods: PaymentMethod[], payment
           const res = await fetch(PLACE_PATH, {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ order: ORDER_TOKEN, ...(CART ? { cart: CART } : {}) }),
+            body: JSON.stringify({ order: ORDER_TOKEN, ...(CHAIN ? { chain: CHAIN } : {}) }),
           });
           if (!res.ok) throw new Error('place-order failed: ' + res.status);
           this.textContent = 'Order placed ✓ (demo)';

@@ -22,11 +22,12 @@
 //     re-checked against what we sealed, and the parsed mdoc drives the gates. The
 //     wire crypto is REAL; the issuer trust anchor is not (presence-only-demo).
 import { resolveOrder, type CeremonyApp, type CeremonyContext, type RailRegistrar } from "../mount.js";
-import { decodeCartMandateParam } from "../cartMandate.js";
+import { decodeMandateChainParam } from "../../ap2/transport.js";
 import type { RequestLike } from "../origin.js";
 import type { CompletionInput } from "../types.js";
 import { buildDcPaymentRequest } from "./request.js";
-import { buildDcMandate, runDcGates, verifyDcPresentation, type DcMandate, type GateResult } from "./verify.js";
+import { buildDcPresentation, runDcGates, verifyDcPresentation, type DcPresentation, type GateResult } from "./verify.js";
+import { issueCeremonyChain } from "../../ap2/ceremony.js";
 import { renderDcPaymentPage } from "./page.js";
 import { checkoutRail } from "../theme.js";
 
@@ -81,7 +82,7 @@ export const registerDcPaymentGate: RailRegistrar = (app: CeremonyApp, ctx: Cere
 
   // GET the gate page — re-priced order, presence-only honesty banner.
   get("/credentagent/dc-payment", async (req, res) => {
-    const order = await resolveOrder(ctx, typeof req.query.order === "string" ? req.query.order : undefined, { cartMandate: decodeCartMandateParam(req.query.cart) });
+    const order = await resolveOrder(ctx, typeof req.query.order === "string" ? req.query.order : undefined, { mandateChain: decodeMandateChainParam(req.query.chain) });
     if (!order) { res.status(404).type("html").send("<!doctype html><h1>Order not found</h1>"); return; }
     // Order-derived stepper with Pay current: reflects only the gates THIS order has, and
     // shows Age ✓ only when it was ACTUALLY verified (read from the store) — never hardcoded.
@@ -93,7 +94,7 @@ export const registerDcPaymentGate: RailRegistrar = (app: CeremonyApp, ctx: Cere
         total: order.total,
         currency: order.currency,
         lines: order.lines.map((l) => ({ name: l.name ?? l.id, quantity: l.quantity, lineTotal: l.lineTotal, currency: l.currency ?? order.currency })),
-        cart: typeof req.query.cart === "string" ? req.query.cart : undefined,
+        cart: typeof req.query.chain === "string" ? req.query.chain : undefined,
         rail,
         returnUrl: ctx.returnUrl?.(order.id),
         branding: ctx.branding,
@@ -105,7 +106,7 @@ export const registerDcPaymentGate: RailRegistrar = (app: CeremonyApp, ctx: Cere
   // amount-bound transaction_data, with the reader context (ECDH key + bound
   // transaction_data) sealed for /verify.
   get("/credentagent/dc-payment/request", async (req, res) => {
-    const order = await resolveOrder(ctx, typeof req.query.order === "string" ? req.query.order : undefined, { cartMandate: decodeCartMandateParam(req.query.cart) });
+    const order = await resolveOrder(ctx, typeof req.query.order === "string" ? req.query.order : undefined, { mandateChain: decodeMandateChainParam(req.query.chain) });
     if (!order) { res.status(404).json({ error: "order not found" }); return; }
     try {
       res.json(await buildDcPaymentRequest(order, originOf(ctx, req), ctx.signingKey, ctx.readerIdentity));
@@ -124,12 +125,12 @@ export const registerDcPaymentGate: RailRegistrar = (app: CeremonyApp, ctx: Cere
     // base64url `cart` string (what the page JS forwards from its URL). resolveOrder
     // verifies it, and it's handed to completion so the shared seam re-verifies +
     // reconciles it (invariant 3).
-    const cartMandate = (body as { cartMandate?: unknown }).cartMandate ?? decodeCartMandateParam((body as { cart?: unknown }).cart);
-    const order = await resolveOrder(ctx, typeof body.order === "string" ? body.order : undefined, { cartMandate });
+    const mandateChain = decodeMandateChainParam((body as { chain?: unknown }).chain);
+    const order = await resolveOrder(ctx, typeof body.order === "string" ? body.order : undefined, { mandateChain });
     if (!order) { res.status(400).json({ completed: false, error: "missing or invalid order" }); return; }
 
     const origin = originOf(ctx, req);
-    let mandate: DcMandate;
+    let mandate: DcPresentation;
     let gates: GateResult[];
     try {
       const result = body.result as { protocol?: string; data?: unknown } | undefined;
@@ -147,30 +148,49 @@ export const registerDcPaymentGate: RailRegistrar = (app: CeremonyApp, ctx: Cere
         // Instant-demo claims path (the tested default).
         const claims = (body.claims && typeof body.claims === "object" ? body.claims : {}) as Record<string, unknown>;
         const presentedAmount = typeof body.amount === "number" ? body.amount : order.total;
-        mandate = buildDcMandate({ order, origin, claims, presentedAmount });
+        mandate = buildDcPresentation({ order, origin, claims, presentedAmount });
         gates = runDcGates(mandate, origin);
       }
     } catch (err) {
-      res.status(400).json({ completed: false, error: (err as Error).message, trust_level: "presence-only-demo" });
+      res.status(400).json({ completed: false, error: (err as Error).message, trust_level: "server-issued-demo", presence: "live" });
       return;
     }
+
+    // Mint the REAL AP2 record for this completion. The wallet presentation above is
+    // evidence — it rides as AP2 `risk_data`; the gate's ES256 key signs the mandate, and
+    // anyone can check that against the published /.well-known/did.json.
+    if (!ctx.mandateIssuer) { res.status(500).json({ completed: false, error: "no AP2 mandate issuer configured" }); return; }
+    const issued = await issueCeremonyChain({
+      issuer: ctx.mandateIssuer,
+      order,
+      origin: origin.origin,
+      evidence: {
+        type: "openid4vp-dc-api",
+        credentialID: mandate.subject.credentialId ?? "",
+        subject: mandate.subject.credentialId ?? "",
+        instrumentIssuer: mandate.payment.instrument.issuer,
+        transactionDataHash: mandate.userAuthorization.transactionDataHash,
+        deviceSigned: mandate.userAuthorization.authBlocks?.hasDeviceAuth ?? false,
+      },
+      instrument: { type: "card", network: "x402-hedera", reference: mandate.payment.instrument.maskedAccount ?? undefined },
+    });
 
     // Complete through the SHARED seam (idempotent record + re-price + age gate +
     // optional settle + clear cart & per-order verification). No second path.
     const input: CompletionInput = {
       order,
-      mandateId: mandate.id,
+      mandateId: issued.mandateId,
       amount: mandate.payment.amount,
       currency: mandate.payment.currency,
       method: "dc-payment",
       instrument: mandate.payment.instrument,
       gates,
-      ...(cartMandate !== undefined ? { cartMandate: cartMandate as CompletionInput["cartMandate"] } : {}),
+      mandateChain: mandateChain ?? issued.chain,
     };
     const result = await ctx.completion(input);
     // Forward the on-chain settlement (when configured + succeeded) AND the
     // settlementError (a configured-but-failed settle → authorized-but-not-settled,
     // FR-013) so the page can render the x402 receipt or the calm refusal line.
-    res.json({ mandate, gates, completed: result.completed, ...(result.reason ? { reason: result.reason } : {}), ...(result.settlement ? { settlement: result.settlement } : {}), ...(result.settlementError ? { settlementError: result.settlementError } : {}) });
+    res.json({ mandate: issued.chain, presentation: mandate, gates, completed: result.completed, trust_level: "server-issued-demo", presence: "live", ...(result.reason ? { reason: result.reason } : {}), ...(result.settlement ? { settlement: result.settlement } : {}), ...(result.settlementError ? { settlementError: result.settlementError } : {}) });
   });
 };

@@ -24,8 +24,12 @@ claims about itself.
     nonce/replay-protected.
   - `credential` (age / membership) and `dc-payment` — **real OpenID4VP wire crypto** (JWE/
     ECDH-ES decrypt, nonce binding, HPKE, ISO-mdoc parse), `trust_level: "presence-only-demo"`.
-- **Signed Cart Mandate (core).** `issueCartMandate` / `verifyCartMandate` + enforcement in
-  `completeOrder` (tamper-evident cart, fail-closed). Server-HMAC for now.
+- **Real AP2 mandates (core, 0.5.0 — spec 013 / #39).** SD-JWT (RFC 9901) mandates signed
+  with the gate's ES256 key and published at `/.well-known/did.json`, discriminated by the
+  AP2 `vct` claim; one `verifyChain` door replaces the three homemade schemes. Money is
+  integer minor units. Still `server-issued-demo` — a real signature, no issuer anchor.
+  The remaining leg is the wallet signing `mandate.checkout.open.1` directly on the
+  intent-sign rail (deferred: it moves the nonce #144's device signature covers).
 
 ## Next
 

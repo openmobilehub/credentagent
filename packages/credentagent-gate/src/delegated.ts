@@ -194,6 +194,15 @@ export class DelegatedGrant {
   ) {}
 
   /** The grant's content-addressed id (the delegationId written on each draw). */
+  /**
+   * The delegate public key (`K_s`) these bounds name — the ONLY key that may sign a draw against
+   * this grant. It is therefore the honest `cnf` for the grant's AP2 "open" mandates: the key
+   * that actually holds the spending authority is the one the mandate commits to.
+   */
+  get delegate(): { kty: "EC"; crv: "P-256"; x: string; y: string } {
+    return this.grant.delegate;
+  }
+
   get id(): string {
     return this.grant.intentId;
   }

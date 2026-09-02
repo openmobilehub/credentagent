@@ -60,7 +60,7 @@ function money(amount: number, currency: string): string {
 
 export function renderDcPaymentPage(args: DcPaymentPageArgs): string {
   const { order, total, currency, lines } = args;
-  const returnUrl = args.returnUrl ?? `/checkout?order=${encodeURIComponent(order)}${args.cart ? `&cart=${args.cart}` : ""}`;
+  const returnUrl = args.returnUrl ?? `/checkout?order=${encodeURIComponent(order)}${args.cart ? `&chain=${args.cart}` : ""}`;
   // The shared order summary card (line items + bold Total) — same chrome as the hub.
   const summary = orderSummaryCard({
     lines: lines.map((l) => ({ name: l.name, quantity: l.quantity, lineTotal: l.lineTotal, currency: l.currency })),
@@ -96,9 +96,9 @@ ${pageHead(`Authorize payment (cross-device) · ${order}`, extraCss, args.brandi
   ${trustFooter()}
   <script type="module">
     const ORDER = ${JSON.stringify(order)};
-    // statelessOrders: the signed cart mandate rides in the page URL (?cart=…); forward
+    // statelessOrders: the signed AP2 chain rides in the page URL (?chain=…); forward
     // it on every verify POST so a store-less server can reconstruct THIS order.
-    const CART = new URLSearchParams(location.search).get("cart");
+    const CHAIN = new URLSearchParams(location.search).get("chain");
     const AMOUNT = ${JSON.stringify(total)};
     const DEMO_CLAIMS = ${JSON.stringify(DEMO_CLAIMS)};
     const RETURN_URL = ${JSON.stringify(returnUrl)};
@@ -149,7 +149,7 @@ ${pageHead(`Authorize payment (cross-device) · ${order}`, extraCss, args.brandi
           settling.classList.add("on");
           const out = await fetch("/credentagent/dc-payment/verify", {
             method: "POST", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ order: ORDER, cart: CART, readerContextToken: rd.readerContextToken, result: { protocol: (result && result.protocol) || null, data } }),
+            body: JSON.stringify({ order: ORDER, chain: CHAIN, readerContextToken: rd.readerContextToken, result: { protocol: (result && result.protocol) || null, data } }),
           }).then((r) => r.json()).finally(() => settling.classList.remove("on"));
           if (!out.mandate) throw new Error(out.error || "authorization failed");
           step("✓ presentation verified · mandate built (" + out.mandate.trust_level + ")", "ok");
@@ -171,7 +171,7 @@ ${pageHead(`Authorize payment (cross-device) · ${order}`, extraCss, args.brandi
         settling.classList.add("on");
         const out = await fetch("/credentagent/dc-payment/verify", {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ order: ORDER, cart: CART, amount: AMOUNT, claims: DEMO_CLAIMS }),
+          body: JSON.stringify({ order: ORDER, chain: CHAIN, amount: AMOUNT, claims: DEMO_CLAIMS }),
         }).then((r) => r.json()).finally(() => settling.classList.remove("on"));
         if (!out.mandate) throw new Error(out.error || "authorization failed");
         step("✓ presentation verified · mandate built (" + out.mandate.trust_level + ")", "ok");

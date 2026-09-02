@@ -24,10 +24,10 @@ import { createRequire } from "node:module";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { resolveOrder, type CeremonyApp, type CeremonyContext, type RailRegistrar } from "../mount.js";
-import { decodeCartMandateParam } from "../cartMandate.js";
+import { decodeMandateChainParam } from "../../ap2/transport.js";
 import type { RequestLike } from "../origin.js";
-import type { CompletionInput } from "../types.js";
-import { buildPasskeyMandate, buildBindingFields, runGates } from "../mandate.js";
+import { buildBindingFields } from "../mandate.js";
+import { issueCeremonyChain, runCeremonyGates } from "../../ap2/ceremony.js";
 import { buildRegistrationOptions, verifyPasskeyAssertion } from "./verify.js";
 import { renderPasskeyPage } from "./page.js";
 import { checkoutRail } from "../theme.js";
@@ -135,14 +135,14 @@ export const registerPasskeyGate: RailRegistrar = (app: CeremonyApp, ctx: Ceremo
 
   // GET the authorize page — re-priced order, presence-only honesty banner.
   get("/credentagent/passkey", async (req, res) => {
-    const order = await resolveOrder(ctx, typeof req.query.order === "string" ? req.query.order : undefined, { cartMandate: decodeCartMandateParam(req.query.cart) });
+    const order = await resolveOrder(ctx, typeof req.query.order === "string" ? req.query.order : undefined, { mandateChain: decodeMandateChainParam(req.query.chain) });
     if (!order) { res.status(404).type("html").send("<!doctype html><h1>Order not found</h1>"); return; }
     // Order-derived stepper with Pay current: reflects only the gates THIS order has, and
     // shows Age ✓ only when it was ACTUALLY verified (read from the store) — never hardcoded.
     const verified = (await ctx.verificationStore.read(order.id)) ?? {};
     const rail = checkoutRail(order, "pay", { ageVerified: verified.ageVerified === true });
     try {
-      res.status(200).type("html").send(renderPasskeyPage({ order, crossDevice: isCrossDevice(req.query.xdev), cart: typeof req.query.cart === "string" ? req.query.cart : undefined, rail, returnUrl: ctx.returnUrl?.(order.id), branding: ctx.branding }));
+      res.status(200).type("html").send(renderPasskeyPage({ order, crossDevice: isCrossDevice(req.query.xdev), cart: typeof req.query.chain === "string" ? req.query.chain : undefined, rail, returnUrl: ctx.returnUrl?.(order.id), branding: ctx.branding }));
     } catch {
       // A hand-edited order can carry a bad currency that throws in Intl; never 500.
       res.status(404).type("html").send("<!doctype html><h1>Order not found</h1>");
@@ -163,8 +163,8 @@ export const registerPasskeyGate: RailRegistrar = (app: CeremonyApp, ctx: Ceremo
   // the SHARED completeOrder seam (re-price + age gate + idempotent record).
   post("/credentagent/passkey/verify", async (req, res) => {
     const body = await readJsonBody(req);
-    const cartMandate = (body as { cartMandate?: unknown }).cartMandate ?? decodeCartMandateParam((body as { cart?: unknown }).cart);
-    const order = await resolveOrder(ctx, typeof body.order === "string" ? body.order : undefined, { cartMandate });
+    const mandateChain = decodeMandateChainParam((body as { chain?: unknown }).chain);
+    const order = await resolveOrder(ctx, typeof body.order === "string" ? body.order : undefined, { mandateChain });
     if (!order) { res.status(400).json({ completed: false, error: "missing or invalid order" }); return; }
     try {
       const origin = originOf(ctx, req);
@@ -174,27 +174,48 @@ export const registerPasskeyGate: RailRegistrar = (app: CeremonyApp, ctx: Ceremo
         origin,
         secret: ctx.signingKey,
       });
-      const mandate = buildPasskeyMandate({ order, authenticator, origin });
-      const gates = runGates(mandate);
+      // The WebAuthn assertion is EVIDENCE, not the signature — it rides as AP2 risk_data
+      // while the gate's ES256 key signs the mandate. Without an issuer configured the rail
+      // refuses rather than falling back to an unsigned record.
+      if (!ctx.mandateIssuer) { res.status(500).json({ completed: false, error: "no AP2 mandate issuer configured" }); return; }
+      const evidence = {
+        type: "webauthn.assertion",
+        credentialID: authenticator.credentialID,
+        userVerified: authenticator.userVerified,
+        hardwareBacked: authenticator.credentialDeviceType === "singleDevice",
+        deviceType: authenticator.credentialDeviceType,
+        backedUp: authenticator.credentialBackedUp,
+        rpID: origin.rpID,
+        origin: origin.origin,
+      };
+      const issued = await issueCeremonyChain({
+        issuer: ctx.mandateIssuer,
+        order,
+        origin: origin.origin,
+        evidence,
+        instrument: { type: "card", network: "x402-hedera" },
+      });
+      const gates = runCeremonyGates(order, evidence, issued.amount);
       const completion = await ctx.completion({
         order,
-        mandateId: mandate.id,
-        amount: mandate.payment.amount,
-        currency: mandate.payment.currency,
+        mandateId: issued.mandateId,
+        amount: order.total,
+        currency: order.currency,
         method: "passkey",
-        instrument: { issuer: mandate.payment.instrument, maskedAccount: mandate.payment.instrumentReference, holder: null },
+        instrument: { issuer: "x402-hedera", maskedAccount: null, holder: null },
         gates: gates.map((g) => ({ gate: g.gate, pass: g.pass, detail: g.detail })),
-        ...(cartMandate !== undefined ? { cartMandate: cartMandate as CompletionInput["cartMandate"] } : {}),
+        mandateChain: mandateChain ?? issued.chain,
       });
       res.json({
-        mandate,
+        mandate: issued.chain,
         gates,
         completed: completion.completed,
         settlement: completion.settlement ?? null,
         settlementError: completion.settlementError ?? null,
         reason: completion.reason ?? null,
         binding: buildBindingFields(order, origin),
-        trust_level: "presence-only-demo",
+        trust_level: "server-issued-demo",
+        presence: "live",
       });
     } catch (err) {
       res.status(400).json({ completed: false, error: (err as Error).message });

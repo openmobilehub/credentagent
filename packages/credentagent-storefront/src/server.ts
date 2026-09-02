@@ -58,9 +58,12 @@ export type { CartStore, OrderStore } from "./state.js";
 // (`./index.js`) does not.
 import {
   completeOrder,
-  issueCartMandate,
-  verifyCartMandate,
-  decodeCartMandateParam,
+  Ap2Issuer,
+  verifyChain,
+  decodeMandateChainParam,
+  encodeMandateChainParam,
+  issueOrderChain,
+  type PublicJwkP256,
   renderRequirements,
   MemoryVerificationStore,
   MultiRoundTrip,
@@ -155,7 +158,7 @@ export interface StorefrontOptions {
   allowEphemeralKey?: boolean;
   /**
    * Opt-in (default false): carry the created order in a signed Cart Mandate on the
-   * checkout link (`?order=<id>&cart=<base64url>`) instead of a `createdOrderStore`
+   * checkout link (`?order=<id>&chain=<base64url>`) instead of a `createdOrderStore`
    * write, so a checkout survives an instance split with no shared created-order store
    * (gate FR-007). Forces a concrete `signingKey` (generated if none) so the mandate the
    * checkout tool issues is the one the gate rails verify. Verification + completion
@@ -342,7 +345,7 @@ function homeRequires(requires: unknown[], base: string, cart?: string | null): 
     const entry = e as { approveUrl?: unknown };
     if (typeof entry.approveUrl !== "string") return e;
     let approveUrl = homeApproveUrl(entry.approveUrl, base);
-    if (cart) approveUrl += `${approveUrl.includes("?") ? "&" : "?"}cart=${cart}`;
+    if (cart) approveUrl += `${approveUrl.includes("?") ? "&" : "?"}chain=${cart}`;
     return { ...entry, approveUrl };
   });
 }
@@ -413,24 +416,40 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
   // ("tampered") by instance B, exactly like an unshared cart-mandate key. Pass `signingKey`.
   const rounds = new MultiRoundTrip({ secret: signingKey ?? randomBytes(32).toString("hex") });
 
-  // Issue + base64url-encode a Cart Mandate for a priced order (the checkout link's `cart`).
-  const cartParamFor = (order: Order): string => {
-    const mandate = issueCartMandate(
-      { orderId: order.id, lines: order.lines.map((l) => ({ id: l.id, quantity: l.quantity, unitPrice: l.unitPrice, lineTotal: l.lineTotal })), currency: order.currency, total: order.total },
-      signingKey as string,
-    );
-    return Buffer.from(JSON.stringify(mandate)).toString("base64url");
-  };
-  const withCart = (url: string, cart?: string | null): string =>
-    cart ? `${url}${url.includes("?") ? "&" : "?"}cart=${cart}` : url;
+  // The gate's AP2 mandate key, read from `app.locals.credentagent` at REQUEST time — not at
+  // construction. The consumer mounts `new CredentAgent()` after `createStorefront()` returns,
+  // so the key does not exist yet when this closure is built. Reading it late also guarantees
+  // the storefront mints with the SAME key the gate verifies with: minting under a key of its
+  // own would produce chains the gate refuses on every path.
+  const gateLocals = (): { mandateIssuer?: Ap2Issuer; mandatePublicJwk?: PublicJwkP256 } =>
+    (app.locals.credentagent ?? {}) as { mandateIssuer?: Ap2Issuer; mandatePublicJwk?: PublicJwkP256 };
 
-  // Resolve a created order by id: from a VERIFIED cart mandate (statelessOrders, no store
-  // read) or the createdOrderStore. Fails closed — a forged/tampered/expired mandate → null.
-  const resolveCreated = async (orderId: string, cartRaw?: unknown): Promise<Order | null> => {
-    if (statelessOrders && cartRaw !== undefined) {
-      const verdict = verifyCartMandate(decodeCartMandateParam(cartRaw), orderId, signingKey as string);
-      if (!verdict.ok) return null;
-      return createOrder(verdict.mandate.lines.map((l) => ({ productId: l.id, quantity: l.quantity })), orderId, source.current());
+  /** Mint + base64url-encode an AP2 chain for a priced order (the checkout link's `chain`). */
+  const chainParamFor = async (order: Order): Promise<string | null> => {
+    const issuer = gateLocals().mandateIssuer;
+    if (!issuer) return null; // no gate mounted ⇒ no chain to carry; the store path still works
+    const { chain } = await issueOrderChain({ issuer, order, origin: baseUrl, merchantName: merchant });
+    return encodeMandateChainParam(chain);
+  };
+
+  const withCart = (url: string, chain?: string | null): string =>
+    chain ? `${url}${url.includes("?") ? "&" : "?"}chain=${chain}` : url;
+
+  // Resolve a created order by id: from a VERIFIED AP2 chain (statelessOrders, no store read)
+  // or the createdOrderStore. Fails closed — a forged / tampered / expired / wrong-order chain,
+  // or no key to check one against, all resolve to null rather than falling back to the store.
+  const resolveCreated = async (orderId: string, chainRaw?: unknown): Promise<Order | null> => {
+    if (statelessOrders && chainRaw !== undefined) {
+      const publicJwk = gateLocals().mandatePublicJwk;
+      const chain = decodeMandateChainParam(chainRaw);
+      if (!chain || !publicJwk) return null;
+      const verdict = await verifyChain(chain, { publicJwk });
+      if (!verdict.ok || verdict.checkout.id !== orderId) return null;
+      return createOrder(
+        verdict.checkout.line_items.map((l) => ({ productId: l.id, quantity: l.quantity })),
+        orderId,
+        source.current(),
+      );
     }
     return (await createdOrderStore.read(orderId)) ?? null;
   };
@@ -492,6 +511,10 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
       // time (mount runs after this closure is defined) so an applicable custom gate() is
       // enforced on the shared completion path (invariant 1), not only in the rendered page.
       credentialRegistry: (app.locals.credentagent as { credentialRegistry?: ReadonlyMap<string, Credential> } | undefined)?.credentialRegistry,
+      // Same lazy read for the gate's PUBLIC mandate key (spec 013): the mounted client
+      // publishes it, and completion needs it to verify an inbound AP2 chain. Read at
+      // completion time for the same reason as the registry — mount runs after this closure.
+      ...(gateLocals().mandatePublicJwk ? { mandatePublicJwk: gateLocals().mandatePublicJwk } : {}),
       ...(opts.settle ? { settle: opts.settle } : {}),
     });
   app.locals.credentagent = {
@@ -640,9 +663,9 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
         // Random id (not a per-instance counter): two serverless instances must
         // not both mint "ORD-1" for different carts.
         const order = createOrder(entries, `ORD-${Math.random().toString(36).slice(2, 8)}`, catalog);
-        // statelessOrders: carry the order in a signed Cart Mandate on the link instead of
-        // a store write — the checkout page + gate rails reconstruct + verify it (FR-007).
-        const cart = statelessOrders ? cartParamFor(order) : null;
+        // statelessOrders: carry the order in a signed AP2 chain on the link instead of a
+        // store write — the checkout page + gate rails reconstruct + verify it (FR-007).
+        const cart = statelessOrders ? await chainParamFor(order) : null;
         if (!statelessOrders) await createdOrderStore.write(order.id, order);
         orderSessions.set(order.id, sessionId); // so completion clears THIS session's cart
         const checkoutUrl = withCart(`${baseUrl}/checkout?order=${order.id}`, cart);
@@ -1183,7 +1206,7 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
   app.get("/checkout", async (req: Request, res: Response) => {
     // statelessOrders: reconstruct + VERIFY the order from the `cart` mandate (no store
     // read); else read the createdOrderStore. `cart` is propagated onto the gate links below.
-    const cartRaw = typeof req.query.cart === "string" ? req.query.cart : undefined;
+    const cartRaw = typeof req.query.chain === "string" ? req.query.chain : undefined;
     const created = await resolveCreated(String(req.query.order ?? ""), cartRaw);
     if (!created) return res.status(404).type("html").send("<h1>Unknown order</h1>");
 
@@ -1269,9 +1292,18 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
     res.type("html").send(renderRequirements(order, requires, verification, { ...(payment ? { payment } : {}), paid, statusUrl, statusRevision, ...(branding ? { branding } : {}) }));
   });
   app.post("/checkout/place-order", async (req: Request, res: Response) => {
-    // statelessOrders: reconstruct + verify from the body's `cart` mandate; else the store.
-    const order = await resolveCreated(String(req.body?.order ?? ""), req.body?.cart);
-    if (order) {
+    // statelessOrders: reconstruct + verify from the body's signed `chain`; else the store.
+    const order = await resolveCreated(String(req.body?.order ?? ""), req.body?.chain);
+    // An order we cannot resolve MUST NOT answer "✓ Order placed". It used to: the handler
+    // completed nothing and still returned 200, so a caller could not tell a real completion
+    // from a silently-dropped one — and a gated order posted without its transport read as
+    // success while skipping the gate check below entirely. Refuse instead (invariant 1:
+    // enforce on every completion path; a reassuring page is not enforcement).
+    if (!order) {
+      res.status(404).type("html").send(`<!doctype html><meta charset="utf-8"><body style="font-family:system-ui;max-width:32rem;margin:3rem auto"><h1>Unknown order</h1><p>This order could not be found. Start again from checkout.</p></body>`);
+      return;
+    }
+    {
       // Security invariant 1 — enforce gates on EVERY completion path, not just the
       // rendered page. This instant-demo path completes WITHOUT a device ceremony, so
       // it is only ever valid for an UNGATED order. A gated order (age / payment

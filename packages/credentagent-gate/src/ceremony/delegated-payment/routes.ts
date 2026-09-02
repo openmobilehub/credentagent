@@ -21,11 +21,10 @@
 // or unknown id is refused — invariant 2), and threads the `?cart=` mandate passthrough
 // so a store-less (statelessOrders) checkout survives every hop.
 import { resolveOrder, type CeremonyApp, type CeremonyContext, type RailRegistrar } from "../mount.js";
-import { decodeCartMandateParam } from "../cartMandate.js";
+import { decodeMandateChainParam } from "../../ap2/transport.js";
 import { checkoutRail } from "../theme.js";
 import { buildBindingFields } from "../mandate.js";
 import type { RequestLike } from "../origin.js";
-import type { CompletionInput } from "../types.js";
 import { buildDelegatedRequest } from "./request.js";
 import { renderDelegatedPage } from "./page.js";
 import { openReference } from "./referenceToken.js";
@@ -85,7 +84,7 @@ export const registerDelegatedPaymentGate: RailRegistrar = (app: CeremonyApp, ct
 
   // GET the approve page — re-priced order, no trust claim (trust is the verifier's to report).
   get("/credentagent/delegated", async (req, res) => {
-    const order = await resolveOrder(ctx, queryString(req.query.order), { cartMandate: decodeCartMandateParam(req.query.cart) });
+    const order = await resolveOrder(ctx, queryString(req.query.order), { mandateChain: decodeMandateChainParam(req.query.chain) });
     if (!order) { res.status(404).type("html").send("<!doctype html><h1>Order not found</h1>"); return; }
     // Order-derived stepper with Pay current: reflects only the gates THIS order has, and
     // shows Age ✓ only when it was ACTUALLY verified (read from the store) — never hardcoded.
@@ -97,7 +96,7 @@ export const registerDelegatedPaymentGate: RailRegistrar = (app: CeremonyApp, ct
         total: order.total,
         currency: order.currency,
         lines: order.lines.map((l) => ({ name: l.name ?? l.id, quantity: l.quantity, lineTotal: l.lineTotal, currency: l.currency ?? order.currency })),
-        cart: queryString(req.query.cart),
+        cart: queryString(req.query.chain),
         rail,
       }),
     );
@@ -105,7 +104,7 @@ export const registerDelegatedPaymentGate: RailRegistrar = (app: CeremonyApp, ct
 
   // GET the verifier handoff for this order + the sealed, order-bound reference.
   get("/credentagent/delegated/request", async (req, res) => {
-    const order = await resolveOrder(ctx, queryString(req.query.order), { cartMandate: decodeCartMandateParam(req.query.cart) });
+    const order = await resolveOrder(ctx, queryString(req.query.order), { mandateChain: decodeMandateChainParam(req.query.chain) });
     if (!order) { res.status(404).json({ error: "order not found" }); return; }
     try {
       res.json(await buildDelegatedRequest(ctx, order, originOf(ctx, req)));
@@ -135,8 +134,8 @@ export const registerDelegatedPaymentGate: RailRegistrar = (app: CeremonyApp, ct
     }
 
     // 2. Re-resolve + re-price the order server-side (invariant 2).
-    const cartMandate = (body as { cartMandate?: unknown }).cartMandate ?? decodeCartMandateParam((body as { cart?: unknown }).cart);
-    const order = await resolveOrder(ctx, orderId, { cartMandate });
+    const mandateChain = decodeMandateChainParam((body as { chain?: unknown }).chain);
+    const order = await resolveOrder(ctx, orderId, { mandateChain });
     if (!order) { res.status(400).json({ completed: false, error: "missing or invalid order" }); return; }
 
     const origin = originOf(ctx, req);
@@ -182,7 +181,7 @@ export const registerDelegatedPaymentGate: RailRegistrar = (app: CeremonyApp, ct
         gates,
         trustLevel: verdict.trust_level,
         ...(settle ? { settle } : {}),
-        ...(cartMandate !== undefined ? { cartMandate: cartMandate as CompletionInput["cartMandate"] } : {}),
+        ...(mandateChain !== undefined ? { mandateChain } : {}),
       });
 
       res.json({

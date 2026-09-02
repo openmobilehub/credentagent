@@ -698,9 +698,13 @@ defineHost({ catalog, orderStore, records | completion, signingKey | allowEpheme
 DelegatedGate  ·  gate.preApprove(bounds) → DelegatedGrant  ·  grant.spend(purchase) → SpendResult  ·  grant.revoke()
 sealIntent  ·  checkDraw  ·  signDraw  ·  MemoryRevocationStore  ·  Draw / IntentBounds / CommittedDraw / Refusal
 
-// Cart Mandate (ap2.CartMandate) — signed, tamper-evident cart integrity; the
-// signingKey-gated check in completeOrder + the opt-in `statelessOrders` transport
-issueCartMandate(args, secret)  ·  verifyCartMandate(mandate, orderId, secret)  ·  DEFAULT_CART_MANDATE_TTL_MS
+// AP2 mandates (spec 013) — SD-JWT (RFC 9901), ES256, discriminated by `vct`.
+// One issuer, one verification door, one chain check. See MIGRATING.md for 0.4.0 → 0.5.0.
+credentagent.ap2 → Ap2Issuer  ·  issuer.checkout / .payment / .openCheckout / .openPayment
+verifyMandate(token, { publicJwk, expect, audience, nonce })  ·  verifyChain(chain, opts)
+presentWithKeyBinding({ token, holderKey, aud, nonce })  ·  encode/decodeMandateChainParam
+amountFrom · toMinorUnits · toMajorUnits · formatAmount   (money is INTEGER minor units)
+credentagent.mandateKey  ·  didDocument()  →  served at /.well-known/did.json
 
 // Retained Mode-B / roadmap blocking primitive
 gated()  ·  buildVerificationRequired()  ·  isVerificationRequired()  ·  envelopeInstruction()
@@ -708,7 +712,7 @@ ageDcql()  ·  ENVELOPE_VERSION  ·  ENVELOPE_SENTINEL
 
 // Types: CredentAgentOptions, GateOrder, OrderLine, Credential, Step, Effect,
 //        VerificationManifestEntry, VerificationStore, VerificationRecord,
-//        TrustLevel, DcqlQuery, DcqlClaim, DcqlCredentialOption, ExpressApp,
+//        TrustLevel, Presence, DcqlQuery, DcqlClaim, DcqlCredentialOption, ExpressApp,
 //        CompletionSeam / SettlementSeam / CeremonyOrder (host composition)
 //        DelegatedVerifier / DelegatedVerdict / DelegatedHandoff / SettlementRecordLike (delegated seam)
 ```

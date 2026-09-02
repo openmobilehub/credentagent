@@ -106,22 +106,46 @@ export { completeOrder } from "./ceremony/completion.js";
 export { defineHost } from "./host.js";
 export type { DefineHostSpec, Host, HostApp } from "./host.js";
 
-// ── Cart Mandate (ap2.CartMandate) — signed, tamper-evident cart envelope ────
-// Additive + fail-closed: `issueCartMandate` seals a server-priced cart with the host's
-// HMAC key; `verifyCartMandate` (and `completeOrder`, when given a `cartMandate` +
-// `signingKey`) refuses a tampered / replayed / expired cart BEFORE re-pricing. The
-// catalog stays the price authority (invariant 2); trust_level is presence-only-demo.
-export { issueCartMandate, verifyCartMandate, decodeCartMandateParam, DEFAULT_CART_MANDATE_TTL_MS } from "./ceremony/cartMandate.js";
-export type { CartMandate, CartMandateLine, CartMandateRefusal, CartMandateVerdict, IssueCartMandateArgs } from "./ceremony/cartMandate.js";
-
-// ── Cart ↔ Payment reconciliation — signed cart + signed payment agree on amount ──
-// When BOTH a Cart Mandate and a Payment Mandate ride along, `completeOrder`
-// reconciles them at the shared seam: same order, consistent currency, and the
-// cart's sealed total == the catalog-re-derived total == the Payment Mandate's bound
-// amount. One amount binding across every payment path (invariant 3); refuses on any
-// mismatch. Exposed for hosts that reconcile outside the bundled completion seam.
-export { reconcileCartPayment } from "./ceremony/reconciliation.js";
-export type { PaymentBinding, ReconcileRefusal, ReconcileVerdict } from "./ceremony/reconciliation.js";
+// ── AP2 mandates (spec 013) — the real wire format ──────────────────────────
+// Replaces the three homemade schemes 0.4.0 shipped: the mock-signed `ap2.PaymentMandate`,
+// the server-HMAC `ap2.CartMandate`, and `credentagent.IntentBounds/v0`. Everything below is
+// SD-JWT (RFC 9901), ES256, discriminated by the AP2 `vct` claim. See MIGRATING.md.
+//
+// HONESTY: a verified chain proves this gate issued these records — and, on the grant path,
+// that the wallet key signed them. It does NOT prove the credential behind them came from a
+// real issuer (#14). `trust_level` still says so.
+export { Ap2Issuer, presentWithKeyBinding, DEFAULT_MANDATE_TTL_MS } from "./ap2/issue.js";
+export type { IssuedMandate, IssuedCheckout, IssueCheckoutArgs, IssuePaymentArgs, IssueOpenArgs, IssueOpenPaymentArgs } from "./ap2/issue.js";
+export { verifyMandate, openCheckoutPayload, peekVct } from "./ap2/verify.js";
+export type { VerifyOptions as VerifyMandateOptions, VerifyResult, MandateVerdict, MandateRefusal, MandateRefusalCode } from "./ap2/verify.js";
+export { issueCeremonyChain, issueOrderChain, runCeremonyGates } from "./ap2/ceremony.js";
+export type { CeremonyChain, CeremonyEvidence } from "./ap2/ceremony.js";
+export { verifyChain } from "./ap2/chain.js";
+export type { MandateChain, ChainResult, ChainVerdict, ChainRefusal, ChainRefusalCode, VerifyChainOptions } from "./ap2/chain.js";
+export { encodeMandateChainParam, decodeMandateChainParam } from "./ap2/transport.js";
+export { VCT, findConstraint } from "./ap2/types.js";
+export type {
+  Vct,
+  Amount,
+  Merchant,
+  PaymentInstrument,
+  UcpCheckout,
+  UcpLineItem,
+  UcpTotal,
+  CheckoutMandate,
+  PaymentMandate,
+  OpenCheckoutMandate,
+  OpenPaymentMandate,
+  AnyMandate,
+  Cnf,
+  CheckoutConstraint,
+  PaymentConstraint,
+} from "./ap2/types.js";
+export { amountFrom, amountOfMinor, amountsEqual, formatAmount, sumAmounts, toMajorUnits, toMinorUnits, exponentFor } from "./ap2/money.js";
+export { checkoutFromOrder, merchantFor, rederiveTotal, totalOf, checkoutConstraintsFromGrant, paymentConstraintsFromGrant } from "./ap2/from-gate.js";
+export type { GrantBoundsInput } from "./ap2/from-gate.js";
+export { didWebFor, didDocument, resolveSigningKey, SIGNING_ALG } from "./ap2/keys.js";
+export type { GateSigningKey, PrivateJwkP256, PublicJwkP256 } from "./ap2/keys.js";
 
 // ── Ceremony presentation (the ONE shared three-gate checkout page) ─────────
 // Both the committed demo and @openmobilehub/credentagent-storefront render their
@@ -232,6 +256,7 @@ export type {
   VerificationStore,
   VerificationRecord,
   TrustLevel,
+  Presence,
   DcqlQuery,
   DcqlClaim,
   DcqlCredentialOption,

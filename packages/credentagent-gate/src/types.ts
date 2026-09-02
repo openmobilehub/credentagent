@@ -8,6 +8,7 @@
 import type { OrderStore, CreatedOrder, CompletedOrder } from "./orders.js";
 import type { WebhookOptions } from "./webhooks.js";
 import type { CatalogEntry } from "./delegated.js";
+import type { PrivateJwkP256 } from "./ap2/keys.js";
 
 // ── DCQL (what to ask the wallet) ──────────────────────────────────────────
 
@@ -55,7 +56,27 @@ export interface DcqlQuery {
  * `"issuer-verified"` itself; only an external verifier may report that (relayed
  * verbatim through the delegated seam).
  */
-export type TrustLevel = "presence-only-demo" | "device-signed" | "issuer-verified";
+export type TrustLevel = "presence-only-demo" | "server-issued-demo" | "device-signed" | "issuer-verified";
+
+/**
+ * WHEN the human consented — the axis that used to be tangled up in `trust_level` (#11).
+ *
+ * These are two different questions, and conflating them produced dishonest labels. A
+ * server-HMAC grant is not "presence-only": nobody was present at all. A live passkey tap is
+ * not "delegated" just because the server signed the record.
+ *
+ * - `"live"` — the human authorized this exact action, just now, on this device.
+ * - `"delegated-demo"` — the human pre-authorized bounds by clicking a server page. The
+ *   server takes their word for it; nothing cryptographic ties the approval to them.
+ * - `"delegated"` — the human pre-authorized bounds and their WALLET KEY signed them
+ *   (spec 012). Fewer people can forge this than can forge a click.
+ *
+ * `trust_level` answers the other question: how strongly is the authorization BOUND?
+ * `"server-issued-demo"` means the record carries a real ES256 signature from this gate's
+ * published key — real cryptography, proving THIS SERVER issued it, and nothing about
+ * whether any credential behind it came from a real issuer (#14).
+ */
+export type Presence = "live" | "delegated-demo" | "delegated";
 
 // ── Effects (tagged data the resolver interprets — never a handler in v0.1) ──
 
@@ -277,6 +298,21 @@ export interface CredentAgentOptions {
    * (fail-open). Declare your custom credentials here and every instance enforces them.
    */
   credentials?: Credential[];
+  /**
+   * The PRIVATE EC P-256 JWK this gate signs its AP2 mandates with (spec 013).
+   *
+   * Distinct from the ceremony seams' `signingKey`, which is an HMAC SECRET for challenge
+   * tokens. This one is an asymmetric key whose public half the world can check.
+   *
+   * Omit and the gate generates an ephemeral key at construction, so a zero-config install
+   * still runs — but every mandate it signed becomes unverifiable the moment the process
+   * restarts, and nobody else could ever check one. `doctor()` reports that as an error.
+   * Set it (from a secret manager, never from source) for any deployment.
+   *
+   * The matching PUBLIC key is published at `/.well-known/did.json` once `mount()` runs, so
+   * a counterparty can verify a mandate without asking you for anything.
+   */
+  mandateSigningKey?: PrivateJwkP256;
   /** Persist created orders (`orders.create`); default in-memory, inject a shared store for multi-instance. */
   orderStore?: OrderStore<CreatedOrder>;
   /** Persist completed orders (its `write()` fires `order.settled`); default in-memory, injectable. */

@@ -51,7 +51,7 @@ learnability — surprise is the tax.
 Validate once at the boundary and return a *typed* value that carries the proof; downstream code
 receives a thing that *cannot* be malformed. Types replace defensive checks.
 - **Exemplar:** Zod `schema.parse(input)` → a typed, guaranteed value.
-- **Here:** honesty lives in the **types** (`trust_level`, `presence`), not comments; `verifyCartMandate`
+- **Here:** honesty lives in the **types** (`trust_level`, `presence`), not comments; `verifyMandate`
   returns a `CartMandateVerdict` (`{ ok:true, mandate }` — a *verified* mandate you can trust — or
   `{ ok:false, reason }`).
 - **Push further:** prefer discriminated unions over optional-bags; a function that returns a "verified
@@ -66,7 +66,7 @@ ideally — how to fix it. Pick **one door** and hold it: result-returning *or* 
   `CompletionResult.reason` (`gates|cart-mandate|reprice|reconcile|age`), the `verification_required`
   envelope with an `approve_url` the agent can act on. A slow buyer sees `expired`, not `tampered`.
 - **Push further:** every refusal should be *actionable* (what unblocks it), and the codebase should
-  choose one error door. (Open gap: `verifyCartMandate` returns a verdict but `verifyChallenge` throws.)
+  choose one error door. (Open gap: `verifyMandate` / `verifyChain` return a verdict but `verifyChallenge` throws.)
 
 ### 5. Extend by composition and escape hatches — never by forking
 The core stays closed to modification but open to extension. Users add capability through defined
@@ -215,7 +215,7 @@ These are live tensions found while working in the code — the rubric applied t
    automated review, fixed in PR #32). It now fails fast without a `signingKey`/`allowEphemeralKey`. The
    lesson: a mode whose whole point is multi-instance must *fail fast* on the config that breaks
    multi-instance, never silently self-generate an instance-local secret.
-5. **Two inconsistent error doors** (P4, still open). `verifyCartMandate` returns a verdict;
+5. **Two inconsistent error doors** (P4, still open). `verifyMandate` returns a verdict;
    `verifyChallenge` throws. Pick one convention for "verify" functions and hold it.
 6. **`completeOrder` does seven things in sequence** (P7 readability, still open). Cohesive and correct,
    but it wants to read as a named pipeline of steps (`checkGates → idempotency → verifyCart → reprice →

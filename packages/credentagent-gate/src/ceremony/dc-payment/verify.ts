@@ -1,6 +1,6 @@
 // AP2-shaped DC payment mandate + four deterministic gates. TWO verify paths feed
 // ONE set of gates:
-//   • the instant-demo path (buildDcMandate + runDcGates) — disclosed instrument
+//   • the instant-demo path (buildDcPresentation + runDcGates) — disclosed instrument
 //     claims passed in directly; the amount-bound transaction_data is re-derived +
 //     re-checked, so a tampered amount is refused. The tested default (CT6–CT8).
 //   • the REAL OpenID4VP path (verifyDcPresentation, below) — the wallet's
@@ -46,9 +46,16 @@ export interface DcInstrument {
   expiry: string | null;
 }
 
-export interface DcMandate {
-  type: "ap2.PaymentMandate";
-  version: "0.1-dc-demo";
+/**
+ * The rail's own presentation record — what the wallet disclosed and what the gates read.
+ *
+ * It used to declare itself `type: "ap2.PaymentMandate"`, `version: "0.1-dc-demo"`. It was
+ * neither: no AP2 field names, no signature. Since spec 013 the AP2 record for this
+ * completion is a real SD-JWT minted alongside it (`issueCeremonyChain`), and this object is
+ * honestly named for what it is — the disclosed presentation the deterministic gates check.
+ */
+export interface DcPresentation {
+  type: "credentagent.DcPresentation/v1";
   id: string;
   issuedAt: string;
   expiresAt: string;
@@ -83,10 +90,14 @@ export interface DcMandate {
     vpToken?: string;
     authBlocks?: { hasIssuerAuth: boolean; hasDeviceAuth: boolean };
   };
-  // Honesty axis (Principle VII) — carried on every mandate so the limitation is
-  // stated in the data, not buried in prose.
+  // Honesty axis (Principle VII) — carried on the record so the limitation is stated in the
+  // data, not buried in prose. Presence-only: the instrument was DISCLOSED, and (on the real
+  // path) the wallet signed the transaction_data — but no issuer anchor validates either (#14).
   trust_level: "presence-only-demo";
 }
+
+/** @deprecated Renamed to {@link DcPresentation} in 0.5.0 — it was never an AP2 mandate. */
+export type DcMandate = DcPresentation;
 
 /**
  * Build the presence-only DC payment mandate. The transaction_data is derived from
@@ -94,13 +105,13 @@ export interface DcMandate {
  * server's truth; `presentedAmount` is what the caller asserts authorizing (Gate 1
  * re-checks it equals the re-derived payable — a tampered value is refused).
  */
-export function buildDcMandate(args: {
+export function buildDcPresentation(args: {
   order: CeremonyOrder;
   origin: Origin;
   claims: Record<string, unknown>;
   presentedAmount?: number;
   issuer?: string;
-}): DcMandate {
+}): DcPresentation {
   const { order, origin, claims } = args;
   const now = new Date();
   const expires = new Date(now.getTime() + 5 * 60_000);
@@ -113,8 +124,7 @@ export function buildDcMandate(args: {
     expiry: claimText(claims["expiry_date"]),
   };
   return {
-    type: "ap2.PaymentMandate",
-    version: "0.1-dc-demo",
+    type: "credentagent.DcPresentation/v1",
     id: "mandate_pm_" + randomUUID(),
     issuedAt: now.toISOString(),
     expiresAt: expires.toISOString(),
@@ -138,7 +148,7 @@ export interface GateResult {
   detail: string;
 }
 
-export function runDcGates(mandate: DcMandate, origin: Origin, opts: { loyaltyDiscountPct?: number } = {}): GateResult[] {
+export function runDcGates(mandate: DcPresentation, origin: Origin, opts: { loyaltyDiscountPct?: number } = {}): GateResult[] {
   const pct = opts.loyaltyDiscountPct ?? DEFAULT_LOYALTY_DISCOUNT_PCT;
   const ua = mandate.userAuthorization;
   const cart = mandate.cart;
@@ -224,7 +234,7 @@ export function buildDcMandateFromPresentation(args: {
   vpStr: string;
   transactionDataB64: string;
   issuer?: string;
-}): DcMandate {
+}): DcPresentation {
   const { order, vpStr, transactionDataB64 } = args;
   const now = new Date();
   const expires = new Date(now.getTime() + 5 * 60_000);
@@ -238,8 +248,7 @@ export function buildDcMandateFromPresentation(args: {
   };
   const blocks = inspectAuthBlocks(vpStr);
   return {
-    type: "ap2.PaymentMandate",
-    version: "0.1-dc-demo",
+    type: "credentagent.DcPresentation/v1",
     id: "mandate_pm_" + randomUUID(),
     issuedAt: now.toISOString(),
     expiresAt: expires.toISOString(),
@@ -263,7 +272,7 @@ export function buildDcMandateFromPresentation(args: {
 }
 
 export interface DcVerification {
-  mandate: DcMandate;
+  mandate: DcPresentation;
   gates: GateResult[];
 }
 

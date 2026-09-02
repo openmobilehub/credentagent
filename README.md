@@ -97,14 +97,22 @@ For a deployment, pass your public origin: `new CredentAgent({ walletOrigin: "ht
 Honesty is core to CredentAgent — it's infrastructure meant to be trusted, so we name what
 binds cryptographically and what doesn't.
 
-**`trust_level: "presence-only-demo"`.** The *wire* cryptography is real — WebAuthn on
-the passkey rail (verified against this server's origin / RP-ID, user-verification
-required, nonce/replay-bound), OpenID4VP JWE / ECDH-ES decrypt with nonce binding,
-HPKE, ISO-mdoc parse. But there is **no issuer / device-signature trust anchor yet**:
-the gate enforces **disclosure** (an explicit positive claim such as
-`age_over_21 === true`, never mere token-presence) and **binding** (nonce / ephemeral
-key), but **not trust**. A self-crafted mdoc would pass. The AP2-shaped mandate is
-dev-signed (integrity hash), not key-signed.
+Two independent questions, two labels (#11): **`presence`** answers *when did the human
+consent* — `live`, `delegated-demo`, `delegated`. **`trust_level`** answers *how strongly is
+the authorization bound* — `presence-only-demo`, `server-issued-demo`, `device-signed`,
+`issuer-verified`.
+
+**The wire cryptography is real.** WebAuthn on the passkey rail (verified against this
+server's origin / RP-ID, user-verification required, nonce/replay-bound), OpenID4VP JWE /
+ECDH-ES decrypt with nonce binding, HPKE, ISO-mdoc parse. Since 0.5.0 the AP2 mandates are
+**real SD-JWTs signed with this gate's ES256 key**, published at `/.well-known/did.json` —
+the mock signer is gone.
+
+**There is still no issuer / device-signature trust anchor.** The gate enforces
+**disclosure** (an explicit positive claim such as `age_over_21 === true`, never mere
+token-presence) and **binding** (nonce / ephemeral key / a checkable signature), but **not
+trust**. A self-crafted mdoc would pass. A verified mandate proves *this server issued this
+record* — never that the credential behind it came from a real issuer.
 
 > **This is a flow demo, not a real safety control — never present it as one.**
 > Issuer-verified cryptographic mdoc trust (issuer MSO + device signatures, via
