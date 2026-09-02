@@ -20,20 +20,36 @@ const ok = (label, cond, detail = "") => {
   console.log(`  ${cond ? "✓" : "✗"} ${label}${cond ? "" : `  ← FAILED ${detail}`}`);
   if (!cond) failures++;
 };
-// Corrupt the signature on the chain's Checkout Mandate. The line items live inside a
-// signed SD-JWT now, so there is no field to edit in the clear — flipping one byte of the
-// signature is the equivalent probe, and it must be refused.
-const tamper = (chain) => {
-  const c = JSON.parse(Buffer.from(chain, "base64url").toString());
-  const [jwt, ...rest] = c.checkout.split("~");
-  const [head, body, sig] = jwt.split(".");
-  c.checkout = [[head, body, (sig[0] === "A" ? "B" : "A") + sig.slice(1)].join("."), ...rest].join("~");
-  return Buffer.from(JSON.stringify(c)).toString("base64url");
+// TRANSITIONAL (remove once 0.5.0 is published): CI runs this one script against BOTH the
+// published packages and the unpublished source, and the transport changed shape between
+// them. 0.4.0 carried an editable `cart` mandate under `?cart=`; 0.5.0 carries a signed AP2
+// chain under `?chain=`. The smoke detects which it was handed rather than assuming, so the
+// published lane keeps testing the published contract instead of being weakened.
+const transportKey = (checkoutUrl) => {
+  const q = new URL(checkoutUrl).searchParams;
+  return q.get("chain") ? "chain" : q.get("cart") ? "cart" : null;
 };
-const placeOrder = (order, cart) =>
+
+// Break the integrity of whichever transport we were given; both must be refused.
+const tamper = (transport) => {
+  const t = JSON.parse(Buffer.from(transport, "base64url").toString());
+  if (typeof t.checkout === "string") {
+    // 0.5.0: the line items live inside a signed SD-JWT, so there is no field to edit in
+    // the clear — flip one byte of the Checkout Mandate's signature instead.
+    const [jwt, ...rest] = t.checkout.split("~");
+    const [head, body, sig] = jwt.split(".");
+    t.checkout = [[head, body, (sig[0] === "A" ? "B" : "A") + sig.slice(1)].join("."), ...rest].join("~");
+  } else {
+    // 0.4.0: price a 1-qty order, pay for 10.
+    t.lines[0].quantity += 9;
+    t.lines[0].lineTotal = t.lines[0].unitPrice * t.lines[0].quantity;
+  }
+  return Buffer.from(JSON.stringify(t)).toString("base64url");
+};
+const placeOrder = (order, transport, key) =>
   fetch(`${base}/checkout/place-order`, {
     method: "POST", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ order, ...(cart ? { chain: cart } : {}) }),
+    body: JSON.stringify({ order, ...(transport && key ? { [key]: transport } : {}) }),
   });
 const completed = async (orderId) =>
   (await (await fetch(`${base}/checkout/order-status?orderId=${orderId}`)).json()).completed;
@@ -78,7 +94,8 @@ try {
   const checkout = async (items) => {
     const r = await mcp.callTool({ name: "checkout", arguments: { items } });
     const sc = r.structuredContent ?? {};
-    return { ...sc, cart: sc.checkoutUrl ? new URL(sc.checkoutUrl).searchParams.get("chain") : null };
+    const key = sc.checkoutUrl ? transportKey(sc.checkoutUrl) : null;
+    return { ...sc, key, cart: key ? new URL(sc.checkoutUrl).searchParams.get(key) : null };
   };
 
   // (b) whiskey → age gate in the requires manifest, payment last
@@ -94,27 +111,33 @@ try {
     !(ungated.requires ?? []).some((e) => e.credential === "age"), JSON.stringify(ungated.requires));
 
   const CLAIMS = { issuer_name: "Demo Bank", payment_instrument_id: "pi-SMOKE", holder_name: "Smoke Buyer", expiry_date: "2032-09-01" };
-  const railVerify = (order, cartB64) =>
+  const railVerify = (order, cartB64, key) =>
     fetch(`${base}/credentagent/dc-payment/verify`, {
       method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ order, chain: cartB64, claims: CLAIMS }),
+      // 0.4.0 wanted the mandate OBJECT under `cartMandate`; 0.5.0 accepts the base64url
+      // chain string under `chain`.
+      body: JSON.stringify({
+        order,
+        ...(key === "chain" ? { chain: cartB64 } : { cartMandate: JSON.parse(Buffer.from(cartB64, "base64url").toString()) }),
+        claims: CLAIMS,
+      }),
     }).then((r) => r.json());
   // The credential rail's instant-demo path: present disclosed age claims for THIS order.
-  const ageVerify = (order, cartB64, claims) =>
+  const ageVerify = (order, cartB64, claims, key) =>
     fetch(`${base}/credentagent/credential/verify`, {
       method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ cred: "age", order, chain: cartB64, claims }),
+      body: JSON.stringify({ cred: "age", order, [key ?? "chain"]: cartB64, claims }),
     }).then((r) => r.json());
 
   // (d) unverified completion of a GATED order → refused server-side (403)
-  const d = await placeOrder(gated.orderId, gated.cart);
+  const d = await placeOrder(gated.orderId, gated.cart, gated.key);
   ok("(d) unverified place-order of gated order → 403", d.status === 403, `got ${d.status}`);
   ok("(d′) gated order stays incomplete", (await completed(gated.orderId)) === false);
 
   // (f) enforce on EVERY completion path: paying for an age-gated order whose age is
   // still unverified must be refused by the payment rail itself, with the typed reason.
   if (gated.cart) {
-    const f = await railVerify(gated.orderId, gated.cart);
+    const f = await railVerify(gated.orderId, gated.cart, gated.key);
     ok("(f) payment-only verify of age-gated order → refused (reason: age)",
       f.completed !== true && f.reason === "age" && (await completed(gated.orderId)) === false, JSON.stringify(f));
   }
@@ -125,10 +148,10 @@ try {
   const victim = await checkout([{ productId: "aurora-headphones", quantity: 1 }]);
   const attacked = await checkout([{ productId: "aurora-headphones", quantity: 1 }]);
   if (victim.cart) {
-    const refused = await railVerify(attacked.orderId, tamper(attacked.cart));
+    const refused = await railVerify(attacked.orderId, tamper(attacked.cart), attacked.key);
     ok("(e) tampered cart mandate → verify refused, order NOT completed",
       refused.completed !== true && (await completed(attacked.orderId)) === false, JSON.stringify(refused));
-    const done = await railVerify(victim.orderId, victim.cart);
+    const done = await railVerify(victim.orderId, victim.cart, victim.key);
     ok("(e′) untampered mandate completes on the payment rail (stateless)",
       done.completed === true && (await completed(victim.orderId)) === true, JSON.stringify(done));
   } else {
@@ -141,9 +164,9 @@ try {
   // the gate is loosened to accept a lower threshold; (h′) fails if it rejects everything
   // (which would make (h) pass trivially) — the pair pins the boundary from both sides.
   if (gated.cart) {
-    const under = await ageVerify(gated.orderId, gated.cart, { age_over_18: true });
+    const under = await ageVerify(gated.orderId, gated.cart, { age_over_18: true }, gated.key);
     ok("(h) age_over_18 proof refused at the 21+ gate", under.verified === false, JSON.stringify(under.gates));
-    const at = await ageVerify(gated.orderId, gated.cart, { age_over_21: true });
+    const at = await ageVerify(gated.orderId, gated.cart, { age_over_21: true }, gated.key);
     ok("(h′) age_over_21 proof accepted at the 21+ gate", at.verified === true, JSON.stringify(at.gates));
 
     // (i) per-order state SCOPING (invariant 4): verifying age on one order must NOT
@@ -153,9 +176,9 @@ try {
     // bleed). A and B are independent checkouts, so they carry distinct order ids.
     const A = await checkout([{ productId: "oak-whiskey", quantity: 1 }]);
     const B = await checkout([{ productId: "oak-whiskey", quantity: 1 }]);
-    await ageVerify(A.orderId, A.cart, { age_over_21: true }); // A only — B stays unverified
-    const payA = await railVerify(A.orderId, A.cart);
-    const payB = await railVerify(B.orderId, B.cart);
+    await ageVerify(A.orderId, A.cart, { age_over_21: true }, A.key); // A only — B stays unverified
+    const payA = await railVerify(A.orderId, A.cart, A.key);
+    const payB = await railVerify(B.orderId, B.cart, B.key);
     ok("(i) A's age verification lets A complete on the payment rail",
       payA.completed === true && (await completed(A.orderId)) === true, JSON.stringify(payA).slice(0, 120));
     ok("(i′) A's age verification does NOT bleed to B (refused: age)",

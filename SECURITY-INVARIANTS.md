@@ -12,17 +12,24 @@ and pinned by a **bypass test** — a test that POSTs the attack and asserts it 
 test that would still pass with the security control removed is not a useful test, so the
 bypass test must fail if you delete the control it guards.
 
-> **Honesty boundary.** CredentAgent v0.1 is `trust_level: "presence-only-demo"`. The *wire
-> crypto* is real — WebAuthn assertion verification, OpenID4VP JWE/ECDH-ES decryption with
-> nonce binding, HPKE-decrypt of the iOS `org-iso-mdoc` path, and ISO 18013-5 mdoc parsing
-> all run for real. What is **not** yet real is the **issuer / device-signature trust
-> anchor**: the mdoc's issuer and device COSE signatures are not checked against a CA (the
-> reference server self-signs its mdoc certs), and the AP2 mandate is dev-signed
-> (`alg: "MOCK-DEV-SIGNER"`). A presence-only gate proves *a credential was disclosed and
-> bound to this request* — it does **not** prove the issuer vouched for it. Never present a
-> presence-only gate as a real safety control. Issuer-verified trust is the v0.2 line. The
-> invariants below are exactly what *can* be enforced honestly today; do not let "it's a
-> demo" become a reason to weaken any of them.
+> **Honesty boundary.** Two axes, deliberately separate (#11): **`presence`** — when did the
+> human consent (`live` / `delegated-demo` / `delegated`) — and **`trust_level`** — how
+> strongly is the authorization bound (`presence-only-demo` / `server-issued-demo` /
+> `device-signed` / `issuer-verified`).
+>
+> The *wire crypto* is real: WebAuthn assertion verification, OpenID4VP JWE/ECDH-ES
+> decryption with nonce binding, HPKE-decrypt of the iOS `org-iso-mdoc` path, and ISO 18013-5
+> mdoc parsing all run for real. Since 0.5.0 (spec 013) so are the **AP2 mandates** — real
+> SD-JWTs signed with the gate's ES256 key and published at `/.well-known/did.json`. The
+> `MOCK-DEV-SIGNER` digest is gone.
+>
+> What is **not** yet real is the **issuer / device-signature trust anchor**: the mdoc's
+> issuer and device COSE signatures are not checked against a CA (the reference server
+> self-signs its mdoc certs). So a verified mandate proves *this server issued this record*
+> and that *a credential was disclosed and bound to this request* — it does **not** prove the
+> issuer vouched for that credential. Never present such a gate as a real safety control.
+> Issuer-verified trust is the v0.2 line. The invariants below are exactly what *can* be
+> enforced honestly today; do not let "it's a demo" become a reason to weaken any of them.
 
 ---
 

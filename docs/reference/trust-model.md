@@ -96,23 +96,20 @@ the issuer trust anchor.
 - The signing secret is an injected `signingKey` seam (`mount()` requires a stable one),
   never a process global — so verification state cannot bleed across users.
 
-What keeps it `presence-only-demo` is **not** the WebAuthn step (that is real
-cryptography) — it is the **mandate** the assertion feeds. The AP2-shaped
-`PasskeyMandate` is signed by a mock dev signer: a SHA-256 digest, not a key-bound
-signature (`src/ceremony/mandate.ts`):
+Since 0.5.0 (spec 013) the mandate this assertion feeds is a **real AP2 SD-JWT signed with
+the gate's ES256 key**, published at `/.well-known/did.json` — the `MOCK-DEV-SIGNER` digest
+is gone. The rail therefore reports `presence: "live"`, `trust_level: "server-issued-demo"`.
 
-```ts
-signature: {
-  alg: "MOCK-DEV-SIGNER",
-  value: "mock-sig:" + digest,
-  note: "Mock dev signer (presence-only-demo). Production replaces with AP2-conformant key-bound signing.",
-}
-```
+Read that label precisely. The signature is genuine and anyone can check it, so the record
+proves **this server issued it**. The WebAuthn assertion rides inside as AP2 `risk_data` —
+evidence the trusted surface collected, not the signature. What is still missing is the
+**issuer anchor**: nothing proves the credential behind the ceremony came from a real
+issuer, so this remains disclosure + binding, not trust (#14).
 
-The four post-verification gates (`runGates`) are genuinely deterministic and re-derive
-everything from the mandate's own fields — amount integrity re-sums the cart lines and
-refuses a tampered total, user-verification and subject-binding are re-checked — but the
-mandate that carries them is dev-signed, so the rail is a flow demo, not a safety control.
+The four post-verification gates (`runCeremonyGates`) are genuinely deterministic and
+re-derive everything from the order and the evidence — amount integrity re-sums the cart
+lines in integer minor units and refuses a tampered total, user-verification and
+subject-binding are re-checked. `verifyChain` then re-checks the whole chain at completion.
 
 ### `credential` — age / membership (OpenID4VP + ISO-mdoc)
 
@@ -165,7 +162,7 @@ verified`. Issuer trust anchor absent → `presence-only-demo`.
 
 | Rail (`/credentagent/*`) | What it proves | Real crypto | Not yet real |
 | :-- | :-- | :-- | :-- |
-| `passkey` (same- + cross-device caBLE) | WebAuthn assertion against this origin/RP-ID, user-verification required, nonce/replay-bound | `@simplewebauthn` WebAuthn end to end | mandate is dev-signed (`MOCK-DEV-SIGNER`), not key-bound |
+| `passkey` (same- + cross-device caBLE) | WebAuthn assertion against this origin/RP-ID, user-verification required, nonce/replay-bound | `@simplewebauthn` WebAuthn end to end **+** an ES256-signed AP2 mandate (0.5.0) | the mandate is signed by the SERVER, not by the holder's key; no issuer anchor |
 | `credential` (age / membership) | OpenID4VP presentation; explicit positive claim at the order's threshold | JWE/HPKE decrypt, ECDH-ES, nonce + origin binding, ISO-mdoc parse | issuer / device COSE signatures (no real CA) |
 | `dc-payment` (Digital Credentials API) | amount-bound mdoc; wallet's device-signed `transaction_data_hash` re-checked | JWE decrypt + the `transaction_data` hash binding + amount re-derivation | issuer / device COSE signatures (no real CA) |
 
@@ -184,8 +181,11 @@ issuer and device signatures against a real anchor:
   This is what defeats a self-crafted mdoc.
 - **Device-signature verification** — the `deviceAuth` / device-signed block is checked,
   binding the presentation to the credential's holder device.
-- A **key-bound mandate** — the AP2 payment mandate is signed with a real key
-  (AP2-conformant key-bound signing), replacing the `MOCK-DEV-SIGNER` digest.
+- A **holder-key-bound mandate** — 0.5.0 already replaced the `MOCK-DEV-SIGNER` digest with
+  a real ES256 signature, but by the SERVER's key. What v0.2 adds is the SD-JWT `cnf`
+  key-binding on the human-present path, so the signature belongs to the holder rather than
+  to us. (The grant path already has this: the wallet key signs, spec 012.) Whose key that
+  should be is the open decision in #142.
 
 The acknowledged integration target is a real mdoc verifier (e.g. Multipaz / `@auth0/mdl`
 class libraries). When a path completes those checks, it sets
