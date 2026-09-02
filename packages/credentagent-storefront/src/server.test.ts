@@ -841,6 +841,50 @@ describe.each([
 // statelessOrders + UNGATED instant-demo place-order: the "Place order (instant demo)"
 // button must forward the cart, or the store-less server can't record the order. (This
 // path only shows when resolveGate returns [] — here headphones under an alcohol-only gate.)
+// The CI smoke caught this one: place-order answered 200 "✓ Order placed" for an order it
+// could not resolve. Nothing completed, but the caller was told it had — and a GATED order
+// posted without its transport took that path, skipping the gate check entirely. A completion
+// endpoint that cannot find the order must refuse, not reassure.
+describe("place-order — an unresolvable order is refused, never reported as placed", () => {
+  const build = (stateless: boolean): Storefront => {
+    const store = createStorefront({ statelessOrders: stateless, allowEphemeralKey: true, baseUrl: "http://shop.test" });
+    const a = new CredentAgent();
+    a.mount(store.app);
+    store.gate((order) => a.requirements(order, [required(age.over(21).when((o) => o.lines.some((l) => (l.minimumAge ?? 0) >= 21)))]));
+    return store;
+  };
+
+  it("BYPASS: an unknown order id gets 404, not a success page", async () => {
+    const store = build(false);
+    const res = await request(store.app).post("/checkout/place-order").send({ order: "ORD-NEVER-EXISTED" });
+    expect(res.status).toBe(404);
+    expect(res.text).not.toContain("Order placed");
+  });
+
+  // The shape the smoke hit: statelessOrders on, the signed chain omitted from the POST. The
+  // order lives only in the chain, so it cannot resolve — and must not read as placed.
+  it("BYPASS: a gated order posted WITHOUT its chain is refused (never a silent 200)", async () => {
+    const store = build(true);
+    const sc = (await (await connect(store)).callTool({ name: "checkout", arguments: { items: [{ productId: "oak-whiskey", quantity: 1 }] } })).structuredContent as any;
+    const res = await request(store.app).post("/checkout/place-order").send({ order: sc.orderId });
+    expect(res.status).not.toBe(200);
+    expect(res.text).not.toContain("Order placed");
+    expect((await request(store.app).get(`/checkout/order-status?orderId=${sc.orderId}`)).body.completed).toBe(false);
+  });
+
+  // …and WITH its chain it resolves, so the age gate is the thing that refuses it — proving
+  // the 404 above is about resolution, not a blanket refusal that would mask the gate.
+  it("with its chain it resolves, and the AGE GATE is what refuses it (403)", async () => {
+    const store = build(true);
+    const sc = (await (await connect(store)).callTool({ name: "checkout", arguments: { items: [{ productId: "oak-whiskey", quantity: 1 }] } })).structuredContent as any;
+    const chain = new URL(sc.checkoutUrl).searchParams.get("chain");
+    expect(chain).toBeTruthy();
+    const res = await request(store.app).post("/checkout/place-order").send({ order: sc.orderId, chain });
+    expect(res.status).toBe(403);
+    expect(res.text).toContain("Verification required");
+  });
+});
+
 describe("statelessOrders — ungated instant-demo place-order carries the chain", () => {
   const buildUngated = (): Storefront => {
     const store = createStorefront({ statelessOrders: true, allowEphemeralKey: true, baseUrl: "http://shop.test" });

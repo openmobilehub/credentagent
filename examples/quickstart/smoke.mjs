@@ -20,16 +20,20 @@ const ok = (label, cond, detail = "") => {
   console.log(`  ${cond ? "✓" : "✗"} ${label}${cond ? "" : `  ← FAILED ${detail}`}`);
   if (!cond) failures++;
 };
-const tamper = (cart) => {
-  const m = JSON.parse(Buffer.from(cart, "base64url").toString());
-  m.lines[0].quantity += 9; // price a 1-qty order, pay for 10 — must be refused
-  m.lines[0].lineTotal = m.lines[0].unitPrice * m.lines[0].quantity;
-  return Buffer.from(JSON.stringify(m)).toString("base64url");
+// Corrupt the signature on the chain's Checkout Mandate. The line items live inside a
+// signed SD-JWT now, so there is no field to edit in the clear — flipping one byte of the
+// signature is the equivalent probe, and it must be refused.
+const tamper = (chain) => {
+  const c = JSON.parse(Buffer.from(chain, "base64url").toString());
+  const [jwt, ...rest] = c.checkout.split("~");
+  const [head, body, sig] = jwt.split(".");
+  c.checkout = [[head, body, (sig[0] === "A" ? "B" : "A") + sig.slice(1)].join("."), ...rest].join("~");
+  return Buffer.from(JSON.stringify(c)).toString("base64url");
 };
 const placeOrder = (order, cart) =>
   fetch(`${base}/checkout/place-order`, {
     method: "POST", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ order, ...(cart ? { cart } : {}) }),
+    body: JSON.stringify({ order, ...(cart ? { chain: cart } : {}) }),
   });
 const completed = async (orderId) =>
   (await (await fetch(`${base}/checkout/order-status?orderId=${orderId}`)).json()).completed;
@@ -74,7 +78,7 @@ try {
   const checkout = async (items) => {
     const r = await mcp.callTool({ name: "checkout", arguments: { items } });
     const sc = r.structuredContent ?? {};
-    return { ...sc, cart: sc.checkoutUrl ? new URL(sc.checkoutUrl).searchParams.get("cart") : null };
+    return { ...sc, cart: sc.checkoutUrl ? new URL(sc.checkoutUrl).searchParams.get("chain") : null };
   };
 
   // (b) whiskey → age gate in the requires manifest, payment last
@@ -93,13 +97,13 @@ try {
   const railVerify = (order, cartB64) =>
     fetch(`${base}/credentagent/dc-payment/verify`, {
       method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ order, cartMandate: JSON.parse(Buffer.from(cartB64, "base64url").toString()), claims: CLAIMS }),
+      body: JSON.stringify({ order, chain: cartB64, claims: CLAIMS }),
     }).then((r) => r.json());
   // The credential rail's instant-demo path: present disclosed age claims for THIS order.
   const ageVerify = (order, cartB64, claims) =>
     fetch(`${base}/credentagent/credential/verify`, {
       method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ cred: "age", order, cart: cartB64, claims }),
+      body: JSON.stringify({ cred: "age", order, chain: cartB64, claims }),
     }).then((r) => r.json());
 
   // (d) unverified completion of a GATED order → refused server-side (403)

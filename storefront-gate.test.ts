@@ -120,7 +120,7 @@ describe("end-to-end ceremony over the mounted /credentagent/* routes", () => {
     // 3), and a finished ceremony records through the shared completeOrder seam.
     const pay = await request(store.app).post("/credentagent/dc-payment/verify").send({ order: orderId, claims: DC_CLAIMS });
     expect(pay.body.completed).toBe(true);
-    expect(pay.body.mandate.payment.amount).toBeCloseTo(111.6);
+    expect(pay.body.presentation.payment.amount).toBeCloseTo(111.6);
 
     // get-order-status / the order-status poll reflect completion + the discounted amount.
     const status = await request(store.app).get(`/checkout/order-status?orderId=${orderId}`);
@@ -149,7 +149,7 @@ describe("end-to-end ceremony over the mounted /credentagent/* routes", () => {
     await request(store.app).post("/credentagent/credential/verify").send({ order: orderId, cred: "age", claims: { age_over_21: true } });
     const ok = await request(store.app).post("/credentagent/dc-payment/verify").send({ order: orderId, claims: DC_CLAIMS });
     expect(ok.body.completed).toBe(true);
-    expect(ok.body.mandate.payment.amount).toBeCloseTo(124);
+    expect(ok.body.presentation.payment.amount).toBeCloseTo(124);
     const done = await request(store.app).get(`/checkout/order-status?orderId=${orderId}`);
     expect(done.body.completed).toBe(true);
     expect(done.body.order.amount).toBeCloseTo(124);

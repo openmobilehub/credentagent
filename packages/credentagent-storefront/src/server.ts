@@ -1292,9 +1292,18 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
     res.type("html").send(renderRequirements(order, requires, verification, { ...(payment ? { payment } : {}), paid, statusUrl, statusRevision, ...(branding ? { branding } : {}) }));
   });
   app.post("/checkout/place-order", async (req: Request, res: Response) => {
-    // statelessOrders: reconstruct + verify from the body's `cart` mandate; else the store.
+    // statelessOrders: reconstruct + verify from the body's signed `chain`; else the store.
     const order = await resolveCreated(String(req.body?.order ?? ""), req.body?.chain);
-    if (order) {
+    // An order we cannot resolve MUST NOT answer "✓ Order placed". It used to: the handler
+    // completed nothing and still returned 200, so a caller could not tell a real completion
+    // from a silently-dropped one — and a gated order posted without its transport read as
+    // success while skipping the gate check below entirely. Refuse instead (invariant 1:
+    // enforce on every completion path; a reassuring page is not enforcement).
+    if (!order) {
+      res.status(404).type("html").send(`<!doctype html><meta charset="utf-8"><body style="font-family:system-ui;max-width:32rem;margin:3rem auto"><h1>Unknown order</h1><p>This order could not be found. Start again from checkout.</p></body>`);
+      return;
+    }
+    {
       // Security invariant 1 — enforce gates on EVERY completion path, not just the
       // rendered page. This instant-demo path completes WITHOUT a device ceremony, so
       // it is only ever valid for an UNGATED order. A gated order (age / payment
