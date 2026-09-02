@@ -51,6 +51,9 @@ export interface DoctorInput {
    *  from seams doctor only partially sees: the order-store check is skipped (the host owns order
    *  persistence) and a residual secret/store finding is annotated rather than asserted hard. */
   composedWithHost?: boolean;
+  /** Was an AP2 mandate-signing key supplied (spec 013)? Absent ⇒ the gate made an ephemeral
+   *  one, so its mandates die with the process and nobody outside can verify one. */
+  hasSigningKey?: boolean;
   /** Environment to read deployment signals from. Defaults to `process.env`; injected in tests. */
   env?: Record<string, string | undefined>;
 }
@@ -123,6 +126,22 @@ export function runDoctor(input: DoctorInput): DoctorReport {
         `On ${where} a challenge issued on one instance won't verify on another — the ceremony fails.` +
         seamNote,
       fix: "Set a stable secret — generate one with: openssl rand -hex 32 — and pass { gateSecret: process.env.GATE_SECRET }.",
+    });
+  }
+
+  // An ephemeral mandate key is error-level on ANY deployment, not just serverless: the failure
+  // is not "two instances disagree", it is "every mandate this process ever signed becomes
+  // unverifiable when it restarts, and no counterparty could check one in the first place". A
+  // single-instance deployment has exactly that problem too.
+  if (env.deployment && !input.hasSigningKey) {
+    findings.push({
+      level: "error",
+      code: "ephemeral-mandate-signing-key",
+      message:
+        `No mandateSigningKey is set, so AP2 mandates are signed with a key generated at boot. Every mandate this ` +
+        `process issued stops verifying when it restarts, and no counterparty can check one against your ` +
+        `published /.well-known/did.json.` + seamNote,
+      fix: "Generate a P-256 JWK once, keep it in your secret manager, and pass { mandateSigningKey: JSON.parse(process.env.GATE_MANDATE_KEY) }.",
     });
   }
 

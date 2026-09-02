@@ -29,7 +29,7 @@
 // unverified age-restricted order — lives in the shared `completeOrder` seam
 // (completion.ts), so every payment rail honors it.
 import { resolveOrder, type CeremonyApp, type CeremonyContext, type RailRegistrar } from "../mount.js";
-import { decodeCartMandateParam } from "../cartMandate.js";
+import { decodeMandateChainParam } from "../../ap2/transport.js";
 import { RESERVED_CREDENTIAL_IDS, claimLeaf } from "../../credentials.js";
 import type { Credential } from "../../types.js";
 import type { RequestLike } from "../origin.js";
@@ -166,9 +166,9 @@ export const registerCredentialGate: RailRegistrar = (app: CeremonyApp, ctx: Cer
   get("/credentagent/credential", async (req, res) => {
     const resolved = resolveCred(ctx, req.query.cred);
     if (!resolved) { res.status(404).type("html").send("<!doctype html><h1>Unknown credential</h1>"); return; }
-    const order = await resolveOrder(ctx, typeof req.query.order === "string" ? req.query.order : undefined, { cartMandate: decodeCartMandateParam(req.query.cart) });
+    const order = await resolveOrder(ctx, typeof req.query.order === "string" ? req.query.order : undefined, { mandateChain: decodeMandateChainParam(req.query.chain) });
     if (!order) { res.status(404).type("html").send("<!doctype html><h1>Order not found</h1>"); return; }
-    const cart = typeof req.query.cart === "string" ? req.query.cart : undefined;
+    const cart = typeof req.query.chain === "string" ? req.query.chain : undefined;
     // Order-derived stepper with THIS gate current — only the gates the order actually has,
     // Age ✓ only when truly verified (from the store), never a hardcoded Age · Membership · Pay.
     const verified = (await ctx.verificationStore.read(order.id)) ?? {};
@@ -221,7 +221,7 @@ export const registerCredentialGate: RailRegistrar = (app: CeremonyApp, ctx: Cer
   get("/credentagent/credential/request", async (req, res) => {
     const resolved = resolveCred(ctx, req.query.cred);
     if (!resolved) { res.status(404).json({ error: "unknown credential" }); return; }
-    const order = await resolveOrder(ctx, typeof req.query.order === "string" ? req.query.order : undefined, { cartMandate: decodeCartMandateParam(req.query.cart) });
+    const order = await resolveOrder(ctx, typeof req.query.order === "string" ? req.query.order : undefined, { mandateChain: decodeMandateChainParam(req.query.chain) });
     if (!order) { res.status(404).json({ error: "order not found" }); return; }
     try {
       const reqOrigin = originOf(ctx, req);
@@ -263,7 +263,7 @@ export const registerCredentialGate: RailRegistrar = (app: CeremonyApp, ctx: Cer
     const body = await readJsonBody(req);
     const resolved = resolveCred(ctx, body.cred);
     if (!resolved) { res.status(404).json({ verified: false, error: "unknown credential" }); return; }
-    const order = await resolveOrder(ctx, typeof body.order === "string" ? body.order : undefined, { cartMandate: (body as { cartMandate?: unknown }).cartMandate ?? decodeCartMandateParam((body as { cart?: unknown }).cart) });
+    const order = await resolveOrder(ctx, typeof body.order === "string" ? body.order : undefined, { mandateChain: decodeMandateChainParam((body as { chain?: unknown }).chain) });
     if (!order) { res.status(400).json({ verified: false, error: "missing or invalid order" }); return; }
 
     const credential = resolved.credential;

@@ -30,7 +30,13 @@ import request from "supertest";
 import { mountCeremony, resolveOrder, type CeremonyContext, type CeremonySeams } from "../mount.js";
 import { completeOrder, type CompletedRecord, type CompletionContext } from "../completion.js";
 import { MemoryVerificationStore } from "../../store.js";
-import { buildPasskeyMandate, runGates, type VerifiedAuthenticator } from "../mandate.js";
+import type { VerifiedAuthenticator } from "../mandate.js";
+import { runCeremonyGates } from "../../ap2/ceremony.js";
+import { verifyMandate } from "../../ap2/verify.js";
+import { amountFrom } from "../../ap2/money.js";
+import { Ap2Issuer } from "../../ap2/issue.js";
+import { resolveSigningKey } from "../../ap2/keys.js";
+import { VCT, type PaymentMandate } from "../../ap2/types.js";
 import { buildRegistrationOptions, verifyPasskeyAssertion } from "./verify.js";
 import { renderPasskeyPage } from "./page.js";
 import { issueChallenge } from "../challengeToken.js";
@@ -165,6 +171,10 @@ interface Harness {
   seed: (id: string, items: { id: string; quantity: number }[], tamperedTotal?: number) => void;
 }
 
+// One gate key for the file — the rail mints with it and completion verifies with it.
+const GATE_KEY = resolveSigningKey(ORIGIN);
+const GATE_ISSUER = new Ap2Issuer(GATE_KEY);
+
 function harness(): Harness {
   const verificationStore = new MemoryVerificationStore();
   const orders = new Map<string, CeremonyOrder>();
@@ -176,6 +186,7 @@ function harness(): Harness {
     verificationStore,
     records: { read: async (id) => records.get(id), write: async (rec) => void records.set(rec.orderId, rec) },
     cart: { clear: async () => {} },
+    mandatePublicJwk: GATE_KEY.publicJwk,
   };
   const seams: CeremonySeams = {
     verificationStore,
@@ -183,6 +194,8 @@ function harness(): Harness {
     catalog,
     completion: (input) => completeOrder(input, completionCtx),
     signingKey: SIGNING_KEY,
+    mandatePublicJwk: GATE_KEY.publicJwk,
+    mandateIssuer: GATE_ISSUER,
   };
   const app = express();
   const ctx = mountCeremony(app as never, seams);
@@ -227,7 +240,11 @@ describe("CT6 — the four deterministic gates run on a real passkey ceremony", 
       "Subject binding",
     ]);
     expect(res.body.gates.every((g: { pass: boolean }) => g.pass)).toBe(true);
-    expect(res.body.mandate.trust_level).toBe("presence-only-demo");
+    // The receipt now carries a real signed chain, not a self-described object. The honesty
+    // label lives on the response (the mandate itself is an SD-JWT and carries no such claim).
+    expect(res.body.trust_level).toBe("server-issued-demo");
+    expect(res.body.presence).toBe("live");
+    expect(typeof res.body.mandate.checkout).toBe("string");
     expect(h.records.get("ORD-P")?.amount).toBe(199);
   });
 
@@ -306,12 +323,17 @@ describe("CT6 — the four deterministic gates run on a real passkey ceremony", 
 describe("CT7 — a tampered amount is refused by the amount-integrity gate", () => {
   const AUTH: VerifiedAuthenticator = { credentialID: "cred-abc", userVerified: true, credentialDeviceType: "singleDevice", credentialBackedUp: false };
 
-  it("the amount-integrity gate FAILS when the bound payment amount is tampered", () => {
+  const EVIDENCE = {
+    type: "webauthn.assertion",
+    credentialID: AUTH.credentialID,
+    userVerified: AUTH.userVerified,
+    hardwareBacked: AUTH.credentialDeviceType === "singleDevice",
+  };
+
+  it("the amount-integrity gate FAILS when the signed amount is tampered", () => {
     const order = catalog.createOrder([{ productId: "aurora-headphones", quantity: 1 }], "ORD-T");
-    const mandate = buildPasskeyMandate({ order, authenticator: AUTH, origin: { rpID: HOST, origin: ORIGIN } });
-    // Tamper the authorized amount away from the re-summed line total.
-    mandate.payment.amount = 1;
-    const gates = runGates(mandate);
+    // The signed amount claims $1 against a $199 cart.
+    const gates = runCeremonyGates(order, EVIDENCE, amountFrom(1, order.currency));
     const amountGate = gates.find((g) => g.gate === "Amount integrity")!;
     expect(amountGate.pass).toBe(false); // FAILS if gate 1 stopped re-summing the lines
     // The other three gates still pass — only amount integrity catches the tamper.
@@ -320,8 +342,8 @@ describe("CT7 — a tampered amount is refused by the amount-integrity gate", ()
 
   it("a clean order passes the amount-integrity gate (the control is not a blanket refusal)", () => {
     const order = catalog.createOrder([{ productId: "aurora-headphones", quantity: 1 }], "ORD-OK");
-    const mandate = buildPasskeyMandate({ order, authenticator: AUTH, origin: { rpID: HOST, origin: ORIGIN } });
-    expect(runGates(mandate).find((g) => g.gate === "Amount integrity")!.pass).toBe(true);
+    const gates = runCeremonyGates(order, EVIDENCE, amountFrom(order.total, order.currency));
+    expect(gates.find((g) => g.gate === "Amount integrity")!.pass).toBe(true);
   });
 
   it("resolveOrder re-prices a hand-edited (tampered) stored total from the catalog, never the token", async () => {
@@ -340,7 +362,11 @@ describe("CT7 — a tampered amount is refused by the amount-integrity gate", ()
     h.seed("ORD-T", [{ id: "aurora-headphones", quantity: 1 }], /* tamperedTotal */ 1);
     const res = await authorize(h, "ORD-T");
     expect(res.body.completed).toBe(true);
-    expect(res.body.mandate.payment.amount).toBe(199); // bound to the catalog total
+    // Read the amount off the SIGNED mandate, not off the response envelope: an assertion
+    // against the envelope would pass even if the signed value drifted from the catalog.
+    const v = await verifyMandate<PaymentMandate>(res.body.mandate.payment, { publicJwk: GATE_KEY.publicJwk, expect: VCT.payment });
+    expect(v.ok).toBe(true);
+    if (v.ok) expect(v.mandate.payment_amount).toEqual({ amount: 19900, currency: "USD" });
     expect(res.body.binding.amount).toBe(199);
     expect(h.records.get("ORD-T")?.amount).toBe(199);
   });
@@ -405,12 +431,12 @@ describe("CT11 — page + receipt state presence-only-demo (not a real safety co
     expect(html).toContain("continue in your agent");
   });
 
-  it("the verify receipt carries trust_level presence-only-demo", async () => {
+  it("the verify receipt carries the honesty axes: presence live, trust server-issued-demo", async () => {
     const h = harness();
     h.seed("ORD-P", [{ id: "aurora-headphones", quantity: 1 }]);
     const res = await authorize(h, "ORD-P");
-    expect(res.body.trust_level).toBe("presence-only-demo");
-    expect(res.body.mandate.trust_level).toBe("presence-only-demo");
+    expect(res.body.trust_level).toBe("server-issued-demo");
+    expect(res.body.presence).toBe("live");
   });
 });
 

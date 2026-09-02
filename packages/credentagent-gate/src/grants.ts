@@ -21,6 +21,11 @@
 // key-signing ceremony is the roadmap (#71/#14); it will call the SAME _authorize seam.
 
 import { DelegatedGate, DelegatedGrant, type CatalogEntry } from "./delegated.js";
+import { Ap2Issuer } from "./ap2/issue.js";
+import type { MandateChain } from "./ap2/chain.js";
+import { checkoutConstraintsFromGrant, merchantFor, paymentConstraintsFromGrant } from "./ap2/from-gate.js";
+import { amountOfMinor } from "./ap2/money.js";
+import { digestToken } from "./ap2/sdjwt.js";
 import { serveGrants, type GrantsApp } from "./grants-serve.js";
 import { ageScopeFor, skuAllowed, type GrantAgeScope } from "./grants-age.js";
 import type { SealedAgeProof, SealedMembershipProof } from "./ceremony/mandate.js";
@@ -144,6 +149,16 @@ export type SpendDoor =
        *  bounds the device signed). Absent on page-mode grants. So a settled purchase traces
        *  to the signed authority. */
       mandate?: { id: string; boundsHash: string };
+      /**
+       * The AP2 mandate bundle for this purchase (#114, spec 013) — the signed records a
+       * payment processor needs to see WHAT was authorized: the Checkout Mandate for the
+       * priced line, the Payment Mandate bound to it, and the grant's two "open" mandates
+       * carrying the constraints the human agreed to.
+       *
+       * Absent when no `mandateIssuer` is configured. Its presence is evidence, never
+       * permission: every bound was already enforced before this was minted.
+       */
+      mandateBundle?: MandateChain;
     }
   | { ok: false; code: GrantDoorCode; remaining?: number; retryable?: string; replayed?: boolean };
 
@@ -197,6 +212,13 @@ export interface GrantsDeps {
   signingKey?: string;
   /** Stable reader identity the intent-sign request presents (absent ⇒ per-request self-signed). */
   readerIdentity?: ReaderIdentity;
+  /**
+   * The gate's AP2 issuer (spec 013) — mints the mandate bundle a settled spend hands the
+   * payment processor (#114). Absent ⇒ `spend()` succeeds without a `mandateBundle`, exactly
+   * as it did before; its presence never changes whether a spend is ALLOWED, only what
+   * evidence the successful outcome carries.
+   */
+  mandateIssuer?: Ap2Issuer;
   /** Host brand for the signing page (absent ⇒ the built-in look; never brands the trust line). */
   branding?: Branding;
   /** Your loyalty programme's discount, as a percentage (e.g. `10`). Setting it OPTS IN: the
@@ -533,6 +555,77 @@ export class Grants {
    *  uncategorized item does NOT pass. No bounds ⇒ everything in the catalog is allowed.
    *  Delegates to the SHARED predicate the approve page's age disclosure reads (grants-age.ts),
    *  so what the page says a grant covers is exactly what this enforces (#172). */
+  /**
+   * Build the AP2 bundle for one settled draw (#114).
+   *
+   * Returns `undefined` rather than throwing when no issuer is configured or the catalog has
+   * no entry: a bundle is EVIDENCE about a purchase that already completed, so failing to
+   * mint one must never turn a successful spend into a failed one. The amount comes from the
+   * ENGINE's committed cents, not from the catalog re-read, so the signed record states what
+   * was actually drawn.
+   */
+  private async mandateBundleFor(
+    rec: GrantRecord,
+    sku: string,
+    qty: number,
+    committedCents: number,
+  ): Promise<MandateChain | undefined> {
+    const issuer = this.deps.mandateIssuer;
+    if (!issuer) return undefined;
+    try {
+      const origin = this.deps.walletOrigin;
+      const payee = merchantFor(origin, rec.opts.merchant);
+      const currency = "USD";
+      const unit = amountOfMinor(Math.round(committedCents / qty), currency);
+      const line = amountOfMinor(committedCents, currency);
+      const co = await issuer.checkout({
+        checkout: {
+          id: `${rec.id}:${sku}`,
+          merchant: payee,
+          line_items: [{ id: sku, quantity: qty, unit_amount: unit, total_amount: line }],
+          status: "completed",
+          currency,
+          totals: [{ type: "subtotal", amount: line }, { type: "total", amount: line }],
+          links: [],
+        },
+      });
+      const pay = await issuer.payment({
+        transactionId: co.checkoutHash,
+        payee,
+        amount: line,
+        instrument: { type: "delegated" },
+        riskData: { authorization: "delegated", grantId: rec.id, presence: rec.engine?.presence, trustLevel: rec.engine?.trustLevel },
+      });
+      const bounds = {
+        merchant: rec.opts.merchant,
+        budget: rec.opts.budget,
+        perSpend: rec.opts.perSpend,
+        currency,
+        skus: rec.opts.allow?.skus ?? [sku],
+      };
+      // No `cnf` key of the human's own on a page-approved grant, so the open mandates cannot
+      // be minted honestly — AP2 REQUIRES key binding on both. A device-signed grant has one;
+      // wiring the wallet key through is the remaining leg (see MIGRATING.md).
+      const cnfJwk = rec.engine?.delegate;
+      if (!cnfJwk) return { checkout: co.token, payment: pay.token };
+      const exp = Math.floor(Date.now() / 1000) + 3600;
+      const openCo = await issuer.openCheckout({
+        constraints: checkoutConstraintsFromGrant(bounds, origin),
+        cnf: { jwk: cnfJwk },
+        exp,
+      });
+      const openPay = await issuer.openPayment({
+        constraints: paymentConstraintsFromGrant(bounds, origin, digestToken(openCo.token)),
+        cnf: { jwk: cnfJwk },
+        exp,
+      });
+      return { checkout: co.token, payment: pay.token, openCheckout: openCo.token, openPayment: openPay.token };
+    } catch {
+      // Evidence, never permission — a minting failure must not undo a committed spend.
+      return undefined;
+    }
+  }
+
   private allowed(rec: GrantRecord, sku: string): boolean {
     return skuAllowed(rec.opts.allow, sku, this.deps.catalog ?? {});
   }
@@ -574,6 +667,9 @@ export class Grants {
         }
 
         const r = await rec.engine.spend({ idempotencyKey, item: sku, quantity: qty });
+        // Mint the AP2 bundle only for a spend the engine ALREADY allowed. Minting first would
+        // put a signed record of a purchase that never happened onto the wire.
+        const bundle = r.ok ? await this.mandateBundleFor(rec, sku, qty, r.amount) : undefined;
         // The engine runs in cents (fix 2); convert its amount/remaining back to the plain-dollar
         // public surface. Division by 100 of an integer-cent value is exact for any cent amount.
         const door: SpendDoor = r.ok
@@ -586,6 +682,7 @@ export class Grants {
               ...(r.delegationId ? { delegationId: r.delegationId } : {}),
               // Trace the spend to the signed Intent Mandate (spec 012, FR-5) — device grants only.
               ...(rec.mandate && rec.mandateId ? { mandate: { id: rec.mandateId, boundsHash: rec.mandate.boundsHash } } : {}),
+              ...(bundle ? { mandateBundle: bundle } : {}),
             }
           : { ok: false, code: CODE_MAP[r.reason ?? ""] ?? "refused", remaining: r.remaining / 100, ...(r.retryable ? { retryable: r.retryable } : {}) };
         rec.cache.set(idempotencyKey, door);

@@ -5,7 +5,7 @@
 //
 // The seam CONTRACT (CeremonySeams / CeremonyContext) lives in mount.ts; this
 // file holds the entities those seams pass around.
-import type { CartMandate } from "./cartMandate.js";
+import type { MandateChain } from "../ap2/chain.js";
 
 import type { SettlementRecordLike } from "./completion.js";
 import type { BindingFields } from "./mandate.js";
@@ -110,11 +110,19 @@ export interface CompletionInput {
   method: string;
   instrument?: unknown;
   gates: GateOutcome[];
-  /** Optional signed Cart Mandate (ap2.CartMandate). When present AND the context has a
-   *  `signingKey`, completion verifies it (signature + order-id binding + expiry) BEFORE
-   *  re-pricing and refuses a tampered/replayed/expired cart — additive, fail-closed
-   *  defense-in-depth; the catalog stays the price authority either way. */
-  cartMandate?: CartMandate;
+  /**
+   * The optional AP2 mandate chain riding with this completion (spec 013): the Checkout
+   * Mandate, the Payment Mandate bound to it, and — on a delegated spend — the grant's two
+   * "open" mandates. When present AND the context holds the gate's public key, completion
+   * verifies the WHOLE chain before re-pricing and refuses a tampered, replayed, expired or
+   * out-of-bounds one. The catalog is still the price authority (invariant 2): a chain with a
+   * perfect signature and the wrong price is refused at the re-price step either way.
+   */
+  mandateChain?: MandateChain;
+  /** Required when the chain carries key-bound open mandates: who the KB-JWT is addressed to. */
+  mandateAudience?: string;
+  /** Required when the chain carries key-bound open mandates: the nonce this gate issued. */
+  mandateNonce?: string;
   /** Optional HNP delegated draw (005): a user-sealed Intent Mandate + the delegate-signed
    *  draw redeeming it. When present, completion re-runs the full bounds + revocation +
    *  atomic single-use checks server-side (additive, fail-closed) — never trusting an

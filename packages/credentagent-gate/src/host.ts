@@ -19,6 +19,7 @@
 // server-side on your completion path too (Security invariant 1), never only in a page.
 
 import { completeOrder, type ClearableCart, type CompletedOrderStore, type CompletionContext } from "./ceremony/completion.js";
+import type { PublicJwkP256 } from "./ap2/keys.js";
 import type {
   CeremonyCatalog,
   CeremonyOrderStore,
@@ -55,6 +56,8 @@ export interface DefineHostSpec {
    * options→verify hop survives a serverless instance split. Pass this OR `allowEphemeralKey`.
    */
   signingKey?: string;
+  /** The gate's PUBLIC AP2 mandate key (spec 013). Usually supplied by the mounted client. */
+  mandatePublicJwk?: PublicJwkP256;
   /** Allow a per-process ephemeral key for a single-process dev server. Pass this OR `signingKey`. */
   allowEphemeralKey?: boolean;
   /**
@@ -134,14 +137,23 @@ export function defineHost(spec: DefineHostSpec): Host {
   // the seams `mount()` injects onto app.locals AFTER publish. Same lazy read the storefront
   // does for the registry; here also for the resolved signing key.
   let boundApp: HostApp | undefined;
-  const localsOf = (): { credentialRegistry?: ReadonlyMap<string, Credential>; signingKey?: string } | undefined =>
-    boundApp?.locals.credentagent as { credentialRegistry?: ReadonlyMap<string, Credential>; signingKey?: string } | undefined;
+  const localsOf = ():
+    | { credentialRegistry?: ReadonlyMap<string, Credential>; signingKey?: string; mandatePublicJwk?: PublicJwkP256 }
+    | undefined =>
+    boundApp?.locals.credentagent as
+      | { credentialRegistry?: ReadonlyMap<string, Credential>; signingKey?: string; mandatePublicJwk?: PublicJwkP256 }
+      | undefined;
   const registryOf = (): ReadonlyMap<string, Credential> | undefined => localsOf()?.credentialRegistry;
   // The key completion verifies a Cart Mandate with MUST be the one the rails signed it with.
   // On the `allowEphemeralKey` path mount GENERATES the key and republishes it here, so
   // forwarding `spec.signingKey` (undefined) would skip signature + reconciliation entirely —
   // a tampered/replayed cart mandate would pass. Read the resolved key from the bound app.
   const signingKeyOf = (): string | undefined => localsOf()?.signingKey ?? spec.signingKey;
+  // Same resolution rule for the AP2 mandate key (spec 013): read the EFFECTIVE value the
+  // mounted client published, not the one this spec was constructed with. Forwarding a stale
+  // `undefined` here would make `completeOrder` refuse every chain it is handed — or, worse,
+  // if the check were ever relaxed, accept one unverified.
+  const mandatePublicJwkOf = (): PublicJwkP256 | undefined => localsOf()?.mandatePublicJwk ?? spec.mandatePublicJwk;
 
   // Build the shared completion over the host's stores (unless the host brought its own).
   const complete: CompletionSeam =
@@ -154,6 +166,7 @@ export function defineHost(spec: DefineHostSpec): Host {
         ...(spec.cart ? { cart: spec.cart } : {}),
         ...(spec.settle ? { settle: spec.settle } : {}),
         ...(signingKeyOf() ? { signingKey: signingKeyOf() } : {}),
+        ...(mandatePublicJwkOf() ? { mandatePublicJwk: mandatePublicJwkOf() } : {}),
         // Read at CALL time (mount injects the registry after publish) so a custom gate() is
         // enforced here, not only in the rendered page (invariant 1). Absent ⇒ sweep skipped.
         ...(registryOf() ? { credentialRegistry: registryOf() } : {}),

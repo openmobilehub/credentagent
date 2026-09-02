@@ -735,7 +735,7 @@ describe("per-session carts over HTTP (issue #34 · Security Invariant #4)", () 
 // statelessOrders (gate FR-007): the checkout link carries the signed Cart Mandate
 // instead of a createdOrderStore write; the page reconstructs + verifies it. The store
 // here THROWS on read, so any passing test also proves no created-order store read.
-describe("statelessOrders — the cart mandate is the order transport (FR-007)", () => {
+describe("statelessOrders — the AP2 chain is the order transport (FR-007)", () => {
   const makeStateless = (): Storefront => {
     const store = createStorefront({
       statelessOrders: true,
@@ -756,29 +756,34 @@ describe("statelessOrders — the cart mandate is the order transport (FR-007)",
     return new URL(sc.checkoutUrl);
   };
 
-  it("checkout returns a link (and approve links) carrying the signed cart mandate", async () => {
+  it("checkout returns a link (and approve links) carrying the signed AP2 chain", async () => {
     const store = makeStateless();
     const sc = (await (await connect(store)).callTool({ name: "checkout", arguments: { items: [{ productId: "oak-whiskey", quantity: 1 }] } })).structuredContent as any;
-    expect(sc.checkoutUrl).toMatch(/[?&]cart=[A-Za-z0-9_-]+/);
-    expect(sc.requires?.[0]?.approveUrl).toMatch(/[?&]cart=[A-Za-z0-9_-]+/); // the age gate link too
+    expect(sc.checkoutUrl).toMatch(/[?&]chain=[A-Za-z0-9_-]+/);
+    expect(sc.requires?.[0]?.approveUrl).toMatch(/[?&]chain=[A-Za-z0-9_-]+/); // the age gate link too
   });
 
-  it("GET /checkout renders from the mandate with NO created-order store read", async () => {
+  it("GET /checkout renders from the chain with NO created-order store read", async () => {
     const store = makeStateless();
     const url = await checkoutUrl(store);
     const res = await request(store.app).get(url.pathname + url.search);
-    expect(res.status).toBe(200); // reconstructed from ?cart; the throwing store was never read
+    expect(res.status).toBe(200); // reconstructed from ?chain; the throwing store was never read
   });
 
-  it("BYPASS: a tampered cart mandate resolves nothing (fails closed → 404)", async () => {
+  it("BYPASS: a tampered chain resolves nothing (fails closed → 404)", async () => {
     const store = makeStateless();
     const url = await checkoutUrl(store);
-    // Keep valid JSON + valid lines but break the signature (edit the sealed cart).
-    const m = JSON.parse(Buffer.from(url.searchParams.get("cart")!, "base64url").toString("utf8"));
-    m.lines = [{ id: "oak-whiskey", quantity: 99, unitPrice: 124, lineTotal: 12276 }];
-    url.searchParams.set("cart", Buffer.from(JSON.stringify(m)).toString("base64url"));
+    // Keep the JSON envelope intact but corrupt the signed Checkout Mandate. The control is
+    // `verifyChain`: delete it and this edited chain resolves a 99-unit order.
+    const chain = JSON.parse(Buffer.from(url.searchParams.get("chain")!, "base64url").toString("utf8"));
+    const [head, body, sig] = (chain.checkout as string).split("~")[0].split(".");
+    const claims = JSON.parse(Buffer.from(body, "base64url").toString("utf8"));
+    claims.checkout_hash = "tampered";
+    const forgedJwt = [head, Buffer.from(JSON.stringify(claims)).toString("base64url"), sig].join(".");
+    chain.checkout = (chain.checkout as string).replace((chain.checkout as string).split("~")[0], forgedJwt);
+    url.searchParams.set("chain", Buffer.from(JSON.stringify(chain)).toString("base64url"));
     const res = await request(store.app).get(url.pathname + "?" + url.searchParams.toString());
-    expect(res.status).toBe(404); // verifyCartMandate refuses the edited cart → resolveCreated null
+    expect(res.status).toBe(404); // verifyChain refuses the edited chain → resolveCreated null
   });
 });
 
@@ -803,7 +808,7 @@ describe.each([
     const store = build();
     const sc = (await (await connect(store)).callTool({ name: "checkout", arguments: { items: [{ productId: "oak-whiskey", quantity: 1 }] } })).structuredContent as any;
     const orderId: string = sc.orderId;
-    const cart = new URL(sc.checkoutUrl).searchParams.get("cart");
+    const cart = new URL(sc.checkoutUrl).searchParams.get("chain");
     // the link carries the cart iff stateless
     expect(!!cart).toBe(stateless);
 
@@ -816,10 +821,10 @@ describe.each([
     const agePage = await request(store.app).get(ageUrl.pathname + ageUrl.search);
     expect(agePage.status).toBe(200);
     const returnUrl: string = JSON.parse(agePage.text.match(/const RETURN_URL = ("(?:[^"\\]|\\.)*")/)![1]);
-    expect(returnUrl.includes("cart=")).toBe(stateless);
+    expect(returnUrl.includes("chain=")).toBe(stateless);
 
     // prove age (instant demo)
-    const verified = await request(store.app).post("/credentagent/credential/verify").send({ order: orderId, cred: "age", cart, claims: { age_over_21: true } });
+    const verified = await request(store.app).post("/credentagent/credential/verify").send({ order: orderId, cred: "age", chain: cart, claims: { age_over_21: true } });
     expect(verified.body.verified).toBe(true);
 
     // THE REGRESSION: returning to checkout must resolve the order (was 404 statelessly)
@@ -828,7 +833,7 @@ describe.each([
     expect(back.text).not.toContain("Unknown order");
 
     // pay → complete through the shared seam (age already proven above)
-    const done = await request(store.app).post("/credentagent/dc-payment/verify").send({ order: orderId, cart, amount: 124, claims: DC_CLAIMS });
+    const done = await request(store.app).post("/credentagent/dc-payment/verify").send({ order: orderId, chain: cart, amount: 124, claims: DC_CLAIMS });
     expect(done.body.completed).toBe(true);
   });
 });
@@ -836,7 +841,7 @@ describe.each([
 // statelessOrders + UNGATED instant-demo place-order: the "Place order (instant demo)"
 // button must forward the cart, or the store-less server can't record the order. (This
 // path only shows when resolveGate returns [] — here headphones under an alcohol-only gate.)
-describe("statelessOrders — ungated instant-demo place-order carries the cart", () => {
+describe("statelessOrders — ungated instant-demo place-order carries the chain", () => {
   const buildUngated = (): Storefront => {
     const store = createStorefront({ statelessOrders: true, allowEphemeralKey: true, baseUrl: "http://shop.test" });
     const a = new CredentAgent();
@@ -846,22 +851,22 @@ describe("statelessOrders — ungated instant-demo place-order carries the cart"
     return store;
   };
 
-  it("the checkout page's place-order script forwards the cart (regression: it dropped it)", async () => {
+  it("the checkout page's place-order script forwards the chain (regression: it dropped it)", async () => {
     const store = buildUngated();
     const sc = (await (await connect(store)).callTool({ name: "checkout", arguments: { items: [{ productId: "aurora-headphones", quantity: 1 }] } })).structuredContent as any;
     const url = new URL(sc.checkoutUrl);
     const page = await request(store.app).get(url.pathname + url.search);
     expect(page.status).toBe(200);
-    expect(page.text).toContain("const CART = new URLSearchParams"); // the fix: cart read + forwarded
+    expect(page.text).toContain("const CHAIN = new URLSearchParams"); // the fix: chain read + forwarded
   });
 
-  it("place-order with the cart records the order on a store-less server", async () => {
+  it("place-order with the chain records the order on a store-less server", async () => {
     const store = buildUngated();
     const sc = (await (await connect(store)).callTool({ name: "checkout", arguments: { items: [{ productId: "aurora-headphones", quantity: 1 }] } })).structuredContent as any;
-    const cart = new URL(sc.checkoutUrl).searchParams.get("cart");
-    const placed = await request(store.app).post("/checkout/place-order").send({ order: sc.orderId, cart });
+    const cart = new URL(sc.checkoutUrl).searchParams.get("chain");
+    const placed = await request(store.app).post("/checkout/place-order").send({ order: sc.orderId, chain: cart });
     expect(placed.status).toBe(200);
-    // recorded ⇒ order-status reports completed (was impossible without the cart)
+    // recorded ⇒ order-status reports completed (was impossible without the chain)
     const status = await request(store.app).get(`/checkout/order-status?orderId=${sc.orderId}`);
     expect(status.body.completed).toBe(true);
   });

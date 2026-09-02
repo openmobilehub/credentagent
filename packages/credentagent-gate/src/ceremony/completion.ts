@@ -7,8 +7,9 @@
 // settle means authorized-but-not-completed (no record, cart intact — FR-013).
 import type { Credential, GateOrder, TrustLevel, VerificationStore } from "../types.js";
 import type { CartItemRef, CeremonyCatalog, CeremonyOrder, CompletionInput, CompletionResult, GateOutcome } from "./types.js";
-import { verifyCartMandate, type CartMandate } from "./cartMandate.js";
-import { reconcileCartPayment } from "./reconciliation.js";
+import { verifyChain, type ChainVerdict } from "../ap2/chain.js";
+import type { PublicJwkP256 } from "../ap2/keys.js";
+import { amountFrom } from "../ap2/money.js";
 import { checkDraw, ageProofCovers, type DrawVerifier } from "./mandate.js";
 import type { RevocationStore } from "./revocation.js";
 import { refusal } from "./refusals.js";
@@ -77,10 +78,17 @@ export interface CompletionContext {
   cart?: ClearableCart;
   /** Optional demo-mode settlement; throwing GATES completion (no record). */
   settle?: (order: CompletionInput["order"]) => Promise<SettlementRecordLike>;
-  /** Optional HMAC key for Cart Mandate verification. When set AND the input carries a
-   *  `cartMandate`, completion verifies it (signature + order-id binding + expiry)
-   *  before re-pricing. Absent ⇒ the cart-mandate check is skipped (additive). */
+  /** The HMAC secret for challenge tokens. Distinct from `mandatePublicJwk` below — this one
+   *  is symmetric and private; that one is asymmetric and published. */
   signingKey?: string;
+  /**
+   * The gate's PUBLIC mandate-signing key (spec 013) — `credentagent.signingKeyInfo()`.
+   *
+   * Required to verify an inbound `mandateChain`. Its ABSENCE is fail-closed: a chain arriving
+   * with no key to check it against is refused, never waved through as "no chain check
+   * configured". A caller that does not send a chain is unaffected.
+   */
+  mandatePublicJwk?: PublicJwkP256;
   /** Optional revocation + committed-draw store (005). REQUIRED when the input carries a
    *  `draw`: its absence is fail-closed (a draw without a store to check it is refused).
    *  Consulted fail-closed (a throwing read refuses) and holds the atomic single-use consume. */
@@ -186,11 +194,21 @@ async function completeOrderLocked(input: CompletionInput, ctx: CompletionContex
   // (invariant 2). A valid-signature-but-wrong-price mandate therefore still fails the
   // re-price check — the mandate is defense-in-depth, never a substitute for it. The
   // verified mandate is reconciled against the Payment Mandate's binding AFTER re-pricing.
-  let cartMandate: CartMandate | undefined;
-  if (input.cartMandate && ctx.signingKey) {
-    const verdict = verifyCartMandate(input.cartMandate, input.order.id, ctx.signingKey);
+  // Signatures first, before anything reads a field off the chain. This pass proves the
+  // mandates were issued by this gate, that the cart adds up to what it claims, and that the
+  // payment names THIS cart — all without knowing the catalog price yet, so a tampered or
+  // replayed chain is refused with a precise reason rather than as a generic price mismatch.
+  let chain: ChainVerdict | undefined;
+  if (input.mandateChain) {
+    if (!ctx.mandatePublicJwk) return { completed: false, reason: "cart-mandate" };
+    const verdict = await verifyChain(input.mandateChain, {
+      publicJwk: ctx.mandatePublicJwk,
+      ...(input.mandateAudience ? { audience: input.mandateAudience } : {}),
+      ...(input.mandateNonce ? { nonce: input.mandateNonce } : {}),
+    });
     if (!verdict.ok) return { completed: false, reason: "cart-mandate" };
-    cartMandate = verdict.mandate;
+    if (verdict.checkout.id !== input.order.id) return { completed: false, reason: "cart-mandate" };
+    chain = verdict;
   }
 
   // Invariant 2: never trust the order token — re-price the lines against the
@@ -231,13 +249,18 @@ async function completeOrderLocked(input: CompletionInput, ctx: CompletionContex
   // signature across ALL paths: a cart sealed for X paired with a payment for Y≠X, a
   // currency or order mismatch, or a discount one path blesses and another refuses is
   // refused here, never silently under-charged. Re-priced (not the token) per invariant 2.
-  if (cartMandate) {
-    const agree = reconcileCartPayment(
-      cartMandate,
-      { amount: input.amount, currency: input.currency, orderId: input.order.id },
-      repriced.total,
-    );
-    if (!agree.ok) return { completed: false, reason: "reconcile" };
+  if (chain) {
+    // Invariant 3, closed here: the chain already proved that its own line sum, its stated
+    // total and its SIGNED payment amount agree. This is the last leg — that all three also
+    // equal what the CATALOG says, and what this rail is about to charge. An internally
+    // consistent chain about the wrong price is still the wrong price.
+    const catalogTotal = amountFrom(repriced.total, repriced.currency);
+    const charging = amountFrom(input.amount, input.currency);
+    if (chain.amount.currency !== catalogTotal.currency) return { completed: false, reason: "reconcile" };
+    if (chain.amount.amount !== catalogTotal.amount) return { completed: false, reason: "reconcile" };
+    if (charging.currency !== catalogTotal.currency || charging.amount !== catalogTotal.amount) {
+      return { completed: false, reason: "reconcile" };
+    }
   }
 
   // Invariant 1: enforce the age gate on EVERY completion path. The age restriction

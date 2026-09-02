@@ -16,14 +16,16 @@
 // the PR-in-flight crypto — scaffolded in request.ts and refused 501 by the route's
 // presentation path.
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeAll } from "vitest";
 import express, { type Express } from "express";
 import request from "supertest";
 import { mountCeremony, resolveOrder, type CeremonyContext, type CeremonySeams } from "../mount.js";
 import { completeOrder, type CompletedRecord, type CompletionContext } from "../completion.js";
-import { issueCartMandate } from "../cartMandate.js";
+import { mintChain, testIssuer, type TestIssuer } from "../../ap2/chain.testkit.js";
+import { encodeMandateChainParam } from "../../ap2/transport.js";
+import type { CeremonyOrder } from "../types.js";
 import { MemoryVerificationStore } from "../../store.js";
-import { buildDcMandate, runDcGates } from "./verify.js";
+import { buildDcPresentation, runDcGates } from "./verify.js";
 import { buildDcPaymentRequest } from "./request.js";
 import { renderDcPaymentPage } from "./page.js";
 import type { CeremonyCatalog, CeremonyOrder, CompletionInput } from "../types.js";
@@ -99,6 +101,7 @@ function harness(): Harness {
       write: async (rec) => void (records.set(rec.orderId, rec), writes++),
     },
     cart: { clear: async () => void cartClears++ },
+    mandatePublicJwk: T.key.publicJwk,
   };
   const seams: CeremonySeams = {
     verificationStore,
@@ -106,6 +109,8 @@ function harness(): Harness {
     catalog,
     completion: (input) => completeOrder(input, completionCtx), // ← the shared seam
     signingKey: "stable-test-secret",
+    mandatePublicJwk: T.key.publicJwk,
+    mandateIssuer: T.ap2,
   };
   const app = express();
   const ctx = mountCeremony(app as never, seams);
@@ -139,7 +144,7 @@ describe("CT8 — a dc-payment verify completes via the shared completeOrder sea
     const recorded = h.records.get("ORD-D1");
     expect(recorded?.amount).toBe(199); // amount re-derived from the catalog
     expect(recorded?.method).toBe("dc-payment");
-    expect(recorded?.mandateId).toBe(res.body.mandate.id);
+    expect(recorded?.mandateId).toEqual(expect.any(String));
     expect(h.cartClears()).toBe(1); // cart emptied through the shared seam
     expect(await h.verificationStore.read("ORD-D1")).toBeUndefined(); // per-order verification cleared
   });
@@ -167,10 +172,10 @@ describe("CT8 — a dc-payment verify completes via the shared completeOrder sea
     const res = await request(h.app)
       .post("/credentagent/dc-payment/verify")
       .send({ order: "ORD-D3", amount: order!.total, claims: DEMO_CLAIMS });
-    expect(res.body.mandate.payment.amount).toBe(398);
+    expect(res.body.presentation.payment.amount).toBe(398);
     const amountGate = res.body.gates.find((g: { gate: string }) => g.gate === "Amount binding");
     expect(amountGate.pass).toBe(true);
-    expect(res.body.mandate.userAuthorization.transactionDataHash).toEqual(expect.any(String));
+    expect(res.body.presentation.userAuthorization.transactionDataHash).toEqual(expect.any(String));
   });
 });
 
@@ -250,7 +255,7 @@ describe("CT8 — a membership-discounted order authorizes the discounted total 
     expect(order!.total).toBeCloseTo(179.1); // 199 − 10%
     const res = await request(h.app).post("/credentagent/dc-payment/verify").send({ order: "ORD-M", amount: order!.total, claims: DEMO_CLAIMS });
     expect(res.body.completed).toBe(true);
-    expect(res.body.mandate.payment.amount).toBeCloseTo(179.1);
+    expect(res.body.presentation.payment.amount).toBeCloseTo(179.1);
   });
 });
 
@@ -310,12 +315,15 @@ describe("CT11 — page / request descriptor / receipt all state presence-only-d
     expect(Object.keys(td.payload.payee).sort()).toEqual(["id", "name"]);
   });
 
-  it("the verify receipt (mandate) carries trust_level presence-only-demo", async () => {
+  it("the verify receipt carries the honesty axes: presence live, trust server-issued-demo", async () => {
     const h = harness();
     h.seed("ORD-H", [{ id: "aurora-headphones", quantity: 1 }]);
     const order = await resolveOrder(h.ctx, "ORD-H");
     const res = await request(h.app).post("/credentagent/dc-payment/verify").send({ order: "ORD-H", amount: order!.total, claims: DEMO_CLAIMS });
-    expect(res.body.mandate.trust_level).toBe("presence-only-demo");
+    expect(res.body.trust_level).toBe("server-issued-demo");
+    expect(res.body.presence).toBe("live");
+    // The wallet presentation is still presence-only — it is EVIDENCE, not the signature.
+    expect(res.body.presentation.trust_level).toBe("presence-only-demo");
   });
 
   it("the encrypted wallet-presentation path is REAL — it requires a readerContextToken (400, not 501) and records nothing without one", async () => {
@@ -335,7 +343,7 @@ describe("CT11 — page / request descriptor / receipt all state presence-only-d
 describe("runDcGates — re-derives the binding; no trusted `verified` flag", () => {
   it("passes all four gates for a faithful presence-only mandate", () => {
     const order = catalog.createOrder([{ productId: "aurora-headphones", quantity: 1 }], "ORD-G");
-    const mandate = buildDcMandate({ order, origin: localhost, claims: DEMO_CLAIMS, presentedAmount: order.total });
+    const mandate = buildDcPresentation({ order, origin: localhost, claims: DEMO_CLAIMS, presentedAmount: order.total });
     const gates = runDcGates(mandate, localhost);
     expect(gates).toHaveLength(4);
     expect(gates.every((g) => g.pass)).toBe(true);
@@ -343,28 +351,28 @@ describe("runDcGates — re-derives the binding; no trusted `verified` flag", ()
 
   it("fails amount binding when the presented amount diverges from the re-derived payable", () => {
     const order = catalog.createOrder([{ productId: "aurora-headphones", quantity: 1 }], "ORD-G");
-    const mandate = buildDcMandate({ order, origin: localhost, claims: DEMO_CLAIMS, presentedAmount: 1 });
+    const mandate = buildDcPresentation({ order, origin: localhost, claims: DEMO_CLAIMS, presentedAmount: 1 });
     const gate = runDcGates(mandate, localhost).find((g) => g.gate === "Amount binding");
     expect(gate?.pass).toBe(false);
   });
 
   it("fails subject binding when the disclosed instrument id is absent", () => {
     const order = catalog.createOrder([{ productId: "aurora-headphones", quantity: 1 }], "ORD-G");
-    const mandate = buildDcMandate({ order, origin: localhost, claims: { ...DEMO_CLAIMS, payment_instrument_id: undefined }, presentedAmount: order.total });
+    const mandate = buildDcPresentation({ order, origin: localhost, claims: { ...DEMO_CLAIMS, payment_instrument_id: undefined }, presentedAmount: order.total });
     const subject = runDcGates(mandate, localhost).find((g) => g.gate === "Subject binding");
     expect(subject?.pass).toBe(false);
   });
 
   it("fails the expiry gate for a past expiry_date", () => {
     const order = catalog.createOrder([{ productId: "aurora-headphones", quantity: 1 }], "ORD-G");
-    const mandate = buildDcMandate({ order, origin: localhost, claims: { ...DEMO_CLAIMS, expiry_date: "2000-01-01" }, presentedAmount: order.total });
+    const mandate = buildDcPresentation({ order, origin: localhost, claims: { ...DEMO_CLAIMS, expiry_date: "2000-01-01" }, presentedAmount: order.total });
     const exp = runDcGates(mandate, localhost).find((g) => g.gate === "Credential not expired");
     expect(exp?.pass).toBe(false);
   });
 
   it("fails the payee binding when the request origin/RP-ID does not match", () => {
     const order = catalog.createOrder([{ productId: "aurora-headphones", quantity: 1 }], "ORD-G");
-    const mandate = buildDcMandate({ order, origin: localhost, claims: DEMO_CLAIMS, presentedAmount: order.total });
+    const mandate = buildDcPresentation({ order, origin: localhost, claims: DEMO_CLAIMS, presentedAmount: order.total });
     const gate = runDcGates(mandate, { rpID: "evil.example", origin: "https://evil.example" }).find((g) => g.gate === "Amount binding");
     expect(gate?.pass).toBe(false); // payee bound to the issuing origin, not the attacker's
   });
@@ -376,6 +384,9 @@ describe("runDcGates — re-derives the binding; no trusted `verified` flag", ()
 // on read, so any test that passes also proves no store read happened.
 
 function statelessHarness(): Harness {
+  // The gate's PUBLIC mandate key must reach BOTH the rail (to reconstruct the order from
+  // the chain) and completion (to verify it again before settling). A harness that wires only
+  // one of the two would let a test pass while half the enforcement was absent.
   const verificationStore = new MemoryVerificationStore();
   const orders = new Map<string, CeremonyOrder>(); // never seeded
   const records = new Map<string, CompletedRecord>();
@@ -386,7 +397,8 @@ function statelessHarness(): Harness {
     verificationStore,
     records: { read: async (id) => records.get(id), write: async (rec) => void (records.set(rec.orderId, rec), writes++) },
     cart: { clear: async () => void cartClears++ },
-    signingKey: "stable-test-secret", // completeOrder verifies + reconciles the cart mandate
+    signingKey: "stable-test-secret",
+    mandatePublicJwk: T.key.publicJwk, // completeOrder verifies the whole AP2 chain
   };
   const seams: CeremonySeams = {
     verificationStore,
@@ -394,6 +406,8 @@ function statelessHarness(): Harness {
     catalog,
     completion: (input) => completeOrder(input, completionCtx),
     signingKey: "stable-test-secret",
+    mandatePublicJwk: T.key.publicJwk,
+    mandateIssuer: T.ap2,
     statelessOrders: true,
   };
   const app = express();
@@ -402,54 +416,69 @@ function statelessHarness(): Harness {
   return { app, ctx, verificationStore, orders, records, seed, cartClears: () => cartClears, writes: () => writes };
 }
 
-const cartParam = (mandate: unknown): string => Buffer.from(JSON.stringify(mandate)).toString("base64url");
+// One issuer per file: chains signed by different keys are refused at the signature, which
+// would make the binding bypasses below pass without their bindings ever running.
+let T: TestIssuer;
+beforeAll(async () => {
+  T = await testIssuer();
+});
+
+const headphones = (id: string, qty = 1): CeremonyOrder => ({
+  id,
+  lines: [{ id: "aurora-headphones", quantity: qty, unitPrice: 199, lineTotal: 199 * qty }],
+  subtotal: 199 * qty,
+  discount: 0,
+  total: 199 * qty,
+  currency: "USD",
+});
 
 describe("statelessOrders — end-to-end through the dc-payment rail (empty order store)", () => {
-  it("renders the page + completes a checkout reconstructed from the signed cart mandate alone", async () => {
+  it("renders the page + completes a checkout reconstructed from the signed chain alone", async () => {
     const h = statelessHarness();
-    const mandate = issueCartMandate(
-      { orderId: "ORD-S1", lines: [{ id: "aurora-headphones", quantity: 1, unitPrice: 199, lineTotal: 199 }], currency: "USD", total: 199 },
-      "stable-test-secret",
-    );
+    const chain = await mintChain(T, headphones("ORD-S1"));
 
-    // GET the gate page — order reconstructed from ?cart, no store read.
-    const page = await request(h.app).get(`/credentagent/dc-payment?order=ORD-S1&cart=${cartParam(mandate)}`);
+    // GET the gate page — order reconstructed from ?chain, no store read.
+    const page = await request(h.app).get(`/credentagent/dc-payment?order=ORD-S1&chain=${encodeMandateChainParam(chain)}`);
     expect(page.status).toBe(200);
     expect(page.text).toContain("199");
 
-    // POST verify with the mandate in the body → completes via the shared seam.
+    // POST verify with the chain in the body → completes via the shared seam.
     const res = await request(h.app)
       .post("/credentagent/dc-payment/verify")
-      .send({ order: "ORD-S1", cartMandate: mandate, claims: DEMO_CLAIMS });
+      .send({ order: "ORD-S1", chain, claims: DEMO_CLAIMS });
     expect(res.status).toBe(200);
     expect(res.body.completed).toBe(true);
     expect(h.records.get("ORD-S1")?.amount).toBe(199);
   });
 
-  it("verify accepts the base64url `cart` string the page JS forwards (not just a cartMandate object)", async () => {
+  it("verify accepts the base64url `chain` string the page JS forwards, not only an object", async () => {
     const h = statelessHarness();
-    const mandate = issueCartMandate(
-      { orderId: "ORD-S1b", lines: [{ id: "aurora-headphones", quantity: 1, unitPrice: 199, lineTotal: 199 }], currency: "USD", total: 199 },
-      "stable-test-secret",
-    );
-    // This is exactly what the dc-payment page posts: `cart` = base64url(JSON(mandate)).
+    const chain = await mintChain(T, headphones("ORD-S1b"));
     const res = await request(h.app)
       .post("/credentagent/dc-payment/verify")
-      .send({ order: "ORD-S1b", cart: cartParam(mandate), claims: DEMO_CLAIMS });
+      .send({ order: "ORD-S1b", chain: encodeMandateChainParam(chain), claims: DEMO_CLAIMS });
     expect(res.status).toBe(200);
     expect(res.body.completed).toBe(true);
   });
 
-  it("BYPASS: a tampered cart mandate resolves/completes nothing (fails closed over the wire)", async () => {
+  it("BYPASS: a tampered chain resolves/completes nothing (fails closed over the wire)", async () => {
     const h = statelessHarness();
-    const mandate = issueCartMandate(
-      { orderId: "ORD-S2", lines: [{ id: "aurora-headphones", quantity: 1, unitPrice: 199, lineTotal: 199 }], currency: "USD", total: 199 },
-      "stable-test-secret",
-    );
-    const tampered = { ...mandate, lines: [{ id: "aurora-headphones", quantity: 10, unitPrice: 199, lineTotal: 1990 }] };
+    const real = await mintChain(T, headphones("ORD-S2"));
+    // A validly-signed checkout for TEN headphones, spliced onto the one-unit payment.
+    const inflated = await mintChain(T, headphones("ORD-S2", 10));
     const res = await request(h.app)
       .post("/credentagent/dc-payment/verify")
-      .send({ order: "ORD-S2", cartMandate: tampered, claims: DEMO_CLAIMS });
+      .send({ order: "ORD-S2", chain: { ...real, checkout: inflated.checkout }, claims: DEMO_CLAIMS });
+    expect(res.body.completed).not.toBe(true);
+  });
+
+  it("BYPASS: a chain signed by another key completes nothing", async () => {
+    const h = statelessHarness();
+    const attacker = await testIssuer();
+    const forged = await mintChain(attacker, headphones("ORD-S3"));
+    const res = await request(h.app)
+      .post("/credentagent/dc-payment/verify")
+      .send({ order: "ORD-S3", chain: forged, claims: DEMO_CLAIMS });
     expect(res.body.completed).not.toBe(true);
   });
 });

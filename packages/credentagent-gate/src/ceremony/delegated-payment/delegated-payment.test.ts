@@ -10,7 +10,7 @@
 // DIFFERENT order" goes red. Delete the timingSafeEqual signature check and the tamper
 // tests go red.
 
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeAll } from "vitest";
 import { MemoryVerificationStore } from "../../store.js";
 import { age, payment, membership, defineCredential, gate, dcql } from "../../credentials.js";
 import type { Credential } from "../../types.js";
@@ -19,7 +19,8 @@ import type { CeremonyCatalog, CeremonyOrderStore, CompletionInput, CompletionRe
 import { completeOrder, type CompletedRecord } from "../completion.js";
 import { sealReference, openReference } from "./referenceToken.js";
 import { mergeDelegatedDcql, delegatedPolicyEntries } from "./dcql.js";
-import { issueCartMandate } from "../cartMandate.js";
+import { mintChain, testIssuer, type TestIssuer } from "../../ap2/chain.testkit.js";
+import { encodeMandateChainParam } from "../../ap2/transport.js";
 import { renderDelegatedPage } from "./page.js";
 import { buildDelegatedRequest } from "./request.js";
 
@@ -347,9 +348,10 @@ function harness(
       records: { read: (id) => records.get(id), write: (r) => void records.set(r.orderId, r) },
       credentialRegistry: registry,
       signingKey: SECRET,
+      mandatePublicJwk: T.key.publicJwk,
     });
   const app = routeApp();
-  mountCeremony(app, { verificationStore: verification, orderStore, catalog, completion, signingKey: SECRET, credentialRegistry: registry, verifier, ...(opts.stateless ? { statelessOrders: true } : {}) });
+  mountCeremony(app, { verificationStore: verification, orderStore, catalog, completion, signingKey: SECRET, mandatePublicJwk: T.key.publicJwk, credentialRegistry: registry, verifier, ...(opts.stateless ? { statelessOrders: true } : {}) });
   const handler = app.handlers.get("POST /credentagent/delegated/verify")!;
   return {
     records,
@@ -522,10 +524,13 @@ describe("delegated rail — settlement gating + trust honesty", () => {
 // checkout 400'd with "missing or invalid order". The other e2e tests all use the stateful
 // store, which is why nothing caught it.
 
-const cartParam = (mandate: unknown): string => Buffer.from(JSON.stringify(mandate)).toString("base64url");
+let T: TestIssuer;
+beforeAll(async () => {
+  T = await testIssuer();
+});
 
 describe("delegated rail — statelessOrders passthrough", () => {
-  it("the approve page forwards `cart` on the verify POST (the hop that dropped it)", () => {
+  it("the approve page forwards `chain` on the verify POST (the hop that dropped it)", () => {
     const html = renderDelegatedPage({
       order: "ORD-S1",
       total: 199,
@@ -534,25 +539,48 @@ describe("delegated rail — statelessOrders passthrough", () => {
       cart: "CART-MANDATE",
     });
     // Read off the live URL (same as the dc-payment rail) and included in the verify body.
-    expect(html).toContain('new URLSearchParams(location.search).get("cart")');
-    expect(html).toContain("cart: CART");
+    expect(html).toContain('new URLSearchParams(location.search).get("chain")');
+    expect(html).toContain("chain: CHAIN");
   });
 
-  it("completes from the signed cart mandate alone — the order store is never read", async () => {
+  it("completes from the signed chain alone — the order store is never read", async () => {
     const verifier = verifierReturning({
       claims: { payment: { issuer_name: "Bank" } },
       binding: { amount: 199, currency: "USD", payee: { id: "shop.example" } },
     });
     const h = harness([payment.in("usd")], verifier, [{ productId: "aurora-headphones", quantity: 1 }], { stateless: true });
-    const mandate = issueCartMandate(
-      { orderId: "ORD-S1", lines: [{ id: "aurora-headphones", quantity: 1, unitPrice: 199, lineTotal: 199 }], currency: "USD", total: 199 },
-      SECRET,
-    );
-    // Exactly what the page posts: `cart` = base64url(JSON(mandate)). The harness's order
-    // store THROWS, so completing at all proves the mandate carried the order.
-    const out = await h.verify({ order: "ORD-S1", cart: cartParam(mandate), referenceToken: tokenFor("ORD-S1") });
+    const chain = await mintChain(T, {
+      id: "ORD-S1",
+      lines: [{ id: "aurora-headphones", quantity: 1, unitPrice: 199, lineTotal: 199 }],
+      subtotal: 199,
+      discount: 0,
+      total: 199,
+      currency: "USD",
+    });
+    // Exactly what the page posts: `chain` = base64url(JSON(chain)). The harness's order store
+    // THROWS, so completing at all proves the chain carried the order.
+    const out = await h.verify({ order: "ORD-S1", chain: encodeMandateChainParam(chain), referenceToken: tokenFor("ORD-S1") });
     expect((out.body as { completed: boolean }).completed).toBe(true);
-    expect(h.records.get("ORD-S1")?.amount).toBe(199); // reconstructed + re-priced from the mandate
+    expect(h.records.get("ORD-S1")?.amount).toBe(199); // reconstructed + re-priced from the chain
+  });
+
+  it("BYPASS: a chain signed by another key completes nothing", async () => {
+    const verifier = verifierReturning({
+      claims: { payment: { issuer_name: "Bank" } },
+      binding: { amount: 199, currency: "USD", payee: { id: "shop.example" } },
+    });
+    const h = harness([payment.in("usd")], verifier, [{ productId: "aurora-headphones", quantity: 1 }], { stateless: true });
+    const attacker = await testIssuer();
+    const forged = await mintChain(attacker, {
+      id: "ORD-S9",
+      lines: [{ id: "aurora-headphones", quantity: 1, unitPrice: 199, lineTotal: 199 }],
+      subtotal: 199,
+      discount: 0,
+      total: 199,
+      currency: "USD",
+    });
+    const out = await h.verify({ order: "ORD-S9", chain: encodeMandateChainParam(forged), referenceToken: tokenFor("ORD-S9") });
+    expect((out.body as { completed?: boolean }).completed).not.toBe(true);
   });
 });
 

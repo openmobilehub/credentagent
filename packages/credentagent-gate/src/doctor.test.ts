@@ -8,6 +8,8 @@ import { CredentAgent } from "./client.js";
 import { MemoryVerificationStore, MemoryOrderStore } from "./index.js";
 import type { VerificationStore, VerificationRecord } from "./types.js";
 import type { OrderStore } from "./orders.js";
+import { webcrypto } from "node:crypto";
+import type { PrivateJwkP256 } from "./ap2/keys.js";
 
 // Stand-ins for GENUINELY shared stores (e.g. Redis) — NOT the exported in-memory impls, so doctor
 // treats them as surviving an instance split (PR #134 review finding: only in-memory is process-local).
@@ -28,11 +30,20 @@ const sharedStores = () => ({ store: new SharedVerificationStore(), orderStore: 
 const healthy = (over: Partial<DoctorInput> = {}): DoctorInput => ({
   walletOrigin: "https://shop.example",
   hasGateSecret: true,
+  hasSigningKey: true,
   sharedVerificationStore: true,
   sharedOrderStores: true,
   env: { VERCEL: "1" }, // strongest multi-instance signal
   ...over,
 });
+
+/** A throwaway P-256 private JWK, generated per run. Never hard-code one: a committed private
+ *  key is a secret-scanner hit, and the test file is where people copy their habits from. */
+async function throwawaySigningKey(): Promise<PrivateJwkP256> {
+  const pair = await webcrypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
+  const jwk = await webcrypto.subtle.exportKey("jwk", pair.privateKey);
+  return { kty: "EC", crv: "P-256", x: jwk.x!, y: jwk.y!, d: jwk.d! };
+}
 
 const codes = (input: DoctorInput) => runDoctor(input).findings.map((f) => f.code);
 
@@ -94,12 +105,18 @@ describe("runDoctor — each check fires on its own trigger", () => {
     expect(codes(healthy({ sharedOrderStores: false }))).toContain("in-memory-order-store");
   });
 
-  it("a wholly-misconfigured serverless deploy reports all four and never throws", () => {
+  it("a wholly-misconfigured serverless deploy reports all five and never throws", () => {
     const input: DoctorInput = { walletOrigin: "http://localhost:3000", hasGateSecret: false, sharedVerificationStore: false, sharedOrderStores: false, env: { VERCEL: "1" } };
     let report!: ReturnType<typeof runDoctor>;
     expect(() => { report = runDoctor(input); }).not.toThrow();
     expect(new Set(report.findings.map((f) => f.code))).toEqual(
-      new Set(["ephemeral-gate-secret", "localhost-wallet-origin", "in-memory-verification-store", "in-memory-order-store"]),
+      new Set([
+        "ephemeral-gate-secret",
+        "ephemeral-mandate-signing-key",
+        "localhost-wallet-origin",
+        "in-memory-verification-store",
+        "in-memory-order-store",
+      ]),
     );
     expect(report.ok).toBe(false);
   });
@@ -173,9 +190,14 @@ describe("CredentAgent.doctor() — assembles the instance's config + reads the 
     expect(found.has("in-memory-verification-store")).toBe(true);
   });
 
-  it("a fully-configured serverless instance is healthy (proves the wiring reads real config)", () => {
+  it("a fully-configured serverless instance is healthy (proves the wiring reads real config)", async () => {
     vi.stubEnv("VERCEL", "1");
-    const ca = new CredentAgent({ walletOrigin: "https://shop.example", gateSecret: "s".repeat(32), ...sharedStores() });
+    const ca = new CredentAgent({
+      walletOrigin: "https://shop.example",
+      gateSecret: "s".repeat(32),
+      mandateSigningKey: await throwawaySigningKey(),
+      ...sharedStores(),
+    });
     expect(ca.doctor().findings).toEqual([]);
   });
 

@@ -19,7 +19,10 @@ import type {
   DelegatedVerifier,
   SettlementSeam,
 } from "./types.js";
-import { verifyCartMandate } from "./cartMandate.js";
+import { verifyChain } from "../ap2/chain.js";
+import type { PublicJwkP256 } from "../ap2/keys.js";
+import type { Ap2Issuer } from "../ap2/issue.js";
+import { decodeMandateChainParam } from "../ap2/transport.js";
 import { preserveLineAttributes } from "./order-attributes.js";
 import { registerCredentialGate } from "./credential-gate/routes.js";
 import { registerPasskeyGate } from "./passkey/routes.js";
@@ -50,6 +53,10 @@ export interface CeremonySeams {
   /** Stable HMAC key for the challenge nonce. Required so options→verify survive
    *  an instance split (D6) UNLESS `allowEphemeralKey` is explicitly set. */
   signingKey?: string;
+  /** The gate's PUBLIC mandate-signing key (spec 013). `mount()` supplies it from the client. */
+  mandatePublicJwk?: PublicJwkP256;
+  /** The gate's AP2 issuer. `mount()` supplies it from the client. */
+  mandateIssuer?: Ap2Issuer;
   /** RP-id / origin derivation; defaults to the built-in `deriveOrigin`. */
   origin?: (req: RequestLike) => Origin;
   /** Optional demo-mode settlement seam (absent ⇒ mock-complete). */
@@ -102,6 +109,10 @@ export interface CeremonyContext {
   catalog: CeremonyCatalog;
   completion: CompletionSeam;
   signingKey: string;
+  /** The gate's PUBLIC mandate-signing key (spec 013) — needed to verify an AP2 chain. */
+  mandatePublicJwk?: PublicJwkP256;
+  /** The gate's AP2 issuer — needed to MINT a chain when a rail completes a ceremony. */
+  mandateIssuer?: Ap2Issuer;
   origin: (req: RequestLike) => Origin;
   settlement?: SettlementSeam;
   /** The external verifier/processor, when the host configured one (008). Absent ⇒
@@ -212,6 +223,8 @@ export function mountCeremony(app: CeremonyApp, options: Partial<CeremonySeams> 
     signingKey,
     origin,
     statelessOrders,
+    ...(options.mandatePublicJwk ?? locals.mandatePublicJwk ? { mandatePublicJwk: options.mandatePublicJwk ?? locals.mandatePublicJwk } : {}),
+    ...(options.mandateIssuer ?? locals.mandateIssuer ? { mandateIssuer: options.mandateIssuer ?? locals.mandateIssuer } : {}),
     ...(credentialRegistry ? { credentialRegistry } : {}),
     ...(orderPolicies ? { orderPolicies } : {}),
     ...(settlement ? { settlement } : {}),
@@ -248,18 +261,24 @@ export function mountCeremony(app: CeremonyApp, options: Partial<CeremonySeams> 
 export async function resolveOrder(
   ctx: CeremonyContext,
   orderId: string | undefined | null,
-  opts?: { cartMandate?: unknown },
+  opts?: { mandateChain?: unknown },
 ): Promise<CeremonyOrder | null> {
   if (!orderId) return null;
 
-  // Stateless transport (opt-in): reconstruct from the verified mandate, no store read.
-  if (ctx.statelessOrders && opts?.cartMandate !== undefined) {
-    const verdict = verifyCartMandate(opts.cartMandate, orderId, ctx.signingKey);
-    if (!verdict.ok) return null;
+  // Stateless transport (opt-in): reconstruct the order from the VERIFIED chain, no store
+  // read. Fail-closed on every axis — no key to check the chain against, a chain that does
+  // not verify, or a chain describing a different order all resolve to null rather than
+  // falling back to the store, because a fallback would make a forged chain indistinguishable
+  // from an absent one. The catalog still prices (invariant 2): only the ITEMS come from here.
+  if (ctx.statelessOrders && opts?.mandateChain !== undefined) {
+    const chain = decodeMandateChainParam(opts.mandateChain);
+    if (!chain || !ctx.mandatePublicJwk) return null;
+    const verdict = await verifyChain(chain, { publicJwk: ctx.mandatePublicJwk });
+    if (!verdict.ok || verdict.checkout.id !== orderId) return null;
     const verification = await ctx.verificationStore.read(orderId);
     const loyaltyApplied = !!(verification as { loyalty?: { applied?: boolean } } | undefined)?.loyalty?.applied;
     return ctx.catalog.createOrder(
-      verdict.mandate.lines.map((l) => ({ productId: l.id, quantity: l.quantity })),
+      verdict.checkout.line_items.map((l) => ({ productId: l.id, quantity: l.quantity })),
       orderId,
       { loyaltyApplied },
     );

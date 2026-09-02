@@ -4,7 +4,7 @@
 // a tampered amount from the catalog (invariant 2), and resolveOrder never trusts
 // the inbound order (CT3). Each test FAILS if its control is removed.
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeAll } from "vitest";
 import { CredentAgent } from "../client.js";
 import { MemoryVerificationStore } from "../store.js";
 import { required, defineCredential, dcql, gate } from "../credentials.js";
@@ -12,7 +12,8 @@ import type { Credential } from "../types.js";
 import { professionalLicense } from "./credential-gate/__fixtures__/customCredential.js";
 import { mountCeremony, resolveOrder, type CeremonyApp, type CeremonyContext, type CeremonySeams } from "./mount.js";
 import { issueChallenge, verifyChallenge } from "./challengeToken.js";
-import { issueCartMandate } from "./cartMandate.js";
+import { mintChain, testIssuer, type TestIssuer } from "../ap2/chain.testkit.js";
+import { encodeMandateChainParam } from "../ap2/transport.js";
 import { completeOrder, type CompletedRecord, type CompletionContext } from "./completion.js";
 import type { CeremonyCatalog, CeremonyOrderStore, CompletionInput } from "./types.js";
 
@@ -381,21 +382,33 @@ describe("resolveOrder — re-prices from the catalog, refuses tampered ids (CT3
   });
 });
 
-// ── FR-007: statelessOrders — reconstruct from a VERIFIED Cart Mandate (US3) ──
-// The store is bypassed on purpose (an instance split has no shared store), so the
-// SIGNED mandate is the transport. Every bypass here FAILS if verifyCartMandate is
-// removed from resolveOrder's stateless branch: a forged/tampered/replayed/expired
-// mandate would then resolve an attacker-chosen order.
+// ── FR-007: statelessOrders — reconstruct from a VERIFIED AP2 chain (US3) ──
+// The store is bypassed on purpose (an instance split has no shared store), so the SIGNED
+// chain is the transport. Every bypass below FAILS if `verifyChain` is removed from
+// resolveOrder's stateless branch: a forged / tampered / replayed / expired chain would then
+// resolve an attacker-chosen order.
 
 const SECRET = "stable-test-secret";
-const CART_LINES = [{ id: "oak-whiskey", quantity: 2, unitPrice: 124, lineTotal: 248 }];
-// Proves FR-007's "no createdOrderStore read": if the stateless branch ever touched
-// the store, this throws and the test fails.
+const ORDER_1: CeremonyOrder = {
+  id: "ORD-1",
+  lines: [{ id: "oak-whiskey", quantity: 2, unitPrice: 124, lineTotal: 248 }],
+  subtotal: 248,
+  discount: 0,
+  total: 248,
+  currency: "USD",
+};
+// Proves FR-007's "no createdOrderStore read": if the stateless branch ever touched the
+// store, this throws and the test fails.
 const THROW_STORE: CeremonyOrderStore = {
   read: () => {
     throw new Error("orderStore.read must NOT be called under statelessOrders (FR-007)");
   },
 };
+
+let T: TestIssuer;
+beforeAll(async () => {
+  T = await testIssuer();
+});
 
 function statelessCtx(overrides: Partial<CeremonyContext> = {}): CeremonyContext {
   return {
@@ -404,86 +417,100 @@ function statelessCtx(overrides: Partial<CeremonyContext> = {}): CeremonyContext
     catalog,
     completion: async () => ({ completed: true }),
     signingKey: SECRET,
+    mandatePublicJwk: T.key.publicJwk,
     origin: () => ({ rpID: "shop.example", origin: "https://shop.example" }),
     statelessOrders: true,
     ...overrides,
   };
 }
 
-describe("resolveOrder — FR-007 statelessOrders (reconstruct from a verified Cart Mandate, US3)", () => {
-  it("reconstructs a created order from a valid mandate with NO orderStore read (SC-003)", async () => {
-    const mandate = issueCartMandate({ orderId: "ORD-1", lines: CART_LINES, currency: "USD", total: 248 }, SECRET);
-    const order = await resolveOrder(statelessCtx(), "ORD-1", { cartMandate: mandate });
+describe("resolveOrder — FR-007 statelessOrders (reconstruct from a verified AP2 chain, US3)", () => {
+  it("reconstructs a created order from a valid chain with NO orderStore read (SC-003)", async () => {
+    const chain = await mintChain(T, ORDER_1);
+    const order = await resolveOrder(statelessCtx(), "ORD-1", { mandateChain: chain });
     expect(order?.id).toBe("ORD-1");
     expect(order?.lines.map((l) => l.id)).toEqual(["oak-whiskey"]);
     expect(order?.total).toBe(248); // 2 × 124, RE-PRICED from the catalog
   });
 
-  it("re-prices from the catalog, ignoring the mandate's sealed price (invariant 2)", async () => {
-    // Validly signed, but the sealed price CLAIMS $2; the catalog says $248.
-    const mandate = issueCartMandate(
-      { orderId: "ORD-1", lines: [{ id: "oak-whiskey", quantity: 2, unitPrice: 1, lineTotal: 2 }], currency: "USD", total: 2 },
-      SECRET,
-    );
-    const order = await resolveOrder(statelessCtx(), "ORD-1", { cartMandate: mandate });
+  it("accepts the base64url form the page JS forwards, not only an object", async () => {
+    const chain = await mintChain(T, ORDER_1);
+    const order = await resolveOrder(statelessCtx(), "ORD-1", { mandateChain: encodeMandateChainParam(chain) });
+    expect(order?.total).toBe(248);
+  });
+
+  it("re-prices from the catalog, ignoring the chain's signed price (invariant 2)", async () => {
+    // Validly signed end to end, but the chain CLAIMS $2; the catalog says $248.
+    const cheap: CeremonyOrder = { ...ORDER_1, lines: [{ id: "oak-whiskey", quantity: 2, unitPrice: 1, lineTotal: 2 }], subtotal: 2, total: 2 };
+    const chain = await mintChain(T, cheap);
+    const order = await resolveOrder(statelessCtx(), "ORD-1", { mandateChain: chain });
     expect(order?.total).toBe(248);
   });
 
   it("SC-003: a created order COMPLETES across two instances with no shared order store", async () => {
-    // Instance A issues the signed cart for ORD-1 (whiskey ×2 = $248).
-    const mandate = issueCartMandate({ orderId: "ORD-1", lines: CART_LINES, currency: "USD", total: 248 }, SECRET);
+    // Instance A issues the signed chain for ORD-1 (whiskey ×2 = $248).
+    const chain = await mintChain(T, ORDER_1);
 
     // Instance B has NO stored order (its orderStore throws) — it reconstructs from the
-    // mandate, then completes through the shared seam with its OWN empty records store.
-    const order = await resolveOrder(statelessCtx(), "ORD-1", { cartMandate: mandate });
+    // chain, then completes through the shared seam with its OWN empty records store.
+    const order = await resolveOrder(statelessCtx(), "ORD-1", { mandateChain: chain });
     expect(order?.total).toBe(248);
 
-    const { ctx: completion, records } = completionCtx({ signingKey: SECRET });
+    const { ctx: completion, records } = completionCtx({ signingKey: SECRET, mandatePublicJwk: T.key.publicJwk });
     const res = await completeOrder(
-      { order: order!, cartMandate: mandate, mandateId: "m1", amount: 248, currency: "USD", method: "passkey", gates: PASSING_GATES },
+      { order: order!, mandateChain: chain, mandateId: "m1", amount: 248, currency: "USD", method: "passkey", gates: PASSING_GATES },
       completion,
     );
     expect(res.completed).toBe(true);
     expect(records.get("ORD-1")?.amount).toBe(248);
   });
 
-  it("BYPASS: a tampered mandate resolves nothing (fails closed) — control = verifyCartMandate", async () => {
-    const mandate = issueCartMandate({ orderId: "ORD-1", lines: CART_LINES, currency: "USD", total: 248 }, SECRET);
-    // Edit the cart AFTER signing to an attacker-chosen order; the signature no longer matches.
-    const tampered = { ...mandate, lines: [{ id: "aurora-headphones", quantity: 10, unitPrice: 199, lineTotal: 1990 }] };
-    expect(await resolveOrder(statelessCtx(), "ORD-1", { cartMandate: tampered })).toBeNull();
+  it("BYPASS: a tampered cart resolves nothing (fails closed) — control = verifyChain", async () => {
+    // Swap the line items AFTER the checkout was signed; the digest no longer matches.
+    const chain = await mintChain(T, ORDER_1);
+    const other = await mintChain(T, { ...ORDER_1, id: "ORD-1", lines: [{ id: "aurora-headphones", quantity: 10, unitPrice: 199, lineTotal: 1990 }], subtotal: 1990, total: 1990 });
+    const spliced = { ...chain, checkout: other.checkout };
+    expect(await resolveOrder(statelessCtx(), "ORD-1", { mandateChain: spliced })).toBeNull();
   });
 
-  it("BYPASS: a mandate signed with the wrong key (forgery) resolves nothing", async () => {
-    const forged = issueCartMandate({ orderId: "ORD-1", lines: CART_LINES, currency: "USD", total: 248 }, "attacker-key");
-    expect(await resolveOrder(statelessCtx(), "ORD-1", { cartMandate: forged })).toBeNull();
+  it("BYPASS: a chain signed with the wrong key (forgery) resolves nothing", async () => {
+    const attacker = await testIssuer();
+    const forged = await mintChain(attacker, ORDER_1);
+    expect(await resolveOrder(statelessCtx(), "ORD-1", { mandateChain: forged })).toBeNull();
   });
 
-  it("refuses a valid mandate replayed against a DIFFERENT order (order-id binding)", async () => {
-    const mandate = issueCartMandate({ orderId: "ORD-OTHER", lines: CART_LINES, currency: "USD", total: 248 }, SECRET);
-    expect(await resolveOrder(statelessCtx(), "ORD-1", { cartMandate: mandate })).toBeNull();
+  it("BYPASS: no key configured means no chain is accepted — never waved through", async () => {
+    const chain = await mintChain(T, ORDER_1);
+    const ctx = statelessCtx();
+    delete (ctx as { mandatePublicJwk?: unknown }).mandatePublicJwk;
+    expect(await resolveOrder(ctx, "ORD-1", { mandateChain: chain })).toBeNull();
   });
 
-  it("refuses an expired mandate", async () => {
-    const mandate = issueCartMandate({ orderId: "ORD-1", lines: CART_LINES, currency: "USD", total: 248, now: 1000, ttlMs: 1 }, SECRET);
-    expect(await resolveOrder(statelessCtx(), "ORD-1", { cartMandate: mandate })).toBeNull();
+  it("refuses a valid chain replayed against a DIFFERENT order (order-id binding)", async () => {
+    const chain = await mintChain(T, { ...ORDER_1, id: "ORD-OTHER" });
+    expect(await resolveOrder(statelessCtx(), "ORD-1", { mandateChain: chain })).toBeNull();
+  });
+
+  it("refuses an expired chain", async () => {
+    const chain = await mintChain(T, ORDER_1, { ttlMs: -1000 });
+    expect(await resolveOrder(statelessCtx(), "ORD-1", { mandateChain: chain })).toBeNull();
   });
 
   it("applies the loyalty discount only when THIS order's verification opts in (invariant 3)", async () => {
     const verificationStore = new MemoryVerificationStore();
     verificationStore.write("ORD-1", { loyalty: { applied: true, membershipNumber: "M-1" } });
-    const mandate = issueCartMandate({ orderId: "ORD-1", lines: CART_LINES, currency: "USD", total: 248 }, SECRET);
-    const order = await resolveOrder(statelessCtx({ verificationStore }), "ORD-1", { cartMandate: mandate });
+    const chain = await mintChain(T, ORDER_1);
+    const order = await resolveOrder(statelessCtx({ verificationStore }), "ORD-1", { mandateChain: chain });
     expect(order?.discount).toBeCloseTo(24.8);
     expect(order?.total).toBeCloseTo(223.2);
   });
 
-  it("OFF by default: with statelessOrders unset the mandate is ignored and the store wins", async () => {
+  it("OFF by default: with statelessOrders unset the chain is ignored and the store wins", async () => {
     // ctxWithOrder leaves statelessOrders unset (off). The store holds a DIFFERENT order
     // (headphones $199); passing a whiskey mandate must not override the store.
     const stored = { id: "ORD-1", lines: [{ id: "aurora-headphones", quantity: 1, lineTotal: 199 }], subtotal: 199, discount: 0, total: 199, currency: "USD" };
-    const mandate = issueCartMandate({ orderId: "ORD-1", lines: CART_LINES, currency: "USD", total: 248 }, SECRET);
-    const order = await resolveOrder(ctxWithOrder(stored), "ORD-1", { cartMandate: mandate });
+    const chain = await mintChain(T, ORDER_1);
+    const order = await resolveOrder(ctxWithOrder(stored), "ORD-1", { mandateChain: chain });
     expect(order?.lines.map((l) => l.id)).toEqual(["aurora-headphones"]);
     expect(order?.total).toBe(199);
   });

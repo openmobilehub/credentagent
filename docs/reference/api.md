@@ -448,46 +448,63 @@ change the price authority: the catalog still re-prices (invariant 2); the manda
 integrity pre-check + defense-in-depth, never a substitute for re-derivation.
 
 ```ts
-import { issueCartMandate, verifyCartMandate, DEFAULT_CART_MANDATE_TTL_MS } from "@openmobilehub/credentagent-gate";
-import type { CartMandate, CartMandateLine, CartMandateVerdict, CartMandateRefusal, IssueCartMandateArgs } from "@openmobilehub/credentagent-gate";
+import { Ap2Issuer, verifyMandate, verifyChain, VCT, DEFAULT_MANDATE_TTL_MS } from "@openmobilehub/credentagent-gate";
+import type { CheckoutMandate, PaymentMandate, MandateChain, ChainResult } from "@openmobilehub/credentagent-gate";
 ```
 
 | Symbol | Purpose |
 | :-- | :-- |
-| `issueCartMandate(args, secret)` | Sign a server-priced cart → `CartMandate`. `args`: `{ orderId, lines, currency, total, id?, ttlMs?, now? }`. |
-| `verifyCartMandate(mandate, orderId, secret, now?)` | Verify → `CartMandateVerdict` (`{ ok, mandate }` / `{ ok:false, reason }`). Checks, in order: shape, **HMAC signature** (constant-time), **order-id binding**, **expiry**. Never throws. |
-| `DEFAULT_CART_MANDATE_TTL_MS` | Default validity window (15 min). |
-| `CartMandateRefusal` | `"malformed" \| "signature" \| "order-id" \| "expired"` — a slow buyer sees `expired`, a tampered/forged cart sees `signature` (distinct reasons). |
+| `credentagent.ap2` | The gate's configured `Ap2Issuer`. Mint through this one, never a second instance — every mandate must carry the same `kid`. |
+| `issuer.checkout({ checkout })` | Sign a UCP Checkout → `mandate.checkout.1` + its `checkoutHash`. |
+| `issuer.payment({ transactionId, payee, amount, instrument, riskData? })` | Sign `mandate.payment.1`, bound to a checkout by `transactionId`. |
+| `issuer.openCheckout` / `issuer.openPayment` | The grant mandates. Both REQUIRE `cnf` (RFC 7800) and their `contains` constraint — minting without one throws rather than producing an unbounded mandate. |
+| `verifyMandate(token, { publicJwk, expect?, audience?, nonce?, nowMs? })` | The single mandate door → `{ ok, mandate }` / `{ ok:false, code }`. Never throws. |
+| `verifyChain(chain, { publicJwk, expectedTotal?, audience?, nonce? })` | The whole chain in one call: signatures, the cart's own arithmetic, the payment's binding to it, and a delegated spend's bounds. |
+| `presentWithKeyBinding({ token, holderKey, aud, nonce })` | Append a KB-JWT delegation hop. `aud` and `nonce` are not optional — a constant for either defeats the point. |
+| `DEFAULT_MANDATE_TTL_MS` | Default validity window (15 min). |
+| `MandateRefusalCode` | `"malformed" \| "signature" \| "unexpected-type" \| "expired" \| "not-yet-valid" \| "key-binding" \| "audience" \| "nonce" \| "checkout-unbound"`. |
+| `ChainRefusalCode` | The above plus `"transaction-mismatch" \| "amount-mismatch" \| "total-tampered" \| "payee-mismatch" \| "over-per-spend" \| "grant-unbound"`. |
 
-**Honesty (`trust_level: "presence-only-demo"`).** v0.1 signs with the **server's** HMAC key
-(the same sealed-HMAC primitive as the challenge nonce). That proves the server issued the cart,
-**not that the user authorized it**. A user/agent-signed cart mandate + issuer trust is the v0.2
-line; the `alg` field (`"HS256"`) reserves room for an ES256 / key-bound variant without changing
-the contract.
+**Key binding is read off the TOKEN, not off what you asked for.** A key-bound presentation
+handed to `verifyMandate` without an `audience`/`nonce` is REFUSED (`key-binding`), never
+quietly accepted as an ordinary mandate — otherwise a stolen presentation replays anywhere.
 
-**In `completeOrder`.** When the completion input carries a `cartMandate` **and** the context has a
-`signingKey`, completion verifies it (signature + order-id + expiry) **before** re-pricing, then —
-if a Payment Mandate is also present — reconciles `cart total == re-priced total == bound amount`
-across every payment path. Failures surface as `{ completed:false, reason:"cart-mandate" }`
-(tamper/replay/expiry) or `"reconcile"` (cart and payment disagree).
+**Money is integer minor units.** `{ amount: 27999, currency: "USD" }` is $279.99.
+`amountFrom(19.99, "usd")`, `toMinorUnits`, `toMajorUnits`, `formatAmount` convert; `ap2/money.ts`
+owns the only conversion in the package, so a re-priced cart and a signed mandate compare as
+integers and cannot disagree by a cent.
+
+**Honesty (`trust_level: "server-issued-demo"`).** The signature is real ES256 over this gate's
+published key (`/.well-known/did.json`). That proves **this server issued the record** — not that
+the user authorized it, and not that any credential behind it came from a real issuer (#14). The
+grant path reaches `device-signed` where the wallet key signed (spec 012).
+
+**In `completeOrder`.** When the completion input carries a `mandateChain` **and** the context has
+`mandatePublicJwk`, completion verifies the whole chain **before** re-pricing, then checks the
+chain's re-derived amount against the catalog total and the amount being charged. Failures surface
+as `{ completed:false, reason:"cart-mandate" }` (signature / tamper / replay / expiry / wrong
+order) or `"reconcile"` (the chain and the catalog disagree). **A chain with no key configured to
+check it against is refused**, never waved through.
 
 ### `statelessOrders` (mount seam option, default off)
 
-When `true`, a **verified** cart mandate becomes the created-order **transport**: `resolveOrder`
-reconstructs the order's line items from the mandate with **no `orderStore` read**, so a checkout
-survives an instance split with no shared store (serverless / multi-instance). It stays fail-closed
-(a forged / tampered / replayed / expired mandate resolves nothing) and the catalog **still
-re-prices** — the mandate carries the *items*, never the *price*.
+When `true`, a **verified** AP2 chain becomes the created-order **transport**: `resolveOrder`
+reconstructs the order's line items from the chain's Checkout with **no `orderStore` read**, so a
+checkout survives an instance split with no shared store (serverless / multi-instance). It stays
+fail-closed (a forged / tampered / replayed / expired chain, or no key to check one against,
+resolves nothing) and the catalog **still re-prices** — the chain carries the *items*, never the
+*price*.
 
-**Wire contract.** Every rail (`passkey`, `dc-payment`, `credential`) accepts the mandate the same way:
+**Wire contract.** Every rail (`passkey`, `dc-payment`, `credential`) accepts the chain the same way:
 
-- **GET** routes (page / request) — a **base64url-JSON** `cart` query param:
-  `…/credentagent/dc-payment?order=<id>&cart=<base64url(JSON)>`.
-- **POST** verify — a `cartMandate` JSON field in the body: `{ "order": "<id>", "cartMandate": { … } }`.
-  The payment rails also forward it to `completeOrder`, which **re-verifies + reconciles** it.
+- **GET** routes (page / request) — a **base64url-JSON** `chain` query param:
+  `…/credentagent/dc-payment?order=<id>&chain=<base64url(JSON)>`.
+- **POST** verify — a `chain` field in the body (the base64url string or the object):
+  `{ "order": "<id>", "chain": { "checkout": "…", "payment": "…" } }`. The payment rails also
+  forward it to `completeOrder`, which **re-verifies** it.
 
 The gate decodes it trust-free (a missing/garbage value falls through to the store path);
-`verifyCartMandate` is the real gate. **Follow-up DX:** the approve link the gate emits does not yet
+`verifyChain` is the real gate. **Follow-up DX:** the approve link the gate emits does not yet
 auto-embed the mandate under `statelessOrders` — the host wires the client to carry it today; embedding
 it in the approve URL (so the client threads it transparently) is the planned ergonomic improvement.
 Note a signed cart in a **GET URL** is long, and very large carts can approach URL-length limits — POST
