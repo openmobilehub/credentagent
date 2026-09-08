@@ -166,14 +166,28 @@ and the mdoc presentation stop being "the signature" and become **evidence carri
 the mandate**. This is conformant, and it is honest: the record says the server issued it,
 because the server did.
 
-**Grant path** (`mandate.checkout.open.1` + `mandate.payment.open.1`). `cnf` is required.
-We already have the key: #144 shipped device-signed grants, where the Multipaz wallet signs
-the Intent Bounds. That wallet public key becomes the `cnf`, and the wallet's signature
-becomes the KB-JWT of the delegation hop. The grant path therefore reaches a *stronger*
-conformance than the presence path — correctly, because the user really did sign it.
+**Grant path** (`mandate.checkout.open.1` + `mandate.payment.open.1`). `cnf` is required,
+and this is where the credential format bites.
 
-A grant created without a device signature cannot produce a conformant open mandate. It
-must be refused, not downgraded silently.
+#144 shipped device-signed grants against the Multipaz **DPC, which is an ISO mdoc**. An
+mdoc wallet signs a COSE_Sign1 `DeviceAuth` over a `SessionTranscript`; it does **not** emit
+a KB-JWT. `research.md` (spec 012, FR-7) records the split directly: an mdoc device binds
+transaction data in a `deviceSigned` namespace, and only an SD-JWT VC binds it in a KB-JWT.
+So the wallet's signature cannot *be* the delegation hop's KB-JWT, and text saying it does
+would claim a conformance the format cannot produce.
+
+What the wallet signature can honestly do is **attest the delegate key**: the device signs
+bounds that name the agent's public key, that key becomes the `cnf`, and it signs the KB-JWT
+hops from there. The root of the delegation is an mdoc attestation; every hop after it is
+AP2-literal. Where the mdoc `DeviceResponse` travels is not something AP2 specifies — it is
+our own transport field, and it is labelled as an extension rather than as part of the chain.
+
+The grant path is therefore not "more conformant" than the presence path. It carries a real
+user signature the presence path does not have, in an envelope AP2 does not define. Those are
+two different claims and the honesty labels must keep them apart.
+
+A grant created without a device signature has no key to name in `cnf` and cannot produce an
+open mandate at all. It must be refused, not downgraded silently.
 
 ### Rail-by-rail impact
 
