@@ -14,6 +14,13 @@
 import { describe, expect, it } from "vitest";
 import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, sign as nodeSign, verify as nodeVerify, webcrypto } from "node:crypto";
 import { SDJwtInstance, decodeSdJwt } from "@sd-jwt/core";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import nodePath from "node:path";
+import { fileURLToPath } from "node:url";
+import { inflateRawSync } from "node:zlib";
+import { decode } from "cbor-x";
 
 const AUD = "https://shop.example";
 const NONCE = "n-once-123";
@@ -153,5 +160,65 @@ describe("the SD-JWT Digital Payment Credential (spec 014, FR-1)", () => {
 
     const forger = new SDJwtInstance({ hasher, hashAlg: "sha-256", saltGenerator, signAlg: "ES256", kbSignAlg: "ES256", kbSigner: signer(attacker.privateKey) });
     await expect(check.verify(await forger.present(token, { masked_account_reference: true }, { kb: { payload: kbPayload } }), verifyOpts)).rejects.toThrow();
+  });
+});
+
+// The `.mpzpass` container is what the wallet actually imports — a bare SD-JWT is not
+// importable. These pin its structure, because a container that is subtly wrong produces a
+// wallet that silently refuses a perfectly good credential, and that failure costs a trip to
+// the phone to discover.
+//
+// Format verified 2026-09-08 against openwallet-foundation/multipaz @ main,
+// multipaz/src/commonMain/kotlin/org/multipaz/mpzpass/{MpzPass,MpzPassSdJwtVc}.kt.
+describe("the .mpzpass container (spec 014, FR-1)", () => {
+  const read = readFileSync;
+  const HERE = nodePath.dirname(fileURLToPath(import.meta.url));
+  const get = (m, k) => (m instanceof Map ? m.get(k) : m[k]);
+
+  /** Mint into a temp dir through the real CLI — the tool as a caller runs it. */
+  const packed = (() => {
+    const dir = mkdtempSync(nodePath.join(tmpdir(), "dpc-"));
+    execFileSync(process.execPath, [nodePath.join(HERE, "mint-dpc-sdjwt.mjs"), "--mpzpass", "--out", dir], { stdio: "pipe" });
+    const top = decode(read(nodePath.join(dir, "dpc.mpzpass")));
+    return {
+      top,
+      root: decode(inflateRawSync(top[1])),
+      token: read(nodePath.join(dir, "dpc.sdjwt"), "utf-8").trim(),
+      holderJwk: JSON.parse(read(nodePath.join(dir, "dpc-holder-key.jwk"), "utf-8")),
+    };
+  })();
+
+  it('is wrapped as ["MpzPass", raw-deflate(CBOR)]', () => {
+    expect(Array.isArray(packed.top)).toBe(true);
+    expect(packed.top[0]).toBe("MpzPass");
+    expect(Buffer.isBuffer(packed.top[1]) || packed.top[1] instanceof Uint8Array).toBe(true);
+  });
+
+  it("carries the credential under credential.sdJwtVc, byte-identical to the minted token", () => {
+    const entry = get(get(packed.root, "credential"), "sdJwtVc")[0];
+    expect(get(entry, "vct")).toBe("com.emvco.dpc");
+    // If this drifts, the wallet holds a credential that is not the one we verified.
+    expect(get(entry, "compactSerialization")).toBe(packed.token);
+  });
+
+  it("encodes deviceKeyPrivate as a COSE_Key with INTEGER labels", () => {
+    const entry = get(get(packed.root, "credential"), "sdJwtVc")[0];
+    const cose = get(entry, "deviceKeyPrivate");
+    const at = (label) => (cose instanceof Map ? cose.get(label) : cose[String(label)]);
+    // kty EC2, crv P-256. String labels here would encode a map Multipaz cannot read.
+    expect(at(1)).toBe(2);
+    expect(at(-1)).toBe(1);
+    const matches = (bytes, b64u) => Buffer.compare(Buffer.from(bytes), Buffer.from(b64u, "base64url")) === 0;
+    expect(matches(at(-2), packed.holderJwk.x)).toBe(true);
+    expect(matches(at(-3), packed.holderJwk.y)).toBe(true);
+    // The private scalar travels IN the file. That is the format's documented trade-off, and
+    // asserting it here keeps it from being a surprise to whoever reads this next.
+    expect(matches(at(-4), packed.holderJwk.d)).toBe(true);
+  });
+
+  it("has the identifiers the format requires", () => {
+    expect(String(get(packed.root, "uniqueId"))).toMatch(/^[A-Za-z0-9_-]{16,}$/); // ≥128 bits of entropy
+    expect(get(packed.root, "version")).toBe(0);
+    expect(get(get(packed.root, "display"), "typeName")).toBeTruthy();
   });
 });

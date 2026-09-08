@@ -17,8 +17,13 @@
 // HONESTY: this mints a DEMO credential. The issuer key is a demo key, and a credential it
 // signs proves only that this tool signed it. Nothing here is an issuer trust anchor (#14).
 //
+// A bare SD-JWT string is NOT importable into the Multipaz wallet — the wallet reads
+// `.mpzpass` containers, and `--mpzpass` writes one (see `writeMpzPass` for the format and
+// the assurance trade-off it carries).
+//
 // Usage:
 //   node mint-dpc-sdjwt.mjs                        # dev: generates both keys, writes them out
+//   node mint-dpc-sdjwt.mjs --mpzpass              # …and package it for the wallet
 //   node mint-dpc-sdjwt.mjs --device-key dev.jwk   # bind to a real wallet's device key
 //   node mint-dpc-sdjwt.mjs --issuer-key ds-key.pem --device-key dev.jwk
 //   node mint-dpc-sdjwt.mjs --inspect ../out/dpc.sdjwt
@@ -26,14 +31,17 @@
 // Flags:
 //   --issuer-key <file>   EC P-256 private key (PEM or JWK). Absent ⇒ generated + written out.
 //   --device-key <file>   EC P-256 PUBLIC JWK for `cnf`. Absent ⇒ a holder pair is generated.
+//   --mpzpass             Also write `dpc.mpzpass`, the container the wallet can import.
 //   --out <dir>           Output directory (default ../out).
 //   --holder <name>       Cardholder name on the credential.
 //   --inspect <file>      Decode and print an existing credential instead of minting.
-import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, sign as nodeSign, webcrypto } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, randomUUID, sign as nodeSign, webcrypto } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { deflateRawSync } from "node:zlib";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { SDJwtInstance, decodeSdJwt, getClaims } from "@sd-jwt/core";
+import { Encoder } from "cbor-x";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -169,6 +177,76 @@ async function mint({ issuerKey, issuerJwk, deviceJwk, holder, ttlDays }) {
   return { token, payload, disclosableClaims: Object.keys(claims) };
 }
 
+// ── .mpzpass packaging ────────────────────────────────────────────────────────
+
+/**
+ * Wrap the credential in the container the Multipaz wallet can actually import.
+ *
+ * A bare SD-JWT is not importable: the wallet reads `.mpzpass`, which is
+ * `["MpzPass", raw-deflate(CBOR)]` — the same wrapper `inspect_mpzpass.py` already knows how
+ * to open, and the same one `payment.mpzpass` uses. Verified 2026-09-08 against
+ * `openwallet-foundation/multipaz` @ `main`,
+ * `multipaz/src/commonMain/kotlin/org/multipaz/mpzpass/{MpzPass,MpzPassSdJwtVc}.kt`.
+ *
+ * ASSURANCE TRADE-OFF, stated because it is easy to miss. `MpzPassSdJwtVc` carries
+ * `deviceKeyPrivate` — the holder's PRIVATE key travels INSIDE the file. Multipaz's own
+ * format README is blunt about what that means:
+ *
+ *   "For high-value credentials where cloning or replay attacks are active threat vectors
+ *    (e.g., mobile driving licenses or financial instruments), this file format is
+ *    inherently unsuitable. In those high-assurance scenarios, issuers must leverage a
+ *    robust provisioning protocol like OpenID4VCI to ensure secure delivery and
+ *    hardware-backed device-binding at the time of issuance."
+ *
+ * A payment credential is a financial instrument, so this container is a DEMO vehicle only —
+ * exactly the assurance the existing `payment.mpzpass` already has, and no less. It is enough
+ * to answer "does the AP2 delegation ceremony work end to end?", which is the open question.
+ * It is not enough for a device signature to mean what spec 014 needs it to mean; that needs
+ * OpenID4VCI, and the spec records it.
+ *
+ * The pass is UNSIGNED: signing needs the demo Document Signer's private key, which
+ * `gen-pki.sh` deliberately keeps out of this repository. Multipaz treats the issuer chain as
+ * optional (`isSigned` is simply "a chain is present").
+ */
+function writeMpzPass({ outDir, token, vct, holderPrivateJwk, holder }) {
+  const cbor = new Encoder({ useRecords: false, variableMapSize: true, useTag259ForMaps: false });
+  const b64u = (s) => Buffer.from(s, "base64url");
+
+  // COSE_Key (RFC 8152 §7) for an EC2 P-256 private key — what `asCoseKey.ecPrivateKey`
+  // parses. A Map, not an object: the labels are negative INTEGERS and an object would
+  // stringify them into a structure Multipaz cannot read.
+  const coseKey = new Map([
+    [1, 2],                              // kty: EC2
+    [-1, 1],                             // crv: P-256
+    [-2, b64u(holderPrivateJwk.x)],      // x
+    [-3, b64u(holderPrivateJwk.y)],      // y
+    [-4, b64u(holderPrivateJwk.d)],      // d — the private scalar, in the clear, in the file
+  ]);
+
+  const cardArt = path.resolve(HERE, "../cardart/card-payment.png");
+  const credentialData = new Map([
+    ["uniqueId", randomUUID()], // ≥128 bits of entropy, as the format requires
+    ["version", 0],
+    ["credential", new Map([
+      ["sdJwtVc", [new Map([
+        ["vct", vct],
+        ["deviceKeyPrivate", coseKey],
+        ["compactSerialization", token],
+      ])]],
+    ])],
+    ["display", new Map([
+      ["name", `${holder} — payment card`],
+      ["typeName", "Bank of Utopia Payment Card"],
+      ...(existsSync(cardArt) ? [["cardArt", readFileSync(cardArt)]] : []),
+    ])],
+  ]);
+
+  const packed = cbor.encode(["MpzPass", deflateRawSync(cbor.encode(credentialData), { level: 5 })]);
+  const file = path.join(outDir, "dpc.mpzpass");
+  writeFileSync(file, packed);
+  return file;
+}
+
 // ── inspect ───────────────────────────────────────────────────────────────────
 
 async function inspect(file) {
@@ -222,11 +300,16 @@ async function main() {
   // The device key that goes in `cnf`. A real run passes the wallet's key; a dev run gets a
   // local holder pair so the whole flow is exercisable before any phone is involved.
   let deviceJwk;
+  let holderPrivateJwk; // only known when WE generated the pair, or the caller passed a private JWK
   if (typeof args["device-key"] === "string") {
-    deviceJwk = loadPublicJwk(path.resolve(process.cwd(), args["device-key"]));
+    const file = path.resolve(process.cwd(), args["device-key"]);
+    deviceJwk = loadPublicJwk(file);
+    const supplied = JSON.parse(readFileSync(file, "utf-8"));
+    if (supplied.d) holderPrivateJwk = supplied;
   } else {
     const gen = generateP256();
     deviceJwk = gen.publicJwk;
+    holderPrivateJwk = gen.privateJwk;
     const file = path.join(outDir, "dpc-holder-key.jwk");
     writeFileSync(file, `${JSON.stringify(gen.privateJwk, null, 2)}\n`, { mode: 0o600 });
     written.push([file, "GENERATED holder private key — the simulated wallet signs with this"]);
@@ -247,6 +330,17 @@ async function main() {
   const jsonFile = path.join(outDir, "dpc.json");
   writeFileSync(jsonFile, `${JSON.stringify({ vct: VCT, format: "dc+sd-jwt", payload, disclosableClaims, token }, null, 2)}\n`);
   written.push([jsonFile, "the same thing decoded, for reading"]);
+
+  if (args.mpzpass) {
+    if (!holderPrivateJwk) {
+      throw new Error(
+        "--mpzpass needs the holder PRIVATE key, because the container carries it (that is the format's trade-off).\n" +
+          "  Either drop --device-key so a pair is generated, or pass a PRIVATE holder JWK to --device-key.",
+      );
+    }
+    const file = writeMpzPass({ outDir, token, vct: VCT, holderPrivateJwk, holder });
+    written.push([file, "the wallet-importable container — UNSIGNED, and it carries the holder private key"]);
+  }
 
   console.log(`\n  Minted a demo Digital Payment Credential (${VCT}, dc+sd-jwt)\n`);
   for (const [file, why] of written) console.log(`    ${path.relative(process.cwd(), file)}\n      ${why}`);

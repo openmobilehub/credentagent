@@ -75,6 +75,7 @@ This one is plain Node — no Multipaz checkout, no gradle:
 
 ```bash
 node mint-dpc-sdjwt.mjs                          # dev: generates both keys and writes them out
+node mint-dpc-sdjwt.mjs --mpzpass                # …and package it so a wallet can import it
 node mint-dpc-sdjwt.mjs --device-key device.jwk  # bind cnf to a real wallet's key
 node mint-dpc-sdjwt.mjs --inspect ../out/dpc.sdjwt
 ```
@@ -83,8 +84,33 @@ node mint-dpc-sdjwt.mjs --inspect ../out/dpc.sdjwt
 |------|---------|
 | `--issuer-key <file>` | EC P-256 private key (PEM or JWK). Absent ⇒ generated and written out. |
 | `--device-key <file>` | EC P-256 **public** JWK for `cnf`. Absent ⇒ a holder pair is generated. |
+| `--mpzpass` | also write `dpc.mpzpass`, the container the wallet imports |
 | `--holder <name>` | cardholder name on the credential |
 | `--out <dir>` | output directory (default `../out`) |
+
+### Why `--mpzpass` exists
+
+**A bare `.sdjwt` file cannot be imported into the Multipaz wallet.** The wallet reads
+`.mpzpass` containers — the same wrapper `payment.mpzpass` uses,
+`["MpzPass", raw-deflate(CBOR)]`. That format already supports SD-JWT VC
+(`MpzPassSdJwtVc.kt`), so `--mpzpass` writes one.
+
+**Know what you are handing over.** `MpzPassSdJwtVc` carries `deviceKeyPrivate` — the
+holder's private key travels *inside the file*. Multipaz's own format README says so plainly:
+
+> For high-value credentials where cloning or replay attacks are active threat vectors
+> (e.g., mobile driving licenses or **financial instruments**), this file format is inherently
+> unsuitable. In those high-assurance scenarios, issuers must leverage a robust provisioning
+> protocol like OpenID4VCI […] and hardware-backed device-binding at the time of issuance.
+
+A payment credential *is* a financial instrument, so this container is a **demo vehicle
+only** — exactly the assurance the existing `payment.mpzpass` already has, and no less. It is
+enough to answer "does the AP2 delegation ceremony work end to end?". It is not enough for a
+device signature to mean what spec 014 needs it to mean; that needs OpenID4VCI.
+
+The pass is **unsigned**: signing needs the demo Document Signer's private key, which
+`gen-pki.sh` deliberately keeps out of this repository. Multipaz treats the issuer chain as
+optional.
 
 `gen-pki.sh` deliberately keeps the demo Document Signer's private key out of the
 repository, so there is nothing to default `--issuer-key` to. Absent it, the tool generates
