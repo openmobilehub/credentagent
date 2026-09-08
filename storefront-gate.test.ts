@@ -5,6 +5,11 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createStorefront, type Storefront } from "@openmobilehub/credentagent-storefront/server";
 import { CredentAgent, age, membership, payment, required, optional } from "@openmobilehub/credentagent-gate";
 
+// LOCATION MATTERS: this file lives at the REPO ROOT on purpose, because it belongs to
+// neither workspace — it checks that the two PUBLISHED packages compose. The consequence is
+// that neither workspace's vitest picks it up: a per-workspace run sees 51 files, the root
+// run sees 52. Verify with the root `npm test` (#184); `npm run test:workspaces` skips this.
+//
 // Guards the quickstart showcase (examples/storefront.mjs): the two packages
 // compose with ZERO glue — a priced storefront Order feeds credentagent.requirements()
 // directly (the line carries minimumAge), and the checkout tool surfaces the

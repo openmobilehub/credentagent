@@ -22,8 +22,10 @@ This repo (`openmobilehub/credentagent`) is the **library**: two npm workspaces 
   catalog-injected MCP shopping server + the pure pricing/order model. Reference
   consumer of the gate.
 
-Tests run with `npm run test` (vitest) **per workspace**; `npm run build` typechecks +
-builds each package. The end-to-end reference DEMO lives in a **separate** repo,
+Tests run with **`npm test` from the repo root** (vitest) — that is the authoritative run,
+and the only one that includes the cross-package integration suite (see *Testing
+expectations*). `npm run test:workspaces` is the faster inner loop and skips it.
+`npm run build` typechecks + builds each package. The end-to-end reference DEMO lives in a **separate** repo,
 [`openmobilehub/mcp-apps-shopping-demo`](https://github.com/openmobilehub/mcp-apps-shopping-demo),
 which consumes these packages — link to it, don't describe it as part of this repo.
 
@@ -150,6 +152,11 @@ Quick gate for any new/changed public API (full list in the rubric):
   and assert amount binding passes; assert global-state bleed cannot occur.
 - **A test that would still pass with the security control removed is not a useful test.**
   Every bypass test must fail when its control is deleted.
+- **Verify with the ROOT `npm test`, not a per-workspace run.** `storefront-gate.test.ts`
+  lives at the repo root — it checks that the two published packages compose with zero
+  glue, so it belongs to neither workspace and neither workspace's vitest picks it up. A
+  per-workspace run is a legitimate fast inner loop; it is **not** a verification. Claiming
+  green off one is how #184 happened: 51 files passed locally, and CI's 52nd failed.
 
 ## Conventions
 
