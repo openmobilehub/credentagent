@@ -113,14 +113,32 @@ app.get("/request", async (_req, res) => {
     // `client_id` is omitted: OpenID4VP requires that for unsigned requests.
     dcql_query: {
       credentials: [
-        {
-          id: "dpc_credential",
-          format: "dc+sd-jwt",
-          meta: { vct_values: VCTS },
-        },
+        // CONTROL MODE. `FORMAT=mso_mdoc` asks for the mdoc payment credential instead — the
+        // one this project has always used. It cannot carry a delegation (Delegate SD-JWT is
+        // SD-JWT syntax), so it is useless for the real ceremony; it is here to tell a broken
+        // request shape apart from a credential the wallet will not offer.
+        process.env.FORMAT === "mso_mdoc"
+          ? {
+              id: "dpc_credential",
+              format: "mso_mdoc",
+              meta: { doctype_value: "org.multipaz.payment.sca.1" },
+              claims: [{ path: ["org.multipaz.payment.sca.1", "masked_account_reference"] }],
+            }
+          : {
+              id: "dpc_credential",
+              format: "dc+sd-jwt",
+              meta: { vct_values: VCTS },
+              // A claim the credential actually carries. The matcher appears to need one for
+              // `dc+sd-jwt`: with `meta` alone the wallet reports no matching credential.
+              claims: [{ path: ["masked_account_reference"] }],
+            },
       ],
     },
-    transaction_data: [b64u(payment), b64u(delegate)],
+    // PaymentTransaction.isApplicable requires `vct == org.multipaz.payment.sca.1`; our
+    // credential is a different type, so including that entry makes the whole presentation
+    // fail. Set WITH_PAYMENT=1 to send it anyway (it is what AP2's example does, and it is
+    // what a wallet would render once it learns to).
+    transaction_data: process.env.WITH_PAYMENT ? [b64u(payment), b64u(delegate)] : [b64u(delegate)],
   };
 
   sessions.set(nonce, { mandates, at: Date.now() });
