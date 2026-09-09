@@ -42,11 +42,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { SDJwtInstance, decodeSdJwt, getClaims } from "@sd-jwt/core";
 import { Encoder } from "cbor-x";
+import * as x509 from "@peculiar/x509";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 /** AP2's own example `vct` for a Digital Payment Credential. */
-const VCT = "com.emvco.dpc";
+const VCT = process.env.DPC_VCT || "com.emvco.dpc";
 
 /** IANA hash name. `_sd_alg` records it; a verifier follows the token's own value. */
 const SD_HASH_ALG = "sha-256";
@@ -119,6 +120,46 @@ function generateP256() {
   };
 }
 
+/**
+ * A self-signed X.509 certificate for the issuer key, DER-encoded base64 for the JWS `x5c`.
+ *
+ * NOT decoration. Multipaz refuses to read an SD-JWT VC whose header has no `x5c`:
+ * `SdJwtVcCredential.getClaimsImpl` throws "Only X509-certified keys are supported in SD-JWT",
+ * the credential fails to export to the Android Digital Credentials matcher, and the card
+ * becomes invisible to every request — with no error the holder can see. It takes the issuer
+ * key from the FIRST certificate and verifies the SD-JWT against it, so the certificate and
+ * the signing key must be the same key.
+ *
+ * Self-signed because `gen-pki.sh` keeps the demo Document Signer's private key out of the
+ * repository. Pass `--issuer-cert` to use a real chain instead; a demo trust anchor proves
+ * nothing either way (#14).
+ */
+async function selfSignedCertB64(privateKeyPem, publicJwk) {
+  const alg = { name: "ECDSA", namedCurve: "P-256", hash: "SHA-256" };
+  const priv = await webcrypto.subtle.importKey("pkcs8", derOf(privateKeyPem), alg, false, ["sign"]);
+  const pub = await webcrypto.subtle.importKey("jwk", { ...publicJwk, ext: true }, alg, true, ["verify"]);
+  const notBefore = new Date();
+  const notAfter = new Date(notBefore.getTime() + 5 * 365 * 24 * 60 * 60 * 1000);
+  const cert = await x509.X509CertificateGenerator.createSelfSigned(
+    {
+      serialNumber: Buffer.from(webcrypto.getRandomValues(new Uint8Array(8))).toString("hex"),
+      name: "CN=CredentAgent Demo DPC Issuer, O=CredentAgent Demo PKI",
+      notBefore,
+      notAfter,
+      signingAlgorithm: alg,
+      keys: { privateKey: priv, publicKey: pub },
+      extensions: [new x509.BasicConstraintsExtension(false, undefined, true)],
+    },
+    webcrypto,
+  );
+  return Buffer.from(cert.rawData).toString("base64");
+}
+
+/** PKCS#8 DER bytes from a PEM, for WebCrypto import. */
+function derOf(pem) {
+  return Buffer.from(pem.replace(/-----[^-]+-----|\s/g, ""), "base64");
+}
+
 /** RFC 7638 thumbprint — a stable `kid` for a demo key, so a swap is visible. */
 function thumbprint(jwk) {
   const canonical = JSON.stringify({ crv: jwk.crv, kty: jwk.kty, x: jwk.x, y: jwk.y });
@@ -145,7 +186,7 @@ function instrumentClaims(holder) {
   };
 }
 
-async function mint({ issuerKey, issuerJwk, deviceJwk, holder, ttlDays }) {
+async function mint({ issuerKey, issuerJwk, deviceJwk, holder, ttlDays, x5c }) {
   const sdjwt = new SDJwtInstance({
     hasher,
     hashAlg: SD_HASH_ALG,
@@ -171,7 +212,7 @@ async function mint({ issuerKey, issuerJwk, deviceJwk, holder, ttlDays }) {
   const token = await sdjwt.issue(
     payload,
     { _sd: Object.keys(claims) },
-    { header: { kid: thumbprint(issuerJwk), typ: "dc+sd-jwt" } },
+    { header: { kid: thumbprint(issuerJwk), typ: "dc+sd-jwt", x5c: [x5c] } },
   );
 
   return { token, payload, disclosableClaims: Object.keys(claims) };
@@ -315,9 +356,16 @@ async function main() {
     written.push([file, "GENERATED holder private key — the simulated wallet signs with this"]);
   }
 
+  // Multipaz will not read an SD-JWT VC without `x5c`; see selfSignedCertB64.
+  const x5c = await selfSignedCertB64(
+    issuerKey.export({ format: "pem", type: "pkcs8" }),
+    { kty: issuerJwk.kty, crv: issuerJwk.crv, x: issuerJwk.x, y: issuerJwk.y },
+  );
+
   const { token, payload, disclosableClaims } = await mint({
     issuerKey,
     issuerJwk,
+    x5c,
     deviceJwk,
     holder,
     ttlDays: DEFAULT_TTL_DAYS,

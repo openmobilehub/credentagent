@@ -12,7 +12,7 @@
 // This file lives at the repo root's reach, not inside a workspace — run it with the root
 // `npm test` (see #184).
 import { describe, expect, it } from "vitest";
-import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, sign as nodeSign, verify as nodeVerify, webcrypto } from "node:crypto";
+import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, sign as nodeSign, verify as nodeVerify, webcrypto, X509Certificate } from "node:crypto";
 import { SDJwtInstance, decodeSdJwt } from "@sd-jwt/core";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync } from "node:fs";
@@ -21,6 +21,8 @@ import nodePath from "node:path";
 import { fileURLToPath } from "node:url";
 import { inflateRawSync } from "node:zlib";
 import { decode } from "cbor-x";
+
+const HERE_DIR = nodePath.dirname(fileURLToPath(import.meta.url));
 
 const AUD = "https://shop.example";
 const NONCE = "n-once-123";
@@ -220,5 +222,45 @@ describe("the .mpzpass container (spec 014, FR-1)", () => {
     expect(String(get(packed.root, "uniqueId"))).toMatch(/^[A-Za-z0-9_-]{16,}$/); // ≥128 bits of entropy
     expect(get(packed.root, "version")).toBe(0);
     expect(get(get(packed.root, "display"), "typeName")).toBeTruthy();
+  });
+});
+
+// The `x5c` header is not decoration — it is what makes the credential visible at all.
+//
+// Multipaz refuses to read an SD-JWT VC without it: `SdJwtVcCredential.getClaimsImpl` throws
+// "Only X509-certified keys are supported in SD-JWT", the credential exports to the Android
+// Digital Credentials matcher with NO claims, and every request answers "Your info wasn't
+// found" — with nothing the holder can see to explain why. Found on a real device.
+describe("the issuer certificate (spec 014, FR-1)", () => {
+  const minted = (() => {
+    const dir = mkdtempSync(nodePath.join(tmpdir(), "dpc-x5c-"));
+    execFileSync(process.execPath, [nodePath.join(HERE_DIR, "mint-dpc-sdjwt.mjs"), "--out", dir], { stdio: "pipe" });
+    return readFileSync(nodePath.join(dir, "dpc.sdjwt"), "utf-8").trim();
+  })();
+
+  const header = JSON.parse(Buffer.from(minted.split("~")[0].split(".")[0], "base64url").toString("utf-8"));
+
+  it("carries an x5c chain in the issuer JWT header", () => {
+    expect(Array.isArray(header.x5c)).toBe(true);
+    expect(header.x5c.length).toBeGreaterThan(0);
+    // Standard JWS x5c is base64 DER — not base64url, and not PEM.
+    expect(header.x5c[0]).not.toContain("-----BEGIN");
+    expect(header.x5c[0]).toMatch(/^[A-Za-z0-9+/]+=*$/);
+  });
+
+  // The load-bearing one. Multipaz takes the issuer key from the FIRST certificate and
+  // verifies the SD-JWT against it. A certificate for a different key would be accepted as
+  // present and then fail verification — the credential would still be unreadable.
+  it("the certificate's key is the key that signed the credential", () => {
+    const pem = `-----BEGIN CERTIFICATE-----\n${header.x5c[0].replace(/(.{64})/g, "$1\n")}\n-----END CERTIFICATE-----`;
+    const cert = new X509Certificate(pem);
+    const [h, p, sig] = minted.split("~")[0].split(".");
+    const ok = nodeVerify(
+      "sha256",
+      Buffer.from(`${h}.${p}`),
+      { key: cert.publicKey, dsaEncoding: "ieee-p1363" },
+      Buffer.from(sig, "base64url"),
+    );
+    expect(ok).toBe(true);
   });
 });

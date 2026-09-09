@@ -30,8 +30,13 @@ import { randomUUID, webcrypto } from "node:crypto";
 const PORT = Number(process.env.PORT ?? 4050);
 const ORIGIN = (process.env.PUBLIC_URL || `http://localhost:${PORT}`).replace(/\/+$/, "");
 
-/** The credential the probe asks for. Must match the `vct` of the credential in the wallet. */
-const VCT = process.env.DPC_VCT || "com.emvco.dpc";
+/**
+ * The credential types the probe will accept. DCQL `vct_values` is a list, so asking for
+ * several costs nothing and saves a round trip to the phone when the wallet holds the card
+ * under a different identifier: AP2's example uses `com.emvco.dpc`, while Multipaz registers
+ * `urn:emvco:dpc:card:1` for its own SD-JWT payment credential.
+ */
+const VCTS = (process.env.DPC_VCT || "com.emvco.dpc,urn:emvco:dpc:card:1,org.multipaz.payment.sca.1").split(",").map((v) => v.trim()).filter(Boolean);
 
 const b64u = (obj) => Buffer.from(JSON.stringify(obj), "utf-8").toString("base64url");
 const rand = () => Buffer.from(webcrypto.getRandomValues(new Uint8Array(16))).toString("base64url");
@@ -111,8 +116,7 @@ app.get("/request", async (_req, res) => {
         {
           id: "dpc_credential",
           format: "dc+sd-jwt",
-          meta: { vct_values: [VCT] },
-          claims: [{ path: ["masked_account_reference"] }],
+          meta: { vct_values: VCTS },
         },
       ],
     },
@@ -120,7 +124,7 @@ app.get("/request", async (_req, res) => {
   };
 
   sessions.set(nonce, { mandates, at: Date.now() });
-  console.log(`\n  → request built · nonce ${nonce.slice(0, 12)}… · vct ${VCT}`);
+  console.log(`\n  → request built · nonce ${nonce.slice(0, 12)}… · vct ${VCTS.join(" | ")}`);
   res.json({ protocol: "openid4vp-v1-unsigned", data: request, nonce });
 });
 
@@ -165,6 +169,18 @@ app.post("/result", (req, res) => {
   console.log(`    ${delegated.map((m) => m.vct).join(" · ")}`);
   console.log(`  ${same ? "✓ verbatim: identical to what we asked the wallet to sign" : "✗ CHANGED in transit — the signature does not cover what we requested"}\n`);
   res.json({ ok: true, verbatim: !!same, mandates: delegated, kb });
+});
+
+// Serve the credential for import. A phone cannot open a `file://` path pushed with adb —
+// Android's scoped storage denies the wallet read access, and the import fails with an IO
+// error that looks nothing like a permissions problem. Downloading it through the browser
+// hands the wallet a `content://` URI it is allowed to read.
+app.get("/dpc.mpzpass", (_req, res) => {
+  const file = process.env.MPZPASS || "";
+  if (!file) return res.status(404).send("set MPZPASS=/path/to/dpc.mpzpass");
+  res.setHeader("content-type", "application/vnd.multipaz.mpzpass");
+  res.setHeader("content-disposition", 'attachment; filename="dpc.mpzpass"');
+  res.sendFile(file);
 });
 
 app.get("/", (_req, res) => {
@@ -223,7 +239,7 @@ document.getElementById('go').onclick = async () => {
 
 app.listen(PORT, () => {
   console.log(`\n  AP2 delegation probe on :${PORT} · origin ${ORIGIN}`);
-  console.log(`  asking for vct: ${VCT}   (override with DPC_VCT=…)`);
+  console.log(`  asking for vct: ${VCTS.join(" | ")}   (override with DPC_VCT=a,b)`);
   console.log(`\n  NEEDS a wallet built with the AP2 \`delegate\` transaction type registered.`);
   console.log(`  Stock Multipaz rejects the whole request with "Unknown transaction type 'delegate'".`);
   console.log(`\n  1. adb reverse tcp:${PORT} tcp:${PORT}`);
