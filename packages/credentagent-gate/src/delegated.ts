@@ -45,6 +45,9 @@ export interface PreApproveOptions {
   total: number;
   /** A human sentence describing the grant (shown in your UI). */
   description?: string;
+  /** The agent keypair this grant delegates to. Supply it when the human must sign over the
+   *  key BEFORE the grant is sealed (the device-signed path); omit it and one is minted here. */
+  delegateKeys?: Awaited<ReturnType<typeof generateDelegate>>;
   /** Who delegated — informational in v0.1 (an audit key; not yet an enforced identity). */
   subject?: string;
   /** An age claim the HUMAN proved before authorizing, sealed into the grant's bounds (#172).
@@ -160,7 +163,11 @@ export class DelegatedGate {
 
   /** Mint ONE grant and hand it back for your agent to hold. */
   async preApprove(opts: PreApproveOptions): Promise<DelegatedGrant> {
-    const { privateKey, delegate } = await generateDelegate();
+    // A caller may bring the delegate keypair. A device-signed grant MUST: AP2 binds an open
+    // mandate to the agent key in `cnf`, so the human signs over that key — which means it has
+    // to exist before they are asked, not be minted afterwards. Generating a fresh one here
+    // would leave the human's signature naming a key nothing ever uses.
+    const { privateKey, delegate } = opts.delegateKeys ?? (await generateDelegate());
     const grant = await sealIntent({
       type: "credentagent.IntentBounds/v0",
       naturalLanguageDescription: opts.description,

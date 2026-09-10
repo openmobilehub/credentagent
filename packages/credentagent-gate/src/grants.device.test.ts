@@ -76,7 +76,8 @@ describe("device-signed grants — e2e over the served HTTP rail", () => {
     const signed = (await ca.grants.retrieve(g.id))!;
     expect(signed.status).toBe("authorized");
     expect(signed.trustLevel).toBe("device-signed"); // FR-4
-    expect(signed.mandate?.credentialDoctype).toBe("org.multipaz.payment.sca.1");
+    // An SD-JWT `vct` since spec 014 — the rail signs AP2 mandates, not an mdoc presentation.
+    expect(signed.mandate?.credentialType).toBe("urn:emvco:dpc:card:1");
     expect(signed.mandate?.verifiedBy).toBe("gate");
     expect(typeof signed.mandate?.boundsHash).toBe("string");
 
@@ -175,14 +176,14 @@ describe("device-signed grants — FR-3/6 controls", () => {
     const ca = makeAgent();
     // In-gate evidence.
     const gate = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30, signing: "device" });
-    await ca.grants._authorizeDevice(gate.id, { boundsHash: "h1", signedAt: "2026-07-28T00:00:00Z", credentialDoctype: "org.multipaz.payment.sca.1", verifiedBy: "gate", trustLevel: "device-signed" });
+    await ca.grants._authorizeDevice(gate.id, { boundsHash: "h1", signedAt: "2026-07-28T00:00:00Z", credentialType: "urn:emvco:dpc:card:1", verifiedBy: "gate", trustLevel: "device-signed" });
     const gateAuthed = (await ca.grants.retrieve(gate.id))!;
     expect(gateAuthed.trustLevel).toBe("device-signed");
     expect(gateAuthed.mandate?.verifiedBy).toBe("gate");
 
     // A stronger, issuer-backed level from an external verifier is relayed verbatim WITH its id.
     const delegated = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30, signing: "device" });
-    await ca.grants._authorizeDevice(delegated.id, { boundsHash: "h2", signedAt: "2026-07-28T00:00:00Z", credentialDoctype: "org.multipaz.payment.sca.1", verifiedBy: "upay-verifier", trustLevel: "issuer-verified" });
+    await ca.grants._authorizeDevice(delegated.id, { boundsHash: "h2", signedAt: "2026-07-28T00:00:00Z", credentialType: "urn:emvco:dpc:card:1", verifiedBy: "upay-verifier", trustLevel: "issuer-verified" });
     const delegatedAuthed = (await ca.grants.retrieve(delegated.id))!;
     expect(delegatedAuthed.trustLevel).toBe("issuer-verified"); // relayed, not the gate's own claim
     expect(delegatedAuthed.mandate?.verifiedBy).toBe("upay-verifier");
