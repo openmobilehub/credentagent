@@ -62,3 +62,72 @@ Every credential's `x5chain` should show `Utopia Demo Document Signer` chaining 
 
 **Unverified:** these `.mpzpass` files have NOT been imported into a real wallet —
 that is the device step (#51).
+
+## The SD-JWT payment credential (`mint-dpc-sdjwt.mjs`)
+
+Everything above mints **ISO mdoc** credentials. `mint-dpc-sdjwt.mjs` mints the payment
+credential in the **other** format — an SD-JWT VC (`dc+sd-jwt`) — because AP2's delegation
+mechanism is specified for SD-JWT only. Its chain serialization is SD-JWT syntax, and mdoc
+has no equivalent, so adopting AP2 with an mdoc credential would mean writing the missing
+half of the specification ourselves. See `specs/014-ap2-delegated-intent/spec.md`, FR-1.
+
+This one is plain Node — no Multipaz checkout, no gradle:
+
+```bash
+node mint-dpc-sdjwt.mjs                          # dev: generates both keys and writes them out
+node mint-dpc-sdjwt.mjs --mpzpass                # …and package it so a wallet can import it
+node mint-dpc-sdjwt.mjs --device-key device.jwk  # bind cnf to a real wallet's key
+node mint-dpc-sdjwt.mjs --inspect ../out/dpc.sdjwt
+```
+
+| flag | meaning |
+|------|---------|
+| `--issuer-key <file>` | EC P-256 private key (PEM or JWK). Absent ⇒ generated and written out. |
+| `--device-key <file>` | EC P-256 **public** JWK for `cnf`. Absent ⇒ a holder pair is generated. |
+| `--mpzpass` | also write `dpc.mpzpass`, the container the wallet imports |
+| `--holder <name>` | cardholder name on the credential |
+| `--out <dir>` | output directory (default `../out`) |
+
+### Why `--mpzpass` exists
+
+**A bare `.sdjwt` file cannot be imported into the Multipaz wallet.** The wallet reads
+`.mpzpass` containers — the same wrapper `payment.mpzpass` uses,
+`["MpzPass", raw-deflate(CBOR)]`. That format already supports SD-JWT VC
+(`MpzPassSdJwtVc.kt`), so `--mpzpass` writes one.
+
+**Know what you are handing over.** `MpzPassSdJwtVc` carries `deviceKeyPrivate` — the
+holder's private key travels *inside the file*. Multipaz's own format README says so plainly:
+
+> For high-value credentials where cloning or replay attacks are active threat vectors
+> (e.g., mobile driving licenses or **financial instruments**), this file format is inherently
+> unsuitable. In those high-assurance scenarios, issuers must leverage a robust provisioning
+> protocol like OpenID4VCI […] and hardware-backed device-binding at the time of issuance.
+
+A payment credential *is* a financial instrument, so this container is a **demo vehicle
+only** — exactly the assurance the existing `payment.mpzpass` already has, and no less. It is
+enough to answer "does the AP2 delegation ceremony work end to end?". It is not enough for a
+device signature to mean what spec 014 needs it to mean; that needs OpenID4VCI.
+
+The pass is **unsigned**: signing needs the demo Document Signer's private key, which
+`gen-pki.sh` deliberately keeps out of this repository. Multipaz treats the issuer chain as
+optional.
+
+`gen-pki.sh` deliberately keeps the demo Document Signer's private key out of the
+repository, so there is nothing to default `--issuer-key` to. Absent it, the tool generates
+an issuer key and says so — it does not quietly mint under a key you did not choose.
+
+**Claims.** The same six the mdoc DPC carries (`issuer_name`, `payment_instrument_id`,
+`masked_account_reference`, `holder_name`, `issue_date`, `expiry_date`), each separately
+disclosable, so one DCQL shape serves both formats. `vct` is `com.emvco.dpc` — the value
+AP2's own example uses.
+
+**Is it fit for purpose?** `mint-dpc-sdjwt.test.mjs` pins the one job spec 014 needs it for:
+the holder can present it with key binding carrying AP2's `_delegate_payload`, only the
+requested claims are disclosed, and a presentation signed by a key the credential does not
+name is refused. That last one is verified load-bearing — deleting the key-binding check
+fails it. Run it with the **root** `npm test` (this file is outside both workspaces, #184).
+
+**Unverified:** whether the installed Multipaz app can *provision* an SD-JWT credential as
+easily as it imports an mdoc `.mpzpass`. The Multipaz library supports SD-JWT VC
+presentation (spec 012 `research.md`); the app's import path has not been checked. That is
+the first thing to establish on the device.
