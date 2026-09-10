@@ -196,17 +196,21 @@ catalog and refuse a chain whose amount disagrees, however perfect its signature
   keep saying so.
 - Replacing the mdoc dc-payment rail. That rail verifies a payment presentation at checkout
   and is unaffected; this specification concerns delegation.
-- Retiring `credentagent.IntentBounds/v0` and the mdoc intent-sign path. They stay until the
-  SD-JWT path is proven on a real device.
+- ~~Retiring the mdoc intent-sign path.~~ **Decided otherwise, and done.** The rail replaces
+  it rather than running both: two ceremony surfaces means two verification doors and every
+  control pinned twice, and the mdoc path never had a verified on-device baseline, so nothing
+  proven was discarded. `credentagent.IntentBounds/v0` remains as the grant's content address
+  (`boundsHash`); what the wallet SIGNS is now AP2 Mandate Content.
 - The Trusted Agent Provider model.
 
 ## Functional requirements
 
 **FR-1 — The DPC as an SD-JWT VC.** A minting tool produces a `dc+sd-jwt` DPC: an SD-JWT
 signed by the demo Document Signer, `cnf` bound to a supplied device public key, and the
-instrument claims selectively disclosable. The `vct` is `com.emvco.dpc` — the value AP2's own
-example uses — so a verifier written against the specification's example matches ours without
-a local convention to learn. The claim set
+instrument claims selectively disclosable. The `vct` is `urn:emvco:dpc:card:1` — the value Multipaz registers for its SD-JWT payment
+credential, so a wallet recognises the type. AP2's own example uses `com.emvco.dpc`; the rail
+accepts both in `vct_values`, because the ecosystem has not settled on one and a naming
+difference should not cost a device session. The claim set
 matches what the gate already requests (`issuer_name`, `payment_instrument_id`,
 `masked_account_reference`, `holder_name`, `issue_date`, `expiry_date`), so one DCQL shape
 serves both credential formats. A dev mode may generate a holder key locally so the whole
@@ -274,17 +278,63 @@ either credential format. AP2 defines the display payload; Multipaz does not yet
 So the ceremony page remains the human-readable surface, exactly as in spec 012. The repo
 already holds `multipaz-upstream-proposal-draft.md`; this is a candidate for it.
 
-**UNVERIFIED — can the Multipaz app import an SD-JWT VC?** The Multipaz *library* supports
-SD-JWT VC presentation including `transaction_data_hashes` in the KB-JWT; `research.md` cites
-`org/multipaz/sdjwt/SdJwtKb.kt` and a passing presentment test. Whether the installed app can
-*provision* an SD-JWT credential as easily as it imports an mdoc `.mpzpass` bundle has not
-been checked. This is the first thing to establish on the device, and it decides whether FR-1
-ships as a credential file or also as an upstream contribution.
+**RESOLVED — the app can hold an SD-JWT VC, via `.mpzpass`.** Confirmed on a Galaxy S24 Ultra,
+Android 16. `MpzPass` already carries an `sdJwtVc` list and `DocumentStore.importMpzPass`
+creates a `KeyBoundSdJwtVcCredential` from it. A bare `.sdjwt` file is NOT importable — the
+wallet reads the `.mpzpass` container — and a file pushed with `adb` is not importable either,
+because Android's scoped storage denies the wallet read access and the import fails with an IO
+error that looks nothing like a permissions problem. Serve it over HTTP and download it.
 
 **The on-device baseline is still unrun.** Spec 012's acceptance has one unchecked box: the
 real-wallet round trip. It must be run **before** this specification changes what the wallet
 signs. Without a green baseline, a failure after the change has two indistinguishable causes:
 the new shape, or a session-transcript mismatch that was always there.
+
+## What the device taught us
+
+Verified 2026-09-09 on a Galaxy S24 Ultra, Android 16, against a Multipaz wallet built with
+the AP2 `delegate` transaction type. The wallet signed both open mandates, byte-identical to
+what was requested, inside its Key Binding JWT.
+
+Getting there took four separate blockers. **Every one of them failed silently** — the same
+"Your info wasn't found" a wallet holding no credential at all would give, or an error naming
+something unrelated. They are written down here because the next person will hit them.
+
+**1. Multipaz rejects an unregistered `transaction_data` type outright.**
+`DocumentTypeRepository.parseJsonTransactions` throws `Unknown transaction type 'delegate'`,
+and `OpenID4VP.kt` lets that kill the whole request. Multipaz registers exactly two types
+(`urn:eudi:sca:payment:1` and a ping type); AP2's `delegate` is not among them. Fixed
+upstream: `TheBlackBit/multipaz @ feat/ap2-delegate-transaction` adds the type, plus a
+`nestSdJwtResponseClaims` flag so a type can put `_delegate_payload` at the KB-JWT top level
+as an array — the previous code wrapped every type's claims in an object, which no verifier
+written against Delegate SD-JWT can read.
+
+**2. The credential must carry an `x5c` chain.** `SdJwtVcCredential.getClaimsImpl` throws
+`Only X509-certified keys are supported in SD-JWT`. The export to the Android matcher catches
+it and proceeds with an EMPTY claim set, so the wallet shows the card, says "ready to use",
+and can never match a request.
+
+**3. A `dc+sd-jwt` DCQL query needs a `claims` entry.** With `meta.vct_values` alone the
+wallet matches nothing. An mdoc query matches on `meta.doctype_value` alone, which is what
+made this hard to see.
+
+**4. Every `transaction_data` entry must apply to the chosen credential.** AP2's example
+pairs `delegate` with a human-readable `urn:eudi:sca:payment:1` entry. Multipaz's
+`PaymentTransaction.isApplicable` requires `vct == org.multipaz.payment.sca.1`; ours is a
+different type, so including that entry failed the presentation with "Error retrieving a
+token". **This has a design consequence:** AP2's display payload and AP2's delegation
+mechanism must target a credential type the wallet accepts for BOTH, or the human sees no
+terms at all. Today they cannot, so the approve page stays the reading surface — on top of
+the limitation already recorded, that Multipaz renders only the transaction type's name.
+
+### And one fault of our own
+
+The agent's keypair was minted at AUTHORIZE time. AP2 names that key in the mandates' `cnf`,
+and the human's signature covers those bytes — so it has to exist BEFORE they are asked. As
+written, the human signed over a key that was then discarded and replaced at authorization:
+they authorized a spending authority nobody ever used. It is now minted when a device-mode
+grant is created and handed to the engine at authorization, so the key that was authorized is
+the key that can spend (`preApprove` takes an optional `delegateKeys`).
 
 ## Sequencing
 
@@ -302,14 +352,19 @@ on nothing and is the gate for everything that changes the signed bytes.
 ## Acceptance
 
 - [ ] Spec 012's on-device box is checked (the baseline).
-- [ ] A `dc+sd-jwt` DPC is minted, and its provisioning path into the wallet is known.
+- [x] A `dc+sd-jwt` DPC is minted, and its provisioning path into the wallet is known
+      (`.mpzpass`, served over HTTP — see *What the device taught us*).
 - [ ] In-process end to end: delegate → store the intent → spend at a merchant → verify.
 - [ ] The same intent verifies at a **second** merchant, and is refused at one outside its
       allowed merchants. This is the test that portability is real.
 - [ ] All FR-8 bypass tests red-on-revert.
 - [ ] `K_s` demonstrably never enters the merchant's process in the example.
 - [ ] Root `npm test`, build and lint green; READMEs honest per FR-7.
-- [ ] On-device: the wallet signs the delegate payload and the resulting intent verifies.
+- [x] On-device: a real wallet signs the delegate payload, verbatim. Proven with a standalone
+      probe on 2026-09-09.
+- [ ] On-device THROUGH THE RAIL. The probe answered "can the wallet do this at all"; it did
+      not exercise the rail's signed request, encrypted response or sealed context. A green
+      probe is not a green rail, and the difference is where the last three blockers lived.
 
 ## Open decisions
 
@@ -322,9 +377,9 @@ settled here.
    *Recommendation:* an entry point in the gate package, matching spec 013's reasoning for
    keeping `ap2/` a directory rather than a workspace. A package can follow if the boundary
    proves hard to hold.
-3. **What happens to the mdoc intent-sign path once the SD-JWT path works?** Keeping both
-   doubles the ceremony surface; removing it discards working, on-device-tested code.
-   *Recommendation:* defer until the SD-JWT path has its own on-device green.
+3. ~~**What happens to the mdoc intent-sign path?**~~ **Answered: replaced.** See *Out of
+   scope*. The code it discards was never green on a device, so the recommendation to defer
+   was based on a baseline that did not exist.
 
 ## Sources
 
