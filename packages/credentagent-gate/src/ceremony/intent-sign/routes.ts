@@ -76,12 +76,15 @@ export function registerIntentSignRail(app: RailApp, grants: Grants): void {
     const g = await grants.retrieve(id);
     if (!g || g.signing !== "device") { res.status(404).json({ error: "unknown device grant" }); return; }
     if (g.status !== "pending") { res.status(409).json({ error: `grant is ${g.status}` }); return; }
-    const bounds = grants._boundsInputFor(id);
-    if (!bounds) { res.status(404).json({ error: "unknown grant" }); return; }
+    const inputs = grants._intentSignInputsFor(id);
+    if (!inputs) { res.status(404).json({ error: "unknown grant" }); return; }
+    const { bounds, delegate, mandateExp } = inputs;
     try {
       const cfg = grants.railConfig;
       const oid = await buildIntentSignRequest({
         bounds,
+        delegate,
+        mandateExp,
         origin: originOf(req),
         secret: cfg.secret,
         ...(cfg.readerIdentity ? { readerIdentity: cfg.readerIdentity } : {}),
@@ -101,8 +104,9 @@ export function registerIntentSignRail(app: RailApp, grants: Grants): void {
     const id = req.params.id;
     const g = await grants.retrieve(id);
     if (!g || g.signing !== "device") { res.status(404).json({ ok: false, reason: "unknown device grant" }); return; }
-    const bounds = grants._boundsInputFor(id);
-    if (!bounds) { res.status(404).json({ ok: false, reason: "unknown grant" }); return; }
+    const inputs = grants._intentSignInputsFor(id);
+    if (!inputs) { res.status(404).json({ ok: false, reason: "unknown grant" }); return; }
+    const { bounds, delegate, mandateExp } = inputs;
     const body = await readJsonBody(req);
     const result = body.result as { protocol?: string; data?: unknown } | undefined;
     const readerContextToken = body.readerContextToken;
@@ -113,6 +117,8 @@ export function registerIntentSignRail(app: RailApp, grants: Grants): void {
     try {
       const cfg = grants.railConfig;
       const out = await verifyIntentPresentation({
+        delegate,
+        mandateExp,
         result,
         readerContextToken,
         secret: cfg.secret,
@@ -126,7 +132,7 @@ export function registerIntentSignRail(app: RailApp, grants: Grants): void {
       const sealed = await grants._authorizeDevice(id, {
         boundsHash: out.boundsHash,
         signedAt: out.signedAt,
-        credentialDoctype: out.credentialDoctype,
+        credentialType: out.credentialType,
         verifiedBy: out.verifiedBy,
         trustLevel: out.trustLevel,
       });
