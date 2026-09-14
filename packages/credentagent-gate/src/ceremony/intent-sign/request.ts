@@ -90,9 +90,14 @@ export async function buildIntentSignRequest(args: {
     dcql_query: dcql,
     // ONE entry, on purpose. AP2's example pairs `delegate` with a human-readable payment
     // entry, but a wallet refuses the whole presentation when any entry does not apply to the
-    // chosen credential — and Multipaz's payment type requires a different credential type
-    // than the one delegation needs. Sending both fails with "Error retrieving a token", which
-    // points nowhere near the cause. The approve page remains the reading surface (FR-4).
+    // chosen credential — and Multipaz's payment type requires a different credential type than
+    // the one delegation needs. Sending both fails with "Error retrieving a token", which points
+    // nowhere near the cause.
+    //
+    // THE WALLET IS THE READING SURFACE, not this rail's approve page (#192). AP2 puts that job
+    // on the Trusted Surface, and a page served by the party asking for the signature cannot
+    // vouch for itself. The wallet renders the Mandate Content from this entry — see
+    // `DelegateTransaction.summarize` in Multipaz. The approve page stays as a preview.
     transaction_data: [
       Buffer.from(
         JSON.stringify(delegateTransactionData({ mandates, credentialId: PAYMENT_CREDENTIAL_ID })),
