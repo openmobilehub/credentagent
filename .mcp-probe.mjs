@@ -1,0 +1,13 @@
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+const B = "https://investigator-cave-kenny-assistant.trycloudflare.com";
+const c = new Client({ name: "probe", version: "1.0.0" });
+await c.connect(new StreamableHTTPClientTransport(new URL(`${B}/mcp`)));
+const r = await c.callTool({ name: "create-spending-grant", arguments: { budget: 200, perSpend: 130, products: ["drift-mouse"], description: "Buy me a drift-mouse while I'm away — up to $200." } });
+const g = r.structuredContent;
+console.log("grantId   :", g.id);
+console.log("approveUrl:", g.approveUrl);
+console.log("note      :", g.note);
+const page = await (await fetch(g.approveUrl)).text();
+console.log("page shows:", [...new Set(page.match(/Sign with your wallet|✓ Approve|✗ Deny|device-signed|stands in for the wallet/g) ?? [])].join(" | "));
+await c.close();

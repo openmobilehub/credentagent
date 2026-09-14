@@ -123,6 +123,28 @@ export type { CartMandate, CartMandateLine, CartMandateRefusal, CartMandateVerdi
 export { reconcileCartPayment } from "./ceremony/reconciliation.js";
 export type { PaymentBinding, ReconcileRefusal, ReconcileVerdict } from "./ceremony/reconciliation.js";
 
+// ── AP2 mandates (spec 013) — mint one, verify one ─────────────────────────
+// SD-JWT (RFC 9901), ES256, discriminated by the AP2 `vct` claim. `Ap2Issuer` mints;
+// `verifyMandate` is the ONE door that says whether a mandate is signed, unexpired and — when
+// key-bound — presented by the key its own `cnf` commits to.
+//
+// HONESTY: a verified mandate proves the named key signed these bytes. It does NOT prove the
+// amount is right (re-price: security invariant 2), that a human agreed, or that any
+// credential behind it came from a real issuer (#14, still open).
+export { Ap2Issuer, presentWithKeyBinding, DEFAULT_MANDATE_TTL_MS } from "./ap2/issue.js";
+export type { IssuedMandate, IssuedCheckout, IssueCheckoutArgs, IssuePaymentArgs, IssueOpenArgs, IssueOpenPaymentArgs } from "./ap2/issue.js";
+export { verifyMandate, openCheckoutPayload, peekVct } from "./ap2/verify.js";
+export type { VerifyOptions as VerifyMandateOptions, VerifyResult, MandateVerdict, MandateRefusal, MandateRefusalCode } from "./ap2/verify.js";
+export { didWebFor, didDocument, resolveSigningKey, SIGNING_ALG } from "./ap2/keys.js";
+export type { GateSigningKey, PrivateJwkP256, PublicJwkP256 } from "./ap2/keys.js";
+export { VCT, findConstraint } from "./ap2/types.js";
+export type {
+  Vct, Amount, Merchant, PaymentInstrument, UcpCheckout, UcpLineItem, UcpTotal,
+  CheckoutMandate, PaymentMandate, OpenCheckoutMandate, OpenPaymentMandate, AnyMandate,
+  Cnf, CheckoutConstraint, PaymentConstraint,
+} from "./ap2/types.js";
+export { amountFrom, amountOfMinor, amountsEqual, formatAmount, sumAmounts, toMajorUnits, toMinorUnits, exponentFor } from "./ap2/money.js";
+
 // ── Ceremony presentation (the ONE shared three-gate checkout page) ─────────
 // Both the committed demo and @openmobilehub/credentagent-storefront render their
 // checkout page through `renderRequirements(order, manifest, verification)` — one
