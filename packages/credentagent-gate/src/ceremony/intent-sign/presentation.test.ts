@@ -12,6 +12,7 @@
 import { describe, it, expect } from "vitest";
 import { buildIntentSignRequest } from "./request.js";
 import { verifyIntentPresentation, memoryNonceGuard, inGateBackend, type IntentVerifyBackend } from "./verify.js";
+import { dcApiAudience } from "./presentation.js";
 import { devSimulateWalletSignature } from "./simulate.js";
 import { boundsHash, type IntentBoundsInput } from "./bounds.js";
 import type { Origin } from "../origin.js";
@@ -248,5 +249,36 @@ describe("intent-sign verify seam (FR-4) — no self-upgrade, verbatim relay", (
     const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: bounds({ budget: 2000 }), origin: ORIGIN, nonceGuard: memoryNonceGuard(), backend: delegated });
     expect(out.ok).toBe(false);
     if (!out.ok) expect(out.reason).toMatch(/bounds mismatch/);
+  });
+});
+
+// The audience form is not cosmetic, and it is the one thing the simulator got wrong for the
+// whole of this rail's life: it sent the bare origin, every test passed, and the first real
+// wallet was refused. These pin the rule so the two cannot drift apart again.
+describe("the Key Binding audience (OpenID4VP §B.3.6)", () => {
+  it("is the origin prefixed with `origin:`, not the bare origin", () => {
+    // What a real Multipaz wallet sends over the DC API. Confirmed on-device 2026-09-14, and
+    // in Multipaz's own OpenID4VP.kt, which cites §B.3.6 for the same rule.
+    expect(dcApiAudience(ORIGIN.origin)).toBe(`origin:${ORIGIN.origin}`);
+    expect(dcApiAudience(ORIGIN.origin)).not.toBe(ORIGIN.origin);
+  });
+
+  it("BYPASS: a key binding addressed to a DIFFERENT verifier → refused", async () => {
+    const b = bounds();
+    // The wallet signs for someone else's origin. Accepting it would let a presentation
+    // captured at one verifier be replayed at another.
+    const { req, result } = await signFor(b, { origin: "https://attacker.example" } as never);
+    const out = await verifyIntentPresentation({
+      result,
+      readerContextToken: req.readerContextToken,
+      secret: SECRET,
+      bounds: b,
+      origin: ORIGIN,
+      nonceGuard: memoryNonceGuard(),
+      delegate: DELEGATE,
+      mandateExp: MANDATE_EXP,
+    });
+    expect(out.ok).toBe(false);
+    if (!out.ok) expect(out.reason).toMatch(/addressed to/);
   });
 });
