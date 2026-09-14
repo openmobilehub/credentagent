@@ -27,7 +27,7 @@ the Gate in a full agentic-commerce flow; you can bring your own host instead.
 | Package | One line | Install |
 | :-- | :-- | :-- |
 | [`@openmobilehub/credentagent-gate`](./packages/credentagent-gate) | The Gate — `new CredentAgent()` + `credentagent.mount(app)` wires the wallet-ceremony rails and resolves a typed credential policy into a serializable `requires` manifest. | `npm install @openmobilehub/credentagent-gate` |
-| [`@openmobilehub/credentagent-storefront`](./packages/credentagent-storefront) | The Storefront — `createStorefront()` stands up a runnable MCP shopping server (catalog-injected, nine tools, a widget) that the Gate mounts onto. | `npm install @openmobilehub/credentagent-storefront @openmobilehub/credentagent-gate` |
+| [`@openmobilehub/credentagent-storefront`](./packages/credentagent-storefront) | The Storefront — `createStorefront()` stands up a runnable MCP shopping server (catalog-injected, ten tools, a widget) that the Gate mounts onto. | `npm install @openmobilehub/credentagent-storefront @openmobilehub/credentagent-gate` |
 
 Both are Apache-2.0, ESM, ship their own types, and target Node ≥ 20. The Gate stands
 alone on any Express host; the Storefront is the reference host that demos the whole
