@@ -272,11 +272,22 @@ that it "has no formal standing in the IETF standards process". Building on it i
 deliberate choice with churn risk. Mitigation: isolate the serialization and verification in
 one module, pin the implemented revision in a constant, and record it in the honesty label.
 
-**The wallet will not display the terms.** `research.md` (spec 012, FR-7) found that Multipaz
-renders only the transaction type's display name — "Payment" — never the amount or payee, in
-either credential format. AP2 defines the display payload; Multipaz does not yet render it.
-So the ceremony page remains the human-readable surface, exactly as in spec 012. The repo
-already holds `multipaz-upstream-proposal-draft.md`; this is a candidate for it.
+**RESOLVED — the wallet displays the terms, and it is the surface of record.**
+
+This was recorded as a limitation to design around: Multipaz renders only a transaction type's
+display name, so the approve page would stay the reading surface. That was the wrong call, and
+#192 corrected it. AP2 is explicit — "The User is shown the Mandate Content on a Trusted
+Surface" — and in the User Credential model the wallet IS that surface. A page served by the
+party asking for the signature cannot vouch for itself, and the wallet answered a `delegate`
+request from ANY website with the same blank screen.
+
+`DelegateTransaction.summarize()` (openwallet-foundation/multipaz#2011) renders the Mandate
+Content on both consent screens, generically — it walks whatever JSON the mandate carries, so a
+mandate type nobody has seen still displays. A mandate with nothing displayable is refused at
+parse rather than signed, so a blank approval is unreachable.
+
+**The approve page stays as a preview, not as the record.** What the signature covers is what
+the wallet showed.
 
 **RESOLVED — the app can hold an SD-JWT VC, via `.mpzpass`.** Confirmed on a Galaxy S24 Ultra,
 Android 16. `MpzPass` already carries an `sdJwtVc` list and `DocumentStore.importMpzPass`
@@ -362,6 +373,7 @@ on nothing and is the gate for everything that changes the signed bytes.
 - [ ] Root `npm test`, build and lint green; READMEs honest per FR-7.
 - [x] On-device: a real wallet signs the delegate payload, verbatim. Proven with a standalone
       probe on 2026-09-09.
+- [ ] The consent screen shows the mandate, and the screenshot is attached to #192.
 - [ ] On-device THROUGH THE RAIL. The probe answered "can the wallet do this at all"; it did
       not exercise the rail's signed request, encrypted response or sealed context. A green
       probe is not a green rail, and the difference is where the last three blockers lived.
