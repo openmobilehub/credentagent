@@ -29,7 +29,7 @@ import * as jose from "jose";
 import { openReaderContext } from "../mdoc/readerContext.js";
 import { PAYMENT_CREDENTIAL_VCTS, PAYMENT_INSTRUMENT_CLAIM } from "./dcql.js";
 import { boundsHash, deriveNonce, type IntentBoundsInput } from "./bounds.js";
-import { verifyDelegatedPresentation } from "./presentation.js";
+import { dcApiAudience, verifyDelegatedPresentation } from "./presentation.js";
 import { delegatePayloadMatches, openMandatesForGrant, type DelegateJwk, type MandateContent } from "./mandates.js";
 import type { TrustLevel } from "../../types.js";
 
@@ -202,11 +202,11 @@ export async function verifyIntentPresentation(args: {
   if (process.env.INTENT_DEBUG_PRESENTATION) {
     await (await import("node:fs/promises")).writeFile(
       process.env.INTENT_DEBUG_PRESENTATION,
-      JSON.stringify({ sdjwt, audience: origin.origin, nonce }, null, 2),
+      JSON.stringify({ sdjwt, audience: dcApiAudience(origin.origin), nonce }, null, 2),
     );
   }
 
-  const verdict = await backend({ sdjwt, audience: origin.origin, nonce });
+  const verdict = await backend({ sdjwt, audience: dcApiAudience(origin.origin), nonce });
   if (!verdict.ok) return { ok: false, reason: verdict.reason ?? "presentation not verified" };
 
   // THE authorization check. Rebuild the Mandate Content from the SERVER's grant record and

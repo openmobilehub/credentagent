@@ -17,6 +17,7 @@ import * as jose from "jose";
 import { createHash, generateKeyPairSync, sign as nodeSign, webcrypto, type KeyObject } from "node:crypto";
 import * as x509 from "@peculiar/x509";
 import { SDJwtInstance } from "@sd-jwt/core";
+import { dcApiAudience } from "./presentation.js";
 import { PAYMENT_CREDENTIAL_VCTS, PAYMENT_INSTRUMENT_CLAIM } from "./dcql.js";
 import { DELEGATE_PAYLOAD_CLAIM, type MandateContent } from "./mandates.js";
 import type { SignedIntentRequest } from "./request.js";
@@ -172,7 +173,8 @@ export async function devSimulateWalletSignature(
       kb: {
         payload: {
           iat: Math.floor(Date.now() / 1000),
-          aud: origin,
+          // The DC API form, per OpenID4VP §B.3.6 — what a real wallet sends.
+          aud: dcApiAudience(origin),
           nonce,
           // AP2: the Mandate Content MUST be included as part of the Key Binding.
           [DELEGATE_PAYLOAD_CLAIM]: mandates,

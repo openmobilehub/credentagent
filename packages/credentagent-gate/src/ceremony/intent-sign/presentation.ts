@@ -50,6 +50,23 @@ function es256(publicKey: ReturnType<typeof createPublicKey>, data: string, sig:
   }
 }
 
+/**
+ * The audience a Key Binding JWT must name, for a presentation made over the Digital
+ * Credentials API.
+ *
+ * OpenID4VP 1.0 §B.3.6: the `aud` claim MUST be the value of the Client Identifier, EXCEPT for
+ * requests over the DC API, where it MUST be the Origin prefixed with `origin:` (Appendix A.4).
+ * This rail responds over `dc_api.jwt`, so the prefixed form is the correct one — not the bare
+ * origin, and not the `client_id`.
+ *
+ * It is a function so the gate and the simulated wallet cannot drift apart. They did: the
+ * simulator sent the bare origin, every test passed, and the first real wallet was refused with
+ * "key binding is addressed to origin:https://… , not this verifier".
+ */
+export function dcApiAudience(origin: string): string {
+  return `origin:${origin}`;
+}
+
 export type PresentationResult =
   | {
       ok: true;
