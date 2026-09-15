@@ -25,7 +25,7 @@ import { makeReaderCert, makeEncryptionKey } from "../mdoc/reader.js";
 import { sealReaderContext } from "../mdoc/readerContext.js";
 import { buildIntentSignDcql, PAYMENT_CREDENTIAL_ID } from "./dcql.js";
 import { boundsHash, deriveNonce, type IntentBoundsInput } from "./bounds.js";
-import { delegateTransactionData, openMandatesForGrant, type DelegateJwk, type MandateContent } from "./mandates.js";
+import { delegateEntries, openMandatesForGrant, type DelegateHashAlg, type DelegateJwk, type MandateContent } from "./mandates.js";
 import type { DcqlQuery, ReaderIdentity } from "../../types.js";
 
 export interface SignedIntentRequest {
@@ -40,6 +40,8 @@ export interface SignedIntentRequest {
   nonce: string;
   /** The Mandate Content the wallet is asked to sign — echoed so a caller can show it. */
   mandates: MandateContent[];
+  /** The array-element digests the returned KB-JWT must carry in `delegate_payload`. */
+  delegateDigests: string[];
   trust_level: "device-signed";
 }
 
@@ -61,6 +63,8 @@ export async function buildIntentSignRequest(args: {
   mandateExp: number;
   /** The product ids the grant may buy, resolved server-side (`grants._allowedSkusFor`). */
   allowedSkus: string[];
+  /** The digest algorithm the `delegate` entries ask for. Defaults to `sha-256` (RFC 9901's). */
+  hashAlg?: DelegateHashAlg;
   readerIdentity?: ReaderIdentity;
 }): Promise<SignedIntentRequest> {
   const { bounds, origin, secret } = args;
@@ -84,6 +88,17 @@ export async function buildIntentSignRequest(args: {
     allowedSkus: args.allowedSkus,
   });
 
+  // The Delegate SD-JWT request form: each mandate behind an array disclosure, and the digests
+  // the KB-JWT must carry. Salted deterministically from the gate secret + grant id, so /verify
+  // recomputes the identical digests from the same record rather than remembering them.
+  const delegate = delegateEntries({
+    mandates,
+    credentialId: PAYMENT_CREDENTIAL_ID,
+    secret,
+    grantId: bounds.grantId,
+    ...(args.hashAlg ? { hashAlg: args.hashAlg } : {}),
+  });
+
   const requestObject = {
     response_type: "vp_token",
     response_mode: "dc_api.jwt",
@@ -91,22 +106,23 @@ export async function buildIntentSignRequest(args: {
     expected_origins: [origin.origin],
     nonce,
     dcql_query: dcql,
-    // ONE entry, on purpose. AP2's example pairs `delegate` with a human-readable payment
-    // entry, but a wallet refuses the whole presentation when any entry does not apply to the
-    // chosen credential — and Multipaz's payment type requires a different credential type than
-    // the one delegation needs. Sending both fails with "Error retrieving a token", which points
-    // nowhere near the cause.
+    // `delegate` ENTRIES ONLY, on purpose. AP2's example pairs `delegate` with a human-readable
+    // payment entry, but a wallet refuses the whole presentation when any entry does not apply
+    // to the chosen credential — and Multipaz's payment type requires a different credential
+    // type than the one delegation needs. Sending both fails with "Error retrieving a token",
+    // which points nowhere near the cause.
+    //
+    // ONE ENTRY PER MANDATE, per Delegate SD-JWT §7.1 — the checkout authority and the payment
+    // authority are two Delegate Payloads, and each must have its digest in the signed
+    // `delegate_payload`. A wallet that signs only the last entry it was given fails `/verify`.
     //
     // THE WALLET IS THE READING SURFACE, not this rail's approve page (#192). AP2 puts that job
     // on the Trusted Surface, and a page served by the party asking for the signature cannot
-    // vouch for itself. The wallet renders the Mandate Content from this entry — see
+    // vouch for itself. The wallet renders the Mandate Content from these entries — see
     // `DelegateTransaction.summarize` in Multipaz. The approve page stays as a preview.
-    transaction_data: [
-      Buffer.from(
-        JSON.stringify(delegateTransactionData({ mandates, credentialId: PAYMENT_CREDENTIAL_ID })),
-        "utf-8",
-      ).toString("base64url"),
-    ],
+    transaction_data: delegate.entries.map((entry) =>
+      Buffer.from(JSON.stringify(entry), "utf-8").toString("base64url"),
+    ),
     client_metadata: {
       vp_formats_supported: { "dc+sd-jwt": { "sd-jwt_alg_values": ["ES256"], "kb-jwt_alg_values": ["ES256"] } },
       jwks: { keys: [encJwk] },
@@ -125,5 +141,14 @@ export async function buildIntentSignRequest(args: {
     { ecdhPrivateJwk, transactionDataB64: "", nonce, grantId: bounds.grantId, challenge, boundsHash: hash },
     secret,
   );
-  return { protocol: "openid4vp-v1-signed", request, dcql_query: dcql, readerContextToken, nonce, mandates, trust_level: "device-signed" };
+  return {
+    protocol: "openid4vp-v1-signed",
+    request,
+    dcql_query: dcql,
+    readerContextToken,
+    nonce,
+    mandates,
+    delegateDigests: delegate.digests,
+    trust_level: "device-signed",
+  };
 }

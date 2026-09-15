@@ -27,10 +27,17 @@
 // different terms — which is what the bypass tests pin.
 import * as jose from "jose";
 import { openReaderContext } from "../mdoc/readerContext.js";
-import { PAYMENT_CREDENTIAL_VCTS, PAYMENT_INSTRUMENT_CLAIM } from "./dcql.js";
+import { PAYMENT_CREDENTIAL_ID, PAYMENT_CREDENTIAL_VCTS, PAYMENT_INSTRUMENT_CLAIM } from "./dcql.js";
 import { boundsHash, deriveNonce, type IntentBoundsInput } from "./bounds.js";
 import { dcApiAudience, verifyDelegatedPresentation } from "./presentation.js";
-import { delegatePayloadMatches, openMandatesForGrant, type DelegateJwk, type MandateContent } from "./mandates.js";
+import {
+  delegateEntries,
+  delegatePayloadMatches,
+  openMandatesForGrant,
+  type DelegateHashAlg,
+  type DelegateJwk,
+  type MandateContent,
+} from "./mandates.js";
 import type { TrustLevel } from "../../types.js";
 
 /** Single-use nonce ledger: `consume` records a nonce and returns true only the FIRST
@@ -66,7 +73,9 @@ export interface IntentTrustVerdict {
   disclosed?: Record<string, unknown>;
   /** The credential type that signed (SD-JWT `vct`). */
   credentialType?: string;
-  /** The Mandate Content the holder signed. The gate compares it to its own record. */
+  /** The KB-JWT's `delegate_payload` claim, verbatim — an array of RFC 9901 array-element
+   *  digests (`{"...": "<digest>"}`) since Delegate SD-JWT §7.1. The gate recomputes the
+   *  digests from its OWN grant record and requires every one of them to be present here. */
   delegatePayload?: MandateContent[];
 }
 
@@ -146,6 +155,8 @@ export async function verifyIntentPresentation(args: {
   mandateExp: number;
   /** The product ids the grant may buy, re-resolved from the SERVER\'s record. */
   allowedSkus: string[];
+  /** The digest algorithm `/request` asked for — must match, or the digests cannot line up. */
+  hashAlg?: DelegateHashAlg;
   /** Trust backend (FR-4). Defaults to the in-gate key-binding check. */
   backend?: IntentVerifyBackend;
 }): Promise<IntentVerifyResult> {
@@ -216,8 +227,20 @@ export async function verifyIntentPresentation(args: {
   // merchant, the caps, the allowed items, the expiry, and the agent key the grant delegates
   // to — lives in these bytes, so a mismatch here is a grant whose terms are not the ones that
   // were signed. Refuse rather than authorize against a signature given for something else.
+  //
+  // The comparison is on DIGESTS (Delegate SD-JWT §7.1): the mandates are rebuilt, re-disclosed
+  // with the same deterministic salts `/request` used, and re-hashed. Identical input ⇒ identical
+  // digest, so this refuses for exactly the same reasons the old byte comparison did — and it
+  // additionally catches a wallet that signed only some of the `delegate` entries.
   const expected = openMandatesForGrant({ bounds, origin: origin.origin, delegate: args.delegate, exp: args.mandateExp, allowedSkus: args.allowedSkus });
-  if (!delegatePayloadMatches(verdict.delegatePayload, expected)) {
+  const { digests } = delegateEntries({
+    mandates: expected,
+    credentialId: PAYMENT_CREDENTIAL_ID,
+    secret,
+    grantId: bounds.grantId,
+    ...(args.hashAlg ? { hashAlg: args.hashAlg } : {}),
+  });
+  if (!delegatePayloadMatches(verdict.delegatePayload, digests)) {
     return { ok: false, reason: "mandate mismatch: the wallet signed different terms than the grant records" };
   }
 

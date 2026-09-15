@@ -8,7 +8,7 @@
 //   • the credential was signed by the key in its own `x5c` certificate,
 //   • the KB-JWT was signed by the key that credential commits to in `cnf`,
 //   • that KB-JWT names THIS verifier (`aud`) and THIS ceremony (`nonce`),
-//   • and it carries a `_delegate_payload`.
+//   • it is typed `kb+sd-jwt` and carries a `delegate_payload` (Delegate SD-JWT §5.1.4, §7.1).
 //
 // It does NOT mean the certificate chains to anyone we trust. The demo credential is
 // self-signed by `tools/demo-pki/mint/`, and checking a chain we minted against a root we
@@ -19,7 +19,7 @@
 // `mandates.ts`, against the server's own grant record, and the caller must do it.
 import { createHash, createPublicKey, verify as nodeVerify, X509Certificate } from "node:crypto";
 import { decodeSdJwt, splitSdJwt } from "@sd-jwt/core";
-import { DELEGATE_PAYLOAD_CLAIM, type MandateContent } from "./mandates.js";
+import { DELEGATE_KB_TYP, DELEGATE_PAYLOAD_CLAIM, type MandateContent } from "./mandates.js";
 
 const utf8 = new TextEncoder();
 
@@ -70,7 +70,8 @@ export function dcApiAudience(origin: string): string {
 export type PresentationResult =
   | {
       ok: true;
-      /** The Mandate Content the holder signed. Compare it against the server's own record. */
+      /** The KB-JWT's `delegate_payload`, verbatim — array-element digests of the mandates the
+       *  holder signed (Delegate SD-JWT §7.1). Compare against the server's own record. */
       delegatePayload: MandateContent[];
       /** Disclosed claims, for the explicit-positive-claim check (invariant 5). */
       disclosed: Record<string, unknown>;
@@ -155,6 +156,15 @@ export async function verifyDelegatedPresentation(args: {
   if (!kb) return { ok: false, reason: "key-binding JWT is not readable" };
   if (kb.aud !== args.audience) return { ok: false, reason: `key binding is addressed to ${String(kb.aud)}, not this verifier` };
   if (kb.nonce !== args.nonce) return { ok: false, reason: "key-binding nonce is not the one this ceremony issued" };
+
+  // Delegate SD-JWT §5.1.4: a Delegate KB-JWT is typed `kb+sd-jwt` (or `kb+sd-jwt+kb`), not the
+  // plain `kb+jwt` of an ordinary key binding. A wallet that emits `kb+jwt` here has treated the
+  // delegation as a normal presentation, which is the shape this rail shipped before #192 — so
+  // accepting it would let the old, non-conformant output keep passing unnoticed.
+  const kbTyp = segment<{ typ?: string }>(parts.kbJwt, 0)?.typ;
+  if (!kbTyp || !(DELEGATE_KB_TYP as readonly string[]).includes(kbTyp)) {
+    return { ok: false, reason: `key binding is typed ${kbTyp ?? "∅"}, not ${DELEGATE_KB_TYP.join(" or ")}` };
+  }
 
   const delegatePayload = kb[DELEGATE_PAYLOAD_CLAIM];
   if (!Array.isArray(delegatePayload) || delegatePayload.length === 0) {

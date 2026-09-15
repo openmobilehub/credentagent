@@ -19,7 +19,15 @@ import * as x509 from "@peculiar/x509";
 import { SDJwtInstance } from "@sd-jwt/core";
 import { dcApiAudience } from "./presentation.js";
 import { PAYMENT_CREDENTIAL_VCTS, PAYMENT_INSTRUMENT_CLAIM } from "./dcql.js";
-import { DELEGATE_PAYLOAD_CLAIM, type MandateContent } from "./mandates.js";
+import {
+  DELEGATE_KB_TYP,
+  DELEGATE_PAYLOAD_CLAIM,
+  arrayDisclosure,
+  disclosureDigest,
+  isDelegateHashAlg,
+  DEFAULT_HASH_ALG,
+  type MandateContent,
+} from "./mandates.js";
 import type { SignedIntentRequest } from "./request.js";
 
 const utf8 = new TextEncoder();
@@ -91,6 +99,15 @@ export interface SimulateOptions {
   forgeHolderKey?: boolean;
   /** TEST-ONLY: return no key binding at all. */
   omitKeyBinding?: boolean;
+  /** TEST-ONLY: sign only the LAST `delegate` entry, the way a wallet that overwrites its
+   *  accumulated payload does (#192). Every entry must be signed, so this must be refused. */
+  signOnlyLastEntry?: boolean;
+  /** TEST-ONLY: emit a different key-binding `typ` — e.g. the plain `kb+jwt` this rail sent
+   *  before the Delegate SD-JWT shape landed. */
+  overrideKbTyp?: string;
+  /** TEST-ONLY: put the mandates in the KB-JWT as plain objects instead of digests — the
+   *  pre-#192 shape, which a draft-conformant verifier must no longer accept. */
+  plainDelegatePayload?: boolean;
 }
 
 /**
@@ -111,17 +128,39 @@ export async function devSimulateWalletSignature(
   const encJwk = payload.client_metadata.jwks.keys[0];
   const nonce = opts.overrideNonce ?? payload.nonce;
 
-  // The Mandate Content the gate asked for, read back out of the request the way a wallet does.
-  const delegateEntry = (payload.transaction_data ?? [])
+  // The `delegate` entries the gate asked for, read back out of the request the way a wallet
+  // does. Delegate SD-JWT §7.1 carries ONE array disclosure per entry, and every entry's digest
+  // must end up in the signed `delegate_payload` — so this reads them ALL, not just the last.
+  const delegateEntries = (payload.transaction_data ?? [])
     .map((b64) => {
       try {
-        return JSON.parse(Buffer.from(b64, "base64url").toString("utf-8")) as { type?: string; delegate_payload?: MandateContent[] };
+        return JSON.parse(Buffer.from(b64, "base64url").toString("utf-8")) as {
+          type?: string;
+          delegate_payload_disclosure?: string;
+          transaction_data_hashes_alg?: string[];
+        };
       } catch {
         return undefined;
       }
     })
-    .find((entry) => entry?.type === "delegate");
-  const mandates = opts.overrideMandates ?? delegateEntry?.delegate_payload ?? [];
+    .filter((entry): entry is NonNullable<typeof entry> => entry?.type === "delegate");
+
+  // The requested algorithm, honoured (#192) — a wallet that always answers in sha-256 makes a
+  // verifier asking for sha-384 fail with a digest mismatch it cannot explain.
+  const requestedAlg = delegateEntries[0]?.transaction_data_hashes_alg?.[0] ?? DEFAULT_HASH_ALG;
+  const hashAlg = isDelegateHashAlg(requestedAlg) ? requestedAlg : DEFAULT_HASH_ALG;
+
+  // Forged terms get their own disclosures (a different salt, hence a different digest); the
+  // honest path re-uses the verifier's own disclosure bytes, which is what a real wallet signs.
+  const disclosures = opts.overrideMandates
+    ? opts.overrideMandates.map((m, i) => arrayDisclosure(`forged-salt-${i}`, m))
+    : delegateEntries.map((entry) => entry.delegate_payload_disclosure ?? "");
+  const signedDisclosures = opts.signOnlyLastEntry ? disclosures.slice(-1) : disclosures;
+
+  // RFC 9901 §4.2.4.2: an array element replaced by a disclosure is `{"...": "<digest>"}`.
+  const delegatePayload: unknown[] = opts.plainDelegatePayload
+    ? signedDisclosures.map((d) => JSON.parse(Buffer.from(d, "base64url").toString("utf-8"))[1] as MandateContent)
+    : signedDisclosures.map((d) => ({ "...": disclosureDigest(d, hashAlg) }));
 
   // Mint the credential: issuer key + certificate, holder key in `cnf`.
   const issuer = p256();
@@ -152,35 +191,36 @@ export async function devSimulateWalletSignature(
     { header: { typ: "dc+sd-jwt", x5c: [x5c] } },
   );
 
+  // Disclose everything the credential carries; the key binding is added by hand below.
+  const disclosed = await new SDJwtInstance<Record<string, unknown>>({ hasher, hashAlg: "sha-256", saltGenerator }).present(
+    credential,
+    Object.fromEntries(Object.keys(claims).map((k) => [k, true])) as never,
+  );
+
   let presentation: string;
   if (opts.omitKeyBinding) {
     // Disclose everything, sign nothing. A verifier that accepts this has stopped checking
     // that anybody authorized anything.
-    presentation = await new SDJwtInstance<Record<string, unknown>>({ hasher, hashAlg: "sha-256", saltGenerator }).present(
-      credential,
-      Object.fromEntries(Object.keys(claims).map((k) => [k, true])) as never,
-    );
+    presentation = disclosed;
   } else {
+    // THE KEY BINDING IS ASSEMBLED HERE rather than through `SDJwtInstance.present({ kb })`,
+    // because that path hardcodes `typ: "kb+jwt"` (@sd-jwt/core's KB_JWT_TYP) and a Delegate
+    // KB-JWT must be typed `kb+sd-jwt` (Delegate SD-JWT §5.1.4). Everything else is the same
+    // JWS the library would have produced.
     const kbKey = opts.forgeHolderKey ? p256().privateKey : holder.privateKey;
-    presentation = await new SDJwtInstance<Record<string, unknown>>({
-      hasher,
-      hashAlg: "sha-256",
-      saltGenerator,
-      signAlg: "ES256",
-      kbSignAlg: "ES256",
-      kbSigner: signer(kbKey),
-    }).present(credential, Object.fromEntries(Object.keys(claims).map((k) => [k, true])) as never, {
-      kb: {
-        payload: {
-          iat: Math.floor(Date.now() / 1000),
-          // The DC API form, per OpenID4VP §B.3.6 — what a real wallet sends.
-          aud: dcApiAudience(origin),
-          nonce,
-          // AP2: the Mandate Content MUST be included as part of the Key Binding.
-          [DELEGATE_PAYLOAD_CLAIM]: mandates,
-        } as never,
-      },
-    });
+    const sdHash = createHash("sha256").update(disclosed, "ascii").digest("base64url");
+    const kbHeader = { alg: "ES256", typ: opts.overrideKbTyp ?? DELEGATE_KB_TYP[0] };
+    const kbPayload = {
+      iat: Math.floor(Date.now() / 1000),
+      // The DC API form, per OpenID4VP §B.3.6 — what a real wallet sends.
+      aud: dcApiAudience(origin),
+      nonce,
+      sd_hash: sdHash,
+      // Delegate SD-JWT §7.1: the KB-JWT carries the DIGEST of the delegate payload.
+      [DELEGATE_PAYLOAD_CLAIM]: delegatePayload,
+    };
+    const signingInput = `${Buffer.from(JSON.stringify(kbHeader), "utf-8").toString("base64url")}.${Buffer.from(JSON.stringify(kbPayload), "utf-8").toString("base64url")}`;
+    presentation = `${disclosed}${signingInput}.${signer(kbKey)(signingInput)}`;
   }
 
   const credentialId = (request.dcql_query as unknown as { credentials: { id: string }[] }).credentials[0].id;

@@ -200,14 +200,17 @@ describe("device-signed grants — FR-3/6 controls", () => {
 // These pin the reverse: the mandate carries the age-covered products and nothing else, and the
 // page says so before the signature is given.
 describe("a device grant signs only what spend() would honour (#172)", () => {
-  /** The `checkout.line_items` allow-list inside the `delegate` transaction_data the page sends. */
+  /** The `checkout.line_items` allow-list inside the `delegate` transaction_data the page sends.
+   *  Delegate SD-JWT §7.1 carries the mandate as an array disclosure — `[salt, value]` — so the
+   *  value is read back out of it the way the wallet does before it renders the consent screen. */
   async function signedLineItems(app: Express, id: string): Promise<string[]> {
     const res = await request(app).get(`/credentagent/grants/${id}/sign/request`).set("Host", HOST);
     expect(res.status).toBe(200);
-    const b64 = (s: string) => JSON.parse(Buffer.from(s, "base64url").toString()) as Record<string, never>;
-    const claims = b64(res.body.requests[0].data.request.split(".")[1]) as unknown as { transaction_data: string[] };
-    const td = b64(claims.transaction_data[0]) as unknown as { delegate_payload: { constraints: { type: string; allowed?: string[] }[] }[] };
-    return td.delegate_payload[0].constraints.find((c) => c.type === "checkout.line_items")!.allowed!;
+    const b64 = (s: string) => JSON.parse(Buffer.from(s, "base64url").toString()) as unknown;
+    const claims = b64(res.body.requests[0].data.request.split(".")[1]) as { transaction_data: string[] };
+    const entry = b64(claims.transaction_data[0]) as { delegate_payload_disclosure: string };
+    const [, checkout] = b64(entry.delegate_payload_disclosure) as [string, { constraints: { type: string; allowed?: string[] }[] }];
+    return checkout.constraints.find((c) => c.type === "checkout.line_items")!.allowed!;
   }
 
   /** A pending device grant over the whole Beverages category (coffee + the 21+ wine). */
