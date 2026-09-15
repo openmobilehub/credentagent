@@ -250,8 +250,21 @@ export function serveGrants(app: GrantsApp, grants: Grants): void {
     // (the proofs are inside `canonicalIntentBounds` — #172).
     if (g.signing === "device") {
       const { rail, cards } = stepsFor(g, loyaltyPct, "Sign");
+      // What the signature will NOT cover, said before it is given (#172). The mandate omits any
+      // age-restricted product the sealed proof doesn't reach (`_allowedSkusFor`), so this page
+      // owes the human the same sentence the page-mode decision card gives them. When NOTHING is
+      // left to authorize, there is no mandate to mint at all and the age step stops being
+      // optional — signing is offered only once it can mean something.
+      const minimumAge = g.ageScope.minimumAge;
+      const proved = ageProved(g, g.ageScope);
+      const signable = grants._allowedSkusFor(g.id);
+      const withheld =
+        minimumAge != null && !proved
+          ? { minimumAge, blocking: signable !== null && signable.length === 0 }
+          : undefined;
       return res.status(200).type("html").send(
         renderIntentSignPage({
+          ...(withheld ? { withheld } : {}),
           grantId: g.id,
           merchant: g.merchant,
           budget: g.budget,

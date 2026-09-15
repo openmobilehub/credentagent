@@ -20,8 +20,8 @@
 // human clicks approve — presence "delegated-demo", trust "server-issued-demo"). The wallet
 // key-signing ceremony is the roadmap (#71/#14); it will call the SAME _authorize seam.
 
-import { DelegatedGate, DelegatedGrant, type CatalogEntry } from "./delegated.js";
-import { generateDelegate } from "./ceremony/mandate.js";
+import { DelegatedGate, DelegatedGrant, minAgeOf, type CatalogEntry } from "./delegated.js";
+import { ageProofCovers, generateDelegate } from "./ceremony/mandate.js";
 import { serveGrants, type GrantsApp } from "./grants-serve.js";
 import { ageScopeFor, skuAllowed, type GrantAgeScope } from "./grants-age.js";
 import type { SealedAgeProof, SealedMembershipProof } from "./ceremony/mandate.js";
@@ -353,6 +353,14 @@ export class Grants {
    * here, the same way the approve page's age disclosure already scans them, so what the mandate
    * says matches what the page said and what `spend()` enforces.
    *
+   * AGE-RESTRICTED ITEMS ARE OMITTED UNLESS THE HUMAN PROVED FOR THEM (#172). `spend()` refuses
+   * an age-restricted line with `step-up` whenever the sealed proof does not cover it, so listing
+   * those skus here would mint a mandate that authorizes MORE than the gate will ever honour —
+   * the human signs "your agent may buy the whiskey", the agent is then refused every time. The
+   * signature has to say exactly what is spendable, so the same `ageProofCovers` predicate the
+   * spend path runs decides membership here. A grant gains nothing by omission: proving the age
+   * BEFORE signing puts the items back, which is the order the page presents them in.
+   *
    * `null` when the set cannot be determined — no catalog to scan. A caller MUST refuse to mint
    * rather than fall back to an empty list, which would authorize nothing while looking like a
    * grant.
@@ -362,7 +370,15 @@ export class Grants {
     if (!rec) return null;
     const catalog = this.deps.catalog;
     if (!catalog || Object.keys(catalog).length === 0) return null;
-    return Object.keys(catalog).filter((sku) => skuAllowed(rec.opts.allow, sku, catalog)).sort();
+    return Object.keys(catalog)
+      .filter((sku) => skuAllowed(rec.opts.allow, sku, catalog))
+      .filter((sku) => {
+        const minAge = minAgeOf(catalog[sku]);
+        // A 0 / absent threshold is an unrestricted product; only a positive one needs a proof.
+        if (typeof minAge !== "number" || !(minAge > 0)) return true;
+        return ageProofCovers(rec.ageProof, minAge);
+      })
+      .sort();
   }
 
   /** The grant's signed BOUNDS (spec 012) — assembled from the SERVER's record, never the

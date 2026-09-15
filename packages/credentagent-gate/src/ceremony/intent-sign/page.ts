@@ -31,6 +31,18 @@ export interface IntentSignPageArgs {
    *  present before signing. They belong above it because what they prove is part of what they
    *  sign: the proofs are inside `canonicalIntentBounds`, so the signature covers them. */
   steps?: string;
+  /**
+   * The age-restricted items this signature will NOT cover, because the human has not proved an
+   * age that reaches them (#172). Absent ⇒ nothing is withheld and the button reads plainly.
+   *
+   * The signed mandate omits those products (`grants._allowedSkusFor`), so saying "Sign with your
+   * wallet" over a page that just listed them by name would misdescribe what is being signed.
+   * `blocking` is the case where NOTHING remains — a grant whose every product is restricted.
+   * There is no mandate to mint then, so the signature is not offered at all until the age step
+   * is done. That is a statement about what can be authorized, not a security control: the
+   * refusal lives in `spend()`, which steps up on an uncovered item however this page renders.
+   */
+  withheld?: { minimumAge: number; blocking: boolean };
 }
 
 function escapeHtml(s: string): string {
@@ -54,6 +66,19 @@ export function renderIntentSignPage(args: IntentSignPageArgs): string {
     ? escapeHtml(args.description)
     : `An AI agent asks to spend on your behalf while you're away. Sign this with your wallet to authorize exactly the bounds below — nothing more.`;
 
+  // Once age is on the table, "Sign with your wallet" alone is ambiguous — the human is choosing
+  // between signing WITH the restricted items and signing without them. Say which one this is,
+  // the same way the page-mode decision card does.
+  const withheld = args.withheld;
+  const signLabel = withheld && !withheld.blocking ? "Sign without them" : "Sign with your wallet";
+  const withheldNote = withheld
+    ? `<p class="row-pending" style="margin:0 0 14px">${
+        withheld.blocking
+          ? `Everything this grant covers is ${withheld.minimumAge}+. Prove your age above and this becomes signable — there is nothing else to authorize.`
+          : `Your agent will be able to spend within these limits, but the ${withheld.minimumAge}+ items above are not part of this signature and will be refused.`
+      }</p>`
+    : "";
+
   const extraCss = `
   .bounds { margin:12px 0; padding:12px 14px; background:var(--surface-2, #f6f7f9); border-radius:12px; font-size:.95rem; }
   #done { display:none; margin-top:16px; background:var(--accent); color:#fff; font-weight:700; padding:16px; border-radius:12px; text-align:center; }
@@ -71,7 +96,8 @@ ${pageHead(title, extraCss, args.branding)}
     <p class="lede">${lede}</p>
     <div class="bounds">${bounds}</div>
     <p class="small">What you see here is page-attested; what you authorize is <strong>device-signed</strong> — your wallet's key signs over these exact bounds.</p>
-    <button id="go-dc" class="btn btn-primary">Sign with your wallet</button>
+    ${withheldNote}
+    <button id="go-dc" class="btn btn-primary"${withheld?.blocking ? " disabled" : ""}>${signLabel}</button>
     <div id="log"></div>
   </div>
   <div id="done">✓ Signed — this grant is now authorized. <a id="back" href="${escapeHtml(args.returnUrl ?? "#")}">continue ›</a></div>
@@ -96,8 +122,13 @@ ${pageHead(title, extraCss, args.branding)}
       reqData = null;
       fetch("/credentagent/grants/" + encodeURIComponent(ID) + "/sign/request").then((r) => r.json()).then((d) => { reqData = d; }).catch(() => {});
     }
+    // Nothing this grant covers is signable until the age step is done, so there is no request to
+    // pre-fetch — /sign/request would refuse to mint a mandate that authorizes nothing anyway.
+    const BLOCKED = ${JSON.stringify(!!withheld?.blocking)};
     const DC_API = !!(navigator.credentials && navigator.credentials.get);
-    if (!DC_API) {
+    if (BLOCKED) {
+      goDc.disabled = true;
+    } else if (!DC_API) {
       goDc.disabled = true;
       notice("Signing needs a digital wallet on a supported device — Chrome 141+ on Android (import <code>payment.mpzpass</code> into Multipaz), or scan from another device. This browser can't run the wallet ceremony.");
     } else {
