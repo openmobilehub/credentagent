@@ -71,14 +71,29 @@ export function openMandatesForGrant(args: {
   delegate: DelegateJwk;
   /** Absolute expiry, epoch seconds. */
   exp: number;
+  /**
+   * The concrete product ids the grant may buy, resolved from the SERVER's record and catalog
+   * (`grants._allowedSkusFor`). NOT `bounds.allow.skus`: a category-bounded grant names no
+   * products, and putting its empty list into `checkout.line_items` would say "nothing may be
+   * bought" — the constraint's own meaning — for a grant the human approved for a category.
+   */
+  allowedSkus: string[];
 }): MandateContent[] {
   const { bounds, origin, delegate, exp } = args;
+  // Refuse rather than mint an authorization that permits nothing while looking like a grant.
+  // An empty list here is not a tighter bound, it is a wrong one: the page told the human what
+  // they could buy, and the mandate would contradict it.
+  if (args.allowedSkus.length === 0) {
+    throw new Error(
+      `grant ${bounds.grantId}: no products resolve from its bounds, so \`checkout.line_items\` would authorize nothing — refusing to mint a mandate that contradicts what the human approved`,
+    );
+  }
   const grantBounds = {
     merchant: bounds.merchant,
     budget: bounds.budget,
     perSpend: bounds.perSpend,
     currency: "USD",
-    skus: bounds.allow?.skus ?? [],
+    skus: args.allowedSkus,
   };
 
   const checkout: MandateContent = {

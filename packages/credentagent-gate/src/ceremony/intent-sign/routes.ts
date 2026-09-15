@@ -78,13 +78,14 @@ export function registerIntentSignRail(app: RailApp, grants: Grants): void {
     if (g.status !== "pending") { res.status(409).json({ error: `grant is ${g.status}` }); return; }
     const inputs = grants._intentSignInputsFor(id);
     if (!inputs) { res.status(404).json({ error: "unknown grant" }); return; }
-    const { bounds, delegate, mandateExp } = inputs;
+    const { bounds, delegate, mandateExp, allowedSkus } = inputs;
     try {
       const cfg = grants.railConfig;
       const oid = await buildIntentSignRequest({
         bounds,
         delegate,
         mandateExp,
+        allowedSkus,
         origin: originOf(req),
         secret: cfg.secret,
         ...(cfg.readerIdentity ? { readerIdentity: cfg.readerIdentity } : {}),
@@ -106,7 +107,7 @@ export function registerIntentSignRail(app: RailApp, grants: Grants): void {
     if (!g || g.signing !== "device") { res.status(404).json({ ok: false, reason: "unknown device grant" }); return; }
     const inputs = grants._intentSignInputsFor(id);
     if (!inputs) { res.status(404).json({ ok: false, reason: "unknown grant" }); return; }
-    const { bounds, delegate, mandateExp } = inputs;
+    const { bounds, delegate, mandateExp, allowedSkus } = inputs;
     const body = await readJsonBody(req);
     const result = body.result as { protocol?: string; data?: unknown } | undefined;
     const readerContextToken = body.readerContextToken;
@@ -119,6 +120,7 @@ export function registerIntentSignRail(app: RailApp, grants: Grants): void {
       const out = await verifyIntentPresentation({
         delegate,
         mandateExp,
+        allowedSkus,
         result,
         readerContextToken,
         secret: cfg.secret,
