@@ -76,7 +76,8 @@ describe("device-signed grants — e2e over the served HTTP rail", () => {
     const signed = (await ca.grants.retrieve(g.id))!;
     expect(signed.status).toBe("authorized");
     expect(signed.trustLevel).toBe("device-signed"); // FR-4
-    expect(signed.mandate?.credentialDoctype).toBe("org.multipaz.payment.sca.1");
+    // An SD-JWT `vct` since spec 014 — the rail signs AP2 mandates, not an mdoc presentation.
+    expect(signed.mandate?.credentialType).toBe("urn:emvco:dpc:card:1");
     expect(signed.mandate?.verifiedBy).toBe("gate");
     expect(typeof signed.mandate?.boundsHash).toBe("string");
 
@@ -175,16 +176,125 @@ describe("device-signed grants — FR-3/6 controls", () => {
     const ca = makeAgent();
     // In-gate evidence.
     const gate = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30, signing: "device" });
-    await ca.grants._authorizeDevice(gate.id, { boundsHash: "h1", signedAt: "2026-07-28T00:00:00Z", credentialDoctype: "org.multipaz.payment.sca.1", verifiedBy: "gate", trustLevel: "device-signed" });
+    await ca.grants._authorizeDevice(gate.id, { boundsHash: "h1", signedAt: "2026-07-28T00:00:00Z", credentialType: "urn:emvco:dpc:card:1", verifiedBy: "gate", trustLevel: "device-signed" });
     const gateAuthed = (await ca.grants.retrieve(gate.id))!;
     expect(gateAuthed.trustLevel).toBe("device-signed");
     expect(gateAuthed.mandate?.verifiedBy).toBe("gate");
 
     // A stronger, issuer-backed level from an external verifier is relayed verbatim WITH its id.
     const delegated = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30, signing: "device" });
-    await ca.grants._authorizeDevice(delegated.id, { boundsHash: "h2", signedAt: "2026-07-28T00:00:00Z", credentialDoctype: "org.multipaz.payment.sca.1", verifiedBy: "upay-verifier", trustLevel: "issuer-verified" });
+    await ca.grants._authorizeDevice(delegated.id, { boundsHash: "h2", signedAt: "2026-07-28T00:00:00Z", credentialType: "urn:emvco:dpc:card:1", verifiedBy: "upay-verifier", trustLevel: "issuer-verified" });
     const delegatedAuthed = (await ca.grants.retrieve(delegated.id))!;
     expect(delegatedAuthed.trustLevel).toBe("issuer-verified"); // relayed, not the gate's own claim
     expect(delegatedAuthed.mandate?.verifiedBy).toBe("upay-verifier");
+  });
+});
+
+// A device grant's signature must describe exactly what the agent can spend on — no more.
+//
+// `spend()` refuses an age-restricted line with `step-up` unless the sealed proof covers it
+// (issue #172). So a mandate that LISTS a 21+ product for a grant nobody proved an age for asks
+// the human to sign "your agent may buy the whiskey" while the gate refuses that purchase every
+// single time. The signature would overclaim, and the human would have no way to know.
+//
+// These pin the reverse: the mandate carries the age-covered products and nothing else, and the
+// page says so before the signature is given.
+describe("a device grant signs only what spend() would honour (#172)", () => {
+  /** The `checkout.line_items` allow-list inside the `delegate` transaction_data the page sends.
+   *  Delegate SD-JWT §7.1 carries the mandate as an array disclosure — `[salt, value]` — so the
+   *  value is read back out of it the way the wallet does before it renders the consent screen. */
+  async function signedLineItems(app: Express, id: string): Promise<string[]> {
+    const res = await request(app).get(`/credentagent/grants/${id}/sign/request`).set("Host", HOST);
+    expect(res.status).toBe(200);
+    const b64 = (s: string) => JSON.parse(Buffer.from(s, "base64url").toString()) as unknown;
+    const claims = b64(res.body.requests[0].data.request.split(".")[1]) as { transaction_data: string[] };
+    const entry = b64(claims.transaction_data[0]) as { delegate_payload_disclosure: string };
+    const [, checkout] = b64(entry.delegate_payload_disclosure) as [string, { constraints: { type: string; allowed?: string[] }[] }];
+    return checkout.constraints.find((c) => c.type === "checkout.line_items")!.allowed!;
+  }
+
+  /** A pending device grant over the whole Beverages category (coffee + the 21+ wine). */
+  async function beveragesGrant(ca: CredentAgent): Promise<Grant> {
+    return ca.grants.create({ merchant: "utopia", budget: 200, perSpend: 130, allow: { categories: ["Beverages"] }, signing: "device" });
+  }
+
+  // BYPASS (the `ageProofCovers` filter in `_allowedSkusFor`): delete it and this goes red —
+  // every unproved grant would be signed over a mandate naming items it can never buy.
+  it("BYPASS: with NO age proof, the 21+ sku is absent from what the wallet is asked to sign", async () => {
+    const ca = makeAgent();
+    const g = await beveragesGrant(ca);
+    expect(await signedLineItems(serve(ca), g.id)).toEqual(["coffee"]);
+  });
+
+  // BYPASS (the threshold comparison inside `ageProofCovers`): an 18+ proof is not a 21+ proof,
+  // and the mandate must not quietly promote it.
+  it("BYPASS: an 18+ proof does not put the 21+ sku into the mandate", async () => {
+    const ca = makeAgent();
+    const g = await beveragesGrant(ca);
+    expect(await ca.grants._recordAgeProof(g.id, { provenAge: 18 })).toBe(true);
+    expect(await signedLineItems(serve(ca), g.id)).toEqual(["coffee"]);
+  });
+
+  // The positive half — without it the filter could simply drop everything and still "pass".
+  it("proving 21+ BEFORE signing puts the item back into the mandate", async () => {
+    const ca = makeAgent();
+    const g = await beveragesGrant(ca);
+    expect(await ca.grants._recordAgeProof(g.id, { provenAge: 21 })).toBe(true);
+    expect(await signedLineItems(serve(ca), g.id)).toEqual(["coffee", "wine"]);
+  });
+
+  it("the signing page names what is being withheld, and the button says which choice it is", async () => {
+    const ca = makeAgent();
+    const g = await beveragesGrant(ca);
+    const res = await request(serve(ca)).get(`/credentagent/grants/${g.id}`).set("Host", HOST);
+    expect(res.text).toContain("Sign without them");
+    expect(res.text).toContain("21+ items above are not part of this signature");
+  });
+
+  it("once the age is proved the page drops the caveat and offers a plain signature", async () => {
+    const ca = makeAgent();
+    const g = await beveragesGrant(ca);
+    await ca.grants._recordAgeProof(g.id, { provenAge: 21 });
+    const res = await request(serve(ca)).get(`/credentagent/grants/${g.id}`).set("Host", HOST);
+    expect(res.text).toContain(">Sign with your wallet</button>");
+    expect(res.text).not.toContain("Sign without them");
+  });
+
+  // A grant whose EVERY product is age-restricted has nothing to authorize until the age step is
+  // done: `_allowedSkusFor` resolves to an empty list, and minting a mandate from it would say
+  // "nothing may be bought" while looking like a grant. So the rail refuses and the page does not
+  // offer a signature it cannot produce.
+  describe("a grant where EVERYTHING is age-restricted", () => {
+    const BAR = { wine: { price: 21, minAge: 21, category: "Beverages" }, whiskey: { price: 60, minAge: 21, category: "Beverages" } };
+    const bar = () => new CredentAgent({ walletOrigin: ORIGIN, catalog: BAR, gateSecret: "stable-test-secret" });
+
+    it("BYPASS: the signature is not offered, and the rail refuses to mint the mandate", async () => {
+      const ca = bar();
+      const app = serve(ca);
+      const g = await ca.grants.create({ merchant: "utopia", budget: 200, perSpend: 130, signing: "device" });
+
+      const page = await request(app).get(`/credentagent/grants/${g.id}`).set("Host", HOST);
+      expect(page.text).toContain(`<button id="go-dc" class="btn btn-primary" disabled>Sign with your wallet</button>`);
+      expect(page.text).toContain("Prove your age above and this becomes signable");
+
+      // Hiding a button is not enforcement (invariant 1) — the rail refuses on its own.
+      const req = await request(app).get(`/credentagent/grants/${g.id}/sign/request`).set("Host", HOST);
+      expect(req.status).toBe(404);
+      expect((await ca.grants.retrieve(g.id))!.status).toBe("pending");
+    });
+
+    it("proving the age makes the very same grant signable", async () => {
+      const ca = bar();
+      const app = serve(ca);
+      const g = await ca.grants.create({ merchant: "utopia", budget: 200, perSpend: 130, signing: "device" });
+      expect(await ca.grants._recordAgeProof(g.id, { provenAge: 21 })).toBe(true);
+
+      const page = await request(app).get(`/credentagent/grants/${g.id}`).set("Host", HOST);
+      expect(page.text).toContain(`<button id="go-dc" class="btn btn-primary">Sign with your wallet</button>`);
+
+      const verifyRes = await signOverHttp(app, g.id);
+      expect(verifyRes.body.ok).toBe(true);
+      expect((await ca.grants.retrieve(g.id))!.status).toBe("authorized");
+    });
   });
 });

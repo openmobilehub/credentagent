@@ -20,7 +20,8 @@
 // human clicks approve — presence "delegated-demo", trust "server-issued-demo"). The wallet
 // key-signing ceremony is the roadmap (#71/#14); it will call the SAME _authorize seam.
 
-import { DelegatedGate, DelegatedGrant, type CatalogEntry } from "./delegated.js";
+import { DelegatedGate, DelegatedGrant, minAgeOf, type CatalogEntry } from "./delegated.js";
+import { ageProofCovers, generateDelegate } from "./ceremony/mandate.js";
 import { serveGrants, type GrantsApp } from "./grants-serve.js";
 import { ageScopeFor, skuAllowed, type GrantAgeScope } from "./grants-age.js";
 import type { SealedAgeProof, SealedMembershipProof } from "./ceremony/mandate.js";
@@ -153,7 +154,7 @@ export type SpendDoor =
 export interface GrantMandateEvidence {
   boundsHash: string;
   signedAt: string;
-  credentialDoctype: string;
+  credentialType: string;
   verifiedBy: string;
   trustLevel: TrustLevel;
 }
@@ -175,6 +176,13 @@ interface GrantRecord {
   boundsNonce: string;
   /** Minted at AUTHORIZE time (the intent is sealed when the human approves, not before). */
   engine?: DelegatedGrant;
+  /** The agent keypair a device-mode grant delegates to, minted at CREATE time.
+   *
+   *  It has to exist before the human is asked to sign, because AP2 names it in the mandates'
+   *  `cnf` and the human's signature covers those bytes. The same keypair is then handed to
+   *  the engine at authorization, so the key that was authorized is the key that can spend —
+   *  minting a fresh one there would seal a grant whose spending authority nobody approved. */
+  delegateKeys?: Awaited<ReturnType<typeof generateDelegate>>;
   /** The age claim the human proved before authorizing, held until the grant seals it into the
    *  intent (#172). Writable ONLY while the grant is pending — see `_recordAgeProof`. */
   ageProof?: SealedAgeProof;
@@ -305,6 +313,74 @@ export class Grants {
     };
   }
 
+  /**
+   * Everything the intent-sign rail needs to build the AP2 Mandate Content for a grant, all of
+   * it from the SERVER's record (spec 014). `null` when the grant is unknown, or when it has no
+   * delegate key — a grant with no agent key to name in `cnf` cannot be delegated at all, and
+   * saying so here is better than minting a mandate bound to nothing.
+   *
+   * `mandateExp` is the grant's own expiry when it has one. Without one it falls back to a year
+   * from creation, because AP2 requires an expiry and a mandate that never expires is worse
+   * than one whose horizon the caller can read. A grant that shows the human no expiry and then
+   * signs a one-year one is a gap in the approve page, recorded in spec 014.
+   */
+  _intentSignInputsFor(id: string): { bounds: IntentBoundsInput; delegate: { kty: "EC"; crv: "P-256"; x: string; y: string }; mandateExp: number; allowedSkus: string[] } | null {
+    const bounds = this._boundsInputFor(id);
+    // The key minted at CREATION for a device-mode grant. Not the engine's — the engine does
+    // not exist until the grant is authorized, and by then the human has already signed.
+    const delegate = this.records.get(id)?.delegateKeys?.delegate;
+    // Both the request and the verify hop take the product list from HERE, so the mandates the
+    // wallet is asked to sign and the mandates `/verify` rebuilds can never differ.
+    const allowedSkus = this._allowedSkusFor(id);
+    if (!bounds || !delegate || !allowedSkus || allowedSkus.length === 0) return null;
+    const expiresAt = bounds.expiresAt ? Date.parse(bounds.expiresAt) : NaN;
+    const fallback = Date.parse(bounds.createdAt) + 365 * 24 * 60 * 60 * 1000;
+    return {
+      bounds,
+      delegate,
+      mandateExp: Math.floor((Number.isFinite(expiresAt) ? expiresAt : fallback) / 1000),
+      allowedSkus,
+    };
+  }
+
+  /**
+   * The concrete product ids this grant may buy — the value AP2's `checkout.line_items`
+   * constraint carries.
+   *
+   * A grant bounded by CATEGORY names no products, and emitting its empty `skus` list straight
+   * into the mandate said "nothing may be bought" (the constraint's own meaning) for a grant the
+   * human had approved for a whole category. The categories are scanned against the catalog
+   * here, the same way the approve page's age disclosure already scans them, so what the mandate
+   * says matches what the page said and what `spend()` enforces.
+   *
+   * AGE-RESTRICTED ITEMS ARE OMITTED UNLESS THE HUMAN PROVED FOR THEM (#172). `spend()` refuses
+   * an age-restricted line with `step-up` whenever the sealed proof does not cover it, so listing
+   * those skus here would mint a mandate that authorizes MORE than the gate will ever honour —
+   * the human signs "your agent may buy the whiskey", the agent is then refused every time. The
+   * signature has to say exactly what is spendable, so the same `ageProofCovers` predicate the
+   * spend path runs decides membership here. A grant gains nothing by omission: proving the age
+   * BEFORE signing puts the items back, which is the order the page presents them in.
+   *
+   * `null` when the set cannot be determined — no catalog to scan. A caller MUST refuse to mint
+   * rather than fall back to an empty list, which would authorize nothing while looking like a
+   * grant.
+   */
+  _allowedSkusFor(id: string): string[] | null {
+    const rec = this.records.get(id);
+    if (!rec) return null;
+    const catalog = this.deps.catalog;
+    if (!catalog || Object.keys(catalog).length === 0) return null;
+    return Object.keys(catalog)
+      .filter((sku) => skuAllowed(rec.opts.allow, sku, catalog))
+      .filter((sku) => {
+        const minAge = minAgeOf(catalog[sku]);
+        // A 0 / absent threshold is an unrestricted product; only a positive one needs a proof.
+        if (typeof minAge !== "number" || !(minAge > 0)) return true;
+        return ageProofCovers(rec.ageProof, minAge);
+      })
+      .sort();
+  }
+
   /** The grant's signed BOUNDS (spec 012) — assembled from the SERVER's record, never the
    *  client. `null` when the grant is unknown. The intent-sign rail re-derives boundsHash
    *  from this at /verify and requires equality with the value sealed at /request. */
@@ -380,6 +456,8 @@ export class Grants {
       // for page mode — it never computes boundsHash).
       createdAt: new Date().toISOString(),
       boundsNonce: globalThis.crypto.randomUUID(),
+      // Device-signed grants only: the key the human signs over (see the field's own note).
+      ...(opts.signing === "device" ? { delegateKeys: await generateDelegate() } : {}),
       cache: new Map(),
     };
     this.records.set(id, rec);
@@ -503,6 +581,9 @@ export class Grants {
         total: toCents(rec.opts.budget),
         description:
           rec.opts.description ?? `Up to $${rec.opts.budget} at ${rec.opts.merchant}, $${rec.opts.perSpend}/purchase`,
+        // THE key the human signed over. Minting a fresh one here would seal a grant whose
+        // spending authority the human never authorized.
+        ...(rec.delegateKeys ? { delegateKeys: rec.delegateKeys } : {}),
         // Honesty carried in the SEALED record: real consent + the attested trust level.
         presence: "delegated",
         trustLevel: evidence.trustLevel,
@@ -618,7 +699,7 @@ export class Grants {
       // "server-issued-demo". The TYPE, not copy, tells the two apart (FR-3).
       trustLevel: rec.mandate?.trustLevel ?? rec.engine?.trustLevel ?? "server-issued-demo",
       // The device-signature evidence (spec 012) — present only once a device grant is signed.
-      ...(rec.mandate ? { mandate: { boundsHash: rec.mandate.boundsHash, signedAt: rec.mandate.signedAt, credentialDoctype: rec.mandate.credentialDoctype, verifiedBy: rec.mandate.verifiedBy } } : {}),
+      ...(rec.mandate ? { mandate: { boundsHash: rec.mandate.boundsHash, signedAt: rec.mandate.signedAt, credentialType: rec.mandate.credentialType, verifiedBy: rec.mandate.verifiedBy } } : {}),
       usage: async (): Promise<GrantUsage> => {
         const budget = rec.opts.budget;
         // Before authorize there is no engine ledger yet: nothing has been drawn, so the
@@ -681,7 +762,7 @@ export interface Grant {
   /** The device-signature evidence (spec 012) — present ONLY once a device-mode grant is signed:
    *  the exact bounds the device signed (`boundsHash`), when, which credential doctype, and who
    *  verified. Absent on page-mode grants and unsigned device grants. */
-  readonly mandate?: { boundsHash: string; signedAt: string; credentialDoctype: string; verifiedBy: string };
+  readonly mandate?: { boundsHash: string; signedAt: string; credentialType: string; verifiedBy: string };
   /** Live money read (dollars) for a display/projection — `{ budget, spent, remaining }`. Async
    *  because the engine's committed-draws ledger is the authority (it may be remote later); a
    *  pending grant reads `{ spent: 0, remaining: budget }`. Feeds {@link grantLifecycle}. */
