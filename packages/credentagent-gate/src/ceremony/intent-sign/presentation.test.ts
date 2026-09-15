@@ -235,7 +235,7 @@ describe("intent-sign verify seam (FR-4) — no self-upgrade, verbatim relay", (
       verifiedBy: "upay-verifier",
       credentialType: "urn:emvco:dpc:card:1",
       disclosed: { payment_instrument_id: "instrument_delegated" },
-      delegatePayload: req.mandates,
+      delegatePayload: req.delegateDigests.map((d) => ({ "...": d })),
     });
     const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, nonceGuard: memoryNonceGuard(), backend: delegated, delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
     expect(out.ok).toBe(true);
@@ -248,7 +248,7 @@ describe("intent-sign verify seam (FR-4) — no self-upgrade, verbatim relay", (
   it("still enforces the gate's OWN checks even under a delegated backend (bounds equality holds)", async () => {
     const b = bounds({ budget: 200 });
     const { req, result } = await signFor(b);
-    const delegated: IntentVerifyBackend = async () => ({ ok: true, trustLevel: "issuer-verified", verifiedBy: "upay-verifier", credentialType: "urn:emvco:dpc:card:1", disclosed: { payment_instrument_id: "x" }, delegatePayload: req.mandates });
+    const delegated: IntentVerifyBackend = async () => ({ ok: true, trustLevel: "issuer-verified", verifiedBy: "upay-verifier", credentialType: "urn:emvco:dpc:card:1", disclosed: { payment_instrument_id: "x" }, delegatePayload: req.delegateDigests.map((d) => ({ "...": d })) });
     // A tampered record (2000 vs the sealed 200) is refused BEFORE the backend runs — delegation
     // moves TRUST, never BINDING (the gate still re-derives boundsHash and requires equality).
     const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: bounds({ budget: 2000 }), origin: ORIGIN, nonceGuard: memoryNonceGuard(), backend: delegated });
@@ -286,5 +286,137 @@ describe("the Key Binding audience (OpenID4VP §B.3.6)", () => {
     });
     expect(out.ok).toBe(false);
     if (!out.ok) expect(out.reason).toMatch(/addressed to/);
+  });
+});
+
+// THE WIRE SHAPE Delegate SD-JWT defines, pinned on this side (#192 Priority 2).
+//
+// These are interop tests with a specification, not internal consistency checks: every
+// assertion below names something a verifier written against
+// `draft-gco-oauth-delegate-sd-jwt-00` will look for. Change the shape and they go red, which is
+// the only way this rail finds out it has drifted — a simulator and a gate that agree with each
+// other and disagree with the world pass every other test in this file (that is exactly how the
+// `aud` bug reached a real phone).
+describe("Delegate SD-JWT conformance (draft-gco-oauth-delegate-sd-jwt-00)", () => {
+  const b64 = (s: string) => JSON.parse(Buffer.from(s, "base64url").toString("utf-8")) as never;
+  const entriesOf = (req: { request: string }) =>
+    ((b64(req.request.split(".")[1]) as { transaction_data: string[] }).transaction_data ?? []).map(
+      (t) => b64(t) as unknown as Record<string, unknown>,
+    );
+
+  async function build(over: Partial<Parameters<typeof buildIntentSignRequest>[0]> = {}) {
+    return buildIntentSignRequest({ bounds: bounds(), origin: ORIGIN, secret: SECRET, delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS, ...over });
+  }
+
+  it("§7.1: the request carries delegate_payload_disclosure, not AP2's plain delegate_payload", async () => {
+    const entries = entriesOf(await build());
+    for (const entry of entries) {
+      expect(entry.type).toBe("delegate");
+      // The member the draft REQUIRES: one array disclosure, as a string.
+      expect(typeof entry.delegate_payload_disclosure).toBe("string");
+      // AP2's `agent_authorization.md` puts the mandate objects here in the clear. Following the
+      // draft means this member is absent — if it comes back, we silently switched specs.
+      expect(entry.delegate_payload).toBeUndefined();
+      // "REQUIRED string containing either dSD-JWT or dSD-JWT+KB" — NOT the credential's
+      // `dc+sd-jwt` VDC format, which is what AP2's example carries here.
+      expect(entry.format).toBe("dSD-JWT");
+      expect(entry.transaction_data_hashes_alg).toEqual(["sha-256"]);
+    }
+  });
+
+  it("§7.1: one entry per mandate, each disclosing the Mandate Content verbatim", async () => {
+    const req = await build();
+    const entries = entriesOf(req);
+    expect(entries).toHaveLength(req.mandates.length);
+    expect(req.mandates.length).toBeGreaterThan(1); // checkout + payment: the multi-entry case
+    entries.forEach((entry, i) => {
+      // RFC 9901 §4.2.4.2 array disclosure: [salt, value].
+      const [salt, value] = b64(entry.delegate_payload_disclosure as string) as unknown as [string, Record<string, unknown>];
+      expect(typeof salt).toBe("string");
+      expect(salt.length).toBeGreaterThanOrEqual(22); // ≥128 bits of base64url
+      expect(value).toEqual(req.mandates[i]);
+    });
+  });
+
+  it("the disclosures are deterministic, so /verify rebuilds them without remembering anything", async () => {
+    // Two independent builds of the same grant must produce identical digests, or the second hop
+    // could not recognise what the first one asked the wallet to sign.
+    expect((await build()).delegateDigests).toEqual((await build()).delegateDigests);
+    // …and a DIFFERENT grant must not reuse them.
+    expect((await build({ bounds: bounds({ grantId: "grant_other" }) })).delegateDigests).not.toEqual((await build()).delegateDigests);
+  });
+
+  it("§5.1.4 + §7.1: the KB-JWT is typed kb+sd-jwt and carries digests under `delegate_payload`", async () => {
+    const { req, result } = await signFor(bounds());
+    // Read the KB-JWT the way the verifier does: decrypt is not needed — the simulator's
+    // presentation is rebuilt here from the same inputs, so assert on a fresh signature.
+    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: bounds(), origin: ORIGIN, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
+    expect(out.ok).toBe(true);
+    // The digests the gate computed are what the wallet had to sign over.
+    expect(req.delegateDigests).toHaveLength(req.mandates.length);
+    for (const digest of req.delegateDigests) expect(digest).toMatch(/^[A-Za-z0-9_-]{43}$/); // base64url sha-256
+  });
+
+  // BYPASS: the claim name is the whole point of this increment. `_delegate_payload` came from
+  // datatracker's rendering of the draft's Markdown italics; a verifier written against the draft
+  // looks for `delegate_payload`. Rename the constant back and this goes red.
+  it("BYPASS: the KB-JWT claim is `delegate_payload`, with no leading underscore", async () => {
+    const { req, result } = await signFor(bounds(), { plainDelegatePayload: false });
+    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: bounds(), origin: ORIGIN, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
+    expect(out.ok).toBe(true);
+    const { DELEGATE_PAYLOAD_CLAIM } = await import("./mandates.js");
+    expect(DELEGATE_PAYLOAD_CLAIM).toBe("delegate_payload");
+    expect(DELEGATE_PAYLOAD_CLAIM.startsWith("_")).toBe(false);
+  });
+
+  // BYPASS (the `typ` check in presentation.ts): a wallet that emits the ordinary `kb+jwt` has
+  // not applied the delegation extension. That is the shape this rail shipped BEFORE #192, so
+  // accepting it would let the non-conformant output keep passing.
+  it("BYPASS: a plain `kb+jwt` key binding is refused", async () => {
+    const { req, result } = await signFor(bounds(), { overrideKbTyp: "kb+jwt" });
+    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: bounds(), origin: ORIGIN, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
+    expect(out).toMatchObject({ ok: false });
+    if (!out.ok) expect(out.reason).toContain("kb+jwt");
+  });
+
+  // BYPASS (the digest comparison): the pre-#192 shape put the mandate objects in the KB-JWT in
+  // the clear. §7.1 says the KB-JWT carries their DIGEST. A verifier that accepts both cannot
+  // tell a conformant wallet from a legacy one.
+  it("BYPASS: mandates sent as plain objects instead of digests are refused", async () => {
+    const { req, result } = await signFor(bounds(), { plainDelegatePayload: true });
+    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: bounds(), origin: ORIGIN, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
+    expect(out).toMatchObject({ ok: false, reason: expect.stringContaining("mandate mismatch") });
+  });
+
+  // BYPASS (the "every expected digest" rule in delegatePayloadMatches): Multipaz keeps only the
+  // LAST delegate entry's payload while hashing all of them (#192). The human would be shown two
+  // authorizations and sign one. An equality check on LENGTH alone would not catch this.
+  it("BYPASS: signing only the last `delegate` entry is refused", async () => {
+    const { req, result } = await signFor(bounds(), { signOnlyLastEntry: true });
+    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: bounds(), origin: ORIGIN, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
+    expect(out).toMatchObject({ ok: false, reason: expect.stringContaining("mandate mismatch") });
+  });
+
+  // The requested algorithm is honoured on both sides (#192). A wallet that always answers in
+  // sha-256 fails a sha-384 request with a digest mismatch that points nowhere near the cause.
+  it("§7.1: a sha-384 request is answered in sha-384, end to end", async () => {
+    const b = bounds();
+    const req = await build({ hashAlg: "sha-384" });
+    expect(entriesOf(req).every((e) => JSON.stringify(e.transaction_data_hashes_alg) === '["sha-384"]')).toBe(true);
+    for (const digest of req.delegateDigests) expect(digest).toMatch(/^[A-Za-z0-9_-]{64}$/); // base64url sha-384
+
+    const result = await devSimulateWalletSignature({ request: req, origin: ORIGIN.origin });
+    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS, hashAlg: "sha-384" });
+    expect(out.ok).toBe(true);
+  });
+
+  // …and the two sides must agree on WHICH algorithm. A verifier still checking sha-256 against
+  // a sha-384 answer refuses, rather than comparing digests of different lengths and shrugging.
+  it("BYPASS: a sha-384 answer does not satisfy a verifier expecting sha-256", async () => {
+    const b = bounds();
+    const req = await build({ hashAlg: "sha-384" });
+    const result = await devSimulateWalletSignature({ request: req, origin: ORIGIN.origin });
+    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
+    expect(out).toMatchObject({ ok: false, reason: expect.stringContaining("mandate mismatch") });
   });
 });
