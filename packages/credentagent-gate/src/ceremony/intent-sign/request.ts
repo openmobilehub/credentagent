@@ -59,6 +59,8 @@ export async function buildIntentSignRequest(args: {
   delegate: DelegateJwk;
   /** Absolute expiry for the mandates, epoch seconds. */
   mandateExp: number;
+  /** The product ids the grant may buy, resolved server-side (`grants._allowedSkusFor`). */
+  allowedSkus: string[];
   readerIdentity?: ReaderIdentity;
 }): Promise<SignedIntentRequest> {
   const { bounds, origin, secret } = args;
@@ -79,6 +81,7 @@ export async function buildIntentSignRequest(args: {
     origin: origin.origin,
     delegate: args.delegate,
     exp: args.mandateExp,
+    allowedSkus: args.allowedSkus,
   });
 
   const requestObject = {

@@ -144,6 +144,8 @@ export async function verifyIntentPresentation(args: {
   delegate: DelegateJwk;
   /** The absolute expiry used when the request was built, epoch seconds. */
   mandateExp: number;
+  /** The product ids the grant may buy, re-resolved from the SERVER\'s record. */
+  allowedSkus: string[];
   /** Trust backend (FR-4). Defaults to the in-gate key-binding check. */
   backend?: IntentVerifyBackend;
 }): Promise<IntentVerifyResult> {
@@ -214,7 +216,7 @@ export async function verifyIntentPresentation(args: {
   // merchant, the caps, the allowed items, the expiry, and the agent key the grant delegates
   // to — lives in these bytes, so a mismatch here is a grant whose terms are not the ones that
   // were signed. Refuse rather than authorize against a signature given for something else.
-  const expected = openMandatesForGrant({ bounds, origin: origin.origin, delegate: args.delegate, exp: args.mandateExp });
+  const expected = openMandatesForGrant({ bounds, origin: origin.origin, delegate: args.delegate, exp: args.mandateExp, allowedSkus: args.allowedSkus });
   if (!delegatePayloadMatches(verdict.delegatePayload, expected)) {
     return { ok: false, reason: "mandate mismatch: the wallet signed different terms than the grant records" };
   }

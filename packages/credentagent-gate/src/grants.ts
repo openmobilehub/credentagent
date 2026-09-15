@@ -324,19 +324,45 @@ export class Grants {
    * than one whose horizon the caller can read. A grant that shows the human no expiry and then
    * signs a one-year one is a gap in the approve page, recorded in spec 014.
    */
-  _intentSignInputsFor(id: string): { bounds: IntentBoundsInput; delegate: { kty: "EC"; crv: "P-256"; x: string; y: string }; mandateExp: number } | null {
+  _intentSignInputsFor(id: string): { bounds: IntentBoundsInput; delegate: { kty: "EC"; crv: "P-256"; x: string; y: string }; mandateExp: number; allowedSkus: string[] } | null {
     const bounds = this._boundsInputFor(id);
     // The key minted at CREATION for a device-mode grant. Not the engine's — the engine does
     // not exist until the grant is authorized, and by then the human has already signed.
     const delegate = this.records.get(id)?.delegateKeys?.delegate;
-    if (!bounds || !delegate) return null;
+    // Both the request and the verify hop take the product list from HERE, so the mandates the
+    // wallet is asked to sign and the mandates `/verify` rebuilds can never differ.
+    const allowedSkus = this._allowedSkusFor(id);
+    if (!bounds || !delegate || !allowedSkus || allowedSkus.length === 0) return null;
     const expiresAt = bounds.expiresAt ? Date.parse(bounds.expiresAt) : NaN;
     const fallback = Date.parse(bounds.createdAt) + 365 * 24 * 60 * 60 * 1000;
     return {
       bounds,
       delegate,
       mandateExp: Math.floor((Number.isFinite(expiresAt) ? expiresAt : fallback) / 1000),
+      allowedSkus,
     };
+  }
+
+  /**
+   * The concrete product ids this grant may buy — the value AP2's `checkout.line_items`
+   * constraint carries.
+   *
+   * A grant bounded by CATEGORY names no products, and emitting its empty `skus` list straight
+   * into the mandate said "nothing may be bought" (the constraint's own meaning) for a grant the
+   * human had approved for a whole category. The categories are scanned against the catalog
+   * here, the same way the approve page's age disclosure already scans them, so what the mandate
+   * says matches what the page said and what `spend()` enforces.
+   *
+   * `null` when the set cannot be determined — no catalog to scan. A caller MUST refuse to mint
+   * rather than fall back to an empty list, which would authorize nothing while looking like a
+   * grant.
+   */
+  _allowedSkusFor(id: string): string[] | null {
+    const rec = this.records.get(id);
+    if (!rec) return null;
+    const catalog = this.deps.catalog;
+    if (!catalog || Object.keys(catalog).length === 0) return null;
+    return Object.keys(catalog).filter((sku) => skuAllowed(rec.opts.allow, sku, catalog)).sort();
   }
 
   /** The grant's signed BOUNDS (spec 012) — assembled from the SERVER's record, never the
