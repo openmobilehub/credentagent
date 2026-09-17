@@ -16,7 +16,7 @@
 // control. Self-contained: takes the re-priced amount + lines, not a demo Order type.
 
 import type { Branding } from "../../types.js";
-import { pageHead, brandHeader, orderSummaryCard, trustFooter, settlingBar, completionHandoffBanner, railCompleteScript } from "../theme.js";
+import { pageHead, brandHeader, orderSummaryCard, trustFooter, settlingBar, completionHandoffBanner, railCompleteScript, refusalNotices } from "../theme.js";
 
 export interface DcPaymentLine {
   name: string;
@@ -103,6 +103,10 @@ ${pageHead(`Authorize payment (cross-device) · ${order}`, extraCss, args.brandi
     const DEMO_CLAIMS = ${JSON.stringify(DEMO_CLAIMS)};
     const RETURN_URL = ${JSON.stringify(returnUrl)};
     const DONE_BANNER = ${JSON.stringify(completionHandoffBanner(returnUrl))};
+    // Buyer-facing copy for every refusal the completion seam can make, rendered
+    // server-side (escaped there) and picked by reason at runtime. Without this a refused
+    // order painted the authorized mandate + green gates and then nothing at all.
+    const REFUSALS = ${JSON.stringify(refusalNotices({ returnUrl }))};
     const log = document.getElementById("log");
     const goDc = document.getElementById("go-dc");
     const btn = document.getElementById("go");
@@ -215,13 +219,23 @@ ${pageHead(`Authorize payment (cross-device) · ${order}`, extraCss, args.brandi
       // order-status and resumes). No auto-redirect — we don't yank the buyer off the
       // "you're done" message; the on-chain proof + a secondary return link stay below.
       const done = out.completed ? DONE_BANNER : "";
-      el.innerHTML = done + '<div class="row-ok">✓ Payment Mandate authorized (amount-bound)</div>' +
+      // …and a NON-completion leads with why. The mandate below really was authorized, so
+      // showing only that (as this page used to) reads as success — or as a hang. The
+      // configured-but-failed settle renders its own calm line further down, so it is the
+      // one non-completion that does not take a notice here.
+      const refused = out.completed || out.settlementError ? "" : (REFUSALS[out.reason] || REFUSALS.unknown);
+      el.innerHTML = done + refused + '<div class="row-ok">✓ Payment Mandate authorized (amount-bound)</div>' +
         '<div class="small" style="margin:4px 0 8px;">' + out.mandate.id + "</div>" + gates + settlement;
       el.style.display = "block";
       if (out.completed) {
         goDc.disabled = true;
         btn.textContent = "Authorized ✓";
         ${railCompleteScript()}
+      } else if (!out.settlementError) {
+        // Recoverable by definition: the buyer proves what's missing (age, a credential)
+        // and authorizes again. Leaving both buttons dead was the other half of the dead end.
+        btn.disabled = false;
+        if ("credentials" in navigator && window.DigitalCredential) { goDc.disabled = false; prefetch(); }
       }
     }
   </script>

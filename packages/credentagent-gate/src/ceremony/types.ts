@@ -144,17 +144,26 @@ export interface CompletionInput {
   policyCredentialIds?: readonly string[];
 }
 
+/**
+ * Why a non-completion happened — a failed ceremony ("gates"), a tampered/replayed/
+ * expired Cart Mandate ("cart-mandate"), a tampered token re-priced against the
+ * catalog ("reprice"), a signed Cart Mandate and signed Payment Mandate that
+ * disagree on order/amount/currency ("reconcile"), an age-restricted order with
+ * no proven per-order age claim ("age"), an applicable custom gate() credential with no
+ * proven per-order verification ("gate" — 007), or a refused delegated draw ("draw").
+ *
+ * Named (not inlined) because the buyer-facing copy in `theme.refusalNotices()` is keyed
+ * by it: adding a reason here without adding its notice fails to compile, so a new
+ * refusal can never reach a buyer as a blank page.
+ */
+export type CompletionRefusalReason = "gates" | "cart-mandate" | "reprice" | "reconcile" | "age" | "gate" | "draw";
+
 export interface CompletionResult {
   completed: boolean;
   settlement?: SettlementRecordLike;
   settlementError?: string;
-  /** Why a non-completion happened — a failed ceremony ("gates"), a tampered/replayed/
-   *  expired Cart Mandate ("cart-mandate"), a tampered token re-priced against the
-   *  catalog ("reprice"), a signed Cart Mandate and signed Payment Mandate that
-   *  disagree on order/amount/currency ("reconcile"), an age-restricted order with
-   *  no proven per-order age claim ("age"), an applicable custom gate() credential with no
-   *  proven per-order verification ("gate" — 007), or a refused delegated draw ("draw"). */
-  reason?: "gates" | "cart-mandate" | "reprice" | "reconcile" | "age" | "gate" | "draw";
+  /** Why a non-completion happened (see `CompletionRefusalReason`). */
+  reason?: CompletionRefusalReason;
   /** For a refused delegated draw, the typed refusals (why + who + recovery class). */
   refusals?: import("./refusals.js").Refusal[];
   /** For a completed delegated draw, the authorizing grant id (the audit link). */
