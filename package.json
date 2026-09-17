@@ -19,7 +19,8 @@
     "build:packages": "npm run build --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "eslint .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:workspaces": "npm run test --workspaces --if-present"
   },
   "devDependencies": {
     "@types/express": "^5.0.0",
