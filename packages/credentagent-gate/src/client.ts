@@ -12,6 +12,8 @@ import { serveOrders } from "./orders-serve.js";
 import { Webhooks } from "./webhooks.js";
 import { Grants } from "./grants.js";
 import { runDoctor, formatDoctorReport, type DoctorReport } from "./doctor.js";
+import { didDocument, resolveSigningKey, type GateSigningKey } from "./ap2/keys.js";
+import { Ap2Issuer } from "./ap2/issue.js";
 
 x509.cryptoProvider.set(globalThis.crypto);
 
@@ -25,6 +27,9 @@ export type MountCeremony = Omit<Partial<CeremonySeams>, "verificationStore">;
  */
 export interface ExpressApp {
   locals: Record<string, unknown>;
+  /** Optional: when present, `mount()` publishes the mandate-signing key at
+   *  `/.well-known/did.json`. Structural, so the package stays free of an express import. */
+  get?: (path: string, handler: (req: unknown, res: { json: (body: unknown) => void }) => void) => void;
 }
 
 /** Zero-config default so `new CredentAgent()` works for local dev. */
@@ -39,6 +44,9 @@ export class CredentAgent {
   readonly webhooks: Webhooks;
   /** The human-not-present resource — `grants.create()` / `grants.retrieve()` (spec 009, #104). */
   readonly grants: Grants;
+  /** Mints AP2 mandates with this gate's key; `mount()` publishes the public half so anyone
+   *  can verify one (spec 013). Signing is real; issuer trust is #14 and still open. */
+  readonly ap2: Ap2Issuer;
   /** Stable reader identity presented by the rails (undefined ⇒ per-request self-signed). */
   readonly readerIdentity?: ReaderIdentity;
   /** Host brand for the ceremony pages, threaded into every rail + the checkout page
@@ -72,6 +80,9 @@ export class CredentAgent {
   // Config facts `doctor()` inspects (#25). Retained at construction so the preflight can read
   // what was configured once — a stable gateSecret, and whether the stores are shared (injected)
   // or the in-memory defaults. `walletOrigin` + `readerIdentity` are already public/held above.
+  private readonly mandateKey: GateSigningKey;
+  // True once /.well-known/did.json has been registered, so a second mount() does not re-register it.
+  private didServed = false;
   private readonly hasGateSecret: boolean;
   private readonly sharedVerificationStore: boolean;
   private readonly sharedOrderStores: boolean;
@@ -107,6 +118,12 @@ export class CredentAgent {
       );
     }
     this.walletOrigin = origin.replace(/\/$/, "");
+    // The AP2 mandate-signing key. Resolved SYNCHRONOUSLY on purpose: mount() is synchronous, and
+    // a key that arrived on a promise would reach app.locals some ticks after the routes did — a
+    // race in the middle of a security check. Absent ⇒ an ephemeral key, which doctor() reports as
+    // an error rather than accepting silently.
+    this.mandateKey = resolveSigningKey(this.walletOrigin, opts.mandateSigningKey);
+    this.ap2 = new Ap2Issuer(this.mandateKey);
     this.store = opts.store ?? new MemoryVerificationStore();
     // #25 doctor(): remember what was configured — an injected store is "shared" (survives an
     // instance split); the default MemoryVerificationStore is not. A non-empty gateSecret makes
@@ -270,6 +287,7 @@ export class CredentAgent {
       sharedVerificationStore: this.sharedVerificationStore || this.mountSharedStore,
       sharedOrderStores: this.sharedOrderStores,
       composedWithHost: this.composedWithHost,
+      ephemeralMandateKey: this.mandateKey.ephemeral,
       env: process.env,
     });
     if (opts.print) {
@@ -296,6 +314,10 @@ export class CredentAgent {
    * when seams are supplied; with none extracted yet, that path attaches no routes.
    */
   mount(app: ExpressApp, ceremony?: MountCeremony): void {
+    // FIRST, before any branch returns. mount() has three of them (explicit seams, a composed
+    // host, and the legacy no-seam path); a key published on only one is a key a verifier cannot
+    // fetch on the other two, and every mandate this gate signed would be uncheckable there.
+    this.publishSigningKey(app);
     if (ceremony) {
       mountCeremony(app as CeremonyApp, { ...ceremony, verificationStore: this.store, readerIdentity: this.readerIdentity, credentialRegistry: this.registry, orderPolicies: this.orderPolicies, ...(this.branding ? { branding: this.branding } : {}) });
       this.mountedRoutes = true;
@@ -331,6 +353,20 @@ export class CredentAgent {
     const existing = app.locals.credentagent as { store?: VerificationStore } | undefined;
     if (existing?.store === this.store) return; // idempotent
     app.locals.credentagent = { store: this.store, walletOrigin: this.walletOrigin, credentialRegistry: this.registry };
+  }
+
+  /**
+   * Publish the mandate-signing key's PUBLIC half as a DID document.
+   *
+   * Without it the signature on a mandate is checkable only by us, which would make "real
+   * signatures" a hollow claim — the whole point of leaving a mock signer behind. The document is
+   * built once and captured, so the handler cannot be made to re-read mutable state later.
+   */
+  private publishSigningKey(app: ExpressApp): void {
+    if (this.didServed || typeof app.get !== "function") return;
+    const doc = didDocument(this.mandateKey);
+    app.get("/.well-known/did.json", (_req, res) => res.json(doc));
+    this.didServed = true;
   }
 }
 

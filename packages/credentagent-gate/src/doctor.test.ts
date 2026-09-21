@@ -3,6 +3,7 @@
 // fails the "healthy" tests), and the `CredentAgent.doctor()` wiring (it assembles the config it
 // was constructed with, reads the env, and the print path returns the same report).
 import { describe, it, expect, vi, afterEach } from "vitest";
+import { generateKeyPairSync } from "node:crypto";
 import { runDoctor, formatDoctorReport, type DoctorInput } from "./doctor.js";
 import { CredentAgent } from "./client.js";
 import { MemoryVerificationStore, MemoryOrderStore } from "./index.js";
@@ -175,7 +176,16 @@ describe("CredentAgent.doctor() — assembles the instance's config + reads the 
 
   it("a fully-configured serverless instance is healthy (proves the wiring reads real config)", () => {
     vi.stubEnv("VERCEL", "1");
-    const ca = new CredentAgent({ walletOrigin: "https://shop.example", gateSecret: "s".repeat(32), ...sharedStores() });
+    // `mandateSigningKey` joined what "fully configured" means when the AP2 issuer landed: a
+    // serverless instance that generates its mandate key at boot signs mandates that stop
+    // verifying at the next cold start, so this fixture is not healthy without one.
+    const { privateKey } = generateKeyPairSync("ec", { namedCurve: "P-256" });
+    const ca = new CredentAgent({
+      walletOrigin: "https://shop.example",
+      gateSecret: "s".repeat(32),
+      mandateSigningKey: privateKey.export({ format: "jwk" }) as never,
+      ...sharedStores(),
+    });
     expect(ca.doctor().findings).toEqual([]);
   });
 
@@ -234,5 +244,38 @@ describe("CredentAgent.doctor() — assembles the instance's config + reads the 
   it("doctor() never throws and touches nothing external (plain data, no side effects without print)", () => {
     const ca = new CredentAgent();
     expect(() => ca.doctor()).not.toThrow();
+  });
+});
+
+// The AP2 mandate-signing key (spec 013). An ephemeral key is an ERROR rather than a warning:
+// every mandate the process signed stops verifying the moment it restarts — including mandates
+// already handed to a wallet, which no redeploy can call back.
+describe("the mandate signing key", () => {
+  const base: DoctorInput = {
+    walletOrigin: "https://shop.example",
+    hasGateSecret: true,
+    sharedVerificationStore: true,
+    sharedOrderStores: true,
+    env: {},
+  };
+
+  it("is an ERROR when the key was generated at boot", () => {
+    const report = runDoctor({ ...base, ephemeralMandateKey: true });
+    const finding = report.findings.find((f) => f.code === "ephemeral-mandate-key");
+    expect(finding?.level).toBe("error");
+    expect(finding?.fix).toMatch(/mandateSigningKey/);
+    expect(report.ok).toBe(false);
+  });
+
+  it("stays quiet when the host supplied a stable key", () => {
+    const report = runDoctor({ ...base, ephemeralMandateKey: false });
+    expect(report.findings.some((f) => f.code === "ephemeral-mandate-key")).toBe(false);
+    expect(report.ok).toBe(true);
+  });
+
+  it("is reported by the client that generated it", () => {
+    const credentagent = new CredentAgent({ walletOrigin: "https://shop.example" });
+    const report = credentagent.doctor();
+    expect(report.findings.some((f) => f.code === "ephemeral-mandate-key")).toBe(true);
   });
 });
