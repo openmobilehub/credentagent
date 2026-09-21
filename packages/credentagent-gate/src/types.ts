@@ -6,6 +6,7 @@
 //                manifest. Functions NEVER cross the wire. `requirements()` is that code→data boundary.
 
 import type { OrderStore, CreatedOrder, CompletedOrder } from "./orders.js";
+import type { PrivateJwkP256 } from "./ap2/keys.js";
 import type { WebhookOptions } from "./webhooks.js";
 import type { CatalogEntry } from "./delegated.js";
 
@@ -289,6 +290,19 @@ export interface CredentAgentOptions {
    * `process.env.GATE_SECRET`) for any multi-instance deploy.
    */
   gateSecret?: string;
+  /**
+   * The gate's AP2 mandate-signing key — a PRIVATE P-256 JWK, read from a secret manager.
+   *
+   * DISTINCT from {@link CredentAgentOptions.gateSecret}, which is a SYMMETRIC HMAC secret for
+   * challenge tokens. This one is ASYMMETRIC and its public half is published to the world at
+   * `/.well-known/did.json`, so anyone can verify a mandate this gate signed. Two different keys
+   * under one name is how a configuration mistake becomes silent, which is why they are named
+   * apart rather than sharing a `signingKey`.
+   *
+   * Omit for local dev and the gate generates one at boot — `doctor()` reports that as an ERROR,
+   * because every mandate this process signed stops verifying the moment it restarts.
+   */
+  mandateSigningKey?: PrivateJwkP256;
   /**
    * Outbound HTTP webhooks (spec 010). Register endpoint URL(s) + their `whsec_` secret and every
    * settled order is POSTed to them as a signed event — the durable, cross-service signal the

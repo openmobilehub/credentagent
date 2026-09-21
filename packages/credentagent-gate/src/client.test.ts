@@ -5,6 +5,9 @@ import { describe, it, expect, vi } from "vitest";
 import { CredentAgent } from "./client.js";
 import { age, required, defineCredential, dcql, gate } from "./credentials.js";
 import type { Credential, GateOrder } from "./types.js";
+import { generateKeyPairSync } from "node:crypto";
+import type { PrivateJwkP256, PublicJwkP256 } from "./ap2/keys.js";
+import { verifyMandate } from "./ap2/verify.js";
 
 const order: GateOrder = {
   id: "ORD-9",
@@ -99,5 +102,90 @@ describe("CredentAgent — eager credential registration (item 5, cold-instance 
 
   it("without declaring them, a fresh instance's registry has no custom gate until requirements() runs", () => {
     expect(registryOf(new CredentAgent())?.get("prescription")).toBeUndefined();
+  });
+});
+
+// The AP2 mandate-signing key and its publication (spec 013). Without a published public key
+// the signature is checkable only by us, which would make "real signatures" a hollow claim.
+describe("the published mandate key", () => {
+  function p256Jwk(): PrivateJwkP256 {
+    const { privateKey } = generateKeyPairSync("ec", { namedCurve: "P-256" });
+    return privateKey.export({ format: "jwk" }) as unknown as PrivateJwkP256;
+  }
+
+  /** A minimal Express stand-in that records the GET routes something registers on it. */
+  function appWithRoutes() {
+    const routes = new Map<string, (req: unknown, res: { json: (b: unknown) => void }) => void>();
+    return {
+      locals: {} as Record<string, unknown>,
+      get: (path: string, handler: (req: unknown, res: { json: (b: unknown) => void }) => void) => routes.set(path, handler),
+      routes,
+    };
+  }
+
+  function bodyOf(app: ReturnType<typeof appWithRoutes>, path: string): Record<string, unknown> | undefined {
+    const handler = app.routes.get(path);
+    if (!handler) return undefined;
+    let body: Record<string, unknown> | undefined;
+    handler({}, { json: (b) => (body = b as Record<string, unknown>) });
+    return body;
+  }
+
+  it("serves a DID document whose id matches the issuer, and never the private half", () => {
+    const credentagent = new CredentAgent({ walletOrigin: "https://shop.example", mandateSigningKey: p256Jwk() });
+    const app = appWithRoutes();
+    credentagent.mount(app as never);
+
+    const doc = bodyOf(app, "/.well-known/did.json");
+    expect(doc, "mount() must serve /.well-known/did.json").toBeDefined();
+    expect(doc?.id).toBe("did:web:shop.example");
+    expect(credentagent.ap2.issuer).toBe("did:web:shop.example");
+    expect(JSON.stringify(doc)).not.toContain('"d"');
+  });
+
+  // mount() has three branches (seams, composed-host, legacy) and every one of them must publish
+  // the key — a mandate whose key is unreachable on two of three mounting styles is not verifiable.
+  it("publishes the key on the composed-host branch too", () => {
+    const credentagent = new CredentAgent({ walletOrigin: "https://shop.example", mandateSigningKey: p256Jwk() });
+    const app = appWithRoutes();
+    app.locals.credentagent = { orderStore: {}, catalog: {}, completion: () => {}, signingKey: "s".repeat(32) };
+    credentagent.mount(app as never);
+    expect(bodyOf(app, "/.well-known/did.json")?.id).toBe("did:web:shop.example");
+  });
+
+  it("mints with the key it published, and that mandate verifies against it", async () => {
+    const credentagent = new CredentAgent({ walletOrigin: "https://shop.example", mandateSigningKey: p256Jwk() });
+    const minted = await credentagent.ap2.payment({
+      transactionId: "tx-1",
+      payee: { name: "Shop", merchant_id: "shop-1" },
+      amount: { amount: 12400, currency: "USD" },
+      instrument: { type: "card", display_name: "Visa ••4242" },
+    });
+    const app = appWithRoutes();
+    credentagent.mount(app as never);
+
+    const doc = bodyOf(app, "/.well-known/did.json") as { verificationMethod: Array<{ publicKeyJwk: PublicJwkP256 }> };
+    const published = doc.verificationMethod[0].publicKeyJwk;
+    const verdict = await verifyMandate(minted.token, { publicJwk: published });
+    expect(verdict.ok, "a mandate must verify against the key the gate publishes").toBe(true);
+  });
+});
+
+// The public surface is a boundary, not a convenience. A caller that can reach the raw signer
+// or the SD-JWT instance can build a second verification door — which is the exact shape
+// `verifyMandate` replaced, and the one that failed open because nobody re-read it.
+describe("the AP2 public surface", () => {
+  it("publishes mint-and-verify but not the crypto layer under it", async () => {
+    const api = await import("./index.js");
+
+    expect(api).toHaveProperty("Ap2Issuer");
+    expect(api).toHaveProperty("verifyMandate");
+    expect(api).toHaveProperty("openCheckoutPayload");
+    expect(api).toHaveProperty("toMinorUnits");
+    expect(api).toHaveProperty("didDocument");
+
+    for (const internal of ["sdJwtInstance", "es256Signer", "es256Verifier", "es256Verify", "cnfKbVerifier", "signCompactJwt", "verifyCompactJwt", "digestToken"]) {
+      expect(api, `${internal} must stay internal`).not.toHaveProperty(internal);
+    }
   });
 });
