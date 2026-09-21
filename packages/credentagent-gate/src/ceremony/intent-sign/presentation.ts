@@ -17,11 +17,13 @@
 //
 // It also does not decide whether the mandates are the RIGHT ones. That comparison is
 // `mandates.ts`, against the server's own grant record, and the caller must do it.
-import { createHash, createPublicKey, verify as nodeVerify, X509Certificate } from "node:crypto";
+import { createHash, createPublicKey, X509Certificate } from "node:crypto";
+// The ONE ES256 check in the package. This rail had a private copy of it; two copies is two
+// places for the `ieee-p1363` detail to be got wrong, and only one of them was round-tripped
+// against a real signer.
+import { es256Verify } from "../../ap2/sdjwt.js";
 import { decodeSdJwt, splitSdJwt } from "@sd-jwt/core";
 import { DELEGATE_KB_TYP, DELEGATE_PAYLOAD_CLAIM, type MandateContent } from "./mandates.js";
-
-const utf8 = new TextEncoder();
 
 const hasher = (data: string | ArrayBuffer, alg: string): Uint8Array => {
   const input = typeof data === "string" ? Buffer.from(data, "utf-8") : Buffer.from(data);
@@ -34,19 +36,6 @@ function segment<T>(token: string, index: 0 | 1): T | undefined {
     return JSON.parse(Buffer.from(token.split(".")[index], "base64url").toString("utf-8")) as T;
   } catch {
     return undefined;
-  }
-}
-
-/**
- * ES256 verify. `ieee-p1363` is the raw r‖s encoding JWS uses — node's EC default is DER,
- * which would reject every valid signature. Any malformed input verifies as FALSE rather than
- * throwing, so a caller cannot mistake "could not check" for "inconclusive, carry on".
- */
-function es256(publicKey: ReturnType<typeof createPublicKey>, data: string, sig: string): boolean {
-  try {
-    return nodeVerify("sha256", utf8.encode(data), { key: publicKey, dsaEncoding: "ieee-p1363" }, Buffer.from(sig, "base64url"));
-  } catch {
-    return false;
   }
 }
 
@@ -125,7 +114,7 @@ export async function verifyDelegatedPresentation(args: {
   }
 
   const [issuerHeader, issuerBody, issuerSig] = parts.jwt.split(".");
-  if (!es256(issuerKey, `${issuerHeader}.${issuerBody}`, issuerSig ?? "")) {
+  if (!es256Verify(issuerKey, `${issuerHeader}.${issuerBody}`, issuerSig ?? "")) {
     return { ok: false, reason: "credential signature does not verify against its own certificate" };
   }
 
@@ -148,7 +137,7 @@ export async function verifyDelegatedPresentation(args: {
   }
 
   const [kbHeader, kbBody, kbSig] = parts.kbJwt.split(".");
-  if (!es256(holderKey, `${kbHeader}.${kbBody}`, kbSig ?? "")) {
+  if (!es256Verify(holderKey, `${kbHeader}.${kbBody}`, kbSig ?? "")) {
     return { ok: false, reason: "key-binding signature does not verify against the credential's cnf key" };
   }
 

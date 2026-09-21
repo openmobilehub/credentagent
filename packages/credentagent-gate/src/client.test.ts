@@ -170,3 +170,22 @@ describe("the published mandate key", () => {
     expect(verdict.ok, "a mandate must verify against the key the gate publishes").toBe(true);
   });
 });
+
+// The public surface is a boundary, not a convenience. A caller that can reach the raw signer
+// or the SD-JWT instance can build a second verification door — which is the exact shape
+// `verifyMandate` replaced, and the one that failed open because nobody re-read it.
+describe("the AP2 public surface", () => {
+  it("publishes mint-and-verify but not the crypto layer under it", async () => {
+    const api = await import("./index.js");
+
+    expect(api).toHaveProperty("Ap2Issuer");
+    expect(api).toHaveProperty("verifyMandate");
+    expect(api).toHaveProperty("openCheckoutPayload");
+    expect(api).toHaveProperty("toMinorUnits");
+    expect(api).toHaveProperty("didDocument");
+
+    for (const internal of ["sdJwtInstance", "es256Signer", "es256Verifier", "es256Verify", "cnfKbVerifier", "signCompactJwt", "verifyCompactJwt", "digestToken"]) {
+      expect(api, `${internal} must stay internal`).not.toHaveProperty(internal);
+    }
+  });
+});

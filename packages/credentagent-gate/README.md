@@ -159,9 +159,56 @@ Each finding is `{ level: "error" | "warn", code, message, fix }`. It checks the
 | `localhost-wallet-origin` | `walletOrigin` is localhost on a deployment | pass your public `https` origin |
 | `in-memory-verification-store` | the default in-memory `store` on a deployment | inject a shared `{ store }` (Redis/Upstash) |
 | `in-memory-order-store` | the default in-memory order stores on a deployment | inject `{ orderStore, completedOrderStore }` |
+| `ephemeral-mandate-key` | no `mandateSigningKey` — the AP2 key was generated at boot (**always an error**) | pass a stable private P-256 JWK as `{ mandateSigningKey }` |
 
-In plain local dev — no deployment env signals (`VERCEL`, `AWS_LAMBDA_*`, `NODE_ENV=production`, …) — it
-reports nothing, so the zero-config quickstart stays quiet.
+In plain local dev — no deployment env signals (`VERCEL`, `AWS_LAMBDA_*`, `NODE_ENV=production`, …) — the
+deployment checks stay quiet, so the zero-config quickstart is undisturbed. `ephemeral-mandate-key` is the
+one exception: it fires wherever the key was generated at boot, because the damage is not "might not work
+across instances" but "every mandate already signed stops verifying at the next restart".
+
+### AP2 mandates — signing them, and letting anyone check
+
+The gate records what a buyer authorized as an [AP2](https://github.com/google-agentic-commerce/AP2)
+mandate: an SD-JWT (RFC 9901) signed ES256, typed by AP2's `vct` claim. Pass the key and `mount()`
+publishes its public half, so a mandate this gate signed is verifiable by someone who does not have
+your source:
+
+```ts
+const credentagent = new CredentAgent({
+  walletOrigin: "https://shop.example",
+  mandateSigningKey: JSON.parse(process.env.MANDATE_SIGNING_KEY),   // a PRIVATE P-256 JWK
+});
+credentagent.mount(app);        // serves GET /.well-known/did.json
+```
+
+`mandateSigningKey` is **not** `gateSecret`. `gateSecret` is a symmetric HMAC secret for challenge
+tokens; this is an asymmetric key whose public half goes to the world. Omit it and the gate generates
+one at boot — fine for a dev server, an error on anything else.
+
+Mint and check:
+
+```ts
+const mandate = await credentagent.ap2.payment({
+  transactionId: checkout.checkoutHash,
+  payee: { name: "Shop", merchant_id: "shop-1" },
+  amount: { amount: 12400, currency: "USD" },      // integer MINOR units — $124.00
+  instrument: { type: "card", display_name: "Visa ••4242" },
+});
+
+const verdict = await verifyMandate(mandate.token, { publicJwk: credentagent.ap2.publicJwk });
+if (!verdict.ok) console.error(verdict.code);       // "signature" | "expired" | "key-binding" | …
+```
+
+Money is an **integer in ISO-4217 minor units**, never a float — `toMinorUnits(124, "USD") === 12400`.
+Once both sides of an amount comparison are integers they either match or they do not, which is what
+security invariant 3 needs.
+
+**What a verified mandate means, exactly:** the bytes were signed by the key named, it has not expired,
+and — when key-bound — the holder proved possession of the key the mandate's own `cnf` commits to. It
+does **not** mean the amount is right (re-price against your catalog; that is security invariant 2 and
+`verifyMandate` will never do it for you), that a human agreed, or that the credential behind it came
+from a real issuer — that last one is
+[#14](https://github.com/openmobilehub/credentagent/issues/14) and still open.
 
 ### Webhooks — tell a *different* service when an order settles
 

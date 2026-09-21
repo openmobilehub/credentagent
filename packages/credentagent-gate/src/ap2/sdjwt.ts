@@ -29,17 +29,30 @@ export function es256Signer(privateKey: KeyObject): Signer {
     nodeSign("sha256", utf8.encode(data), { key: privateKey, dsaEncoding: "ieee-p1363" }).toString("base64url");
 }
 
-/** ES256 verifier against a known public JWK. Any malformed input verifies as FALSE, never
- *  as a thrown error a caller might catch and treat as "inconclusive". */
+/**
+ * THE ES256 check in this package. Every JWS signature the gate verifies — a mandate, a key
+ * binding, a wallet's credential — goes through this one function.
+ *
+ * It takes a `KeyObject` rather than a JWK so a caller holding a key that came from somewhere
+ * other than a JWK (an X.509 certificate in a credential's `x5c`, say) can share it without a
+ * round trip through JWK, which would quietly mangle any key that is not EC P-256.
+ *
+ * Any malformed input verifies as FALSE, never as a thrown error a caller might catch and treat
+ * as "inconclusive".
+ */
+export function es256Verify(publicKey: KeyObject, data: string, sig: string): boolean {
+  try {
+    return nodeVerify("sha256", utf8.encode(data), { key: publicKey, dsaEncoding: "ieee-p1363" }, Buffer.from(sig, "base64url"));
+  } catch {
+    return false;
+  }
+}
+
+/** {@link es256Verify} against a known public JWK, in the shape @sd-jwt/core wants. */
 export function es256Verifier(publicJwk: PublicJwkP256): Verifier {
   return (data: string, sig: string) => {
     try {
-      return nodeVerify(
-        "sha256",
-        utf8.encode(data),
-        { key: importVerifyKey(publicJwk), dsaEncoding: "ieee-p1363" },
-        Buffer.from(sig, "base64url"),
-      );
+      return es256Verify(importVerifyKey(publicJwk), data, sig);
     } catch {
       return false;
     }

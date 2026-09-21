@@ -15,11 +15,6 @@
 // increment of spec 013); how strongly the signature binds is what `trust_level` reports.
 // Neither proves the credential behind the record came from a real issuer — that is #14
 // (issuer-verified trust) and is still open.
-//
-// SCOPE: this file and `money.ts` are the first increment of spec 013 — the payloads and the
-// arithmetic, with no crypto and no wiring. Nothing in the package imports them yet, and they
-// are deliberately NOT exported from `index.ts` until the issuer/verifier lands, so the
-// public API never offers a mandate type a caller has no way to produce or check.
 
 /** Verifiable Credential Type — the AP2 mandate discriminator (SD-JWT `vct`). */
 export const VCT = {
