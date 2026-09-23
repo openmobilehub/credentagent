@@ -508,7 +508,7 @@ paths are unaffected.
 
 ## `@openmobilehub/credentagent-storefront`
 
-The storefront core — a runnable MCP shopping server (nine tools + the widget bundle +
+The storefront core — a runnable MCP shopping server (ten tools + the widget bundle +
 a checkout page), **catalog-injected**, gate-ready. Two entry points: `.` (the pure
 pricing/order model) and `./server` (the runnable server, brings in
 `@modelcontextprotocol/sdk` + `express`).
@@ -591,9 +591,9 @@ Pure, catalog-injected functions (no globals) — useful standalone or to fork:
 ```ts
 import {
   priceCart, createOrder, requiredAgeForLines, getProduct, getReviews,
-  SAMPLE_CATALOG, LOYALTY_DISCOUNT_PCT,
+  listProducts, projectProduct, SAMPLE_CATALOG, LOYALTY_DISCOUNT_PCT,
 } from "@openmobilehub/credentagent-storefront";
-import type { Product, Order, PricedCart, PricedCartLine, Review, PriceOpts } from "@openmobilehub/credentagent-storefront";
+import type { Product, Order, PricedCart, PricedCartLine, Review, PriceOpts, ProductQuery, ProductPage } from "@openmobilehub/credentagent-storefront";
 
 const cart = priceCart([{ productId: "oak-whiskey", quantity: 1 }], SAMPLE_CATALOG);
 cart.hasAgeRestricted;                              // true → wire the gate on checkout
@@ -601,6 +601,13 @@ requiredAgeForLines(cart.lines, SAMPLE_CATALOG);   // 21
 
 const order = createOrder([{ productId: "oak-whiskey", quantity: 1 }], "ORD-1", SAMPLE_CATALOG);
 order.total;                                       // 124
+
+// The catalog read behind the list-products tool (and browse-products):
+const page = listProducts(SAMPLE_CATALOG, { category: "Beverages", query: "duo", limit: 10, cursor: undefined });
+page.products;                                     // matches, in catalog order
+page.totalCount;                                   // 1 — matches across all pages
+page.nextCursor;                                   // null — else pass back as `cursor`; a malformed one throws RangeError
+projectProduct(page.products[0], ["price"]);       // { id: "celebration-champagne", price: 89 } — id always kept
 ```
 
 Each product's `minimumAge` is the single field that ties the two packages together:

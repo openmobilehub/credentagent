@@ -18,6 +18,14 @@ export interface ReaderContext {
   // Request nonce, sealed so /verify can check the wallet's response is bound
   // to THIS request (credential gate; the payment gate also binds via transaction_data).
   nonce?: string;
+  // Intent-sign rail (spec 012): the grant this ceremony signs + the bounds it was
+  // sealed for. /verify re-derives boundsHash from the SERVER's grant record and
+  // requires it to equal `boundsHash` (FR-2 equality check), and re-derives the nonce
+  // from `challenge` + `boundsHash`. Sealed (not client-supplied) so neither can be
+  // swapped after the request is issued. Absent on the credential / payment rails.
+  grantId?: string;
+  challenge?: string;
+  boundsHash?: string;
 }
 
 interface SealedPayload extends ReaderContext {
@@ -40,5 +48,12 @@ export async function openReaderContext(token: string, secret: string): Promise<
   const { plaintext } = await jose.compactDecrypt(token, keyFromSecret(secret));
   const payload = JSON.parse(new TextDecoder().decode(plaintext)) as SealedPayload;
   if (Date.now() > payload.exp) throw new Error("reader context expired");
-  return { ecdhPrivateJwk: payload.ecdhPrivateJwk, transactionDataB64: payload.transactionDataB64, nonce: payload.nonce };
+  return {
+    ecdhPrivateJwk: payload.ecdhPrivateJwk,
+    transactionDataB64: payload.transactionDataB64,
+    nonce: payload.nonce,
+    grantId: payload.grantId,
+    challenge: payload.challenge,
+    boundsHash: payload.boundsHash,
+  };
 }

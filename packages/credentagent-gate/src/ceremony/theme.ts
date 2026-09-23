@@ -19,6 +19,7 @@
 // stay satisfied — the wire crypto is real; the issuer trust anchor is not.
 
 import type { Branding } from "../types.js";
+import type { CompletionRefusalReason } from "./types.js";
 
 function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -255,6 +256,16 @@ const DESIGN_CSS = `
     border: 1px solid var(--hairline); border-left: 3px solid var(--danger);
     border-radius: 10px; font-size: .88rem; color: var(--danger);
   }
+  /* A refused completion: the same calm, muted treatment as settle-failed — the buyer
+     needs the OUTCOME and their next step, not an alarming wall. */
+  .refusal {
+    margin-top: 14px; padding: 12px 14px; background: #fef2f2;
+    border: 1px solid var(--hairline); border-left: 3px solid var(--danger);
+    border-radius: 10px; font-size: .88rem; color: var(--ink);
+  }
+  .refusal .refusal-head { font-weight: 700; color: var(--danger); margin-bottom: 4px; }
+  .refusal .refusal-detail { color: var(--ink); }
+  .refusal .ret { display: inline-block; margin-top: 8px; color: var(--accent); font-weight: 600; text-decoration: none; }
 `;
 
 /** <head> with the shared design-system CSS. `extraCss` lets a page add the few
@@ -311,6 +322,52 @@ export function completionHandoffBanner(returnUrl?: string): string {
     ? `<a class="ret" href="${escapeHtml(returnUrl)}">Staying in the browser? Return to checkout ›</a>`
     : "";
   return `<div class="complete-banner"><div class="big">✓ Order complete</div><div class="sub">You can <strong>close this window</strong> and continue in your agent — it has your order and will pick up from here.</div>${ret}</div>`;
+}
+
+/**
+ * Buyer-facing copy for every refusal `completeOrder` can make, keyed by its `reason`
+ * (plus `unknown` for a reason this build doesn't recognise — a newer gate talking to an
+ * older page). The payment rails embed the whole map server-side and pick one at runtime,
+ * so escaping happens HERE and the page script stays logic-free.
+ *
+ * This exists because a refusal used to render as nothing at all: the pages showed the
+ * success banner on `completed` and dropped `reason` on the floor, so a buyer whose order
+ * was correctly refused saw "✓ Payment Mandate authorized", four green gates, and silence
+ * — indistinguishable from a hang. Every notice therefore states the OUTCOME ("the order
+ * was not placed") before the cause, and names the buyer's next step in their language.
+ *
+ * `returnUrl` (the checkout hub) adds the way back; omit it for an MCP-only flow where
+ * there is no hub to return to. The `Record` is exhaustive over `CompletionRefusalReason`,
+ * so adding a reason to that union fails the build until its copy lands.
+ */
+export function refusalNotices(opts: { returnUrl?: string } = {}): Record<CompletionRefusalReason | "unknown", string> {
+  const back = opts.returnUrl
+    ? `<a class="ret" href="${escapeHtml(opts.returnUrl)}">Return to checkout ›</a>`
+    : "";
+  const notice = (detail: string): string =>
+    `<div class="refusal"><div class="refusal-head">The order was not placed</div><div class="refusal-detail">${detail}</div>${back}</div>`;
+  return {
+    age: notice(
+      "This order has an age-restricted item and no age proof on file for it yet. Prove your age on the checkout page, then authorize payment again.",
+    ),
+    gate: notice(
+      "This order still needs a credential you haven't presented yet. Finish the outstanding step on the checkout page, then authorize payment again.",
+    ),
+    reprice: notice(
+      "The total no longer matches what these items cost. Start a new checkout to get a fresh total.",
+    ),
+    reconcile: notice(
+      "The signed cart and the signed payment disagree about the amount or currency, so neither was trusted. Start a new checkout.",
+    ),
+    "cart-mandate": notice(
+      "This checkout link has expired or been altered since it was issued. Start a new checkout.",
+    ),
+    gates: notice("One of the payment checks did not pass, so nothing was authorized."),
+    draw: notice(
+      "The spending grant behind this purchase could not cover it. Authorize the payment yourself, or set up a new grant.",
+    ),
+    unknown: notice("The payment was authorized but the order did not complete. Nothing was charged."),
+  };
 }
 
 // ── Order summary card ──────────────────────────────────────────────────────
@@ -442,4 +499,18 @@ export function railCompleteScript(): string {
  */
 export function trustFooter(): string {
   return `<div class="trust"><div class="trust-line">🔒 presence-only-demo · secured by CredentAgent · the wire crypto is real; issuer trust anchor is not</div></div>`;
+}
+
+/**
+ * The honesty line for the intent-sign rail (spec 012, FR-4). Distinct from
+ * `trustFooter()` because the trust level is different: here the wallet's device
+ * signature IS verified, so the disclosure says so — while stating plainly that the
+ * trust ANCHOR is still a demo credential (no issuer/VICAL check — #14). It MUST keep
+ * the literal token "device-signed".
+ *
+ * Like `trustFooter()`, it takes NO branding argument: host branding customises the
+ * chrome, never the trust disclosure (a bypass test asserts it stays fixed).
+ */
+export function deviceSignedTrustFooter(): string {
+  return `<div class="trust"><div class="trust-line">🔒 device-signed · secured by CredentAgent · the device signature is real; the trust anchor is a demo credential (no issuer verification yet)</div></div>`;
 }

@@ -74,7 +74,7 @@ badge.
 
 **Pass criteria:** the picker offers the right card, the order completes, and **no red trust
 warnings** appear — issuer (via the imported **VICAL**) *and* verifier (via the imported
-**RICAL** matched against the reader identity the gate now presents, #51).
+**RICAL** matched against the reader identity the gate presents).
 
 > **The verifier side needs the reader *private key*, which is not committed.** `run-gate.mjs`
 > configures `readerIdentity` **only if `keys/reader-key.pem` exists locally** — and that key is

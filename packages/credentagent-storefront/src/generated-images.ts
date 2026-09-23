@@ -22,5 +22,6 @@ export const PRODUCT_IMAGES: Record<string, string> = {
   "drift-mouse": tile("🖱️", ["#0f766e", "#2dd4bf"]),
   "celebration-champagne": tile("🍾", ["#be185d", "#f9a8d4"]),
   "summit-backpack": tile("🎒", ["#1d4ed8", "#60a5fa"]),
+  "court-sneakers": tile("👟", ["#334155", "#94a3b8"]),
   "lumen-desk-lamp": tile("💡", ["#a16207", "#fde047"]),
 };

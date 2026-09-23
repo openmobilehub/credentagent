@@ -14,7 +14,7 @@
 // order id/token (invariant 2).
 import type { CeremonyOrder } from "../types.js";
 import type { Branding } from "../../types.js";
-import { pageHead, brandHeader, orderSummaryCard, trustFooter, settlingBar, completionHandoffBanner, railCompleteScript } from "../theme.js";
+import { pageHead, brandHeader, orderSummaryCard, trustFooter, settlingBar, completionHandoffBanner, railCompleteScript, refusalNotices } from "../theme.js";
 
 function money(amount: number, currency: string): string {
   return new Intl.NumberFormat("en-US", { style: "currency", currency }).format(amount);
@@ -87,6 +87,10 @@ ${pageHead(`Authorize payment · ${order.id}`, extraCss, args.branding)}
     const OPTIONS_URL = ${JSON.stringify(optionsUrl)};
     const RETURN_URL = ${JSON.stringify(returnUrl)};
     const DONE_BANNER = ${JSON.stringify(completionHandoffBanner(returnUrl))};
+    // Buyer-facing copy for every refusal the completion seam can make, rendered
+    // server-side (escaped there) and picked by reason at runtime. Without this a refused
+    // order painted the authorized mandate + green gates and then nothing at all.
+    const REFUSALS = ${JSON.stringify(refusalNotices({ returnUrl }))};
     const log = document.getElementById("log");
     const btn = document.getElementById("go");
     const settling = document.getElementById("settling");
@@ -150,9 +154,14 @@ ${pageHead(`Authorize payment · ${order.id}`, extraCss, args.branding)}
       // order-status and resumes). No auto-redirect — we don't yank the buyer off the
       // "you're done" message; the on-chain proof + a secondary return link stay below.
       const done = out.completed ? DONE_BANNER : "";
+      // …and a NON-completion leads with why. The mandate below really was authorized, so
+      // showing only that (as this page used to) reads as success — or as a hang. The
+      // configured-but-failed settle renders its own calm line further down, so it is the
+      // one non-completion that does not take a notice here.
+      const refused = out.completed || out.settlementError ? "" : (REFUSALS[out.reason] || REFUSALS.unknown);
       const gates = '<div class="gate ' + (allPass ? "pass" : "fail") + '">' +
         (allPass ? "✓ All " + out.gates.length + " authorization gates passed" : "✗ " + (out.gates.length - passCount) + " of " + out.gates.length + " failed") + "</div>" + gateLines;
-      el.innerHTML = done + '<div class="row-ok">✓ Payment Mandate authorized (amount-bound)</div>' +
+      el.innerHTML = done + refused + '<div class="row-ok">✓ Payment Mandate authorized (amount-bound)</div>' +
         '<div class="small" style="margin:4px 0 8px;">' + esc(out.mandate.id) + "</div>" + gates + settlement;
       el.style.display = "block";
       if (out.completed) {

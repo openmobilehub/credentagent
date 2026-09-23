@@ -45,8 +45,17 @@ export interface DcqlQuery {
  * *trust* (issuer / device signatures) — a self-crafted mdoc would pass. The
  * manifest and the envelope both carry this so the limitation is stated in the
  * type, not buried in prose: it's a flow demo, not a real safety control yet.
+ *
+ * `"device-signed"` (spec 012) sits BETWEEN the two: the wallet's mdoc DeviceAuth
+ * signature IS verified (real holder-of-key binding over the exact grant bounds),
+ * but the device key rides in a self-minted demo credential with no issuer/VICAL
+ * anchor (that is #14). So it is stronger than presence-only (the signature is real)
+ * yet still short of `"issuer-verified"` (the anchor is not) — a self-crafted device
+ * key would pass. The gate reports it for in-gate verification and NEVER claims
+ * `"issuer-verified"` itself; only an external verifier may report that (relayed
+ * verbatim through the delegated seam).
  */
-export type TrustLevel = "presence-only-demo" | "issuer-verified";
+export type TrustLevel = "presence-only-demo" | "device-signed" | "issuer-verified";
 
 // ── Effects (tagged data the resolver interprets — never a handler in v0.1) ──
 
@@ -289,8 +298,17 @@ export interface CredentAgentOptions {
   /**
    * The priced catalog (dollars) the `grants` resource prices + bounds delegated spends from —
    * the ONE price source (invariant 2: a caller never passes an amount). Entries may carry
-   * `minAge` (age-restricted → non-delegable) and `category` (feeds a grant's `allow` bounds).
-   * Omit if you don't use `grants`.
+   * `minAge` (age-restricted — the human unlocks these by proving their age when they approve a
+   * grant), `category` (feeds a grant's `allow` bounds) and `name` (what the approve page calls
+   * the product). Omit if you don't use `grants`.
    */
   catalog?: Record<string, CatalogEntry>;
+  /**
+   * Your loyalty programme's discount, as a percentage (e.g. `10`). Setting it OPTS IN: a grant's
+   * approve page grows a "present your membership" step, and a grant the human proves one on
+   * prices every unattended purchase at this rate (#172). Omit ⇒ no membership step and full
+   * catalog price, exactly as before. The rate is SEALED into each grant when the human approves
+   * it, so changing this never re-prices a grant that is already approved.
+   */
+  loyaltyDiscountPct?: number;
 }

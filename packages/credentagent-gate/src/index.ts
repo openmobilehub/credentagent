@@ -36,8 +36,49 @@ export type { OrderStore, CreatedOrder, CompletedOrder, OrderDoor, OrderDoorCode
 // `await credentagent.grants.create({ merchant, budget, perSpend, allow? })` → a pending grant;
 // the human approves once (grant.approveUrl) → `grant.spend({ idempotencyKey, items })` runs the
 // REAL engine (per-spend cap, budget, single-use, revocation, age-non-delegable) → typed door.
-export { Grants } from "./grants.js";
-export type { Grant, GrantStatus, GrantDoorCode, GrantAllow, CreateGrantOptions, SpendDoor, SpendItems } from "./grants.js";
+export { Grants, grantLifecycle } from "./grants.js";
+export type { Grant, GrantStatus, GrantLifecycle, GrantUsage, GrantDoorCode, GrantAllow, CreateGrantOptions, GrantSigning, GrantMandateEvidence, SpendDoor, SpendItems } from "./grants.js";
+// `grant.ageScope` — the age-restricted products a grant's bounds NAME, so the page can say so
+// before the human authorizes (#172). Read straight from the catalog; disclosure, not enforcement.
+export { ageScopeFor } from "./grants-age.js";
+export type { GrantAgeScope, AgeRestrictedItem } from "./grants-age.js";
+
+// ── Device-signed grants (spec 012, #144) — the wallet SIGNS the Intent Mandate first ──
+// Opt a grant into wallet signing with `grants.create({ …, signing: "device" })`: its
+// approveUrl serves the signing ceremony, and it only authorizes on a REAL mdoc DeviceAuth
+// signature over its exact bounds (trust_level "device-signed" — the signature is real; the
+// trust anchor is still a demo credential, #14). These exports are the building blocks + a
+// SIMULATED wallet for testing the flow in-process (no phone), the way Stripe ships test cards.
+export { canonicalIntentBounds, boundsHash, deriveNonce } from "./ceremony/intent-sign/bounds.js";
+export type { IntentBoundsInput } from "./ceremony/intent-sign/bounds.js";
+export { buildIntentSignRequest } from "./ceremony/intent-sign/request.js";
+export type { SignedIntentRequest } from "./ceremony/intent-sign/request.js";
+export { verifyIntentPresentation, inGateBackend, memoryNonceGuard } from "./ceremony/intent-sign/verify.js";
+export type { IntentVerifyResult, IntentVerifyBackend, IntentTrustVerdict, NonceGuard } from "./ceremony/intent-sign/verify.js";
+export { devSimulateWalletSignature } from "./ceremony/intent-sign/simulate.js";
+export type { SimulateOptions } from "./ceremony/intent-sign/simulate.js";
+
+// ── MRTR (spec: Multi Round-Trip Requests) — "I need more from the human before I can do this" ──
+// The MCP pattern for a tool that cannot complete yet: answer with `input_required` (the questions
+// + an opaque `requestState`), the client asks the human, then calls the tool AGAIN echoing the
+// blob. `MultiRoundTrip` seals that blob (HMAC + TTL + request/principal binding) so the server
+// keeps NO session between rounds and a hand-edited blob is refused, never trusted.
+//   const round = rounds.open({ request: "create-spending-grant", params, state, responses });
+//   if (!round.answers.size) return round.ask({ size: { message: "Which size?", fields: { size: { type: "string" } } } });
+// Implemented here because @modelcontextprotocol/sdk does not ship the MRTR types yet.
+export { MultiRoundTrip, DEFAULT_MRTR_TTL_MS } from "./mrtr.js";
+export type {
+  Ask,
+  AskField,
+  AskOptions,
+  InputRequests,
+  InputRequiredResult,
+  MultiRoundTripOptions,
+  MultiRoundTripRefusal,
+  OpenRoundArgs,
+  Round,
+} from "./mrtr.js";
+
 
 // ── Webhooks (spec 010) — the REAL HTTP completion signal ───────────────────
 // SEND: `new CredentAgent({ webhooks: { endpoints: [{ url, secret }] } })` → every settled order
@@ -88,6 +129,13 @@ export type { PaymentBinding, ReconcileRefusal, ReconcileVerdict } from "./cerem
 // polished, route-agnostic page driven by the `requires` manifest (each gate links
 // to its OWN approveUrl) so the two surfaces never drift (T030).
 export { renderRequirements } from "./ceremony/checkout-page.js";
+// The design-system primitives every ceremony page is built from — the page shell + CSS, the
+// brand row, and the step rail. Exported so a HOST page that sits inside the same flow (a grant
+// index, a landing step, a confirmation) can match the rails instead of re-copying their CSS and
+// drifting from it. `trustFooter` is deliberately NOT here: that honesty line belongs to the
+// OpenID4VP rails and must not be pasted onto a page making a different claim.
+export { pageHead, brandHeader, progressRail } from "./ceremony/theme.js";
+export type { RailStep } from "./ceremony/theme.js";
 export type {
   RenderOrder,
   RenderOrderLine,
@@ -134,6 +182,11 @@ export type { Refusal, RefusalCode, RefusalEnforcer, RefusalRetryable } from "./
 // completeOrder) is bundled. Demo-fenced today; stable surface for the wallet-server increment.
 export { DelegatedGate, DelegatedGrant } from "./delegated.js";
 export type { DelegatedGateOptions, PreApproveOptions, Purchase, SpendResult, CatalogEntry } from "./delegated.js";
+// The age claim a human seals into a grant at approval time (#172) + the ONE predicate that
+// answers "does it cover an order demanding N?" — so a host pre-check can ask the same question
+// the gate's completion path asks, rather than inventing a second, drifting rule.
+export { ageProofCovers } from "./ceremony/mandate.js";
+export type { SealedAgeProof, SealedMembershipProof } from "./ceremony/mandate.js";
 export type {
   CeremonyOrder,
   CeremonyOrderLine,

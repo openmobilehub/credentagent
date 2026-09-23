@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { CredentAgent } from "./client.js";
+import { grantLifecycle } from "./grants.js";
 import type { Grant } from "./grants.js";
 
 // A priced catalog in dollars — the ONE price source. wine is age-restricted (non-delegable);
@@ -15,7 +16,7 @@ const client = () => new CredentAgent({ walletOrigin: "http://localhost:4000", c
 
 /** create + approve (the demo authorize seam) in one step, for tests past the lifecycle. */
 async function authorizedGrant(ca: CredentAgent, allow?: { skus?: string[]; categories?: string[] }): Promise<Grant> {
-  const g = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30, ...(allow ? { allow } : {}) });
+  const g = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30, ...(allow ? { allow } : {}), signing: "page" });
   await ca.grants._authorize(g.id);
   return (await ca.grants.retrieve(g.id))!;
 }
@@ -23,7 +24,7 @@ async function authorizedGrant(ca: CredentAgent, allow?: { skus?: string[]; cate
 describe("credentagent.grants — lifecycle (FR-007)", () => {
   it("create() returns a pending grant with an id + approveUrl; authorize flips it", async () => {
     const ca = client();
-    const g = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30 });
+    const g = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30 , signing: "page" });
     expect(g.id).toMatch(/^grant_/);
     expect(g.status).toBe("pending");
     expect(g.approveUrl).toContain(`/credentagent/grants/${g.id}`);
@@ -36,14 +37,14 @@ describe("credentagent.grants — lifecycle (FR-007)", () => {
   // would reach the engine... which was never minted — worse, an attacker-created record spends.
   it("BYPASS: a PENDING grant cannot spend — refused not-authorized", async () => {
     const ca = client();
-    const g = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30 });
+    const g = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30 , signing: "page" });
     const s = await g.spend({ idempotencyKey: "p1", items: [{ sku: "coffee" }] });
     expect(s).toMatchObject({ ok: false, code: "not-authorized" });
   });
 
   it("denied is TERMINAL: authorize after deny fails; spending refuses", async () => {
     const ca = client();
-    const g = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30 });
+    const g = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30 , signing: "page" });
     expect(await ca.grants._deny(g.id)).toBe(true);
     expect(await ca.grants._authorize(g.id)).toBe(false); // never authorizable after deny
     const s = await (await ca.grants.retrieve(g.id))!.spend({ idempotencyKey: "d1", items: [{ sku: "coffee" }] });
@@ -157,7 +158,7 @@ describe("credentagent.grants — the approve page (grants.serve, #112 P1)", () 
     const ca = client();
     const app = fakeApp();
     ca.grants.serve(app);
-    const g = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30, allow: { categories: ["Beverages"] } });
+    const g = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30, allow: { categories: ["Beverages"] }, signing: "page" });
 
     let res = fakeRes();
     await app._get.get("/credentagent/grants/:id")!({ params: { id: g.id } }, res);
@@ -168,13 +169,371 @@ describe("credentagent.grants — the approve page (grants.serve, #112 P1)", () 
     await app._post.get("/credentagent/grants/:id/approve")!({ params: { id: g.id } }, fakeRes());
     expect((await ca.grants.retrieve(g.id))!.status).toBe("authorized");
 
-    const g2 = await ca.grants.create({ merchant: "utopia", budget: 50, perSpend: 10 });
+    const g2 = await ca.grants.create({ merchant: "utopia", budget: 50, perSpend: 10 , signing: "page" });
     await app._post.get("/credentagent/grants/:id/deny")!({ params: { id: g2.id } }, fakeRes());
     expect((await ca.grants.retrieve(g2.id))!.status).toBe("denied");
 
     res = fakeRes();
     await app._get.get("/credentagent/grants/:id")!({ params: { id: "grant_nope" } }, res);
     expect(res._status).toBe(404);
+  });
+
+  // ── #172: the approve page must DISCLOSE an age-restricted scope before the tap ──────────
+  // The bug: "$300, Beverages only" over a catalog whose Beverages are 21+ is a grant that can
+  // spend $0.00, and nothing said so. Both directions are asserted — a page that warns about
+  // everything is as useless as one that warns about nothing.
+
+  it("names the age-restricted product the grant is FOR", async () => {
+    const ca = client();
+    const app = fakeApp();
+    ca.grants.serve(app);
+    const g = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30, allow: { skus: ["wine"] }, signing: "page" });
+
+    const res = fakeRes();
+    await app._get.get("/credentagent/grants/:id")!({ params: { id: g.id } }, res);
+    expect(res._body).toContain("age-restricted items (21+)");
+    expect(res._body).toContain("wine"); // the exact product the grant is for, named
+    expect(res._body).toContain("$21");
+    // The choice the human is actually making, spelled out on the button.
+    expect(res._body).toContain("Approve without them");
+  });
+
+  it("says NOTHING about age when the named product is unrestricted", async () => {
+    const ca = client();
+    const app = fakeApp();
+    ca.grants.serve(app);
+    const g = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30, allow: { skus: ["headphones"] }, signing: "page" });
+
+    const res = fakeRes();
+    await app._get.get("/credentagent/grants/:id")!({ params: { id: g.id } }, res);
+    expect(res._body).not.toContain("age-restricted");
+    expect(res._body).toContain("✓ Approve"); // today's page, unchanged
+  });
+
+  // The approve page and the ceremony gate pages must look like ONE product: same chrome, same
+  // stepper, same card language. This pins the shared design system rather than the old bespoke
+  // inline styles — swap it back for hand-rolled markup and this goes red.
+  it("wears the SHARED ceremony chrome — brand header, progress rail, cards", async () => {
+    const ca = client();
+    const app = fakeApp();
+    ca.grants.serve(app);
+    const g = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30, allow: { skus: ["wine"] }, signing: "page" });
+
+    const res = fakeRes();
+    await app._get.get("/credentagent/grants/:id")!({ params: { id: g.id } }, res);
+    expect(res._body).toContain(`<div class="wrap">`); // theme.pageHead + the shared shell
+    expect(res._body).toContain(`<span class="wordmark">CREDENTAGENT</span>`);
+    expect(res._body).toContain(`<div class="rail" role="list" aria-label="Progress">`);
+    expect(res._body).toContain(`<div class="rail-label">Age</div>`);
+    expect(res._body).toContain(`<div class="rail-label">Approve</div>`);
+    expect(res._body).toContain(`class="btn btn-primary"`);
+    expect(res._body).toContain(`class="card summary"`);
+    // The limits read as money, with the budget as the bold total row.
+    expect(res._body).toContain("$100.00");
+    expect(res._body).toContain("$30.00");
+    // The page's own honesty posture — NOT the rails' presence-only line (a different claim).
+    expect(res._body).toContain("delegated-demo");
+  });
+
+  it("offers the age step for a CATEGORY grant, and says the list is what the shelf holds today", async () => {
+    const ca = client();
+    const app = fakeApp();
+    ca.grants.serve(app);
+    const g = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30, allow: { categories: ["Beverages"] }, signing: "page" });
+
+    const res = fakeRes();
+    await app._get.get("/credentagent/grants/:id")!({ params: { id: g.id } }, res);
+    expect(res._body).toContain("Beverages includes age-restricted items (21+)");
+    expect(res._body).toContain("wine");
+    expect(res._body).toContain("Verify 21+ with your wallet");
+    // The honest limit, stated only for a scan — never implied to be a closed list.
+    expect(res._body).toContain("what this category holds today");
+  });
+
+  it("a NAMED grant states a closed list — no forecast caveat", async () => {
+    const ca = client();
+    const app = fakeApp();
+    ca.grants.serve(app);
+    const g = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30, allow: { skus: ["wine"] }, signing: "page" });
+
+    const res = fakeRes();
+    await app._get.get("/credentagent/grants/:id")!({ params: { id: g.id } }, res);
+    expect(res._body).toContain("This grant is for age-restricted items (21+)");
+    expect(res._body).not.toContain("holds today");
+  });
+
+  it("shows a Membership step only when the host runs a loyalty programme", async () => {
+    // No programme configured ⇒ the step doesn't exist anywhere on the page.
+    const plain = fakeApp();
+    const ca = client();
+    ca.grants.serve(plain);
+    const a = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30, allow: { skus: ["wine"] }, signing: "page" });
+    let res = fakeRes();
+    await plain._get.get("/credentagent/grants/:id")!({ params: { id: a.id } }, res);
+    // (the literal word rides a CSS comment in the shared stylesheet, so assert on the step itself)
+    expect(res._body).not.toContain(`<div class="rail-label">Membership</div>`);
+    expect(res._body).not.toContain("Apply loyalty discount");
+
+    // Configured ⇒ Age · Membership · Approve, with the offer stated at the host's rate.
+    const memberApp = fakeApp();
+    const mca = new CredentAgent({ walletOrigin: "http://localhost:4000", catalog: CATALOG, loyaltyDiscountPct: 10 });
+    mca.grants.serve(memberApp);
+    const b = await mca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30, allow: { skus: ["wine"] }, signing: "page" });
+    res = fakeRes();
+    await memberApp._get.get("/credentagent/grants/:id")!({ params: { id: b.id } }, res);
+    expect(res._body).toContain(`<div class="rail-label">Membership</div>`);
+    expect(res._body).toContain("Apply loyalty discount (10% off)");
+    expect(res._body).toContain(`/credentagent/grants/${b.id}/membership`);
+    // The card numbers follow the rail: Age 1, Membership 2, decision 3.
+    expect(res._body).toContain(`<span class="step-no">2.</span>`);
+    expect(res._body).toContain(`<span class="step-no">3.</span> Your decision`);
+
+    // Proved ⇒ the ✓ row, and the discount surfaces as a term in the limits card.
+    await mca.grants._recordMembershipProof(b.id, { membershipNumber: "GOLD-0001" });
+    res = fakeRes();
+    await memberApp._get.get("/credentagent/grants/:id")!({ params: { id: b.id } }, res);
+    expect(res._body).toContain("✓ Membership applied — 10% off");
+    expect(res._body).toContain("GOLD-0001");
+    expect(res._body).toContain(`<tr class="disc"><td>Loyalty discount (10%)</td>`);
+  });
+
+  it("renders NO stepper when the grant has a single step — a one-dot rail says nothing", async () => {
+    const ca = client();
+    const app = fakeApp();
+    ca.grants.serve(app);
+    const g = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30, allow: { skus: ["headphones"] }, signing: "page" });
+
+    const res = fakeRes();
+    await app._get.get("/credentagent/grants/:id")!({ params: { id: g.id } }, res);
+    expect(res._body).not.toContain(`class="rail"`);
+    expect(res._body).toContain("✓ Approve"); // just the decision
+  });
+
+  it("flips to the verified state once the human has proved their age", async () => {
+    const ca = client();
+    const app = fakeApp();
+    ca.grants.serve(app);
+    const g = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30, allow: { skus: ["wine"] }, signing: "page" });
+    expect(await ca.grants._recordAgeProof(g.id, { provenAge: 21 })).toBe(true);
+
+    const res = fakeRes();
+    await app._get.get("/credentagent/grants/:id")!({ params: { id: g.id } }, res);
+    expect(res._body).toContain("✓ Age verified — 21+");
+    // The verified copy now states the CEILING, not "the items above" — with a category grant the
+    // list above is a forecast, so what the proof actually bought is "up to 21+".
+    expect(res._body).toContain("may buy age-restricted items up to 21+ while you're away");
+    expect(res._body).toContain("Anything stricter still comes back to you");
+    expect(res._body).toContain("✓ Approve"); // no longer "Approve without them"
+    // The rail agrees with the card: Age ticked, Approve current.
+    expect(res._body).toContain(`<div class="rail-step done"><div class="rail-dot">✓</div><div class="rail-label">Age</div>`);
+  });
+});
+
+// ── #172: age at approval — the human proves once, on their phone, and the claim is SEALED into
+// the grant. Every test below goes red if its control is reverted.
+describe("credentagent.grants — the age claim sealed at approval (#172)", () => {
+  /** create → prove `provenAge` → approve. The order the approve page enforces. */
+  async function grantWithAgeProof(ca: CredentAgent, provenAge: number): Promise<Grant> {
+    const g = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30, signing: "page" });
+    expect(await ca.grants._recordAgeProof(g.id, { provenAge })).toBe(true);
+    await ca.grants._authorize(g.id);
+    return (await ca.grants.retrieve(g.id))!;
+  }
+
+  // BYPASS (the reversal's guard — completion.ts's delegated branch): a grant nobody proved an
+  // age for must still refuse an age-restricted item. Delete the `!ageProofCovers(...)` half of
+  // that condition and this goes red — every grant would suddenly buy alcohol unattended.
+  it("BYPASS: a grant with NO age proof still refuses a 21+ item — step-up", async () => {
+    const g = await authorizedGrant(client());
+    const s = await g.spend({ idempotencyKey: "np1", items: [{ sku: "wine" }] });
+    expect(s).toMatchObject({ ok: false, code: "step-up" });
+  });
+
+  // BYPASS (the threshold comparison in ageProofCovers): an 18+ proof must NOT open a 21+ item.
+  // Drop the `proof.provenAge < requiredAge` check and this goes red.
+  it("BYPASS: an 18+ proof does not open a 21+ item — step-up", async () => {
+    const g = await grantWithAgeProof(client(), 18);
+    const s = await g.spend({ idempotencyKey: "u18", items: [{ sku: "wine" }] });
+    expect(s).toMatchObject({ ok: false, code: "step-up" });
+  });
+
+  // The positive path — without it the reversal is unproven: the whole point of #172 is that a
+  // proved grant CAN buy what it was approved for.
+  it("a 21+ proof lets the agent buy the 21+ item, priced + drawn down like any other spend", async () => {
+    const g = await grantWithAgeProof(client(), 21);
+    const s = await g.spend({ idempotencyKey: "ok21", items: [{ sku: "wine" }] });
+    expect(s).toMatchObject({ ok: true, amount: 21, remaining: 79, authorization: "delegated" });
+  });
+
+  // BYPASS (the `status !== "pending"` gate in _recordAgeProof): consent happened when the human
+  // tapped Approve. A grant must never gain a capability afterwards. Delete that check and this
+  // goes red — an approved grant would start buying 21+ goods the human never blessed.
+  it("BYPASS: a proof recorded AFTER approval is refused, and the sealed grant is unchanged", async () => {
+    const ca = client();
+    const g = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30, signing: "page" });
+    await ca.grants._authorize(g.id);
+
+    expect(await ca.grants._recordAgeProof(g.id, { provenAge: 21 })).toBe(false);
+    const live = (await ca.grants.retrieve(g.id))!;
+    expect(live.ageProof).toBeUndefined();
+    expect(await live.spend({ idempotencyKey: "late", items: [{ sku: "wine" }] })).toMatchObject({ ok: false, code: "step-up" });
+  });
+
+  it("a second, WEAKER ceremony cannot lower what the first one proved", async () => {
+    const ca = client();
+    const g = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30, signing: "page" });
+    await ca.grants._recordAgeProof(g.id, { provenAge: 21 });
+    await ca.grants._recordAgeProof(g.id, { provenAge: 18 });
+    await ca.grants._authorize(g.id);
+    expect((await ca.grants.retrieve(g.id))!.ageProof?.provenAge).toBe(21);
+  });
+
+  it("refuses a malformed threshold rather than sealing it", async () => {
+    const ca = client();
+    const g = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30, signing: "page" });
+    expect(await ca.grants._recordAgeProof(g.id, { provenAge: Number.NaN })).toBe(false);
+    expect(await ca.grants._recordAgeProof(g.id, { provenAge: 0 })).toBe(false);
+    expect((await ca.grants.retrieve(g.id))!.ageProof).toBeUndefined();
+  });
+
+  // BYPASS (the expiry half of ageProofCovers): a snapshot claim must respect the credential's
+  // own validity. Delete the `expiry <= nowMs` check and this goes red.
+  it("BYPASS: an EXPIRED proof refuses the 21+ item — a snapshot fails closed", async () => {
+    const ca = client();
+    const g = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30, signing: "page" });
+    await ca.grants._recordAgeProof(g.id, { provenAge: 21, expiresAt: new Date(Date.now() - 60_000).toISOString() });
+    await ca.grants._authorize(g.id);
+    const live = (await ca.grants.retrieve(g.id))!;
+    expect(await live.spend({ idempotencyKey: "exp", items: [{ sku: "wine" }] })).toMatchObject({ ok: false, code: "step-up" });
+  });
+
+  it("the proof is SEALED: it rides the authorized intent, and is stated presence-only", async () => {
+    const g = await grantWithAgeProof(client(), 21);
+    expect(g.ageProof).toMatchObject({ provenAge: 21, trust_level: "presence-only-demo" });
+    expect(typeof g.ageProof!.verifiedAt).toBe("string");
+  });
+
+  // The reviewer's question on #173: is it safe to offer the age step on a CATEGORY grant, when
+  // the page can only forecast what that category holds? Yes — and this is why. The proof is
+  // sealed with the threshold PROVED, and every purchase re-derives its OWN threshold from the
+  // priced line. So a forecast that missed something can only fail to offer the step; it can
+  // never let a stricter item through. Delete the threshold comparison in `ageProofCovers` and
+  // this goes red.
+  it("BYPASS: a category grant's forecast cannot over-grant — a stricter item added later still steps up", async () => {
+    // The human sees Beverages at 21+ (wine), proves 21+, and approves.
+    const ca = new CredentAgent({ walletOrigin: "http://localhost:4000", catalog: { ...CATALOG, absinthe: { price: 60, minAge: 25, category: "Beverages" } } });
+    const g = await ca.grants.create({ merchant: "utopia", budget: 200, perSpend: 100, allow: { categories: ["Beverages"] }, signing: "page" });
+    await ca.grants._recordAgeProof(g.id, { provenAge: 21 });
+    await ca.grants._authorize(g.id);
+    const live = (await ca.grants.retrieve(g.id))!;
+
+    // What they proved for completes…
+    expect(await live.spend({ idempotencyKey: "cat-wine", items: [{ sku: "wine" }] })).toMatchObject({ ok: true, amount: 21 });
+    // …and the 25+ bottle in the same category does NOT, proof or no proof.
+    expect(await live.spend({ idempotencyKey: "cat-absinthe", items: [{ sku: "absinthe" }] })).toMatchObject({ ok: false, code: "step-up" });
+  });
+
+  it("changes NOTHING for an unrestricted purchase", async () => {
+    const g = await grantWithAgeProof(client(), 21);
+    expect(await g.spend({ idempotencyKey: "c1", items: [{ sku: "coffee" }] })).toMatchObject({ ok: true, amount: 18, remaining: 82 });
+  });
+});
+
+// ── #172: the loyalty membership sealed at approval — the mirror of the age proof. Age UNLOCKS
+// items; this LOWERS the price of every purchase. The risk here is invariant 3: the line sum, the
+// order total and the amount the delegate key SIGNED must agree on every path. If they ever don't,
+// completeOrder refuses the draw — so a discount that "works" is itself the proof they reconcile.
+describe("credentagent.grants — the loyalty membership sealed at approval (#172)", () => {
+  const member = () => new CredentAgent({ walletOrigin: "http://localhost:4000", catalog: CATALOG, loyaltyDiscountPct: 10 });
+
+  /** create → prove membership → approve. The order the approve page enforces. */
+  async function grantWithMembership(ca: CredentAgent, membershipNumber = "GOLD-0001"): Promise<Grant> {
+    const g = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30, signing: "page" });
+    expect(await ca.grants._recordMembershipProof(g.id, { membershipNumber })).toBe(true);
+    await ca.grants._authorize(g.id);
+    return (await ca.grants.retrieve(g.id))!;
+  }
+
+  // The positive path. $18 coffee at 10% off is $16.20 charged AND drawn down — and the fact it
+  // completes at all is the reconciliation: completeOrder re-prices independently and refuses the
+  // draw unless the signed amount matches to the cent.
+  it("prices every purchase at the sealed rate, and draws the budget down by what was charged", async () => {
+    const g = await grantWithMembership(member());
+    const s = await g.spend({ idempotencyKey: "m1", items: [{ sku: "coffee" }] });
+    expect(s).toMatchObject({ ok: true, amount: 16.2, remaining: 83.8, authorization: "delegated" });
+  });
+
+  // BYPASS (the `loyaltyDiscountPct` opt-in): a host that runs no programme must never discount.
+  // Delete the opt-in check in `_recordMembershipProof` and this goes red — a grant would price
+  // at a rate its merchant never offered.
+  it("BYPASS: with NO programme configured, a membership records nothing and nothing is discounted", async () => {
+    const ca = client(); // no loyaltyDiscountPct
+    const g = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30, signing: "page" });
+    expect(await ca.grants._recordMembershipProof(g.id, { membershipNumber: "GOLD-0001" })).toBe(false);
+    await ca.grants._authorize(g.id);
+    const live = (await ca.grants.retrieve(g.id))!;
+    expect(live.membershipProof).toBeUndefined();
+    expect(await live.spend({ idempotencyKey: "n1", items: [{ sku: "coffee" }] })).toMatchObject({ ok: true, amount: 18 });
+  });
+
+  // BYPASS (invariant 5 — a real, non-empty membership id): a bare token must not earn a discount,
+  // because a forged loyalty state lowers the bound amount. Delete the emptiness check → red.
+  it("BYPASS: an empty membership id earns no discount", async () => {
+    const ca = member();
+    const g = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30, signing: "page" });
+    expect(await ca.grants._recordMembershipProof(g.id, { membershipNumber: "   " })).toBe(false);
+    expect((await ca.grants.retrieve(g.id))!.membershipProof).toBeUndefined();
+  });
+
+  // BYPASS (the `status !== "pending"` gate): the terms are what the human approved. Delete it and
+  // an already-approved grant starts pricing at a discount nobody blessed.
+  it("BYPASS: a membership recorded AFTER approval is refused, and the sealed grant is unchanged", async () => {
+    const ca = member();
+    const g = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30, signing: "page" });
+    await ca.grants._authorize(g.id);
+    expect(await ca.grants._recordMembershipProof(g.id, { membershipNumber: "GOLD-0001" })).toBe(false);
+    const live = (await ca.grants.retrieve(g.id))!;
+    expect(live.membershipProof).toBeUndefined();
+    expect(await live.spend({ idempotencyKey: "late-m", items: [{ sku: "coffee" }] })).toMatchObject({ ok: true, amount: 18 });
+  });
+
+  // A REGRESSION GUARD, not a bypass test: no current code path reads the host's rate at spend
+  // time, so no mutation of today's code turns this red. It exists so a future refactor that
+  // reaches for config instead of the sealed number is caught — an approved grant must keep
+  // pricing at what the human agreed to, whatever the merchant changes later.
+  it("the rate is sealed: changing the host's programme does NOT re-price an approved grant", async () => {
+    const ca = member();
+    const g = await grantWithMembership(ca);
+    (ca.grants as unknown as { deps: { loyaltyDiscountPct: number } }).deps.loyaltyDiscountPct = 50;
+    expect(await g.spend({ idempotencyKey: "sealed-1", items: [{ sku: "coffee" }] })).toMatchObject({ ok: true, amount: 16.2 });
+  });
+
+  // The discount is measured against the PER-SPEND cap the human set, so a purchase whose list
+  // price is over the cap but whose charged price is under it goes through — the cap bounds what
+  // they are charged, not what the shelf says.
+  it("the per-spend cap is measured on what is CHARGED, not the list price", async () => {
+    const ca = member();
+    const g = await ca.grants.create({ merchant: "utopia", budget: 200, perSpend: 42, signing: "page" });
+    await ca.grants._recordMembershipProof(g.id, { membershipNumber: "GOLD-0001" });
+    await ca.grants._authorize(g.id);
+    const live = (await ca.grants.retrieve(g.id))!;
+    // espresso-machine lists at $45 — over the $42 cap — but bills at $40.50.
+    expect(await live.spend({ idempotencyKey: "cap1", items: [{ sku: "espresso-machine" }] })).toMatchObject({ ok: true, amount: 40.5 });
+  });
+
+  it("stacks with the age proof: a 21+ item both unlocks AND discounts", async () => {
+    const ca = member();
+    const g = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30, signing: "page" });
+    await ca.grants._recordAgeProof(g.id, { provenAge: 21 });
+    await ca.grants._recordMembershipProof(g.id, { membershipNumber: "GOLD-0001" });
+    await ca.grants._authorize(g.id);
+    const live = (await ca.grants.retrieve(g.id))!;
+    expect(await live.spend({ idempotencyKey: "both", items: [{ sku: "wine" }] })).toMatchObject({ ok: true, amount: 18.9 }); // $21 − 10%
+  });
+
+  it("the sealed claim is exposed and stated presence-only", async () => {
+    const g = await grantWithMembership(member());
+    expect(g.membershipProof).toMatchObject({ membershipNumber: "GOLD-0001", discountPct: 10, trust_level: "presence-only-demo" });
   });
 });
 
@@ -207,7 +566,7 @@ describe("credentagent.grants — concurrency + money boundary (#104 port-forwar
   // red (status "authorized", spend ok). Order matters: authorize is started first so it is mid-flight.
   it("BYPASS: a revoke landing while authorize is in flight never leaves a spendable grant", async () => {
     const ca = client();
-    const gc = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30 });
+    const gc = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30 , signing: "page" });
     const g = (await ca.grants.retrieve(gc.id))!;
     await Promise.all([ca.grants._authorize(gc.id), g.revoke()]); // authorize in flight, revoke lands
     expect((await ca.grants.retrieve(gc.id))!.status).toBe("revoked");
@@ -220,7 +579,7 @@ describe("credentagent.grants — concurrency + money boundary (#104 port-forwar
   // and this goes red (the third spend refuses). (Control now lives in toCents/centsCatalogView.)
   it("BYPASS: $4.90 × 3 spends exactly to a $14.70 budget without a false refusal", async () => {
     const ca = new CredentAgent({ walletOrigin: "http://localhost:4000", catalog: { latte: 4.9 } });
-    const gc = await ca.grants.create({ merchant: "utopia", budget: 14.7, perSpend: 4.9 });
+    const gc = await ca.grants.create({ merchant: "utopia", budget: 14.7, perSpend: 4.9 , signing: "page" });
     await ca.grants._authorize(gc.id);
     const g = (await ca.grants.retrieve(gc.id))!;
     for (const k of ["a", "b", "c"]) {
@@ -234,7 +593,7 @@ describe("credentagent.grants — concurrency + money boundary (#104 port-forwar
   // the lock did not weaken the engine's cumulative-cap atomicity.
   it("concurrent DISTINCT-key spends never exceed the budget (exactly one settles)", async () => {
     const ca = client();
-    const gc = await ca.grants.create({ merchant: "utopia", budget: 20, perSpend: 20 }); // room for ONE $18
+    const gc = await ca.grants.create({ merchant: "utopia", budget: 20, perSpend: 20 , signing: "page" }); // room for ONE $18
     await ca.grants._authorize(gc.id);
     const g = (await ca.grants.retrieve(gc.id))!;
     const [a, b] = await Promise.all([
@@ -248,7 +607,7 @@ describe("credentagent.grants — concurrency + money boundary (#104 port-forwar
   // rebind to a fresh, empty ledger that would allow 2× the budget).
   it("a concurrent double-approve seals one grant; the budget cap still holds", async () => {
     const ca = client();
-    const gc = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30 });
+    const gc = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30 , signing: "page" });
     await Promise.all([ca.grants._authorize(gc.id), ca.grants._authorize(gc.id)]);
     const g = (await ca.grants.retrieve(gc.id))!;
     expect(g.status).toBe("authorized");
@@ -275,7 +634,7 @@ describe("credentagent.grants — concurrency + money boundary (#104 port-forwar
   it("BYPASS: prices each spend from the LIVE catalog — a re-price is honoured and the cap enforced against it", async () => {
     const catalog: Record<string, { price: number; category: string }> = { coffee: { price: 18, category: "Beverages" } };
     const ca = new CredentAgent({ walletOrigin: "http://localhost:4000", catalog });
-    const gc = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 40 });
+    const gc = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 40 , signing: "page" });
     await ca.grants._authorize(gc.id);
     const g = (await ca.grants.retrieve(gc.id))!;
     expect(await g.spend({ idempotencyKey: "p1", items: [{ sku: "coffee" }] })).toMatchObject({ ok: true, amount: 18 });
@@ -289,11 +648,84 @@ describe("credentagent.grants — concurrency + money boundary (#104 port-forwar
   // with a clear error, never silently rounded. Make toCents round instead of throw and both legs
   // go red (create resolves; the sub-cent price prices as $0.01 instead of throwing).
   it("BYPASS: rejects sub-cent precision — at config for a cap, and when a sub-cent price is used", async () => {
-    await expect(client().grants.create({ merchant: "utopia", budget: 100, perSpend: 0.006 })).rejects.toThrow(/sub-cent/);
+    await expect(client().grants.create({ merchant: "utopia", budget: 100, perSpend: 0.006 , signing: "page" })).rejects.toThrow(/sub-cent/);
     const ca = new CredentAgent({ walletOrigin: "http://localhost:4000", catalog: { trinket: 0.006 } });
-    const gc = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30 });
+    const gc = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30 , signing: "page" });
     await ca.grants._authorize(gc.id);
     const g = (await ca.grants.retrieve(gc.id))!;
     await expect(g.spend({ idempotencyKey: "p1", items: [{ sku: "trinket" }] })).rejects.toThrow(/sub-cent/);
+  });
+});
+
+// The grant-widget projection (spec 011) reads the live money via `grant.usage()` and derives the
+// display lifecycle via `grantLifecycle()`. These are the authority the widget must NOT re-derive
+// (A2) — so they are tested as first-class behavior here, at the gate.
+describe("credentagent.grants — usage() live money read (spec 011 FR-1)", () => {
+  it("a pending grant reads the full budget: spent 0, remaining = budget", async () => {
+    const ca = client();
+    const g = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30 , signing: "page" });
+    expect(await g.usage()).toEqual({ budget: 100, spent: 0, remaining: 100 });
+  });
+
+  it("usage() draws down as the grant spends, reading the SAME ledger spend() returns", async () => {
+    const g = await authorizedGrant(client());
+    expect(await g.usage()).toEqual({ budget: 100, spent: 0, remaining: 100 });
+    const s = await g.spend({ idempotencyKey: "u1", items: [{ sku: "coffee" }] }); // $18
+    expect(s).toMatchObject({ ok: true, remaining: 82 });
+    expect(await g.usage()).toEqual({ budget: 100, spent: 18, remaining: 82 });
+  });
+
+  it("a revoked grant still reports what was spent before it was stopped", async () => {
+    const g = await authorizedGrant(client());
+    await g.spend({ idempotencyKey: "u2", items: [{ sku: "coffee" }] }); // $18
+    await g.revoke();
+    expect(await g.usage()).toEqual({ budget: 100, spent: 18, remaining: 82 });
+  });
+});
+
+describe("grantLifecycle() — the ONE display-lifecycle derivation (spec 011 A2)", () => {
+  // The 20%-of-budget "low" threshold is a UI-honesty boundary: the pair pins it from both sides.
+  it("authorized: active above 20%, low at/under 20%, exhausted at 0", () => {
+    expect(grantLifecycle({ status: "authorized", budget: 100, remaining: 21 })).toBe("active");
+    expect(grantLifecycle({ status: "authorized", budget: 100, remaining: 20 })).toBe("low");
+    expect(grantLifecycle({ status: "authorized", budget: 100, remaining: 1 })).toBe("low");
+    expect(grantLifecycle({ status: "authorized", budget: 100, remaining: 0 })).toBe("exhausted");
+  });
+
+  it("terminal + pending statuses pass straight through (never re-derived from money)", () => {
+    expect(grantLifecycle({ status: "pending", budget: 100, remaining: 100 })).toBe("pending");
+    expect(grantLifecycle({ status: "denied", budget: 100, remaining: 100 })).toBe("denied");
+    expect(grantLifecycle({ status: "revoked", budget: 100, remaining: 40 })).toBe("revoked");
+  });
+
+  it("end-to-end: a real grant transitions pending → active → low → exhausted as it drains", async () => {
+    const ca = client();
+    // budget 36, perSpend 18: two $18 coffees take it exactly to 0.
+    const created = await ca.grants.create({ merchant: "utopia", budget: 36, perSpend: 18 , signing: "page" });
+    const pendingUsage = await created.usage();
+    expect(grantLifecycle({ status: created.status, ...pendingUsage })).toBe("pending");
+
+    await ca.grants._authorize(created.id);
+    const g = (await ca.grants.retrieve(created.id))!;
+    const active = await g.usage();
+    expect(grantLifecycle({ status: g.status, ...active })).toBe("active");
+
+    await g.spend({ idempotencyKey: "l1", items: [{ sku: "coffee" }] }); // remaining 18 (= 50%)… still active
+    await g.spend({ idempotencyKey: "l2", items: [{ sku: "espresso-machine" }] }).catch(() => {}); // over budget → refused
+    // Take it into the low band with a small draw against a fresh low-budget grant instead:
+    const low = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 18 , signing: "page" });
+    await ca.grants._authorize(low.id);
+    const lg = (await ca.grants.retrieve(low.id))!;
+    for (const k of ["a", "b", "c", "d", "e"]) await lg.spend({ idempotencyKey: k, items: [{ sku: "coffee" }] }); // 5×18 = 90
+    const lu = await lg.usage();
+    expect(lu.remaining).toBe(10);
+    expect(grantLifecycle({ status: lg.status, ...lu })).toBe("low");
+
+    const eu = await g.usage(); // g spent 18 of 36 → remaining 18 (still active); spend the rest
+    void eu;
+    await g.spend({ idempotencyKey: "l3", items: [{ sku: "coffee" }] }); // remaining 0
+    const exhausted = await g.usage();
+    expect(exhausted.remaining).toBe(0);
+    expect(grantLifecycle({ status: g.status, ...exhausted })).toBe("exhausted");
   });
 });

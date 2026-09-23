@@ -1,7 +1,7 @@
 # @openmobilehub/credentagent-storefront
 
 **The agentic storefront core.** A runnable MCP shopping server — the cart → priced-cart →
-order model + the nine shopping tools + the widget bundle — **catalog-injected** (bring your
+order model + the ten shopping tools + the widget bundle — **catalog-injected** (bring your
 own products, own-the-code). Pairs with
 [`@openmobilehub/credentagent-gate`](../credentagent-gate) so you can **gate any consequential MCP tool
 with any credential**: age, membership, a prescription, payment. **Payments is one application
@@ -24,7 +24,7 @@ Apache-2.0, ESM. Two entry points: `.` (the pure pricing model, dependency-light
 
 ## Quickstart — a credential-gated storefront in ≤ 10 lines
 
-`createStorefront()` stands up the real MCP server (nine tools, a widget resource, a checkout
+`createStorefront()` stands up the real MCP server (ten tools, a widget resource, a checkout
 page) over HTTP at `/mcp`. It publishes the ceremony seams on `store.app.locals.credentagent`, so
 `new CredentAgent().mount(store.app)` wires the real `/credentagent/*` ceremony rails with zero glue, and
 `store.gate()` resolves your policy on every `checkout` call (copied from
@@ -138,6 +138,96 @@ const store = createStorefront({
 - **Lean by default:** `firebase-admin` is an **optional peer dependency**, loaded lazily only on the
   credentials path — static-catalog users never install it.
 
+## The catalog as data — for agents that don't render the widget
+
+`browse-products` shows the catalog to a human as a visual picker. An agent that needs the catalog
+*itself* — to find an id, filter, or search — calls **`list-products`**, which returns plain JSON and
+renders nothing:
+
+```jsonc
+// list-products — every argument optional
+{ "category": "Beverages", "query": "duo", "fields": ["name", "price"] }
+// → { "products": [{ "id": "celebration-champagne", "name": "Celebration Champagne Duo", "price": 89 }],
+//     "totalCount": 1, "nextCursor": null }
+```
+
+- **Paged:** 50 products by default (`limit`, max 100). A non-null `nextCursor` goes back as `cursor`.
+- **`fields` keeps answers small:** only those properties, plus `id` (always). Omit it for the full
+  product — the same shape `get-product-details` returns.
+- **Look up many at once:** `get-product-details` and `get-product-reviews` accept `productId` as one
+  id *or* an array. One id answers exactly as before; an array answers
+  `{ "results": [{ "id", "product" } | { "id", "error": "not-found" }, …] }` in request order. A single
+  unknown id is an error that lists up to 50 valid ids (`validIds`) and the total (`validIdCount`).
+- **Same source as everything else:** both tools read the configured `catalog` (static or
+  `firestoreCatalog(...)`) on every call, and `browse-products` goes through the same
+  `listProducts()` — so the picker and the data never disagree.
+
+The same read is exported from the pure entry point:
+
+```ts
+import { listProducts, projectProduct, SAMPLE_CATALOG } from "@openmobilehub/credentagent-storefront";
+
+const page = listProducts(SAMPLE_CATALOG, { category: "Beverages", limit: 10 });
+page.products.map((p) => p.id);                 // ["oak-whiskey", "celebration-champagne"]
+page.nextCursor;                                // null — no more pages
+projectProduct(page.products[0], ["price"]);    // { id: "oak-whiskey", price: 124 }
+```
+
+## "Buy the black court sneakers, US 10" — a grant pinned to one product
+
+When `grants` is wired, `create-spending-grant` takes an `item`: the exact product the human asked
+for, in their own words. If those words fit **several** products, **none**, or leave a choice open
+(size, colour), the tool returns **no approve link**. It answers with the questions to put to the
+human plus an opaque `requestState`, and the agent calls it again with the answers — MCP's
+[multi round-trip request](https://modelcontextprotocol.io/specification/draft/basic/patterns/mrtr)
+pattern, powered by `MultiRoundTrip` from the gate:
+
+```jsonc
+// 1. the agent asks for a grant                → no link yet, two questions
+{ "name": "create-spending-grant",
+  "arguments": { "budget": 200, "perSpend": 120, "item": "sneakers" } }
+// ← { "resultType": "input_required",
+//     "inputRequests": { "size": { "method": "elicitation/create", … }, "colour": { … } },
+//     "requestState": "mrtr1.…" }
+
+// 2. the human answers; the agent calls again with the SAME arguments + the state, verbatim
+{ "name": "create-spending-grant",
+  "arguments": { "budget": 200, "perSpend": 120, "item": "sneakers",
+                 "requestState": "mrtr1.…", "answers": { "size": "US 10", "colour": "Black" } } }
+// ← { "code": "awaiting-approval", "status": "pending", "approveUrl": "…",
+//     "allow": { "skus": ["court-sneakers"] },
+//     "item": { "productId": "court-sneakers", "selections": { "size": "US 10", "colour": "Black" } },
+//     "questions": [ /* "send the human the approve link; reply once they've tapped" */ ],
+//     "requestState": "mrtr1.…" }
+
+// 3. the agent redials at once with the state; the call HOLDS while the human taps Approve
+{ "name": "create-spending-grant",
+  "arguments": { "budget": 200, "perSpend": 120, "item": "sneakers",
+                 "requestState": "mrtr1.…", "answers": { "approved": "true" } } }
+// ← (resolves the moment the tap lands) { "status": "authorized", "allow": { "skus": ["court-sneakers"] }, … }
+```
+
+The grant is minted at step 2 but the flow **stays open** until the human's tap. A redial to a
+still-pending grant **holds its answer open** (`approvalHoldMs`, default 45 s — measured just under
+claude.ai's 60 s tool-call kill; `0` disables), re-reading the grant store until the tap lands — so
+the agent learns of the approval seconds after it happens, with no "I approved it" message from the
+human. The answer itself is a **doorbell, not a credential** — the store re-reads its own grant
+record before it ever says `authorized`, so ringing early (or lying) just returns
+`awaiting-approval` again, and a denial at the page comes back as `status: "denied"`. The grant is sealed to **that product**: a later
+unattended spend on anything else refuses `not-allowed`, and the approve page names exactly what the
+human is agreeing to (*"Buy Cascade Court Sneakers — US 10, Black ($95.00) from utopia."*). Products
+declare their own choices via `Product.variants`; omit `item` and you get the open, category-only
+grant, unchanged.
+
+`requestState` is signed, short-lived, and bound to the call, the money bounds, and the session — a
+hand-edited one is refused rather than believed. It is **not** proof a human answered: until clients
+implement MRTR, the agent relays the answers, which is why the human still confirms on the page.
+
+The MRTR envelope (`resultType` / `inputRequests`) is sent **only to a client that declared the
+`elicitation` capability** — the spec forbids sending requests a client never said it can handle.
+Every other client gets the same questions as ordinary tool output and answers through the tool's
+own `requestState` + `answers` arguments, so the round trip completes either way.
+
 ## The three execution contexts
 
 `createStorefront()` is built around the split the gate enforces — conflating these is forbidden
@@ -150,6 +240,59 @@ const store = createStorefront({
 3. **Poll — reports completion.** The widget polls `GET /checkout/order-status?orderId=<id>`; once the
    ceremony's shared `completeOrder` records the order (re-priced, age re-enforced, cart cleared), it
    reflects the completed — discounted — total.
+
+## Grant widgets — a visual card for a spending grant
+
+A **spending grant** is a bounded authority the human approves ONCE so their AI agent can buy
+**while they're away** — a total budget, a per-purchase cap, and optionally which products or
+categories are allowed (the `create-spending-grant` / `get-grant-status` / `spend-from-grant` /
+`revoke-grant` tools, registered when you pass `grants` to `createStorefront`). Instead of describing
+that grant to the human as a sentence, the four grant tools render it as a **grant card** — a visual
+**MCP App** (an interactive widget the model host shows inline in the conversation, the same mechanism
+as the shopping picker): a budget bar that depletes as the agent spends, the per-purchase cap as a
+marker, the allowed products/categories as tiles/chips, and the lifecycle (needs-approval → active →
+running-low → spent / revoked / declined).
+
+**Nothing changes for the host or the agent** — the grant tools already carry the widget resource,
+exactly as the shopping tools do. The card is a **display, never a control**: every limit is enforced
+server-side (the widget only ever *shows* the server's state, so a stale card can never unlock
+anything), and every card — stock or custom — carries the honest trust line through a frame the public
+API cannot omit.
+
+Inside the widget (own-the-code, `src/ui/grants/` — the gallery is **not yet a package
+export**: today a custom view means building your own widget from this source; publishing the
+components + a supported custom-bundle seam is
+[#176](https://github.com/openmobilehub/credentagent/issues/176)):
+
+```tsx
+import { GrantCard, grantViews, defineGrantView, BudgetMeter } from "./grants";
+
+// Zero-config: picks the most specific fitting view automatically — a single-SKU grant renders the
+// flagship product card (name/price/image + "up to 3 per purchase"), a category grant renders chips,
+// a pending grant renders the Approve/Decline consent card, a spent/revoked grant renders a closed
+// card with no live buttons.
+<GrantCard grant={grant} />
+
+// Choose or reorder the candidate views (e.g. the compact one-line meter for a dense list):
+<GrantCard grant={grant} views={[grantViews.budgetMeter]} />
+
+// Extend — a custom view is the SAME contract the stock gallery is built from. Its
+// body receives ONLY the inert GrantViewData projection (never a live grant handle, so it structurally
+// cannot spend or revoke), plus the token set; reuse the exported <BudgetMeter/> for the validated,
+// accessible meter. The frame (chrome + the non-omittable trust line) is applied for you.
+const wineClubRow = defineGrantView({
+  id: "wine-club-row",
+  fits: (g) => (g.allow.categories.includes("Wine") ? 60 : false),   // a specificity score, or false
+  body: ({ grant }) => <BudgetMeter grant={grant} />,
+});
+<GrantCard grant={grant} views={[wineClubRow, ...grantViews.all]} accent={branding?.accent} />
+```
+
+`grant` here is the server-derived **`GrantViewData`** projection the grant tools emit as their
+structured content — plain, JSON-safe data with the money **already computed server-side** (the widget
+never re-derives an amount). The host's `branding.accent` themes the healthy budget fill and links;
+the running-low amber and spent-out red are **fixed** status colors a brand can never recolor. Consent
+still happens on the server-rendered approval page the card deep-links to — never inside the widget.
 
 ## Pure pricing model (no server)
 
@@ -172,9 +315,9 @@ the catalog; unknown ids are collected (`unknownIds`), not thrown.
 ## What's real in v0.1
 
 - `createStorefront(opts)` → `{ app, catalog, gate, listen, mcpServer }` — the runnable MCP server
-  (nine tools, widget resource, checkout page) over HTTP, catalog-injected, gate-ready.
-- `priceCart()` / `createOrder()` / `requiredAgeForLines()` / `getProduct()` / `getReviews()` — pure,
-  catalog-injected pricing & lookups.
+  (ten tools, widget resource, checkout page) over HTTP, catalog-injected, gate-ready.
+- `priceCart()` / `createOrder()` / `requiredAgeForLines()` / `getProduct()` / `getReviews()` /
+  `listProducts()` / `projectProduct()` — pure, catalog-injected pricing & lookups.
 - The `Product` / `Order` / `PricedCart` / `PricedCartLine` model + a runnable `SAMPLE_CATALOG`
   (includes one 21+ item) so the package demos itself.
 - Loyalty discount with a per-call percent override (`LOYALTY_DISCOUNT_PCT`, `PriceOpts`).

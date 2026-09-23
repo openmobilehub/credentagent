@@ -14,6 +14,17 @@ import {
   type Product,
 } from "../index";
 import styles from "./app.module.css";
+import { GrantCard, GRANT_VIEW_KIND, type GrantViewData, type GrantActions } from "./grants";
+
+// A grant tool result (create/get/spend/revoke) carries the GrantViewData projection, discriminated
+// by `kind`, on BOTH host channels (Claude's structuredContent / text, ChatGPT's toolOutput). When
+// present, the widget renders the grant card instead of the product picker.
+function grantViewOf(value: unknown): GrantViewData | null {
+  if (value && typeof value === "object" && (value as { kind?: unknown }).kind === GRANT_VIEW_KIND) {
+    return value as GrantViewData;
+  }
+  return null;
+}
 
 // Optimistic client-side pricing against the bundled catalog; the server re-prices
 // authoritatively on every tool call. (A host that injects its own catalog at
@@ -244,6 +255,10 @@ function HostApp() {
   const [insets, setInsets] = useState<Insets>();
   const [confirmedOrder, setConfirmedOrder] = useState<CompletedOrder | null>(null);
   const [pendingCheckoutUrl, setPendingCheckoutUrl] = useState<string | null>(null);
+  // Set when a grant tool result arrives (create/get/spend/revoke); renders the grant card in
+  // place of the picker. Cleared when a shopping (cart/catalog) result arrives, so the same widget
+  // flips back to shopping.
+  const [grantView, setGrantView] = useState<GrantViewData | null>(null);
   const appRef = useRef<Parameters<NonNullable<Parameters<typeof useApp>[0]["onAppCreated"]>>[0] | null>(null);
   // Mirrors `cart` so setQuantity can read the current value synchronously
   // (state is async) and compute the next optimistic cart.
@@ -266,15 +281,24 @@ function HostApp() {
       // add-to-cart / set-quantity / get-cart calls the AGENT made in chat.
       // That keeps the cart badge in sync with chat-driven changes.
       app.ontoolresult = async (result) => {
+        // A grant tool result wins: render the grant card. structuredContent carries the projection;
+        // fall back to the JSON text block for hosts that only forward content.
+        const grant = grantViewOf(result.structuredContent) ?? grantViewOf(parseJsonContent(result));
+        if (grant) {
+          setGrantView(grant);
+          return;
+        }
         const catalog = result._meta?.[CATALOG_META_KEY] as { products?: Product[] } | undefined;
         if (catalog?.products) setProducts(catalog.products);
         const metaCart = result._meta?.[CART_META_KEY] as PricedCart | undefined;
         if (metaCart && Array.isArray(metaCart.lines)) {
+          setGrantView(null); // a shopping result flips the widget back to the picker
           applyCart(metaCart);
           return;
         }
         const parsed = parseJsonContent<PricedCart>(result);
         if (parsed && Array.isArray(parsed.lines) && Array.isArray(parsed.unknownIds)) {
+          setGrantView(null);
           applyCart(parsed);
         }
       };
@@ -346,8 +370,20 @@ function HostApp() {
     await appRef.current?.openLink({ url });
   }, []);
 
+  // Grant-card affordances (FR-5): open the approval page through the bridge; revoke via the
+  // existing tool and re-render from its (fresh) grant view. Display-only — no enforcement here.
+  const grantActions = useMemo<GrantActions>(() => ({
+    openLink: (url) => { void appRef.current?.openLink({ url }); },
+    revoke: async (grantId) => {
+      const result = await appRef.current?.callServerTool({ name: "revoke-grant", arguments: { grantId } });
+      const g = result ? grantViewOf((result as CallToolResult).structuredContent) ?? grantViewOf(parseJsonContent(result as CallToolResult)) : null;
+      if (g) setGrantView(g);
+    },
+  }), []);
+
   if (error) return <div className={styles.status}><strong>Error:</strong> {error.message}</div>;
   if (!app) return <div className={styles.status}>Connecting…</div>;
+  if (grantView) return <GrantCard grant={grantView} actions={grantActions} />;
 
   return <Picker products={products} cart={cart} insets={insets} setQuantity={setQuantity} checkout={checkout} openLink={openLink} confirmedOrder={confirmedOrder} pendingCheckoutUrl={pendingCheckoutUrl} />;
 }
@@ -364,10 +400,18 @@ function ChatGptApp() {
   const [cart, setCart] = useState<PricedCart>(emptyCart());
   const [confirmedOrder, setConfirmedOrder] = useState<CompletedOrder | null>(null);
   const [pendingCheckoutUrl, setPendingCheckoutUrl] = useState<string | null>(null);
+  const [grantView, setGrantView] = useState<GrantViewData | null>(null);
 
-  // browse-products yields { products, cart }; cart tools yield a PricedCart.
+  // A grant tool's toolOutput is the GrantViewData (kind-marked); browse-products yields
+  // { products, cart }; cart tools yield a PricedCart.
   const applyToolOutput = useCallback((output: unknown) => {
+    const grant = grantViewOf(output);
+    if (grant) {
+      setGrantView(grant);
+      return;
+    }
     if (!output || typeof output !== "object") return;
+    setGrantView(null); // a shopping result flips the widget back to the picker
     const o = output as Record<string, unknown>;
     if (Array.isArray(o.products)) setProducts(o.products as Product[]);
     const maybeCart = (o.cart ?? o) as PricedCart;
@@ -420,6 +464,17 @@ function ChatGptApp() {
   const openLink = useCallback<OpenLinkFn>(async (url) => {
     await oai.openExternal?.({ href: url });
   }, [oai]);
+
+  const grantActions = useMemo<GrantActions>(() => ({
+    openLink: (url) => { void oai.openExternal?.({ href: url }); },
+    revoke: async (grantId) => {
+      const result = await oai.callTool?.("revoke-grant", { grantId });
+      const g = grantViewOf(structuredOf(result));
+      if (g) setGrantView(g);
+    },
+  }), [oai]);
+
+  if (grantView) return <GrantCard grant={grantView} actions={grantActions} />;
 
   return <Picker products={products} cart={cart} setQuantity={setQuantity} checkout={checkout} openLink={openLink} confirmedOrder={confirmedOrder} pendingCheckoutUrl={pendingCheckoutUrl} />;
 }

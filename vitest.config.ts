@@ -6,6 +6,10 @@ import { defineConfig, configDefaults } from "vitest/config";
 // "supertest flake"); the wider timeout + retry absorb residual environmental jitter.
 // Neither weakens any assertion — a real regression fails all attempts.
 export default defineConfig({
+  // The storefront widget ships React component tests (.test.tsx). Use the automatic JSX runtime
+  // so those files — and the source components they import — transpile without a manual
+  // `import React`. Only affects files that actually contain JSX; plain .ts suites are untouched.
+  esbuild: { jsx: "automatic", jsxImportSource: "react" },
   test: {
     // `spike/**` holds standalone design prototypes whose tests use Node's built-in
     // runner (`node --test`), NOT vitest — exclude them so `vitest run` doesn't try to

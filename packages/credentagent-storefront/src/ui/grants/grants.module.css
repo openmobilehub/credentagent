@@ -1,0 +1,152 @@
+/* Grant Widgets design system (spec 011). Ported 1:1 from specs/011-grant-widgets/mockups.html
+   — the VISUAL TRUTH — into a CSS module scoped to the grant gallery. Colors resolve per host
+   scheme through light-dark() (matching the widget's global.css `color-scheme: light dark`).
+   `--grant-accent` is the ONLY host-brandable token; the status colors below it are FIXED. */
+
+.gallery {
+  --grant-accent:       light-dark(#0d9488, #2dd4bf);
+  --grant-accent-hover: light-dark(#0f766e, #5eead4);
+  --grant-accent-tint:  light-dark(#effcfa, #12312e);
+  --grant-ink:          light-dark(#0f172a, #f1f5f9);
+  --grant-muted:        light-dark(#64748b, #94a3b8);
+  --grant-hairline:     light-dark(#e2e8f0, #334155);
+  --grant-surface:      light-dark(#ffffff, #1f1f1f);
+  --grant-sunken:       light-dark(#f1f5f9, #161616);
+  --grant-warn:         #fab219;                       /* FIXED status — never themed */
+  --grant-warn-ink:     light-dark(#7a4d00, #f6c453);
+  --grant-warn-pill-bg: light-dark(#fdf4e2, #2c2410);
+  --grant-crit:         light-dark(#d03b3b, #e05252);  /* FIXED status — never themed */
+  --grant-radius: 12px;
+  --grant-gap: 12px;
+  color: var(--grant-ink);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 12px;
+}
+
+/* -- The frame (owned by defineGrantView; trust line is non-omittable) -- */
+.gcard {
+  background: var(--grant-surface);
+  border: 1px solid var(--grant-hairline);
+  border-radius: var(--grant-radius);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 460px;
+}
+.showcase { box-shadow: 0 1px 3px rgba(15, 23, 42, 0.1), 0 8px 24px rgba(15, 23, 42, 0.06); }
+.terminal { opacity: 0.96; }
+
+.head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.kicker { font-size: 0.68rem; letter-spacing: 0.1em; text-transform: uppercase; font-weight: 700; color: var(--grant-muted); }
+.wordmark { font-size: 0.78rem; letter-spacing: 0.22em; font-weight: 700; color: var(--grant-muted); }
+
+.pill { display: inline-flex; align-items: center; gap: 5px; font-size: 0.72rem; font-weight: 700; padding: 3px 9px; border-radius: 999px; white-space: nowrap; }
+.pillDot { width: 7px; height: 7px; border-radius: 999px; background: currentColor; }
+.pillAccent { color: var(--grant-accent); background: var(--grant-accent-tint); }
+.pillWarn { color: var(--grant-warn-ink); background: var(--grant-warn-pill-bg); }
+.pillMuted { color: var(--grant-muted); background: var(--grant-sunken); }
+
+/* -- Product tile -- */
+.ptile { display: flex; gap: 12px; align-items: center; }
+.thumb { width: 56px; height: 56px; border-radius: 10px; flex: none; object-fit: cover; display: flex; align-items: center; justify-content: center; font-size: 26px; background: var(--grant-sunken); }
+.ptName { font-size: 0.95rem; font-weight: 600; }
+.ptMeta { font-size: 0.8rem; color: var(--grant-muted); }
+.ptQty { font-size: 0.8rem; color: var(--grant-ink); margin-top: 2px; }
+.ptQty b { color: var(--grant-accent); }
+
+/* -- Scope framing (category / open) -- */
+.scopeLede { font-size: 0.9rem; font-weight: 600; }
+.scopeSub { font-size: 0.8rem; color: var(--grant-muted); line-height: 1.4; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.chip { font-size: 0.78rem; font-weight: 600; padding: 4px 10px; border-radius: 6px; }
+.chipCat { color: var(--grant-accent); background: var(--grant-accent-tint); border: 1px solid light-dark(#c7ede8, #1c4a45); }
+.chipSku { color: var(--grant-muted); background: var(--grant-sunken); }
+.chipsLabel { font-size: 0.78rem; color: var(--grant-muted); margin-right: 2px; }
+
+/* -- Budget meter -- */
+.meter { margin-top: 2px; display: flex; flex-direction: column; }
+.budgetHead { font-size: 1.25rem; font-weight: 700; letter-spacing: -0.01em; }
+.budgetOf { color: var(--grant-muted); font-weight: 600; font-size: 0.92rem; }
+.meterTrack { position: relative; height: 10px; border-radius: 999px; background: var(--grant-sunken); overflow: hidden; margin-top: 6px; }
+.meterFill { height: 100%; border-radius: 999px; background: var(--grant-accent); transition: width 0.4s ease; }
+.meterFillLow { background: var(--grant-warn); }
+.meterFillCrit { background: var(--grant-crit); }
+.meterFillFrozen { background: light-dark(#cbd5e1, #475569); }
+.capwrap { position: relative; height: 16px; margin-top: 5px; }
+.cap { position: absolute; left: 0; top: 0; height: 8px; border-left: 1.5px solid var(--grant-muted); border-right: 1.5px solid var(--grant-muted); border-bottom: 1.5px solid var(--grant-muted); border-radius: 0 0 3px 3px; }
+.capLabel { position: absolute; top: 8px; left: 0; font-size: 0.72rem; color: var(--grant-muted); white-space: nowrap; }
+.capLabelOver { color: var(--grant-warn-ink); font-weight: 600; }
+
+/* -- Agency + revoke -- */
+.agency { font-size: 0.82rem; color: var(--grant-muted); display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.revoke { appearance: none; border: 0; background: transparent; color: var(--grant-accent); font: inherit; font-weight: 600; font-size: 0.82rem; text-decoration: none; padding: 6px 2px; cursor: pointer; min-height: 44px; display: inline-flex; align-items: center; }
+.revoke:hover { text-decoration: underline; }
+
+/* -- Approval card -- */
+.apprH1 { font-size: 1.2rem; font-weight: 700; margin: 2px 0 0; }
+.apprLede { font-size: 0.88rem; color: var(--grant-muted); line-height: 1.45; margin: 0; }
+.scopeBlock { border: 1px solid var(--grant-hairline); border-radius: 10px; padding: 10px 12px; }
+.sbLabel { font-size: 0.64rem; letter-spacing: 0.12em; text-transform: uppercase; font-weight: 800; color: var(--grant-muted); margin-bottom: 6px; }
+.moneyRow { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.moneyAmt { font-size: 1.15rem; font-weight: 800; }
+.moneyLbl { font-size: 0.74rem; color: var(--grant-muted); }
+.moneyDivider { color: var(--grant-hairline); font-weight: 700; }
+.whoText { font-size: 0.88rem; line-height: 1.4; }
+.btnRow { display: flex; gap: 10px; flex-wrap: wrap; }
+.btn { flex: 1 1 140px; min-height: 46px; border-radius: 10px; font: inherit; font-size: 0.92rem; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; text-decoration: none; }
+.btnApprove { background: var(--grant-accent); color: #fff; border: 1px solid var(--grant-accent); }
+.btnApprove:hover { background: var(--grant-accent-hover); }
+.btnDecline { background: transparent; color: var(--grant-ink); border: 1px solid var(--grant-hairline); }
+.btnDecline:hover { border-color: var(--grant-muted); }
+.deeplink { font-size: 0.76rem; color: var(--grant-muted); text-align: center; }
+
+/* -- Terminal -- */
+.terminalLine { font-size: 0.9rem; font-weight: 600; }
+.terminalSub { font-size: 0.8rem; color: var(--grant-muted); }
+
+/* -- Compact budgetMeter (dense list) -- */
+.meterList { border: 1px solid var(--grant-hairline); border-radius: var(--grant-radius); background: var(--grant-surface); overflow: hidden; max-width: 460px; }
+.mrow { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; align-items: center; padding: 11px 14px; border-bottom: 1px solid var(--grant-hairline); }
+.mName { font-size: 0.86rem; font-weight: 600; }
+.mVals { font-size: 0.82rem; color: var(--grant-muted); font-variant-numeric: tabular-nums; justify-self: end; }
+.mBar { grid-column: 1 / -1; }
+.mLock { grid-column: 1 / -1; font-size: 0.68rem; color: var(--grant-muted); }
+.listTrust { padding: 9px 14px; font-size: 0.74rem; color: var(--grant-muted); background: var(--grant-sunken); }
+
+/* -- Trust line (frame footer — always last, non-omittable) -- */
+.trust { border-top: 1px solid var(--grant-hairline); margin: 0 -16px -16px; padding: 11px 16px 13px; }
+.trustLine { font-size: 0.74rem; color: var(--grant-muted); line-height: 1.4; }
+
+/* -- Row density (single grant rendered compact) -- */
+.rowFrame { padding-bottom: 0; }
+
+/* -- loading · stale · error — the honesty states (FR-5 / design §5) -- */
+.dim { opacity: 0.55; }
+.staleCap { font-size: 0.76rem; color: var(--grant-muted); font-style: italic; }
+.banner {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  font-size: 0.8rem; padding: 8px 10px; border-radius: 8px;
+  background: light-dark(#fef2f2, #2a1616); color: var(--grant-crit);
+  border: 1px solid light-dark(#f6cccc, #522);
+}
+.retry { appearance: none; border: 0; background: transparent; color: var(--grant-crit); font: inherit; font-weight: 700; text-decoration: underline; cursor: pointer; }
+.btnDisabled { opacity: 0.5; cursor: not-allowed; pointer-events: none; }
+
+/* -- Skeleton (loading) -- */
+.sk { background: var(--grant-sunken); border-radius: 6px; }
+.skLine { height: 12px; }
+.skShort { width: 40%; }
+.skMid { width: 65%; }
+.skBar { height: 10px; border-radius: 999px; }
+.skTile { width: 56px; height: 56px; border-radius: 10px; flex: none; }
+@keyframes grantShimmer { 0% { opacity: 0.6; } 50% { opacity: 1; } 100% { opacity: 0.6; } }
+.skShimmer { animation: grantShimmer 1.4s ease-in-out infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .meterFill { transition: none; }
+  .skShimmer { animation: none; }
+}

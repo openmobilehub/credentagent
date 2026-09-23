@@ -56,6 +56,17 @@ export interface CredentialPageArgs {
   rail?: string;
   /** Host brand for this page (from `ctx.branding`). Absent ⇒ the built-in look. */
   branding?: Branding;
+  /**
+   * Where this page's two buttons POST/GET. Defaults to the order-scoped credential rail
+   * (`/credentagent/credential/{request,verify}`). The grant-age rail (#172) points them at its
+   * own grant-scoped routes so the SAME page, wallet flow and verify dispatch serve an age proof
+   * captured on the approve page — one ceremony implementation, two entry points.
+   */
+  endpoints?: { request?: string; verify?: string };
+  /** Override the explanatory sentence under the title. The default speaks about the buyer's
+   *  CART, which is right at checkout and wrong on the grant-age rail (#172) — there is no cart
+   *  there, only a spending grant the human is about to approve. */
+  lede?: string;
 }
 
 function escapeHtml(s: string): string {
@@ -77,7 +88,9 @@ export function renderCredentialPage(args: CredentialPageArgs): string {
     : isMembership
       ? "Apply membership discount"
       : customLabel;
-  const lede = isAge
+  const lede = args.lede
+    ? args.lede
+    : isAge
     ? `Your cart contains age-restricted items. Present a digital ID so we can confirm you are ${minimumAge} or older. Nothing is stored — only an over-${minimumAge} check.`
     : isMembership
       ? `Present your membership credential to take ${percent}% off your cart. Optional — your purchase works without it.`
@@ -134,6 +147,8 @@ ${pageHead(title, extraCss, args.branding)}
     // the coherent unsupported-browser guidance below so we never point at a disabled button (#131).
     const DEMO_AVAILABLE = ${demoAvailable};
     const RETURN_URL = ${JSON.stringify(returnUrl)};
+    const REQUEST_URL = ${JSON.stringify(args.endpoints?.request ?? "/credentagent/credential/request")};
+    const VERIFY_URL = ${JSON.stringify(args.endpoints?.verify ?? "/credentagent/credential/verify")};
     const log = document.getElementById("log");
     const goDc = document.getElementById("go-dc");
     const go = document.getElementById("go");
@@ -156,7 +171,7 @@ ${pageHead(title, extraCss, args.branding)}
     let reqData = null;
     function prefetch() {
       reqData = null;
-      fetch("/credentagent/credential/request" + location.search).then((r) => r.json()).then((d) => { reqData = d; }).catch(() => {});
+      fetch(REQUEST_URL + location.search).then((r) => r.json()).then((d) => { reqData = d; }).catch(() => {});
     }
 
     // One coherent recovery message for every combination of wallet support × demo availability —
@@ -194,7 +209,7 @@ ${pageHead(title, extraCss, args.branding)}
           let data = result && result.data != null ? result.data : null;
           if (typeof data === "string") { try { data = JSON.parse(data); } catch (e) {} }
           step("→ verify (" + ((result && result.protocol) || "?") + ")");
-          const out = await fetch("/credentagent/credential/verify", {
+          const out = await fetch(VERIFY_URL, {
             method: "POST", headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ order: ORDER, cart: CART, cred: CRED, readerContextToken: rd.readerContextToken, mdocContextToken: rd.mdocContextToken, result: { protocol: (result && result.protocol) || null, data } }),
           }).then((r) => r.json());
@@ -214,7 +229,7 @@ ${pageHead(title, extraCss, args.branding)}
       go.disabled = true;
       try {
         step("→ verify (presence-only)");
-        const out = await fetch("/credentagent/credential/verify", {
+        const out = await fetch(VERIFY_URL, {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ order: ORDER, cart: CART, cred: CRED, claims: DEMO_CLAIMS }),
         }).then((r) => r.json());
