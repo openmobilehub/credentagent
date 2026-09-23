@@ -1,7 +1,7 @@
 // createStorefront() — a runnable storefront in one line.
 //
-// Stands up the real MCP storefront — the nine shopping tools (six UI-linked to the
-// React widget, three plain) + the single-file widget resource + a checkout page —
+// Stands up the real MCP storefront — the ten shopping tools (six UI-linked to the
+// React widget, four plain) + the single-file widget resource + a checkout page —
 // over HTTP at /mcp, around an injected catalog. The checkout tool is UNGATED by
 // default; call `store.gate(resolve)` to have it surface a `requires` manifest,
 // which is exactly where @openmobilehub/credentagent-gate mounts on:
@@ -33,11 +33,13 @@ import {
   getProduct,
   getReviews,
   isCatalogSource,
+  listProducts,
   priceCart,
+  projectProduct,
   SAMPLE_CATALOG,
   staticCatalog,
 } from "./index.js";
-import type { CartItemInput, CatalogSource, Order, PricedCart, Product, Review } from "./index.js";
+import type { CartItemInput, CatalogSource, Order, PricedCart, Product, ProductPage, Review } from "./index.js";
 // Re-export the catalog contract so a consumer can type a custom dynamic source without
 // reaching into the pure model module.
 export type { CatalogSource } from "./index.js";
@@ -349,6 +351,20 @@ function homeRequires(requires: unknown[], base: string, cart?: string | null): 
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
+// Catalog-as-data limits: a page of `list-products`, a batch of ids, and how many valid ids a
+// single-id miss names. Each keeps one answer small enough for a model's context on a large catalog.
+const LIST_PAGE_DEFAULT = 50;
+const LIST_PAGE_MAX = 100;
+const LOOKUP_BATCH_MAX = 100;
+const VALID_IDS_SHOWN = 50;
+
+/** A plain-data tool result: the same JSON as text (headless agents) and structuredContent. */
+const dataResult = (data: Record<string, unknown>, isError = false): CallToolResult => ({
+  content: [{ type: "text", text: JSON.stringify(data) }],
+  structuredContent: data,
+  ...(isError ? { isError: true } : {}),
+});
+
 export function createStorefront(opts: StorefrontOptions = {}): Storefront {
   // Normalize the catalog into a CatalogSource: a plain array (or the default) is wrapped
   // in a static source; a dynamic source (e.g. `firestoreCatalog(...)`) is used as-is. Every
@@ -571,14 +587,16 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
         description:
           "Show the storefront catalog as an interactive visual product picker (a grid with images). " +
           "Call this whenever the user asks what you sell, what's available, to see/show/browse products, or " +
-          "to shop — it renders the grid for them. Prefer it over describing the catalog in text.",
+          "to shop — it renders the grid for them. Prefer it over describing the catalog in text. To read the " +
+          "catalog as DATA for your own use (find an id, filter, search, page) without rendering anything, call list-products.",
         inputSchema: {},
         annotations: { readOnlyHint: true },
         _meta: UI_META,
       },
       async (_args, extra): Promise<CallToolResult> => {
         await source.load();
-        const catalog = source.current();
+        // The same catalog read as list-products, so the picker and the data never disagree.
+        const catalog = listProducts(source.current()).products;
         const priced = await readPriced(sessionOf(extra));
         // A compact, agent-legible catalog line (ids + names + prices + categories + age flags).
         // A host rendering the widget shows the grid to a human; a HEADLESS agent (no widget, no
@@ -658,22 +676,100 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
       },
     );
 
-    // ── plain tools (3) — registerTool, no widget ───────────────────────────
+    // ── plain tools (4) — registerTool, no widget ───────────────────────────
+    server.registerTool(
+      "list-products",
+      {
+        title: "List Products",
+        description:
+          "Return the catalog as plain JSON data — nothing is rendered. Reach for it when YOU need the data: to find a " +
+          "product's id, filter by category, search by words, page through a large catalog, or when the host can't show " +
+          "widgets. When the user wants to SEE or shop the products, call browse-products instead — it renders the visual " +
+          `picker for them. Up to ${LIST_PAGE_DEFAULT} products per page: when nextCursor is not null, pass it back as cursor for the next ` +
+          "page. Omit fields for the full product (the same shape get-product-details returns); pass fields " +
+          '(e.g. ["name","price"]) to keep the answer small — id is always included.',
+        inputSchema: {
+          category: z.string().optional().describe("exact category, e.g. Beverages"),
+          query: z.string().optional().describe("words to find in the product name or description (case-insensitive)"),
+          limit: z.number().int().min(1).max(LIST_PAGE_MAX).optional().describe(`products per page (default ${LIST_PAGE_DEFAULT}, max ${LIST_PAGE_MAX})`),
+          cursor: z.string().optional().describe("copy nextCursor from the previous page VERBATIM; never edit or invent one"),
+          fields: z.array(z.string()).optional().describe("only these product properties (id is always included); omit for the full product"),
+        },
+        annotations: { readOnlyHint: true },
+      },
+      async ({ category, query, limit, cursor, fields }): Promise<CallToolResult> => {
+        await source.load();
+        let page: ProductPage;
+        try {
+          page = listProducts(source.current(), { category, query, cursor, limit: limit ?? LIST_PAGE_DEFAULT });
+        } catch (err) {
+          // The schema already bounds `limit`, so the only refusal left is a malformed cursor.
+          if (!(err instanceof RangeError)) throw err;
+          return dataResult({ error: "invalid-cursor", message: err.message }, true);
+        }
+        const products = fields ? page.products.map((p) => projectProduct(p, fields)) : page.products;
+        return dataResult({ products, totalCount: page.totalCount, nextCursor: page.nextCursor });
+      },
+    );
     server.registerTool(
       "get-product-details",
-      { title: "Get Product Details", description: "Return full details for a single product by id.", inputSchema: { productId: z.string() }, annotations: { readOnlyHint: true } },
+      {
+        title: "Get Product Details",
+        description:
+          "Return full details for a product by id. Pass an array of ids to look several up in one call: results come " +
+          'back in the same order, and an unknown id comes back as { id, error: "not-found" } instead of failing the ' +
+          "call. A single unknown id is an error that lists valid ids. Don't know the id? Call list-products.",
+        inputSchema: {
+          productId: z
+            .union([z.string(), z.array(z.string()).max(LOOKUP_BATCH_MAX)])
+            .describe(`one product id, or an array of up to ${LOOKUP_BATCH_MAX} ids`),
+        },
+        annotations: { readOnlyHint: true },
+      },
       async ({ productId }): Promise<CallToolResult> => {
         await source.load();
-        const product = getProduct(source.current(), productId);
-        return product
-          ? { content: [{ type: "text", text: JSON.stringify(product) }], structuredContent: { product } }
-          : { content: [{ type: "text", text: `No product found with id "${productId}".` }], isError: true };
+        const catalog = source.current();
+        if (Array.isArray(productId)) {
+          const results = productId.map((id) => {
+            const product = getProduct(catalog, id);
+            return product ? { id, product } : { id, error: "not-found" };
+          });
+          return { content: [{ type: "text", text: JSON.stringify(results) }], structuredContent: { results } };
+        }
+        const product = getProduct(catalog, productId);
+        if (product) return { content: [{ type: "text", text: JSON.stringify(product) }], structuredContent: { product } };
+        // A miss names the ids that DO exist, so the agent can correct itself — capped, so a
+        // large catalog doesn't land in the model's context.
+        const shown = catalog.slice(0, VALID_IDS_SHOWN).map((p) => p.id);
+        const more = catalog.length > shown.length ? ` Showing ${shown.length} of ${catalog.length} valid ids — call list-products to page through all of them.` : "";
+        return dataResult(
+          { id: productId, error: "not-found", message: `No product found with id "${productId}".${more}`, validIds: shown, validIdCount: catalog.length },
+          true,
+        );
       },
     );
     server.registerTool(
       "get-product-reviews",
-      { title: "Get Product Reviews", description: "Return customer reviews for a single product by id.", inputSchema: { productId: z.string() }, annotations: { readOnlyHint: true } },
+      {
+        title: "Get Product Reviews",
+        description:
+          "Return customer reviews for a product by id. Pass an array of ids to fetch several in one call: results come " +
+          'back in the same order, and an unknown id comes back as { id, error: "not-found" }.',
+        inputSchema: {
+          productId: z
+            .union([z.string(), z.array(z.string()).max(LOOKUP_BATCH_MAX)])
+            .describe(`one product id, or an array of up to ${LOOKUP_BATCH_MAX} ids`),
+        },
+        annotations: { readOnlyHint: true },
+      },
       async ({ productId }): Promise<CallToolResult> => {
+        if (Array.isArray(productId)) {
+          // "Unknown" means unknown to the catalog — a real product with no reviews is { reviews: [] }.
+          await source.load();
+          const catalog = source.current();
+          const results = productId.map((id) => (getProduct(catalog, id) ? { id, reviews: getReviews(reviews, id) } : { id, error: "not-found" }));
+          return { content: [{ type: "text", text: JSON.stringify(results) }], structuredContent: { results } };
+        }
         const r = getReviews(reviews, productId);
         return { content: [{ type: "text", text: JSON.stringify(r) }], structuredContent: { reviews: r } };
       },

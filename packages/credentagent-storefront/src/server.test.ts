@@ -1,6 +1,6 @@
 // Contract tests for createStorefront — drives the real MCP server over an
-// in-memory transport (deterministic). Covers CT1 (9 tools), CT2/CT3 (checkout
-// gated/ungated), CT5 (ui resource + the 6/3 UI-linked split), CT6 (state
+// in-memory transport (deterministic). Covers CT1 (10 tools), CT2/CT3 (checkout
+// gated/ungated), CT5 (ui resource + the 6/4 UI-linked split), CT6 (state
 // isolation), CT9/FR-014 (the ChatGPT widget meta — widgetAccessible).
 
 import { describe, it, expect, vi } from "vitest";
@@ -14,7 +14,7 @@ import { createStorefront, originFromRequest, verificationRevision, bundleVersio
 import { redisStorage, type RedisLike } from "./redis.js";
 import { firestoreCatalog, type FirestoreLike } from "./firestore.js";
 import { MemoryOrderStore } from "./state.js";
-import type { Order } from "./index.js";
+import { SAMPLE_CATALOG, type CatalogSource, type Order, type Product } from "./index.js";
 import { CredentAgent, age, membership, payment, required, optional, defineCredential, dcql, gate, MemoryVerificationStore } from "@openmobilehub/credentagent-gate";
 import type { DelegatedVerifier } from "@openmobilehub/credentagent-gate";
 import type { Request } from "express";
@@ -62,10 +62,10 @@ function fakeFirestore(
 
 const ALL_TOOLS = [
   "browse-products", "add-to-cart", "set-quantity", "remove-from-cart", "get-cart",
-  "get-product-details", "get-product-reviews", "checkout", "get-order-status",
+  "list-products", "get-product-details", "get-product-reviews", "checkout", "get-order-status",
 ];
 const UI_LINKED = ["browse-products", "add-to-cart", "set-quantity", "remove-from-cart", "get-cart", "checkout"];
-const PLAIN = ["get-product-details", "get-product-reviews", "get-order-status"];
+const PLAIN = ["list-products", "get-product-details", "get-product-reviews", "get-order-status"];
 
 async function connect(store: Storefront): Promise<Client> {
   const server = store.mcpServer();
@@ -75,15 +75,15 @@ async function connect(store: Storefront): Promise<Client> {
   return client;
 }
 
-describe("CT1 — the nine tools are registered", () => {
-  it("exposes exactly the nine shopping tools", async () => {
+describe("CT1 — the ten tools are registered", () => {
+  it("exposes exactly the ten shopping tools", async () => {
     const names = (await (await connect(createStorefront())).listTools()).tools.map((t) => t.name).sort();
     expect(names).toEqual([...ALL_TOOLS].sort());
   });
 });
 
-describe("CT9 / FR-014 — the ChatGPT widget meta (the 6/3 split)", () => {
-  it("the six UI-linked tools carry widgetAccessible + outputTemplate; the three plain do NOT", async () => {
+describe("CT9 / FR-014 — the ChatGPT widget meta (the 6/4 split)", () => {
+  it("the six UI-linked tools carry widgetAccessible + outputTemplate; the four plain do NOT", async () => {
     const tools = (await (await connect(createStorefront())).listTools()).tools;
     const meta = (n: string) => tools.find((t) => t.name === n)?._meta as Record<string, unknown> | undefined;
     for (const n of UI_LINKED) {
@@ -667,7 +667,7 @@ describe("storage provider — per-slot resolution (US2/US3 · FR-002, FR-006)",
 describe("in-memory default stays lean (US2 · FR-008)", () => {
   it("createStorefront() builds and serves with no storage option", async () => {
     const names = (await (await connect(createStorefront())).listTools()).tools.map((t) => t.name);
-    expect(names.length).toBe(9); // the nine tools — the zero-config path is intact
+    expect(names.length).toBe(10); // the ten tools — the zero-config path is intact
   });
 
   it("the ./server module does not statically import @upstash/redis", () => {
@@ -1085,5 +1085,217 @@ describe("browse-products is agent-legible (#120)", () => {
     }
     expect(text).toContain("21+"); // the age flag rides along so the agent knows what's restricted
     expect(text.toLowerCase()).toContain("do not re-list"); // but don't spam a user who sees the grid
+  });
+});
+
+// ── Reading the catalog as DATA (no widget) ──────────────────────────────────────────────────
+// A client that doesn't render the widget must still be able to enumerate the catalog and look
+// products up in bulk — without reading SAMPLE_CATALOG out of this repo.
+
+/** A synthetic catalog big enough to exercise the default page size and the valid-id cap. */
+const bigCatalog = (n: number): Product[] =>
+  Array.from({ length: n }, (_, i) => ({
+    id: `p-${String(i).padStart(3, "0")}`,
+    name: `Product ${i}`,
+    price: 10 + i,
+    currency: "USD",
+    image: "",
+    category: i % 2 ? "Odd" : "Even",
+    description: `Item number ${i}`,
+  }));
+
+const textOf = (res: Awaited<ReturnType<Client["callTool"]>>): string =>
+  (res.content as { type: string; text?: string }[]).filter((b) => b.type === "text").map((b) => b.text).join("");
+
+describe("list-products — the catalog as plain data (no widget)", () => {
+  const list = (c: Client, args: Record<string, unknown> = {}) => c.callTool({ name: "list-products", arguments: args });
+
+  it("with no arguments returns every product in exactly the shape get-product-details returns", async () => {
+    const c = await connect(createStorefront());
+    const res = await list(c);
+    expect(res.isError).toBeFalsy();
+    const sc = res.structuredContent as any;
+    expect(sc.products.map((p: Product) => p.id)).toEqual(SAMPLE_CATALOG.map((p) => p.id));
+    expect(sc.totalCount).toBe(SAMPLE_CATALOG.length);
+    expect(sc.nextCursor).toBeNull();
+    for (const p of sc.products) {
+      const details = (await c.callTool({ name: "get-product-details", arguments: { productId: p.id } })).structuredContent as any;
+      expect(p).toEqual(details.product);
+    }
+    // A headless agent reads the text block: it carries the same data.
+    expect(JSON.parse(textOf(res))).toEqual(sc);
+  });
+
+  it("filters by exact category and by a case-insensitive name/description query", async () => {
+    const c = await connect(createStorefront());
+    const ids = async (args: Record<string, unknown>) => ((await list(c, args)).structuredContent as any).products.map((p: Product) => p.id);
+    expect(await ids({ category: "Beverages" })).toEqual(["oak-whiskey", "celebration-champagne"]);
+    expect(await ids({ category: "beverages" })).toEqual([]);
+    expect(await ids({ query: "WIRELESS" })).toEqual(["aurora-headphones", "drift-mouse"]);
+    expect(await ids({ category: "Beverages", query: "trio" })).toEqual(["oak-whiskey"]);
+  });
+
+  it("pages: a default page of 50, then limit + cursor walk the rest with no gaps or repeats", async () => {
+    const catalog = bigCatalog(120);
+    const c = await connect(createStorefront({ catalog }));
+    const first = (await list(c)).structuredContent as any;
+    expect(first.products).toHaveLength(50);
+    expect(first.totalCount).toBe(120);
+    expect(typeof first.nextCursor).toBe("string");
+
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    do {
+      const page = (await list(c, { limit: 40, ...(cursor ? { cursor } : {}) })).structuredContent as any;
+      seen.push(...page.products.map((p: Product) => p.id));
+      cursor = page.nextCursor ?? undefined;
+    } while (cursor);
+    expect(seen).toEqual(catalog.map((p) => p.id));
+  });
+
+  it("refuses a page size above 100 at the schema", async () => {
+    const c = await connect(createStorefront());
+    const res = await list(c, { limit: 101 });
+    expect(res.isError).toBe(true);
+  });
+
+  it("projects with fields — id always kept, a field the product lacks is omitted, never invented", async () => {
+    const c = await connect(createStorefront());
+    const sc = (await list(c, { category: "Beverages", fields: ["price", "minimumAge"] })).structuredContent as any;
+    expect(sc.products).toEqual([
+      { id: "oak-whiskey", price: 124, minimumAge: 21 },
+      { id: "celebration-champagne", price: 89, minimumAge: 21 },
+    ]);
+    const audio = (await list(c, { category: "Audio", fields: ["name", "minimumAge"] })).structuredContent as any;
+    expect(audio.products).toEqual([{ id: "aurora-headphones", name: "Aurora Wireless Headphones" }]);
+  });
+
+  it("a malformed cursor is an error result the agent can read — not a thrown request failure", async () => {
+    const c = await connect(createStorefront());
+    const res = await list(c, { cursor: "made-up" });
+    expect(res.isError).toBe(true);
+    expect((res.structuredContent as any).error).toBe("invalid-cursor");
+    expect(textOf(res)).toContain("invalid-cursor");
+  });
+
+  it("returns the same set, in the same order, as browse-products (one shared catalog read)", async () => {
+    for (const catalog of [SAMPLE_CATALOG, bigCatalog(73)]) {
+      const c = await connect(createStorefront({ catalog }));
+      const browsed = ((await c.callTool({ name: "browse-products", arguments: {} })).structuredContent as any).products as Product[];
+      const listed: Product[] = [];
+      let cursor: string | undefined;
+      do {
+        const page = (await list(c, { limit: 100, ...(cursor ? { cursor } : {}) })).structuredContent as any;
+        listed.push(...page.products);
+        cursor = page.nextCursor ?? undefined;
+      } while (cursor);
+      expect(listed).toEqual(browsed);
+      expect(browsed).toHaveLength(catalog.length);
+    }
+  });
+
+  it("reads through a dynamic CatalogSource (firestoreCatalog) unchanged", async () => {
+    const docs = [
+      { id: "oak-whiskey", data: { name: "Oak Reserve", price: 124, currency: "USD", category: "Beverages", minimumAge: 21 } },
+      { id: "drift-mouse", data: { name: "Drift Mouse", price: 49, currency: "USD", category: "Electronics" } },
+    ];
+    const c = await connect(createStorefront({ catalog: firestoreCatalog({ client: fakeFirestore(docs) }) }));
+    const sc = (await list(c, { category: "Beverages", fields: ["price", "minimumAge"] })).structuredContent as any;
+    expect(sc.products).toEqual([{ id: "oak-whiskey", price: 124, minimumAge: 21 }]);
+  });
+});
+
+// Security invariant 2 — prices, currency and minimumAge always re-derive from the catalog
+// SOURCE on the server. A merchant's edit must show on the very next call (the handlers reload the
+// source first); nothing the client sends or a stale snapshot holds may stand in for it.
+// Load-bearing: drop the `await source.load()` from either handler and the edit never shows.
+describe("list-products / get-product-details re-derive from the live catalog source (invariant 2)", () => {
+  it("a server-side price + age change is reflected on the next call, in both tools", async () => {
+    let live: Product[] = [{ id: "cider", name: "Farm Cider", price: 10, currency: "USD", image: "", category: "Beverages", description: "Dry cider." }];
+    let snapshot: Product[] | undefined;
+    const source: CatalogSource = {
+      load: async () => (snapshot = structuredClone(live)),
+      current: () => {
+        if (!snapshot) throw new Error("never loaded");
+        return snapshot;
+      },
+    };
+    const c = await connect(createStorefront({ catalog: source }));
+    const listed = async () => ((await c.callTool({ name: "list-products", arguments: { fields: ["price", "currency", "minimumAge"] } })).structuredContent as any).products[0];
+    const batch = async () => ((await c.callTool({ name: "get-product-details", arguments: { productId: ["cider"] } })).structuredContent as any).results[0].product;
+
+    expect(await listed()).toEqual({ id: "cider", price: 10, currency: "USD" });
+    expect((await batch()).price).toBe(10);
+
+    // Each tool is asked FIRST after the edit, so neither can ride on the other's reload.
+    live = [{ ...live[0], price: 12.5, currency: "EUR", minimumAge: 21 }];
+    expect(await batch()).toMatchObject({ price: 12.5, currency: "EUR", minimumAge: 21 });
+    live = [{ ...live[0], price: 14 }];
+    expect(await listed()).toEqual({ id: "cider", price: 14, currency: "EUR", minimumAge: 21 });
+  });
+});
+
+describe("get-product-details / get-product-reviews — one id or many", () => {
+  const whiskey = SAMPLE_CATALOG.find((p) => p.id === "oak-whiskey")!;
+  const mouse = SAMPLE_CATALOG.find((p) => p.id === "drift-mouse")!;
+
+  it("a string id keeps today's single-object response exactly as it was", async () => {
+    const c = await connect(createStorefront());
+    const res = await c.callTool({ name: "get-product-details", arguments: { productId: "oak-whiskey" } });
+    expect(res).toEqual({ content: [{ type: "text", text: JSON.stringify(whiskey) }], structuredContent: { product: whiskey } });
+  });
+
+  it("an array returns results in request order; an unknown id is an entry with the id + an error, not a failed request", async () => {
+    const c = await connect(createStorefront());
+    const res = await c.callTool({ name: "get-product-details", arguments: { productId: ["drift-mouse", "ghost", "oak-whiskey", "drift-mouse"] } });
+    expect(res.isError).toBeFalsy();
+    const results = (res.structuredContent as any).results;
+    expect(results).toEqual([
+      { id: "drift-mouse", product: mouse },
+      { id: "ghost", error: "not-found" },
+      { id: "oak-whiskey", product: whiskey },
+      { id: "drift-mouse", product: mouse },
+    ]);
+    expect(JSON.parse(textOf(res))).toEqual(results);
+  });
+
+  it("a single-id miss is an error that names every valid id, so the agent can recover", async () => {
+    const c = await connect(createStorefront());
+    const res = await c.callTool({ name: "get-product-details", arguments: { productId: "ghost" } });
+    expect(res.isError).toBe(true);
+    const sc = res.structuredContent as any;
+    expect(sc).toEqual({
+      id: "ghost",
+      error: "not-found",
+      message: expect.stringContaining('No product found with id "ghost".'),
+      validIds: SAMPLE_CATALOG.map((p) => p.id),
+      validIdCount: SAMPLE_CATALOG.length,
+    });
+    expect(JSON.parse(textOf(res))).toEqual(sc); // the text a headless agent reads carries the ids too
+  });
+
+  it("caps the valid-id list at 50 and reports the full count, so a large catalog doesn't dump", async () => {
+    const catalog = bigCatalog(120);
+    const c = await connect(createStorefront({ catalog }));
+    const sc = (await c.callTool({ name: "get-product-details", arguments: { productId: "ghost" } })).structuredContent as any;
+    expect(sc.validIds).toEqual(catalog.slice(0, 50).map((p) => p.id));
+    expect(sc.validIdCount).toBe(120);
+    expect(sc.message).toContain("list-products"); // points at the way to see the rest
+  });
+
+  it("get-product-reviews: a string id is unchanged; an array returns reviews per id, in order, misses marked", async () => {
+    const reviews = { "oak-whiskey": [{ author: "Sam", rating: 5, text: "Smooth." }] };
+    const c = await connect(createStorefront({ reviews }));
+
+    const single = await c.callTool({ name: "get-product-reviews", arguments: { productId: "oak-whiskey" } });
+    expect(single).toEqual({ content: [{ type: "text", text: JSON.stringify(reviews["oak-whiskey"]) }], structuredContent: { reviews: reviews["oak-whiskey"] } });
+
+    const res = await c.callTool({ name: "get-product-reviews", arguments: { productId: ["ghost", "oak-whiskey", "drift-mouse"] } });
+    expect(res.isError).toBeFalsy();
+    expect((res.structuredContent as any).results).toEqual([
+      { id: "ghost", error: "not-found" },
+      { id: "oak-whiskey", reviews: reviews["oak-whiskey"] },
+      { id: "drift-mouse", reviews: [] },
+    ]);
   });
 });
