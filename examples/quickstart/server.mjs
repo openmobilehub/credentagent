@@ -12,6 +12,22 @@ const deployed = !!process.env.VERCEL; // serverless: instances share no memory,
 if (deployed && !process.env.GATE_SECRET) // ephemeral per-instance key can't work — refuse.
   throw new Error("GATE_SECRET is required on a deployment — generate one with: openssl rand -hex 32");
 const kv = { url: process.env.KV_REST_API_URL ?? process.env.UPSTASH_REDIS_REST_URL, token: process.env.KV_REST_API_TOKEN ?? process.env.UPSTASH_REDIS_REST_TOKEN };
+// The STORES are the other half of that. `statelessOrders` carries the ORDER between
+// instances (the signed cart mandate rides in the URL), but nothing carries the buyer's
+// verification or the completed-order record: on the in-memory fallback the age proof written
+// by one request is invisible to the next, so an age-gated order refuses "age" at random and a
+// completed order never reaches order-status — a coin flip that reads as a hang, not an error.
+// Refuse at boot instead. Never inferred: ONE process running deployed-mode semantics (what
+// `npm run smoke` does) opts out with ALLOW_MEMORY_STORAGE=1 — never right on real Vercel.
+// (`redisStorage.fromEnv({ required })` folds this into the library, but it landed after 0.4.0
+// and this example installs the PUBLISHED packages — switch once it ships.)
+if (deployed && !(kv.url && kv.token) && process.env.ALLOW_MEMORY_STORAGE !== "1")
+  throw new Error(
+    "Shared storage is required on a deployment — set KV_REST_API_URL + KV_REST_API_TOKEN (Upstash / Vercel KV). " +
+      "Serverless instances share no memory, so the in-memory stores would lose each buyer's age proof between " +
+      "requests: the order would refuse reason:\"age\" at random and completions would never reach order-status. " +
+      "Running deployed-mode semantics in ONE process (e.g. `npm run smoke`)? Set ALLOW_MEMORY_STORAGE=1.",
+  );
 const origin = process.env.VERCEL_PROJECT_PRODUCTION_URL; // set by Vercel at runtime
 const deployedOrigin = origin && `https://${origin}`;
 const port = Number(process.env.PORT ?? 3005);
@@ -42,7 +58,13 @@ const store = createStorefront({
   signingKey: process.env.GATE_SECRET,
   statelessOrders: deployed, // the signed cart mandate carries the order between instances
   statelessMcp: deployed, // no per-instance MCP session — survives Vercel's instance split
-  storage: kv.url && kv.token ? redisStorage(kv) : undefined,
+  // STORAGE_NAMESPACE isolates this deployment's keys when two deployments share one Redis
+  // (a prod demo and its dev twin). Keys are `${namespace}:…`, so two deployments on the
+  // default namespace could collide on a session or order id. Absent ⇒ the package default,
+  // so an existing deployment's keys are untouched.
+  storage: kv.url && kv.token
+    ? redisStorage({ ...kv, ...(process.env.STORAGE_NAMESPACE ? { namespace: process.env.STORAGE_NAMESPACE } : {}) })
+    : undefined,
   baseUrl: deployedOrigin, // local stays unset → checkout links derive from each request's origin
   // Grant records + the delegated ledger live in THIS process's memory: on a multi-instance
   // deploy a grant made on one instance is invisible to its siblings. Fine for this demo;
