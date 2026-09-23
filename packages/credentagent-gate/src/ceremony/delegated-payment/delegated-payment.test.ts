@@ -623,3 +623,96 @@ describe("delegated rail — the gate names no verifier", () => {
     expect(out.clientEntry).toBe("acmeVerifyCredentials");
   });
 });
+
+// ── An identity-only delegated gate must not be dressed as a payment (#141 follow-up) ────
+// This rail is shared with the payment flow, but a policy with NO authorize() credential
+// settles nothing — pinned above by "an identity-only delegated gate (no payment) completes
+// with NO settlement call". The approve page nevertheless hardcoded "Authorize payment", a
+// "Pay" step, "present a payment credential" and "settlement", so the ONE screen a human
+// reads announced a payment that provably never happens (Principle VII: the page must not
+// claim more than the ceremony does). It also ignored the host's `returnUrl` seam that both
+// sibling rails already honor (dc-payment/routes.ts, passkey/routes.ts), stranding the user
+// on `/checkout` — a route a non-storefront host does not serve.
+//
+// Each test is paired with a control on a policy that DOES settle, so a pass proves the page
+// switched on the policy rather than simply losing the payment wording everywhere.
+
+describe("delegated rail — an identity-only gate is not dressed as a payment", () => {
+  // Assert on what a HUMAN reads: the shared stylesheet `pageHead()` inlines carries an
+  // unrelated CSS comment mentioning x402 settlement, and matching that would pass/fail for
+  // reasons no reader could see.
+  const visible = (html: string) => html.replace(/<style>[\s\S]*?<\/style>/g, "");
+  const identity = () =>
+    renderDelegatedPage({
+      order: "REQ-1", total: 0, currency: "USD", hasPayment: false,
+      lines: [{ name: "Sealed record", quantity: 1, lineTotal: 0, currency: "USD" }],
+    });
+  const paying = () =>
+    renderDelegatedPage({
+      order: "ORD-1", total: 124, currency: "USD", hasPayment: true,
+      lines: [{ name: "oak-whiskey", quantity: 1, lineTotal: 124, currency: "USD" }],
+    });
+
+  it("does not announce a payment, a payment credential, or settlement", () => {
+    const html = visible(identity());
+    expect(html).not.toMatch(/Authorize payment/);
+    expect(html).not.toMatch(/payment credential/);
+    expect(html).not.toMatch(/settlement/i);
+    expect(html).not.toMatch(/Payment complete/);
+    expect(html).not.toMatch(/Return to checkout/);
+  });
+
+  it("still frames a policy that DOES settle as a payment (control)", () => {
+    const html = visible(paying());
+    expect(html).toContain("Authorize payment");
+    expect(html).toContain("payment credential");
+    expect(html).toMatch(/settlement/i);
+  });
+
+  it("shows WHAT is being gated but no amounts — an access decision is not a $0 purchase", () => {
+    const html = visible(identity());
+    expect(html).toContain("Sealed record"); // the subject of the consent stays
+    expect(html).not.toContain("$0.00");
+    expect(html).not.toMatch(/<tr class="total">/);
+    expect(html).toContain("Request REQ-1"); // not "Order" — nothing was ordered
+  });
+
+  it("keeps the order total on a payment policy (control)", () => {
+    const html = visible(paying());
+    expect(html).toContain("$124.00");
+    expect(html).toMatch(/<tr class="total">/);
+    expect(html).toContain("Order ORD-1");
+  });
+});
+
+describe("delegated rail — the approve page honors the host's seams", () => {
+  async function getPage(over: Partial<CeremonySeams> = {}) {
+    const app = routeApp();
+    mountCeremony(app, seams({ verifier: stubVerifier(), ...over }));
+    const handler = app.handlers.get("GET /credentagent/delegated")!;
+    const { res, out } = resDouble();
+    await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(
+      { query: { order: "ORD-1" }, headers: { host: "shop.example" }, protocol: "https" },
+      res,
+    );
+    return out;
+  }
+
+  it("returns the user to the host's returnUrl, never a hardcoded /checkout", async () => {
+    const out = await getPage({ returnUrl: (id) => `/records/${id}` });
+    expect(out.html).toContain("/records/ORD-1");
+    expect(out.html).not.toContain("/checkout?order=ORD-1");
+  });
+
+  it("shows no Pay step when the policy has no payment credential", async () => {
+    const out = await getPage({ credentialRegistry: new Map([["age", age.over(21)]]) });
+    expect(out.html).not.toContain('<div class="rail-label">Pay</div>');
+  });
+
+  it("still shows the Pay step when the policy HAS one (control)", async () => {
+    const out = await getPage({
+      credentialRegistry: new Map([["age", age.over(21)], ["payment", payment.in("usd")]]),
+    });
+    expect(out.html).toContain('<div class="rail-label">Pay</div>');
+  });
+});
