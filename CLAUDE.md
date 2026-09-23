@@ -25,7 +25,8 @@ This repo (`openmobilehub/credentagent`) is the **library**: two npm workspaces 
 Tests run with **`npm test` from the repo root** (vitest) — that is the authoritative run,
 and the only one that includes the cross-package integration suite (see *Testing
 expectations*). `npm run test:workspaces` is the faster inner loop and skips it.
-`npm run build` typechecks + builds each package. The end-to-end reference DEMO lives in a **separate** repo,
+`npm run build` typechecks + builds each package. The end-to-end reference DEMO lives in a
+**separate** repo,
 [`openmobilehub/mcp-apps-shopping-demo`](https://github.com/openmobilehub/mcp-apps-shopping-demo),
 which consumes these packages — link to it, don't describe it as part of this repo.
 
@@ -154,9 +155,11 @@ Quick gate for any new/changed public API (full list in the rubric):
   Every bypass test must fail when its control is deleted.
 - **Verify with the ROOT `npm test`, not a per-workspace run.** `storefront-gate.test.ts`
   lives at the repo root — it checks that the two published packages compose with zero
-  glue, so it belongs to neither workspace and neither workspace's vitest picks it up. A
+  glue, so it belongs to neither workspace and neither workspace's vitest picks it up. The
+  root run therefore includes exactly one more file than the per-package runs: that one. A
   per-workspace run is a legitimate fast inner loop; it is **not** a verification. Claiming
-  green off one is how #184 happened: 51 files passed locally, and CI's 52nd failed.
+  green off one is how issue #184 happened — a contributor ran every test CLAUDE.md told
+  them to run, saw it all pass, and CI failed on the cross-package file they never ran.
 
 ## Conventions
 

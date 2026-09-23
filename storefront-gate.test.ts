@@ -7,8 +7,9 @@ import { CredentAgent, age, membership, payment, required, optional } from "@ope
 
 // LOCATION MATTERS: this file lives at the REPO ROOT on purpose, because it belongs to
 // neither workspace — it checks that the two PUBLISHED packages compose. The consequence is
-// that neither workspace's vitest picks it up: a per-workspace run sees 51 files, the root
-// run sees 52. Verify with the root `npm test` (#184); `npm run test:workspaces` skips this.
+// that neither workspace's vitest picks it up: the root run includes exactly one more file
+// than the per-package runs — this one. Verify with the root `npm test`;
+// `npm run test:workspaces` skips this file.
 //
 // Guards the quickstart showcase (examples/storefront.mjs): the two packages
 // compose with ZERO glue — a priced storefront Order feeds credentagent.requirements()
