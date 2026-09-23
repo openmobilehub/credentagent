@@ -34,7 +34,9 @@ the already-published versions — exactly what happened with v0.3.1: published 
 2026-07-26, release created after, and the `publish` run went red on the duplicate. The manual
 path also skips the record: 0.3.0/0.3.1 shipped tagless and had to be backfilled.
 
-1. **Version bump** — bump both packages together (lockstep) in a PR; merge it.
+1. **Version bump** — bump both packages together (lockstep) in a PR; merge it. See
+   [the version-bump trap](#the-version-bump-trap-npm-version-does-not-do-all-of-it) below —
+   `npm version` does **not** finish the job, and the way it fails looks like a source bug.
 2. **Tag + release — this is the publish.** One lightweight tag per release on the merged bump
    commit (lockstep versions ⇒ one tag marks both), then publish the release:
 
@@ -54,6 +56,47 @@ Release notes are **public copy, written for someone who didn't follow developme
 language, each feature stated by what it does for the integrator, and the honesty gate (below)
 applies to them exactly as it does to the READMEs — never let notes present a presence-only gate
 as a real safety control.
+
+## The version-bump trap (`npm version` does not do all of it)
+
+`npm version X.Y.Z -w …` bumps each package's own `version`, but it does **not** rewrite the
+storefront's dependency range on the gate. That line has to be edited **by hand**:
+
+```jsonc
+// packages/credentagent-storefront/package.json
+"@openmobilehub/credentagent-gate": "^0.4.0",   // <- edit this yourself
+```
+
+**Why it matters:** `^0.3.1` means `>=0.3.1 <0.4.0`. Leave it and you publish a 0.4.0
+storefront that resolves a **0.3.x** gate off the registry — the two packages version in
+lockstep precisely so this can't happen, and this is the one line that enforces it.
+
+**The symptom, if you forget.** In the intermediate state (workspace gate already bumped,
+storefront still asking for the old range) npm can no longer satisfy the range from the
+workspace, so it installs the **published** old gate into a nested
+`packages/credentagent-storefront/node_modules/`. TypeScript then resolves the gate to that
+stale copy and the build fails naming a symbol that is new in the release:
+
+```
+src/server.ts(63,8): error TS2305: Module '"@openmobilehub/credentagent-gate"'
+  has no exported member 'Branding'.
+```
+
+That reads like the export is missing or the barrel is broken. It isn't — the export is fine
+and the resolution is stale. **Fix the range, then run a plain `npm install`** (not
+`--package-lock-only`, which updates the lockfile without touching `node_modules` and leaves
+the nested copy in place). Confirm with:
+
+```bash
+node -p "const g=require('./packages/credentagent-gate/package.json'),s=require('./packages/credentagent-storefront/package.json');JSON.stringify({gate:g.version,storefront:s.version,dep:s.dependencies['@openmobilehub/credentagent-gate']})"
+```
+
+All three must read the new version. (Hit while cutting 0.4.0 — PR #162.)
+
+> **Check exit codes, not piped output.** `npm run build 2>&1 | tail` returns *`tail`'s*
+> status, so a `cmd | tail && next` chain marches straight past a failing build. Use
+> `set -o pipefail`, or capture to a file and echo `$?`, whenever a pre-flight result is
+> going to be reported as green.
 
 ## Optional polish (non-blocking, deferred)
 
