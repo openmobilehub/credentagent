@@ -5,11 +5,12 @@
 // Nothing here decides anything. A `CeremonyOrder` arriving with a wrong total produces a
 // Checkout with a wrong total — re-pricing (security invariant 2) is upstream, and putting
 // a number into a mandate has never made it true.
-import { amountFrom, amountOfMinor, sumAmounts, toMinorUnits } from "./money.js";
+import { amountOfMinor, sumAmounts, toMinorUnits } from "./money.js";
 import type { CeremonyOrder } from "../ceremony/types.js";
 import type {
   Amount,
   CheckoutConstraint,
+  LineItemRequirement,
   Merchant,
   PaymentConstraint,
   UcpCheckout,
@@ -17,10 +18,15 @@ import type {
   UcpTotal,
 } from "./types.js";
 
-/** The merchant identity a mandate binds to. Derived from the gate's own origin. */
+/**
+ * The merchant identity a mandate binds to. Derived from the gate's own origin.
+ *
+ * `name` is REQUIRED by `types/merchant.json`, so a caller that has no display name gets the
+ * host — the one string that is true about this merchant whatever else we know.
+ */
 export function merchantFor(origin: string, name?: string): Merchant {
   const { host } = new URL(origin);
-  return { id: host, ...(name ? { name } : {}), origin };
+  return { id: host, name: name ?? host, origin };
 }
 
 /**
@@ -30,24 +36,33 @@ export function merchantFor(origin: string, name?: string): Merchant {
  * because invariant 3 requires the line sum, the discount and the payable total to stay
  * separately checkable. A reader that can only see the final number cannot tell a
  * legitimate 10% off from a tampered one.
+ *
+ * Amounts in `totals` are plain integers in the checkout's currency's minor units, per
+ * `ucp/types/total.json`: the currency lives once on the checkout, and repeating it per
+ * entry is how two of them end up disagreeing.
  */
 export function checkoutFromOrder(order: CeremonyOrder, merchant: Merchant): UcpCheckout {
   const currency = order.currency.toUpperCase();
   const line_items: UcpLineItem[] = order.lines.map((l) => ({
     id: l.id,
-    ...(l.name ? { name: l.name } : {}),
+    item: {
+      id: l.id,
+      title: l.name ?? l.id,
+      ...(typeof l.minimumAge === "number" ? { minimum_age: l.minimumAge } : {}),
+    },
     quantity: l.quantity,
-    unit_amount: amountFrom(l.unitPrice, currency),
-    total_amount: amountFrom(l.lineTotal, currency),
-    ...(typeof l.minimumAge === "number" ? { minimum_age: l.minimumAge } : {}),
+    totals: [
+      { type: "subtotal", amount: toMinorUnits(l.unitPrice * l.quantity, currency) },
+      { type: "total", amount: toMinorUnits(l.lineTotal, currency) },
+    ],
   }));
 
-  const subtotal = sumAmounts(line_items.map((l) => l.total_amount), currency);
+  const subtotal = sumAmounts(line_items.map((l) => lineTotalOf(l, currency)), currency);
   const discount = toMinorUnits(order.discount ?? 0, currency);
   const totals: UcpTotal[] = [
-    { type: "subtotal", amount: subtotal },
-    ...(discount > 0 ? [{ type: "discount" as const, amount: amountOfMinor(discount, currency) }] : []),
-    { type: "total", amount: amountFrom(order.total, currency) },
+    { type: "subtotal", amount: subtotal.amount },
+    ...(discount > 0 ? [{ type: "discount" as const, amount: discount }] : []),
+    { type: "total", amount: toMinorUnits(order.total, currency) },
   ];
 
   return {
@@ -61,11 +76,18 @@ export function checkoutFromOrder(order: CeremonyOrder, merchant: Merchant): Ucp
   };
 }
 
+/** A line's own payable `total` entry. Throws rather than read a line that has none. */
+function lineTotalOf(line: UcpLineItem, currency: string): Amount {
+  const total = line.totals.find((t) => t.type === "total");
+  if (!total) throw new Error(`line ${line.id} has no \`total\` entry — UCP requires one per line`);
+  return amountOfMinor(total.amount, currency);
+}
+
 /** The `total` entry — the one number a payment must match. Throws if the cart has none. */
 export function totalOf(checkout: UcpCheckout): Amount {
   const total = checkout.totals.find((t) => t.type === "total");
   if (!total) throw new Error(`checkout ${checkout.id} has no \`total\` entry — UCP requires exactly one`);
-  return total.amount;
+  return amountOfMinor(total.amount, checkout.currency.toUpperCase());
 }
 
 /**
@@ -78,9 +100,9 @@ export function totalOf(checkout: UcpCheckout): Amount {
  */
 export function rederiveTotal(checkout: UcpCheckout): Amount {
   const currency = checkout.currency.toUpperCase();
-  const lineSum = sumAmounts(checkout.line_items.map((l) => l.total_amount), currency);
-  const discount = checkout.totals.find((t) => t.type === "discount")?.amount.amount ?? 0;
-  return { amount: lineSum.amount - discount, currency };
+  const lineSum = sumAmounts(checkout.line_items.map((l) => lineTotalOf(l, currency)), currency);
+  const discount = checkout.totals.find((t) => t.type === "discount")?.amount ?? 0;
+  return amountOfMinor(lineSum.amount - discount, currency);
 }
 
 // ── Grants → the "open" mandates' constraint vocabulary ───────────────────────
@@ -99,11 +121,27 @@ export interface GrantBoundsInput {
   alsoAllowed?: Merchant[];
 }
 
-/** Constraints for `mandate.checkout.open.1`. MUST include `checkout.line_items`. */
+/**
+ * Constraints for `mandate.checkout.open.1`. MUST include `checkout.line_items`.
+ *
+ * `checkout.line_items` is a list of REQUIREMENTS, not bare ids: each one names the items that
+ * satisfy it and how many are needed. A grant's allow-list is the simplest case of that, so each
+ * sku becomes a one-item requirement. The gate's catalog keys ARE its product ids and carry no
+ * separate display name, so `title` is the id — the only string that is true here. Anything
+ * richer ("one coffee, either size") is a later feature, not a translation.
+ */
 export function checkoutConstraintsFromGrant(g: GrantBoundsInput, origin: string): CheckoutConstraint[] {
+  const items = g.skus.map((sku): LineItemRequirement => ({
+    id: sku,
+    acceptable_items: [{ id: sku, title: sku }],
+    quantity: 1,
+  }));
+  if (items.length === 0) {
+    throw new Error("`checkout.line_items` needs at least one requirement — an empty list authorizes nothing");
+  }
   return [
     { type: "checkout.allowed_merchants", allowed: [merchantFor(origin, g.merchant), ...(g.alsoAllowed ?? [])] },
-    { type: "checkout.line_items", allowed: [...g.skus] },
+    { type: "checkout.line_items", items: items as [LineItemRequirement, ...LineItemRequirement[]] },
   ];
 }
 

@@ -3,6 +3,7 @@ dist/
 *.log
 .env*.local
 .DS_Store
+.idea/
 
 # Local git worktrees / agent scratch
 .worktrees/

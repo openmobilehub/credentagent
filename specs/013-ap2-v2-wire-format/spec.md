@@ -118,9 +118,16 @@ The grant model maps onto AP2 constraints almost exactly:
 | per-spend cap | `payment.amount_range` (`max`, optional `min`) |
 | total budget | `payment.budget` (`max`) |
 | allowed store / payee | `payment.allowed_payees`, `checkout.allowed_merchants` |
-| product allowlist | `checkout.line_items` |
+| product allowlist | `checkout.line_items` (see the note below — not a bare id list) |
 | validity window | `exp` |
 | binds the payment to its checkout | `payment.reference` → `conditional_transaction_id` |
+
+One row is richer than our current model rather than equal to it. `checkout.line_items`
+is not a list of allowed SKUs: it is a list of *requirements*, each naming the items that
+satisfy it (`acceptable_items`) and how many are needed (`quantity`), with at least one
+requirement required. That expresses "one coffee, either size" — which our `allow.skus`
+cannot say. The migration maps each allowed SKU to a one-item requirement; anything richer
+is a later feature, not a translation.
 
 Three currently-open feature requests fall out of adopting this vocabulary rather than
 being built by hand: #156 (a *list* of allowed stores → `allowed_merchants` is already an
@@ -134,7 +141,7 @@ claimed as done by this feature, but implementers should not build parallel mech
 ```
 packages/credentagent-gate/src/ap2/
   types.ts     the four mandate payloads + the shared types (Amount, Merchant, Checkout)
-  money.ts     Money ↔ minor units. One conversion, one place.
+  money.ts     major ↔ minor units. THE conversion — `grants.ts` uses it too.
   keys.ts      resolves the signing key. The seam #142 plugs into later.
   issue.ts     mint a root SD-JWT; append a KB-SD-JWT delegation hop
   verify.ts    THE verification door — one function, one refusal vocabulary
@@ -149,12 +156,21 @@ can be extracted later if #40 makes isolation worthwhile.
 
 ### Money
 
-`money.ts` owns the only float↔integer conversion in the system. Everything inside `ap2/`
-is integer minor units. The public `Money` type (spec 009) keeps its opaque API; it gains a
-`.toMinorUnits()`. There is no rounding policy to get wrong, because there is no rounding: the
-minor-unit integer is the canonical value. Prices enter as integers from the catalog and
-are only ever formatted to a decimal string for display. A repriced cart and a signed
-mandate therefore compare as integers, and cannot disagree by a cent.
+`money.ts` owns the only float↔integer conversion in the system — not only inside `ap2/`.
+`grants.ts` had its own `toCents` (#135); it now routes through `money.ts` too, so a cap the
+grants API accepts and an amount a mandate signs are derived by ONE set of rules. Two
+converters with different rules are security invariant 3's failure one level up: one path
+accepts an amount the other refuses.
+
+The rules, in one place: the currency must be a known ISO-4217 code (an unknown code is
+refused, never assumed to have two decimals); the value must be finite and still a safe
+integer once scaled; and the value must be exactly representable in that currency's minor
+units. **A finer value is refused, not rounded** — silently turning $1.005 into $1.00 changes
+the amount a human is about to authorize. So there is no rounding policy to get wrong,
+because nothing rounds: the minor-unit integer is the canonical value, and a value that
+cannot become one is an error rather than a nearby number. Amounts are formatted to a decimal
+string only for display. A repriced cart and a signed mandate therefore compare as integers,
+and cannot disagree by a cent.
 
 ### Key binding — the two paths differ, honestly
 

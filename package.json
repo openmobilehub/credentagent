@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "CredentAgent — the consent layer for AI agents (@openmobilehub/credentagent-* packages)",
+  "description": "CredentAgent \u2014 the consent layer for AI agents (@openmobilehub/credentagent-* packages)",
   "license": "Apache-2.0",
   "homepage": "https://github.com/openmobilehub/credentagent",
   "repository": {
@@ -19,13 +19,17 @@
     "build:packages": "npm run build --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "eslint .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:workspaces": "npm run test --workspaces --if-present"
   },
   "devDependencies": {
+    "@peculiar/x509": "^1.14.3",
+    "@sd-jwt/core": "^0.20.1",
     "@types/express": "^5.0.0",
     "@types/node": "^22.10.0",
     "@types/supertest": "^7.2.0",
     "@typescript-eslint/parser": "^8.64.0",
+    "cbor-x": "^1.6.4",
     "eslint": "^10.7.0",
     "supertest": "^7.2.2",
     "typescript": "^5.9.3",

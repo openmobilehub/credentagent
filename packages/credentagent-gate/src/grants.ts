@@ -27,6 +27,7 @@ import { ageScopeFor, skuAllowed, type GrantAgeScope } from "./grants-age.js";
 import type { SealedAgeProof, SealedMembershipProof } from "./ceremony/mandate.js";
 import type { IntentBoundsInput } from "./ceremony/intent-sign/bounds.js";
 import type { Branding, ReaderIdentity, TrustLevel } from "./types.js";
+import { AmountError, toMinorUnits } from "./ap2/money.js";
 
 /** Why a grant operation refused — a TYPED union (never `string`; #95 review). */
 export type GrantDoorCode =
@@ -248,16 +249,28 @@ class KeyedMutex {
  *  exact integers and an exact-budget spend on non-round prices ($4.90 × 3 == $14.70) is not
  *  lost to binary float drift (14.700000000000001 > 14.7). A genuinely sub-cent input (e.g.
  *  $0.006, $1.005) is REJECTED with a clear error rather than silently rounded to a different
- *  value (Codex P2): the smallest representable unit is one cent. The `1e-6` tolerance absorbs
- *  the float noise `× 100` introduces on representable amounts (4.9 → 490.00000000000006). */
+ *  value (Codex P2): the smallest representable unit is one cent.
+ *
+ *  The arithmetic itself is NOT here. It lives in `ap2/money.ts`, the one converter in the
+ *  package, so that a cap this file accepts and an amount an AP2 mandate signs can never be
+ *  derived by two different sets of rules — which is security invariant 3 (the line sum, the
+ *  order total and the signed amount must agree on every payment path) one level up. This
+ *  wrapper adds only the grants-specific wording. */
 function toCents(dollars: number, what = "amount"): number {
-  const cents = dollars * 100;
-  if (!Number.isFinite(cents) || Math.abs(cents - Math.round(cents)) > 1e-6) {
+  try {
+    return toMinorUnits(dollars, "USD");
+  } catch (err) {
+    if (err instanceof AmountError && err.code === "sub-unit") {
+      throw new Error(
+        `[credentagent] grants: ${what} $${dollars} has sub-cent precision; the smallest unit is one cent (round it, or use whole cents).`,
+        { cause: err },
+      );
+    }
     throw new Error(
-      `[credentagent] grants: ${what} $${dollars} has sub-cent precision; the smallest unit is one cent (round it, or use whole cents).`,
+      `[credentagent] grants: ${what} $${dollars} is not an amount this gate can hold — ${(err as Error).message}`,
+      { cause: err },
     );
   }
-  return Math.round(cents);
 }
 
 /** A LIVE cents view over the plain-dollar catalog (issue #104 fix 2; Codex P1). The engine

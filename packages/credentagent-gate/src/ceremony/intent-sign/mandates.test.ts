@@ -28,9 +28,10 @@ describe("what a grant's mandates say may be bought", () => {
   it("carries the RESOLVED products, not the bounds' own (possibly empty) sku list", () => {
     // The grant is bounded by category and names no skus; the catalog scan resolved two.
     const [checkout] = build(["coffee", "espresso-machine"], { allow: { categories: ["Beverages"] } });
-    const lineItems = (checkout.constraints as { type: string; allowed?: string[] }[])
+    const lineItems = (checkout.constraints as { type: string; items?: { acceptable_items: { id: string }[] }[] }[])
       .find((c) => c.type === "checkout.line_items");
-    expect(lineItems?.allowed).toEqual(["coffee", "espresso-machine"]);
+    // One requirement per allowed product — the simplest case of UCP's "these items, this many".
+    expect(lineItems?.items?.flatMap((r) => r.acceptable_items.map((i) => i.id))).toEqual(["coffee", "espresso-machine"]);
   });
 
   // BYPASS-adjacent: an empty list is not a tighter bound, it is a WRONG one. The approve page

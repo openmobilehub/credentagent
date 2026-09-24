@@ -1,7 +1,7 @@
 # @openmobilehub/credentagent-storefront
 
 **The agentic storefront core.** A runnable MCP shopping server — the cart → priced-cart →
-order model + the nine shopping tools + the widget bundle — **catalog-injected** (bring your
+order model + the ten shopping tools + the widget bundle — **catalog-injected** (bring your
 own products, own-the-code). Pairs with
 [`@openmobilehub/credentagent-gate`](../credentagent-gate) so you can **gate any consequential MCP tool
 with any credential**: age, membership, a prescription, payment. **Payments is one application
@@ -24,7 +24,7 @@ Apache-2.0, ESM. Two entry points: `.` (the pure pricing model, dependency-light
 
 ## Quickstart — a credential-gated storefront in ≤ 10 lines
 
-`createStorefront()` stands up the real MCP server (nine tools, a widget resource, a checkout
+`createStorefront()` stands up the real MCP server (ten tools, a widget resource, a checkout
 page) over HTTP at `/mcp`. It publishes the ceremony seams on `store.app.locals.credentagent`, so
 `new CredentAgent().mount(store.app)` wires the real `/credentagent/*` ceremony rails with zero glue, and
 `store.gate()` resolves your policy on every `checkout` call (copied from
@@ -137,6 +137,41 @@ const store = createStorefront({
   (Security invariant 2 — never trust the order token).
 - **Lean by default:** `firebase-admin` is an **optional peer dependency**, loaded lazily only on the
   credentials path — static-catalog users never install it.
+
+## The catalog as data — for agents that don't render the widget
+
+`browse-products` shows the catalog to a human as a visual picker. An agent that needs the catalog
+*itself* — to find an id, filter, or search — calls **`list-products`**, which returns plain JSON and
+renders nothing:
+
+```jsonc
+// list-products — every argument optional
+{ "category": "Beverages", "query": "duo", "fields": ["name", "price"] }
+// → { "products": [{ "id": "celebration-champagne", "name": "Celebration Champagne Duo", "price": 89 }],
+//     "totalCount": 1, "nextCursor": null }
+```
+
+- **Paged:** 50 products by default (`limit`, max 100). A non-null `nextCursor` goes back as `cursor`.
+- **`fields` keeps answers small:** only those properties, plus `id` (always). Omit it for the full
+  product — the same shape `get-product-details` returns.
+- **Look up many at once:** `get-product-details` and `get-product-reviews` accept `productId` as one
+  id *or* an array. One id answers exactly as before; an array answers
+  `{ "results": [{ "id", "product" } | { "id", "error": "not-found" }, …] }` in request order. A single
+  unknown id is an error that lists up to 50 valid ids (`validIds`) and the total (`validIdCount`).
+- **Same source as everything else:** both tools read the configured `catalog` (static or
+  `firestoreCatalog(...)`) on every call, and `browse-products` goes through the same
+  `listProducts()` — so the picker and the data never disagree.
+
+The same read is exported from the pure entry point:
+
+```ts
+import { listProducts, projectProduct, SAMPLE_CATALOG } from "@openmobilehub/credentagent-storefront";
+
+const page = listProducts(SAMPLE_CATALOG, { category: "Beverages", limit: 10 });
+page.products.map((p) => p.id);                 // ["oak-whiskey", "celebration-champagne"]
+page.nextCursor;                                // null — no more pages
+projectProduct(page.products[0], ["price"]);    // { id: "oak-whiskey", price: 124 }
+```
 
 ## "Buy the black court sneakers, US 10" — a grant pinned to one product
 
@@ -280,9 +315,9 @@ the catalog; unknown ids are collected (`unknownIds`), not thrown.
 ## What's real in v0.1
 
 - `createStorefront(opts)` → `{ app, catalog, gate, listen, mcpServer }` — the runnable MCP server
-  (nine tools, widget resource, checkout page) over HTTP, catalog-injected, gate-ready.
-- `priceCart()` / `createOrder()` / `requiredAgeForLines()` / `getProduct()` / `getReviews()` — pure,
-  catalog-injected pricing & lookups.
+  (ten tools, widget resource, checkout page) over HTTP, catalog-injected, gate-ready.
+- `priceCart()` / `createOrder()` / `requiredAgeForLines()` / `getProduct()` / `getReviews()` /
+  `listProducts()` / `projectProduct()` — pure, catalog-injected pricing & lookups.
 - The `Product` / `Order` / `PricedCart` / `PricedCartLine` model + a runnable `SAMPLE_CATALOG`
   (includes one 21+ item) so the package demos itself.
 - Loyalty discount with a per-call percent override (`LOYALTY_DISCOUNT_PCT`, `PriceOpts`).

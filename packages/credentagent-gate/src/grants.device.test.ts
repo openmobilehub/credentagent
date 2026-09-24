@@ -202,15 +202,20 @@ describe("device-signed grants — FR-3/6 controls", () => {
 describe("a device grant signs only what spend() would honour (#172)", () => {
   /** The `checkout.line_items` allow-list inside the `delegate` transaction_data the page sends.
    *  Delegate SD-JWT §7.1 carries the mandate as an array disclosure — `[salt, value]` — so the
-   *  value is read back out of it the way the wallet does before it renders the consent screen. */
+   *  value is read back out of it the way the wallet does before it renders the consent screen.
+   *  The constraint holds one REQUIREMENT per allowed product, so the ids come from those. */
   async function signedLineItems(app: Express, id: string): Promise<string[]> {
     const res = await request(app).get(`/credentagent/grants/${id}/sign/request`).set("Host", HOST);
     expect(res.status).toBe(200);
     const b64 = (s: string) => JSON.parse(Buffer.from(s, "base64url").toString()) as unknown;
     const claims = b64(res.body.requests[0].data.request.split(".")[1]) as { transaction_data: string[] };
     const entry = b64(claims.transaction_data[0]) as { delegate_payload_disclosure: string };
-    const [, checkout] = b64(entry.delegate_payload_disclosure) as [string, { constraints: { type: string; allowed?: string[] }[] }];
-    return checkout.constraints.find((c) => c.type === "checkout.line_items")!.allowed!;
+    const [, checkout] = b64(entry.delegate_payload_disclosure) as [
+      string,
+      { constraints: { type: string; items?: { acceptable_items: { id: string }[] }[] }[] },
+    ];
+    const lineItems = checkout.constraints.find((c) => c.type === "checkout.line_items")!.items!;
+    return lineItems.flatMap((r) => r.acceptable_items.map((i) => i.id));
   }
 
   /** A pending device grant over the whole Beverages category (coffee + the 21+ wine). */
