@@ -17,7 +17,7 @@ import * as jose from "jose";
 import { createHash, generateKeyPairSync, sign as nodeSign, webcrypto, type KeyObject } from "node:crypto";
 import * as x509 from "@peculiar/x509";
 import { SDJwtInstance } from "@sd-jwt/core";
-import { dcApiAudience } from "./presentation.js";
+import { dcApiAudience, hasher } from "./presentation.js";
 import { PAYMENT_CREDENTIAL_VCTS, PAYMENT_INSTRUMENT_CLAIM } from "./dcql.js";
 import {
   DELEGATE_KB_TYP,
@@ -31,11 +31,6 @@ import {
 import type { SignedIntentRequest } from "./request.js";
 
 const utf8 = new TextEncoder();
-
-const hasher = (data: string | ArrayBuffer, alg: string): Uint8Array => {
-  const input = typeof data === "string" ? Buffer.from(data, "utf-8") : Buffer.from(data);
-  return new Uint8Array(createHash(alg.replace(/-/g, "")).update(input).digest());
-};
 
 const saltGenerator = (n: number): string =>
   Buffer.from(webcrypto.getRandomValues(new Uint8Array(n))).toString("hex").slice(0, n);

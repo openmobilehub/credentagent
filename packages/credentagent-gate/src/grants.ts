@@ -158,6 +158,38 @@ export interface GrantMandateEvidence {
   credentialType: string;
   verifiedBy: string;
   trustLevel: TrustLevel;
+  /**
+   * The AP2 Mandate Content the wallet signed — the TERMS, not just their digest.
+   *
+   * `boundsHash` says a signature covered these bounds; this says what the bounds were, in the
+   * protocol's own vocabulary, so "what did I authorize?" can be answered from the grant record
+   * without rebuilding it. Plain JSON. Absent on a grant sealed by a backend that reported none.
+   */
+  mandates?: Array<Record<string, unknown>>;
+}
+
+/**
+ * The product ids an AP2 open Checkout Mandate authorizes, from its `checkout.line_items`.
+ *
+ * The constraint holds one REQUIREMENT per product — each naming the items that satisfy it —
+ * so the ids come from `acceptable_items`. Returns `undefined` when no mandate carries the
+ * constraint, which leaves the grant on its `allow` bounds alone (the page-mode behaviour).
+ */
+function signedSkusFrom(mandates?: Array<Record<string, unknown>>): string[] | undefined {
+  for (const mandate of mandates ?? []) {
+    const constraints = mandate.constraints;
+    if (!Array.isArray(constraints)) continue;
+    const lineItems = constraints.find(
+      (c): c is { type: string; items?: Array<{ acceptable_items?: Array<{ id?: unknown }> }> } =>
+        typeof c === "object" && c !== null && (c as { type?: unknown }).type === "checkout.line_items",
+    );
+    const ids = (lineItems?.items ?? [])
+      .flatMap((requirement) => requirement.acceptable_items ?? [])
+      .map((item) => item.id)
+      .filter((id): id is string => typeof id === "string");
+    if (ids.length > 0) return ids;
+  }
+  return undefined;
 }
 
 export interface SpendItems {
@@ -193,6 +225,16 @@ interface GrantRecord {
   mandate?: GrantMandateEvidence;
   /** The content-addressed Intent Mandate id (the engine's id) a device spend references. */
   mandateId?: string;
+  /**
+   * The product ids the SIGNED mandate names, read back out of it at authorization.
+   *
+   * `allow` bounds are evaluated against the LIVE catalog, so a category grant widens whenever
+   * the catalog does. That is fine for a page-approved grant — nobody signed a list. It is not
+   * fine here: the human's wallet signed `checkout.line_items`, a concrete set of products, and
+   * a product added to an allowed category afterwards is not in it. Spending it would be
+   * spending outside the signature.
+   */
+  signedSkus?: string[];
   /** Idempotent spend cache: key → the door already returned (a retry replays it). */
   cache: Map<string, SpendDoor>;
 }
@@ -621,6 +663,10 @@ export class Grants {
       rec.status = "authorized";
       rec.mandate = evidence;
       rec.mandateId = rec.engine.id;
+      // Freeze what may be bought to what the wallet SIGNED, read back out of the mandate rather
+      // than recomputed — a value recomputed from the catalog would drift with it, which is the
+      // whole problem. `/verify` already required the signature to cover these bytes.
+      rec.signedSkus = signedSkusFrom(evidence.mandates);
       return true;
     });
   }
@@ -638,8 +684,13 @@ export class Grants {
   /** Is this sku inside the grant's `allow` bounds? Fail-closed: with bounds set, an unknown or
    *  uncategorized item does NOT pass. No bounds ⇒ everything in the catalog is allowed.
    *  Delegates to the SHARED predicate the approve page's age disclosure reads (grants-age.ts),
-   *  so what the page says a grant covers is exactly what this enforces (#172). */
+   *  so what the page says a grant covers is exactly what this enforces (#172).
+   *
+   *  A device-signed grant is bounded by BOTH: the live `allow` bounds AND the frozen list its
+   *  mandate names. Whichever is narrower wins, which is the signed one whenever the catalog has
+   *  grown since. */
   private allowed(rec: GrantRecord, sku: string): boolean {
+    if (rec.signedSkus && !rec.signedSkus.includes(sku)) return false;
     return skuAllowed(rec.opts.allow, sku, this.deps.catalog ?? {});
   }
 

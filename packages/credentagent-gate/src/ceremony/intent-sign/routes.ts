@@ -77,7 +77,21 @@ export function registerIntentSignRail(app: RailApp, grants: Grants): void {
     if (!g || g.signing !== "device") { res.status(404).json({ error: "unknown device grant" }); return; }
     if (g.status !== "pending") { res.status(409).json({ error: `grant is ${g.status}` }); return; }
     const inputs = grants._intentSignInputsFor(id);
-    if (!inputs) { res.status(404).json({ error: "unknown grant" }); return; }
+    if (!inputs) {
+      // NOT "unknown": two lines up we established the grant exists, is device-mode and is
+      // pending. The reachable cause is that it has nothing signable — `_allowedSkusFor`
+      // withholds every age-restricted product until the age is proved (#172), and a mandate
+      // naming no products would authorize nothing. Answering "unknown grant" sent whoever hit
+      // this looking for a missing record instead of the age step.
+      const signable = grants._allowedSkusFor(id);
+      res.status(409).json({
+        error:
+          signable && signable.length === 0
+            ? "grant has no signable products yet — every product it names needs an age proof first"
+            : "grant cannot be prepared for signing",
+      });
+      return;
+    }
     const { bounds, delegate, mandateExp, allowedSkus } = inputs;
     try {
       const cfg = grants.railConfig;
@@ -137,6 +151,10 @@ export function registerIntentSignRail(app: RailApp, grants: Grants): void {
         credentialType: out.credentialType,
         verifiedBy: out.verifiedBy,
         trustLevel: out.trustLevel,
+        // The terms themselves, not only their digest. `/verify` rebuilt these from the server's
+        // own grant record and required the wallet's signature to cover them, so they are what
+        // the human agreed to — and dropping them here left the grant unable to say so.
+        ...(out.mandates ? { mandates: out.mandates } : {}),
       });
       if (!sealed) { res.status(409).json({ ok: false, reason: "grant is not pending" }); return; }
       res.json({ ok: true, status: "authorized", trustLevel: out.trustLevel, verifiedBy: out.verifiedBy, boundsHash: out.boundsHash });

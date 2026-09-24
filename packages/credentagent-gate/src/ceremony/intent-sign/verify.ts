@@ -208,10 +208,14 @@ export async function verifyIntentPresentation(args: {
   }
   if (!sdjwt) return { ok: false, reason: "no SD-JWT presentation in vp_token" };
 
-  // On-device interop debug (off by default — set INTENT_DEBUG_PRESENTATION=<path>). Dumps the
-  // wallet's presentation and the audience/nonce the gate expected, so a failed signature can
-  // be inspected offline instead of guessing through redeploy-and-retry. Pure observability: it
-  // changes neither the returned bytes nor the outcome.
+  // DEVELOPMENT ONLY — do not set this in production.
+  //
+  // `INTENT_DEBUG_PRESENTATION=<path>` writes the wallet's whole presentation to that path, so a
+  // failed signature can be inspected offline instead of guessed at through redeploy-and-retry.
+  // That file contains the credential and every claim the wallet disclosed, in the clear, and it
+  // is overwritten on every attempt. Unset, nothing is written and nothing is read.
+  //
+  // Pure observability: it changes neither the returned bytes nor the outcome.
   if (process.env.INTENT_DEBUG_PRESENTATION) {
     await (await import("node:fs/promises")).writeFile(
       process.env.INTENT_DEBUG_PRESENTATION,
