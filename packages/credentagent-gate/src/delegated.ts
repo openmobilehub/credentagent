@@ -16,7 +16,7 @@
 import type { CeremonyCatalog, CeremonyOrder, RepriceOpts } from "./ceremony/types.js";
 import { MemoryVerificationStore } from "./store.js";
 import { MemoryRevocationStore, type RevocationStore } from "./ceremony/revocation.js";
-import { sealIntent, generateDelegate, signDraw, type IntentBounds, type SealedAgeProof, type SealedMembershipProof } from "./ceremony/mandate.js";
+import { sealIntent, generateDelegate, signDraw, type DelegateJwk, type IntentBounds, type SealedAgeProof, type SealedMembershipProof } from "./ceremony/mandate.js";
 import { completeOrder, type CompletedRecord, type CompletionContext } from "./ceremony/completion.js";
 import type { RefusalCode, RefusalRetryable } from "./ceremony/refusals.js";
 
@@ -203,6 +203,18 @@ export class DelegatedGrant {
   /** The grant's content-addressed id (the delegationId written on each draw). */
   get id(): string {
     return this.grant.intentId;
+  }
+
+  /**
+   * The agent's PUBLIC key this grant delegates to — the sole key whose signature `spend()`
+   * produces, and the key a device-signed mandate names in `cnf`.
+   *
+   * Readable so the two can be compared. On a device-signed grant the human's signature covers
+   * this key, so "the key that was authorized" and "the key that can spend" being the same key
+   * is a property worth being able to check rather than assume.
+   */
+  get delegate(): DelegateJwk {
+    return this.grant.delegate;
   }
 
   /** When consent happened — "delegated-demo" in v0.1 (constitution VII honesty axis). */

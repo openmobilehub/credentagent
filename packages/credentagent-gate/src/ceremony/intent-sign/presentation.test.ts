@@ -148,6 +148,35 @@ describe("intent-sign REAL device-signed presentation", () => {
     if (!out.ok) expect(out.reason).toMatch(/key-binding signature/);
   });
 
+  // A revealed field is only the ISSUER'S claim if a digest of it is in the issuer-signed `_sd`.
+  // `decodeSdJwt` only DECODES: reading claims off its disclosure list let a wallet mint a
+  // credential WITHOUT the real instrument, staple an unsigned disclosure naming another card in
+  // its place, and have `verifyIntentPresentation` return ok with trustLevel "device-signed".
+  //
+  // `sd_hash` cannot catch this one — the wallet holds the `cnf` key and recomputes it over its
+  // own tampered bytes. Only the `getClaims` digest check can. Delete that call in
+  // `presentation.ts` and this test goes green again.
+  it("BYPASS: a revealed field the ISSUER never signed a digest for → refused", async () => {
+    const b = bounds();
+    const { req, result } = await signFor(b, { forgeRevealedClaim: "attacker-card" });
+    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
+    expect(out.ok).toBe(false);
+    if (!out.ok) expect(out.reason).toMatch(/Unreferenced disclosure/i);
+  });
+
+  // The other half, and a different attacker: `sd_hash` is what makes the holder's signature
+  // cover WHICH disclosures were presented (RFC 9901 §4.3). Without it, someone between the
+  // wallet and the gate can drop or swap a disclosure after the holder signed, and every
+  // signature in the presentation still verifies. Delete the `sd_hash` comparison and this
+  // test goes green again.
+  it("BYPASS: a key binding whose sd_hash does not cover the disclosures presented → refused", async () => {
+    const b = bounds();
+    const { req, result } = await signFor(b, { breakSdHash: true });
+    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
+    expect(out.ok).toBe(false);
+    if (!out.ok) expect(out.reason).toMatch(/sd_hash/);
+  });
+
   // A presentation with no key binding authorizes nothing, and must not read as consent.
   it("BYPASS: a presentation with NO key binding → refused", async () => {
     const b = bounds();

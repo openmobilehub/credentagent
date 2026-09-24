@@ -108,6 +108,15 @@ export interface SimulateOptions {
   /** TEST-ONLY: put the mandates in the KB-JWT as plain objects instead of digests — the
    *  pre-#192 shape, which a draft-conformant verifier must no longer accept. */
   plainDelegatePayload?: boolean;
+  /** TEST-ONLY: a MALICIOUS WALLET. The credential is minted without the instrument claim, and
+   *  an unsigned disclosure for it is appended to the presentation — then the key binding is
+   *  signed over the tampered bytes, which a wallet holding the `cnf` key can do. Only the
+   *  issuer's `_sd` digests can catch this; `sd_hash` cannot, because the wallet recomputed it. */
+  forgeRevealedClaim?: string;
+  /** TEST-ONLY: a MAN IN THE MIDDLE. The key binding names an `sd_hash` that does not cover the
+   *  disclosures actually presented — what tampering with the disclosure list after the holder
+   *  signed looks like on the wire. */
+  breakSdHash?: boolean;
 }
 
 /**
@@ -168,7 +177,9 @@ export async function devSimulateWalletSignature(
   const x5c = await selfSignedCert(issuer.privateJwk, issuer.publicJwk);
 
   const claims: Record<string, unknown> = { issuer_name: "Bank of Utopia", masked_account_reference: "•••• 4444" };
-  if (!opts.omitInstrumentId) claims[PAYMENT_INSTRUMENT_CLAIM] = instrumentId;
+  // `forgeRevealedClaim` leaves the real claim OUT of what the issuer signs, so the forged
+  // disclosure appended below has no `_sd` digest behind it — the whole point of the bypass.
+  if (!opts.omitInstrumentId && opts.forgeRevealedClaim === undefined) claims[PAYMENT_INSTRUMENT_CLAIM] = instrumentId;
 
   const iat = Math.floor(Date.now() / 1000);
   const issuerInstance = new SDJwtInstance<Record<string, unknown>>({
@@ -192,7 +203,7 @@ export async function devSimulateWalletSignature(
   );
 
   // Disclose everything the credential carries; the key binding is added by hand below.
-  const disclosed = await new SDJwtInstance<Record<string, unknown>>({ hasher, hashAlg: "sha-256", saltGenerator }).present(
+  let disclosed = await new SDJwtInstance<Record<string, unknown>>({ hasher, hashAlg: "sha-256", saltGenerator }).present(
     credential,
     Object.fromEntries(Object.keys(claims).map((k) => [k, true])) as never,
   );
@@ -208,7 +219,19 @@ export async function devSimulateWalletSignature(
     // KB-JWT must be typed `kb+sd-jwt` (Delegate SD-JWT §5.1.4). Everything else is the same
     // JWS the library would have produced.
     const kbKey = opts.forgeHolderKey ? p256().privateKey : holder.privateKey;
-    const sdHash = createHash("sha256").update(disclosed, "ascii").digest("base64url");
+    // An RFC 9901 object disclosure is `base64url(JSON([salt, key, value]))`. Appending one the
+    // issuer never committed to is the forgery; the wallet then hashes over the tampered bytes,
+    // so `sd_hash` still matches and only the `_sd` digest check is left to refuse it.
+    if (opts.forgeRevealedClaim !== undefined) {
+      const forged = Buffer.from(
+        JSON.stringify(["forged-salt-0000000000", PAYMENT_INSTRUMENT_CLAIM, opts.forgeRevealedClaim]),
+        "utf-8",
+      ).toString("base64url");
+      disclosed = `${disclosed}${forged}~`;
+    }
+    const sdHash = opts.breakSdHash
+      ? createHash("sha256").update(`${disclosed}tampered`, "ascii").digest("base64url")
+      : createHash("sha256").update(disclosed, "ascii").digest("base64url");
     const kbHeader = { alg: "ES256", typ: opts.overrideKbTyp ?? DELEGATE_KB_TYP[0] };
     const kbPayload = {
       iat: Math.floor(Date.now() / 1000),
