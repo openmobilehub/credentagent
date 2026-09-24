@@ -24,7 +24,7 @@ import { DelegatedGate, DelegatedGrant, minAgeOf, type CatalogEntry } from "./de
 import { ageProofCovers, generateDelegate } from "./ceremony/mandate.js";
 import { serveGrants, type GrantsApp } from "./grants-serve.js";
 import { ageScopeFor, skuAllowed, type GrantAgeScope } from "./grants-age.js";
-import type { SealedAgeProof, SealedMembershipProof } from "./ceremony/mandate.js";
+import type { DelegateJwk, SealedAgeProof, SealedMembershipProof } from "./ceremony/mandate.js";
 import type { IntentBoundsInput } from "./ceremony/intent-sign/bounds.js";
 import type { Branding, ReaderIdentity, TrustLevel } from "./types.js";
 import { AmountError, toMinorUnits } from "./ap2/money.js";
@@ -354,6 +354,18 @@ export class Grants {
       mandateExp: Math.floor((Number.isFinite(expiresAt) ? expiresAt : fallback) / 1000),
       allowedSkus,
     };
+  }
+
+  /**
+   * The agent public key the SEALED ENGINE will spend with, once the grant is authorized.
+   *
+   * On a device-signed grant this must be the same key `_intentSignInputsFor` put in the
+   * mandates' `cnf`, because that is the key the human's signature covers. They are minted in
+   * two different places and handed across one seam, so the test that pins them together needs
+   * to read both ends. `null` before authorization, or for a grant with no engine.
+   */
+  _engineDelegateFor(id: string): DelegateJwk | null {
+    return this.records.get(id)?.engine?.delegate ?? null;
   }
 
   /**

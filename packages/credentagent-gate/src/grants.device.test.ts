@@ -303,3 +303,42 @@ describe("a device grant signs only what spend() would honour (#172)", () => {
     });
   });
 });
+
+// AP2 names the agent's key in the mandates' `cnf`, and the human's wallet signature covers
+// those bytes — so on a device grant the key has to exist BEFORE they are asked, and the engine
+// sealed afterwards has to be given that same key.
+//
+// The keypair is minted at `grants.create()` and handed to `preApprove` at authorization. Mint a
+// fresh one at authorization instead, and everything still works: the grant seals, the engine
+// spends, every draw verifies — against a key nobody ever authorized. The human approved one
+// spending authority and the server is using a different one, and no other test can see it,
+// because both halves of the replacement agree with each other.
+describe("the key the human signed for is the key the engine spends with", () => {
+  /** The `cnf.jwk` inside the mandates the wallet is asked to sign — what the human authorizes. */
+  async function signedCnf(app: Express, id: string): Promise<unknown> {
+    const res = await request(app).get(`/credentagent/grants/${id}/sign/request`).set("Host", HOST);
+    expect(res.status).toBe(200);
+    const b64 = (s: string) => JSON.parse(Buffer.from(s, "base64url").toString()) as unknown;
+    const claims = b64(res.body.requests[0].data.request.split(".")[1]) as { transaction_data: string[] };
+    const entry = b64(claims.transaction_data[0]) as { delegate_payload_disclosure: string };
+    const [, mandate] = b64(entry.delegate_payload_disclosure) as [string, { cnf: { jwk: unknown } }];
+    return mandate.cnf.jwk;
+  }
+
+  // BYPASS (the `delegateKeys` handoff in `_authorizeDevice`): delete it and `preApprove` mints
+  // its own key, so this comparison fails — and nothing else in the suite moves.
+  it("BYPASS: the sealed engine's agent key is the one named in the signed mandate's cnf", async () => {
+    const ca = makeAgent();
+    const app = serve(ca);
+    const g = await ca.grants.create({ merchant: "utopia", budget: 200, perSpend: 130, allow: { categories: ["Beverages"] }, signing: "device" });
+
+    const authorized = await signedCnf(app, g.id);
+    expect(authorized).toMatchObject({ kty: "EC", crv: "P-256" });
+
+    const verifyRes = await signOverHttp(app, g.id);
+    expect(verifyRes.body.ok).toBe(true);
+    expect((await ca.grants.retrieve(g.id))!.status).toBe("authorized");
+
+    expect(ca.grants._engineDelegateFor(g.id)).toEqual(authorized);
+  });
+});

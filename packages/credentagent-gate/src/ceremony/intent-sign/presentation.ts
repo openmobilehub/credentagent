@@ -18,7 +18,7 @@
 // It also does not decide whether the mandates are the RIGHT ones. That comparison is
 // `mandates.ts`, against the server's own grant record, and the caller must do it.
 import { createHash, createPublicKey, verify as nodeVerify, X509Certificate } from "node:crypto";
-import { decodeSdJwt, splitSdJwt } from "@sd-jwt/core";
+import { decodeSdJwt, getClaims, splitSdJwt } from "@sd-jwt/core";
 import { DELEGATE_KB_TYP, DELEGATE_PAYLOAD_CLAIM, type MandateContent } from "./mandates.js";
 
 const utf8 = new TextEncoder();
@@ -131,7 +131,13 @@ export async function verifyDelegatedPresentation(args: {
 
   // The holder's key, as the credential commits to it. Taken from the verified credential —
   // never from anything travelling beside the signature.
-  const claims = segment<{ cnf?: { jwk?: { kty?: string; crv?: string; x?: string; y?: string } }; vct?: string; exp?: number }>(parts.jwt, 1);
+  const claims = segment<{
+    cnf?: { jwk?: { kty?: string; crv?: string; x?: string; y?: string } };
+    vct?: string;
+    exp?: number;
+    /** RFC 9901 §4.1.1. Absent means sha-256; `sd_hash` MUST be computed with the token's own. */
+    _sd_alg?: string;
+  }>(parts.jwt, 1);
   const cnfJwk = claims?.cnf?.jwk;
   if (!cnfJwk || cnfJwk.kty !== "EC" || cnfJwk.crv !== "P-256") {
     return { ok: false, reason: "credential has no P-256 cnf key to bind to" };
@@ -171,15 +177,47 @@ export async function verifyDelegatedPresentation(args: {
     return { ok: false, reason: "key binding carries no delegate_payload — the wallet signed no mandates" };
   }
 
-  // The disclosures, for the explicit-positive-claim check the caller makes next.
-  let disclosed: Record<string, unknown> = {};
+  // ── A revealed field is only a CLAIM if the issuer signed a digest of it ────────────────
+  //
+  // `sd_hash` first (RFC 9901 §4.3): the digest of the presentation up to the KB-JWT, so the
+  // holder's signature covers WHICH disclosures were presented and in what form. Everything
+  // after the last `~` is the KB-JWT; everything up to and including it is what is hashed.
+  const withoutKb = args.sdjwt.slice(0, args.sdjwt.lastIndexOf("~") + 1);
+  let sdHash: string;
+  try {
+    sdHash = Buffer.from(hasher(withoutKb, claims?._sd_alg ?? "sha-256")).toString("base64url");
+  } catch {
+    return { ok: false, reason: `credential names an _sd_alg this verifier cannot compute: ${String(claims?._sd_alg)}` };
+  }
+  if (kb.sd_hash !== sdHash) {
+    return { ok: false, reason: "key binding's sd_hash does not cover the disclosures presented" };
+  }
+
+  // Then the disclosures themselves. `decodeSdJwt` DECODES — it does not check that a revealed
+  // field is one the issuer committed to. Reading claims straight off its `disclosures` list is
+  // the bypass this closes: append an unsigned `["<salt>", "payment_instrument_id", "theirs"]` to
+  // a presentation, leave the real one out, and the forged value came back as a verified claim.
+  //
+  // `getClaims` rebuilds the payload from the issuer-signed `_sd` digests instead, and REFUSES
+  // ("Unreferenced disclosure(s) detected") any disclosure whose digest the issuer never signed.
+  // That is invariant 5 — verify the actual claim, not that a token was present — and invariant
+  // 6, since `sd_hash` is what binds the presented set to the holder's signature.
+  //
+  // Note what this is NOT: it does not make the credential trustworthy. The issuer here signs
+  // with its own self-minted certificate (#14). It makes the claim genuinely the ISSUER's, which
+  // is the property that has to hold before real issuer trust can mean anything.
+  const disclosed: Record<string, unknown> = {};
   try {
     const decoded = await decodeSdJwt(args.sdjwt, hasher);
+    await getClaims(decoded.jwt.payload, decoded.disclosures, hasher);
+    // Past `getClaims`, every disclosure is one the issuer committed to, so its key/value is
+    // the issuer's. Only the SELECTIVELY disclosed names are reported: the caller asks "did the
+    // wallet reveal this?", which is a different question from "is this in the payload?".
     for (const d of decoded.disclosures) {
       if (d.key) disclosed[d.key] = d.value;
     }
-  } catch {
-    disclosed = {};
+  } catch (err) {
+    return { ok: false, reason: `disclosures: ${(err as Error).message}` };
   }
 
   return {
