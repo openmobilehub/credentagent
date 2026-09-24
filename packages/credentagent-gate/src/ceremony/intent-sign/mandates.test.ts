@@ -4,9 +4,11 @@
 // screen showed "Checkout line items: (none)".
 import { describe, expect, it } from "vitest";
 import { openMandatesForGrant } from "./mandates.js";
+import { generateDelegate } from "../mandate.js";
 import type { IntentBoundsInput } from "./bounds.js";
 
-const DELEGATE = { kty: "EC", crv: "P-256", x: "agent-x", y: "agent-y" } as const;
+/** A REAL P-256 agent key — the same reason as in `presentation.test.ts`. */
+const { delegate: DELEGATE } = await generateDelegate();
 const EXP = 4102444800;
 
 function bounds(over: Partial<IntentBoundsInput> = {}): IntentBoundsInput {

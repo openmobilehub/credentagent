@@ -23,7 +23,10 @@ import { DELEGATE_KB_TYP, DELEGATE_PAYLOAD_CLAIM, type MandateContent } from "./
 
 const utf8 = new TextEncoder();
 
-const hasher = (data: string | ArrayBuffer, alg: string): Uint8Array => {
+/** The SD-JWT hasher for this rail. `@sd-jwt` passes IANA names ("sha-256"); node wants
+ *  "sha256". Exported so the in-process wallet hashes the way the verifier does — two copies
+ *  is two places for this to drift, and a drift here reads as a bad signature. */
+export const hasher = (data: string | ArrayBuffer, alg: string): Uint8Array => {
   const input = typeof data === "string" ? Buffer.from(data, "utf-8") : Buffer.from(data);
   return new Uint8Array(createHash(alg.replace(/-/g, "")).update(input).digest());
 };

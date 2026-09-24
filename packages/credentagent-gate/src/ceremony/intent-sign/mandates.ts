@@ -1,35 +1,24 @@
 // The AP2 Mandate Content this rail asks a wallet to sign, derived from the SERVER's grant
 // record — and the equality check that makes the signature mean something.
 //
-// WHAT REPLACED WHAT (spec 014). The rail used to fold the grant's bounds into the ceremony
-// NONCE (`boundsHash` → `deriveNonce`) and rely on the wallet's mdoc DeviceAuth signature over
-// a session transcript carrying it. That bound the signature to the bounds, but in a shape
-// only this project could read. AP2 specifies the mechanism directly: the verifier puts the
-// Mandate Content in an OpenID4VP `transaction_data` entry of type `delegate`, and the wallet
-// returns it inside the Key Binding JWT. The user's key binding IS the authorization.
+// AP2 delegates through an ordinary presentation: the verifier puts the Mandate Content in an
+// OpenID4VP `transaction_data` entry of type `delegate`, and the wallet returns it inside its Key
+// Binding JWT. The holder's key binding IS the authorization.
 //
-// THE SECURITY PROPERTY IS UNCHANGED, and it is the reason this file exists: the mandates are
-// assembled here from the grant record and NOTHING the client sent, and `/verify` rebuilds
-// them from that same record and requires what came back to be identical. A grant whose terms
-// changed between /request and /verify therefore stops verifying, instead of silently riding a
-// signature the human gave for different terms.
+// WHY THIS FILE EXISTS: the mandates are assembled here from the grant record and NOTHING the
+// client sent, and `/verify` rebuilds them from that same record and requires what came back to
+// be identical. A grant whose terms changed between /request and /verify stops verifying, rather
+// than riding a signature the human gave for different terms.
+//
+// The wire shape follows Delegate SD-JWT (`draft-gco-oauth-delegate-sd-jwt-00`) §7.1, not the
+// shape AP2's `agent_authorization.md` sketches: one RFC 9901 array disclosure in
+// `delegate_payload_disclosure`, with the KB-JWT carrying only its DIGEST. The draft is what a
+// verifier written to the standard reads. Either way the digest is over content assembled here
+// from the server's record, so the security property does not depend on the choice (#192).
 //
 // HONESTY: a verified delegation proves the wallet holding that credential signed these
 // mandates. It proves nothing about whether the credential came from a real card issuer —
 // that is #14, and `trust_level` still says so.
-//
-// WHICH SPEC THIS FILE FOLLOWS, because the two disagree (#192). AP2's `agent_authorization.md`
-// puts the Mandate Content in the request as `delegate_payload` — an array of plain JSON objects
-// — with `format: "dc+sd-jwt"`. Delegate SD-JWT (`draft-gco-oauth-delegate-sd-jwt-00`) §7.1 puts
-// a `delegate_payload_disclosure` there instead — one RFC 9901 array disclosure, as a string —
-// with `format` naming the delegation format (`dSD-JWT`), and says the KB-JWT carries only the
-// DIGEST of it. This rail follows THE DRAFT, because the draft is what a verifier written to the
-// standard will read, and AP2's document describes the shape rather than specifying it.
-//
-// The security property is the same either way and does not depend on which we picked: the
-// digest is over content assembled here from the server's grant record, and `/verify` recomputes
-// that digest from the same record. What changes is only whether the mandate travels in the
-// clear or behind its hash.
 import { createHash, createHmac } from "node:crypto";
 import { canonical } from "../mandate.js";
 import { checkoutConstraintsFromGrant, paymentConstraintsFromGrant } from "../../ap2/from-gate.js";
@@ -58,11 +47,9 @@ export const DELEGATE_FORMAT = "dSD-JWT";
 /**
  * The KB-JWT claim carrying the digests of what the holder signed (Delegate SD-JWT §7.1).
  *
- * `delegate_payload` — no leading underscore. The draft's source writes the claim as
- * `*delegate\_payload*`, Markdown italics around an escaped underscore; datatracker's rendering
- * turns that into `_delegate_payload_`, which is how this rail (and Multipaz) came to send an
- * underscored name that no verifier written against the draft would look for. §7.1's prose,
- * which is not italicised, spells it plainly.
+ * `delegate_payload`, with NO leading or trailing underscore — datatracker renders §7.1's
+ * italicised heading as `_delegate_payload_`, and a verifier written against the draft looks for
+ * the plain name that §7.1's prose spells out.
  */
 export const DELEGATE_PAYLOAD_CLAIM = "delegate_payload";
 

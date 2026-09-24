@@ -282,9 +282,12 @@ describe("a device grant signs only what spend() would honour (#172)", () => {
       expect(page.text).toContain(`<button id="go-dc" class="btn btn-primary" disabled>Sign with your wallet</button>`);
       expect(page.text).toContain("Prove your age above and this becomes signable");
 
-      // Hiding a button is not enforcement (invariant 1) — the rail refuses on its own.
+      // Hiding a button is not enforcement (invariant 1) — the rail refuses on its own. And it
+      // refuses as 409 naming the age step, not 404 "unknown grant": the grant plainly exists,
+      // and saying otherwise sent people looking for a missing record.
       const req = await request(app).get(`/credentagent/grants/${g.id}/sign/request`).set("Host", HOST);
-      expect(req.status).toBe(404);
+      expect(req.status).toBe(409);
+      expect(req.body.error).toMatch(/age proof/);
       expect((await ca.grants.retrieve(g.id))!.status).toBe("pending");
     });
 
@@ -340,5 +343,53 @@ describe("the key the human signed for is the key the engine spends with", () =>
     expect((await ca.grants.retrieve(g.id))!.status).toBe("authorized");
 
     expect(ca.grants._engineDelegateFor(g.id)).toEqual(authorized);
+  });
+});
+
+// `allow: { categories: [...] }` is evaluated against the LIVE catalog, so a category grant
+// widens every time the catalog does. On a page-approved grant that is the intended behaviour —
+// nobody signed a list of products. On a device-signed grant it is not: the wallet signed
+// `checkout.line_items`, a concrete set, and a product stocked afterwards is not in it.
+//
+// So a device grant is bounded by both, and the narrower one wins.
+describe("a device grant may only buy what its mandate actually names", () => {
+  it("BYPASS: a product added to an allowed category AFTER signing cannot be bought", async () => {
+    // A catalog this test owns, so it can grow it mid-flight the way a real one does.
+    const catalog: Record<string, { price: number; category: string }> = {
+      coffee: { price: 18, category: "Beverages" },
+    };
+    const ca = new CredentAgent({ walletOrigin: ORIGIN, catalog, gateSecret: "stable-test-secret" });
+    const app = serve(ca);
+    const g = await ca.grants.create({ merchant: "utopia", budget: 200, perSpend: 130, allow: { categories: ["Beverages"] }, signing: "device" });
+
+    expect((await signOverHttp(app, g.id)).body.ok).toBe(true);
+
+    // The shop stocks a new Beverage. It is inside the grant's `allow` bounds — and outside
+    // everything the human's wallet signed.
+    catalog.matcha = { price: 12, category: "Beverages" };
+
+    const authorized = (await ca.grants.retrieve(g.id))!;
+    const signed = await authorized.spend({ idempotencyKey: "order-signed", items: [{ sku: "coffee" }] });
+    expect(signed.ok).toBe(true);
+
+    const unsigned = await authorized.spend({ idempotencyKey: "order-unsigned", items: [{ sku: "matcha" }] });
+    expect(unsigned.ok).toBe(false);
+    if (!unsigned.ok) expect(unsigned.code).toBe("not-allowed");
+  });
+
+  // The same grant approved through the PAGE seam has no signature over a product list, so it
+  // keeps the live-catalog behaviour. Without this, narrowing device grants could be mistaken
+  // for narrowing every grant.
+  it("a PAGE-approved grant still follows the live catalog", async () => {
+    const catalog: Record<string, { price: number; category: string }> = {
+      coffee: { price: 18, category: "Beverages" },
+    };
+    const ca = new CredentAgent({ walletOrigin: ORIGIN, catalog, gateSecret: "stable-test-secret" });
+    const g = await ca.grants.create({ merchant: "utopia", budget: 200, perSpend: 130, allow: { categories: ["Beverages"] }, signing: "page" });
+    expect(await ca.grants._authorize(g.id)).toBe(true);
+
+    catalog.matcha = { price: 12, category: "Beverages" };
+    const authorized = (await ca.grants.retrieve(g.id))!;
+    expect((await authorized.spend({ idempotencyKey: "page-1", items: [{ sku: "matcha" }] })).ok).toBe(true);
   });
 });

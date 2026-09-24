@@ -16,11 +16,17 @@ import { dcApiAudience } from "./presentation.js";
 import { devSimulateWalletSignature } from "./simulate.js";
 import { boundsHash, type IntentBoundsInput } from "./bounds.js";
 import type { Origin } from "../origin.js";
+import { generateDelegate } from "../mandate.js";
 
 const SECRET = "stable-test-secret";
 const ORIGIN: Origin = { rpID: "shop.example", origin: "https://shop.example" };
 /** The agent key the mandates name in `cnf` — AP2 binds an open mandate to one agent. */
-const DELEGATE = { kty: "EC", crv: "P-256", x: "agent-x", y: "agent-y" } as const;
+// A REAL P-256 agent key, not a stand-in. This is the key AP2 names in the mandates' `cnf` and
+// the one the human's signature covers, so every test here signs over a JWK with real
+// coordinates. A `{ x: "agent-x" }` placeholder passes the rail's own checks — nothing here
+// verifies an agent signature — which is exactly why it hid whether real coordinates survive
+// the disclosure round trip byte-for-byte.
+const { delegate: DELEGATE } = await generateDelegate();
 const MANDATE_EXP = 4102444800;
 /** Resolved server-side in production (`grants._allowedSkusFor`); fixed here. */
 const ALLOWED_SKUS = ["coffee", "espresso-machine"]; // 2100-01-01, so expiry never flakes a test
