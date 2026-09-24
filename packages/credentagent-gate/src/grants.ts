@@ -775,7 +775,20 @@ export class Grants {
       // "server-issued-demo". The TYPE, not copy, tells the two apart (FR-3).
       trustLevel: rec.mandate?.trustLevel ?? rec.engine?.trustLevel ?? "server-issued-demo",
       // The device-signature evidence (spec 012) — present only once a device grant is signed.
-      ...(rec.mandate ? { mandate: { boundsHash: rec.mandate.boundsHash, signedAt: rec.mandate.signedAt, credentialType: rec.mandate.credentialType, verifiedBy: rec.mandate.verifiedBy } } : {}),
+      ...(rec.mandate
+        ? {
+            mandate: {
+              boundsHash: rec.mandate.boundsHash,
+              signedAt: rec.mandate.signedAt,
+              credentialType: rec.mandate.credentialType,
+              verifiedBy: rec.mandate.verifiedBy,
+              // The terms themselves. `view()` rebuilds `mandate` field by field, so a field the
+              // record gained but this projection did not silently never reaches a caller — which
+              // is how these were still invisible after `/verify` started passing them on.
+              ...(rec.mandate.mandates ? { mandates: rec.mandate.mandates } : {}),
+            },
+          }
+        : {}),
       usage: async (): Promise<GrantUsage> => {
         const budget = rec.opts.budget;
         // Before authorize there is no engine ledger yet: nothing has been drawn, so the
@@ -838,7 +851,15 @@ export interface Grant {
   /** The device-signature evidence (spec 012) — present ONLY once a device-mode grant is signed:
    *  the exact bounds the device signed (`boundsHash`), when, which credential doctype, and who
    *  verified. Absent on page-mode grants and unsigned device grants. */
-  readonly mandate?: { boundsHash: string; signedAt: string; credentialType: string; verifiedBy: string };
+  /** The device-signature evidence. `mandates` is the AP2 Mandate Content the wallet signed —
+   *  the TERMS, so "what did I authorize?" is answerable from the grant, not only from a digest. */
+  readonly mandate?: {
+    boundsHash: string;
+    signedAt: string;
+    credentialType: string;
+    verifiedBy: string;
+    mandates?: Array<Record<string, unknown>>;
+  };
   /** Live money read (dollars) for a display/projection — `{ budget, spent, remaining }`. Async
    *  because the engine's committed-draws ledger is the authority (it may be remote later); a
    *  pending grant reads `{ spent: 0, remaining: budget }`. Feeds {@link grantLifecycle}. */

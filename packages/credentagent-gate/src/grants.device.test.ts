@@ -346,6 +346,28 @@ describe("the key the human signed for is the key the engine spends with", () =>
   });
 });
 
+// Found on a phone, not in a test: the grant record kept the signed terms and the public view
+// dropped them, because `view()` rebuilds `mandate` field by field. A caller asking "what did I
+// authorize?" got a digest and nothing else. This pins the whole path — signed on the wire,
+// stored on the record, readable from `retrieve()`.
+describe("a signed grant can say what it authorized, not just that something was signed", () => {
+  it("carries the AP2 mandates the wallet signed all the way to retrieve()", async () => {
+    const ca = makeAgent();
+    const app = serve(ca);
+    const g = await ca.grants.create({ merchant: "utopia", budget: 200, perSpend: 130, allow: { categories: ["Beverages"] }, signing: "device" });
+    expect((await signOverHttp(app, g.id)).body.ok).toBe(true);
+
+    const mandates = (await ca.grants.retrieve(g.id))!.mandate!.mandates!;
+    expect(mandates).toHaveLength(2);
+
+    // The terms a human would want back: what may be bought, and the per-purchase ceiling.
+    const constraints = mandates.flatMap((m) => m.constraints as Array<{ type: string; items?: Array<{ acceptable_items: Array<{ id: string }> }>; max?: number }>);
+    const lineItems = constraints.find((c) => c.type === "checkout.line_items")!;
+    expect(lineItems.items!.flatMap((r) => r.acceptable_items.map((i) => i.id))).toEqual(["coffee"]);
+    expect(constraints.find((c) => c.type === "payment.amount_range")!.max).toBe(13000);
+  });
+});
+
 // `allow: { categories: [...] }` is evaluated against the LIVE catalog, so a category grant
 // widens every time the catalog does. On a page-approved grant that is the intended behaviour —
 // nobody signed a list of products. On a device-signed grant it is not: the wallet signed
