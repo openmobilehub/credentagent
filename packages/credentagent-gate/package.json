@@ -47,6 +47,7 @@
   "dependencies": {
     "@hpke/core": "^1.9.0",
     "@peculiar/x509": "^1.14.3",
+    "@sd-jwt/core": "^0.20.1",
     "@simplewebauthn/browser": "^13.3.0",
     "@simplewebauthn/server": "^13.3.1",
     "cbor-x": "^1.6.4",
