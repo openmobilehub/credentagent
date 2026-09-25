@@ -23,13 +23,15 @@ Three ways in, from zero setup to your own deployment — stop at whichever fits
 Paste the hosted demo into your agent host — nothing to install:
 
 ```
-https://credentagent-demo.vercel.app/mcp
+https://credentagent.ai/marketplace/mcp
 ```
 
 - **Claude** (web/desktop): Settings → Connectors → *Add custom connector* → paste the URL.
-- **Claude Code**: `claude mcp add --transport http shop https://credentagent-demo.vercel.app/mcp`
+- **Claude Code**: `claude mcp add --transport http shop https://credentagent.ai/marketplace/mcp`
 - **ChatGPT**: Settings → Connectors → *Add connector* (developer mode) → paste the URL.
 - **Goose**: `goose configure` → *Add Extension* → *Remote Extension (Streamable HTTP)* → paste the URL.
+
+Want `main`'s unreleased build instead? Use `https://credentagent.ai/marketplace-dev/mcp`.
 
 Then say:
 

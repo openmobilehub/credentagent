@@ -35,8 +35,9 @@ flow.
 
 ## Quickstart
 
-**Zero setup — try it now:** paste `https://credentagent-demo.vercel.app/mcp` into Claude /
+**Zero setup — try it now:** paste `https://credentagent.ai/marketplace/mcp` into Claude /
 ChatGPT / Goose as a remote connector and ask it to sell you the whiskey — the age gate fires.
+(`https://credentagent.ai/marketplace-dev/mcp` runs `main`'s unreleased build.)
 Then take the [5-minute quickstart](./examples/quickstart/) (run it locally → deploy
 your own with one click).
 
