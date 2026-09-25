@@ -8,7 +8,7 @@ the demo that serves it:
 | --- | --- |
 | `https://credentagent.ai/marketplace/mcp` | `credentagent-demo` — the published npm packages |
 | `https://credentagent.ai/marketplace-dev/mcp` | `credentagent-demo-dev` — `main`'s unpublished packages |
-| `https://credentagent.ai/` | redirects to https://openmobilehub.org/credentagent |
+| `https://credentagent.ai/` | the product page from https://openmobilehub.org/credentagent, served under credentagent.ai (the address bar stays on credentagent.ai) |
 
 **Why a separate project, not a domain on `credentagent-demo`:** the demo mints its checkout
 and wallet links from `VERCEL_PROJECT_PRODUCTION_URL`, which Vercel resolves to the project's
