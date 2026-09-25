@@ -3,10 +3,8 @@
   "framework": null,
   "buildCommand": "",
   "outputDirectory": ".",
-  "redirects": [
-    { "source": "/", "destination": "https://openmobilehub.org/credentagent", "permanent": false }
-  ],
   "rewrites": [
+    { "source": "/", "destination": "https://openmobilehub.org/credentagent/" },
     { "source": "/marketplace-dev/:path*", "destination": "https://credentagent-demo-dev.vercel.app/:path*" },
     { "source": "/marketplace/:path*", "destination": "https://credentagent-demo.vercel.app/:path*" }
   ]
