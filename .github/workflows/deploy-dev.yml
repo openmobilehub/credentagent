@@ -11,7 +11,7 @@ name: deploy-dev
 # tarballs into a copy of the quickstart, deploy THAT. `file:` links are deliberately
 # not used — the tarball path exercises the `files` allowlist and `exports` map.
 #
-# Requires the VERCEL_TOKEN secret (a token for the Vercel account that owns the
+# Requires the VERCEL_TOKEN secret (a token scoped to the Vercel team that owns the
 # credentagent-demo-dev project). Without it every step SKIPS (green, with a notice) —
 # the same pattern as agent-e2e — so this merges before the secret exists. The dev
 # project has its own GATE_SECRET and NO shared state with the prod demo.
@@ -31,7 +31,7 @@ concurrency:
 
 env:
   # Identifiers, not credentials: which Vercel team/project `vercel deploy` targets.
-  VERCEL_ORG_ID: team_hJvCfLus8Jc0Q77qB5bOi6gP # dfzuluagas-projects
+  VERCEL_ORG_ID: team_tgMygXtl9Q43sdc78ummCtqL # cbg6 ("CBG") — moved from dfzuluagas-projects 2026-09
   VERCEL_PROJECT_ID: prj_69vlbxYYn2NYwLFvcf1AiS0Lu7AD # credentagent-demo-dev
 
 jobs:
