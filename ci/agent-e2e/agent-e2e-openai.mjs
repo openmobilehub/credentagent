@@ -1,7 +1,7 @@
 // Agent-in-the-loop E2E — a REAL OpenAI/ChatGPT agent drives the deployed MCP storefront, unaided.
 //
 //   OPENAI_API_KEY=... node ci/agent-e2e/agent-e2e-openai.mjs
-//   E2E_MCP_URL=https://credentagent-demo-dev.vercel.app/mcp   # aim at the dev twin (default: prod demo)
+//   E2E_MCP_URL=https://credentagent.ai/marketplace-dev/mcp   # aim at the dev twin (default: prod demo)
 //   OPENAI_MODEL=gpt-4o                                        # override the model (default: gpt-4o)
 //
 // The cross-provider twin of agent-e2e.mjs: same plain-language task, same parse-based assertions
@@ -16,7 +16,7 @@ import { runAssertions } from "./assertions.mjs";
 // Target the deployed MCP storefront. `E2E_MCP_URL` is the override (e.g. the dev twin at
 // credentagent-demo-dev running main's unpublished source); `MCP_URL` stays accepted for
 // back-compat; default is the prod demo, so the nightly workflow needs no env at all.
-const MCP_URL = process.env.E2E_MCP_URL ?? process.env.MCP_URL ?? "https://credentagent-demo.vercel.app/mcp";
+const MCP_URL = process.env.E2E_MCP_URL ?? process.env.MCP_URL ?? "https://credentagent.ai/marketplace/mcp";
 const MODEL = process.env.OPENAI_MODEL ?? "gpt-4o";
 
 const client = new OpenAI(); // OPENAI_API_KEY from env
