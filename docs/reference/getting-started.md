@@ -7,7 +7,12 @@ is just one application. `age.over(21)`, a loyalty membership, a prescription, a
 `payment.in("usd")` are all credentials in the same ordered policy.
 
 This page stands up a credential-gated agentic storefront in about ten lines and
-connects it to an MCP host. Two npm packages compose with zero glue:
+connects it to an MCP host.
+
+> **Just want to see it first?** Paste `https://credentagent.ai/marketplace/mcp` into
+> Claude / ChatGPT / Goose as a remote connector and ask it to sell you the whiskey —
+> the age gate fires. (`https://credentagent.ai/marketplace-dev/mcp` runs `main`'s
+> unreleased build.) Two npm packages compose with zero glue:
 
 - **[`@openmobilehub/credentagent-gate`](https://www.npmjs.com/package/@openmobilehub/credentagent-gate)** — the Gate.
   `new CredentAgent()`, `credentagent.mount(app)`, the policy builders (`age` / `membership` /
@@ -200,21 +205,21 @@ never trusted from the client.
 
 ## Runnable examples
 
-All three live in [`examples/`](https://github.com/openmobilehub/mcp-apps-shopping-demo/tree/main/examples)
-in the reference repo (`npm run build:packages` first, then `node examples/<file>`):
+All three live in [`examples/`](../../examples/)
+in this repo (`npm run build:packages` first, then `node examples/<file>`):
 
 | Example | What it shows | Port |
 | :-- | :-- | :-- |
-| [`storefront.mjs`](https://github.com/openmobilehub/mcp-apps-shopping-demo/blob/main/examples/storefront.mjs) | The ~8-line credential-gated storefront above (age + membership + payment). | 3005 |
-| [`custom-credential.mjs`](https://github.com/openmobilehub/mcp-apps-shopping-demo/blob/main/examples/custom-credential.mjs) | A custom `prescription` gate via `defineCredential`, composed alongside the built-ins. | 3006 |
-| [`with-x402-settlement.mjs`](https://github.com/openmobilehub/mcp-apps-shopping-demo/blob/main/examples/with-x402-settlement.mjs) | On-chain settlement through the fail-closed `settle` seam (mock by default; real Hedera/x402 wiring shown commented). | 3007 |
+| [`storefront.mjs`](../../examples/storefront.mjs) | The ~8-line credential-gated storefront above (age + membership + payment). | 3005 |
+| [`custom-credential.mjs`](../../examples/custom-credential.mjs) | A custom `prescription` gate via `defineCredential`, composed alongside the built-ins. | 3006 |
+| [`with-x402-settlement.mjs`](../../examples/with-x402-settlement.mjs) | On-chain settlement through the fail-closed `settle` seam (mock by default; real Hedera/x402 wiring shown commented). | 3007 |
 
 ## Learn more
 
 - Package READMEs:
   [`@openmobilehub/credentagent-gate`](https://www.npmjs.com/package/@openmobilehub/credentagent-gate) ·
   [`@openmobilehub/credentagent-storefront`](https://www.npmjs.com/package/@openmobilehub/credentagent-storefront)
-- The reference demo (full fail-closed wallet ceremony, on-chain settlement):
-  [openmobilehub/mcp-apps-shopping-demo](https://github.com/openmobilehub/mcp-apps-shopping-demo)
+- The hosted demo: `https://credentagent.ai/marketplace/mcp` — and the
+  [5-minute quickstart](../../examples/quickstart/) to run and deploy your own.
 
 Apache-2.0 · part of [Open Mobile Hub](https://openmobilehub.org) (Linux Foundation).
