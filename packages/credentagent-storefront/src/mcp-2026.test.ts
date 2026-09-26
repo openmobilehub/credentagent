@@ -69,26 +69,60 @@ describe("one /mcp endpoint, both protocol eras", () => {
   });
 });
 
-describe("no shared cart on 2026-07-28 (Security invariant 4)", () => {
-  it("REFUSES to keep a server cart for a session-less client — one client's items never reach another", async () => {
+describe("the cart a 2026-07-28 client carries (no sessions, so no shared cart — Security invariant 4)", () => {
+  const call = async (c: Client, name: string, args: Record<string, unknown>) => sc(await c.callTool({ name, arguments: args }));
+
+  it("keeps the cart in the token the client passes back — through add, set, remove, get and checkout", async () => {
+    const c = await modernClient(await serve(createStorefront()));
+    let r = await call(c, "add-to-cart", { items: [{ productId: "court-sneakers", quantity: 1 }, { productId: "drift-mouse", quantity: 1 }] });
+    expect(r.cart.itemCount).toBe(2);
+    r = await call(c, "set-quantity", { productId: "court-sneakers", quantity: 3, cartToken: r.cartToken });
+    r = await call(c, "remove-from-cart", { productId: "drift-mouse", cartToken: r.cartToken });
+    r = await call(c, "get-cart", { cartToken: r.cartToken });
+    expect(r.cart.lines.map((l: any) => [l.id, l.quantity])).toEqual([["court-sneakers", 3]]);
+
+    const order = await call(c, "checkout", { cartToken: r.cartToken });
+    expect(order.orderId).toMatch(/^ORD-/);
+    expect(order.cart.total).toBe(285); // re-priced from the catalog: 3 × $95 — the token carries no prices
+  });
+
+  it("never lets one client's cart reach another — each has only its own token", async () => {
     const url = await serve(createStorefront());
     const a = await modernClient(url);
     const b = await modernClient(url);
-
-    const added = await a.callTool({ name: "add-to-cart", arguments: { items: [{ productId: "oak-whiskey", quantity: 2 }] } });
-    expect(added.isError).toBe(true);
+    await call(a, "add-to-cart", { items: [{ productId: "oak-whiskey", quantity: 2 }] });
 
     // Were the cart keyed by one fallback session, B would now see A's two bottles.
-    expect(sc(await b.callTool({ name: "get-cart", arguments: {} })).cart.itemCount).toBe(0);
+    expect((await call(b, "get-cart", {})).cart.itemCount).toBe(0);
     const bCheckout = await b.callTool({ name: "checkout", arguments: {} });
-    expect(bCheckout.isError).toBe(true);
+    expect(bCheckout.isError).toBe(true); // B's cart is empty — nothing of A's to check out
   });
 
-  it("checks out the items a session-less client passes explicitly", async () => {
+  it("REFUSES an edited cartToken — its items never reach the cart or an order", async () => {
     const c = await modernClient(await serve(createStorefront()));
-    const r = sc(await c.callTool({ name: "checkout", arguments: { items: [{ productId: "court-sneakers", quantity: 1 }] } }));
+    const { cartToken } = await call(c, "add-to-cart", { items: [{ productId: "court-sneakers", quantity: 1 }] });
+    const [prefix, , sig] = (cartToken as string).split(".");
+    const edited = `${prefix}.${Buffer.from(JSON.stringify([["oak-whiskey", 9]])).toString("base64url")}.${sig}`;
+
+    expect((await c.callTool({ name: "add-to-cart", arguments: { items: [{ productId: "drift-mouse", quantity: 1 }], cartToken: edited } })).isError).toBe(true);
+    expect((await c.callTool({ name: "checkout", arguments: { cartToken: edited } })).isError).toBe(true);
+  });
+
+  it("checks out the items a client passes explicitly, with no token at all", async () => {
+    const c = await modernClient(await serve(createStorefront()));
+    const r = await call(c, "checkout", { items: [{ productId: "court-sneakers", quantity: 1 }] });
     expect(r.orderId).toMatch(/^ORD-/);
     expect(r.cart.itemCount).toBe(1);
+  });
+
+  it("leaves a 2025-era session's cart where it was — on the server, with no token", async () => {
+    const url = await serve(createStorefront());
+    const c = new Client({ name: "legacy", version: "1.0.0" });
+    await c.connect(new StreamableHTTPClientTransport(url));
+    open.push(() => c.close());
+    const added = await call(c, "add-to-cart", { items: [{ productId: "court-sneakers", quantity: 1 }] });
+    expect(added.cartToken).toBeUndefined();
+    expect((await call(c, "get-cart", {})).cart.itemCount).toBe(1);
   });
 });
 

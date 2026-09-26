@@ -110,14 +110,17 @@ const store = createStorefront({ storage: redisStorage.fromEnv() });
 
 ## MCP protocol versions — 2026-07-28 and 2025, one endpoint
 
-`/mcp` serves both. A client on the **2025** revisions (today's hosts) gets its session exactly as
+`/mcp` serves both. A client on the **2025** revisions gets its session exactly as
 before. A client on **2026-07-28** is served per request by the SDK's `createMcpHandler` — that
 revision has no sessions — with two consequences:
 
-- **No server-side cart.** There is no session to key it by, and one shared cart would leak one
-  shopper's items to the next (Security invariant 4). So on 2026-07-28 `get-cart` reads empty,
-  `add-to-cart` / `set-quantity` / `remove-from-cart` refuse, and `checkout` takes its `items`
-  explicitly (the widget already passes them).
+- **The client carries the cart.** There is no session to key a server-side cart by, and one
+  shared cart would leak one shopper's items to the next (Security invariant 4). So every cart tool
+  returns a signed `cartToken`, and the client passes it back on its next cart call and to
+  `checkout`. The token holds product ids and quantities only — prices are re-derived from the
+  catalog on every read — and an edited or forged token is refused. The widget carries it for you
+  and hands the latest one to the agent. Sign it with `signingKey` on a multi-instance deploy, or a
+  token minted on one instance is refused by the next.
 - **Real `input_required` rounds.** `create-spending-grant`'s questions arrive as MCP's
   multi round-trip result for a client that declared `elicitation`, and the SDK's client answers
   and retries by itself (`examples/mrtr-client.mjs`). Every other client gets the same questions as
