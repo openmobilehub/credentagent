@@ -35,7 +35,7 @@ import type { Express, Request, Response } from "express";
 import { z } from "zod";
 import {
   CART_META_KEY,
-  CART_TOKEN_META_KEY,
+  CART_ID_META_KEY,
   CATALOG_META_KEY,
   createOrder,
   getProduct,
@@ -52,7 +52,7 @@ import type { CartItemInput, CatalogSource, Order, PricedCart, Product, ProductP
 // reaching into the pure model module.
 export type { CatalogSource } from "./index.js";
 import { appToolMeta } from "./tool-meta.js";
-import { cartTokens } from "./cart-token.js";
+import { cartIds } from "./cart-id.js";
 import { matchProducts, prefillVariants, validSelections, missingVariants, describeChoice } from "./product-match.js";
 import { projectGrantView } from "./grant-project.js";
 import { MemoryCartStore, MemoryOrderStore } from "./state.js";
@@ -443,7 +443,7 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
   const approvalHoldMs = opts.approvalHoldMs ?? 45_000;
   // State the CLIENT carries is sealed with this secret: MRTR's `requestState` (#174 — the
   // questions a half-specified grant asks, so the server holds no session between rounds) and the
-  // 2026-07-28 cart token (cart-token.ts). It is the storefront's `signingKey` when there is one;
+  // 2026-07-28 cart id (cart-id.ts). It is the storefront's `signingKey` when there is one;
   // otherwise a per-process key — which is fine for a single instance, but on a multi-instance
   // deployment state minted on instance A is refused ("tampered") by instance B, exactly like an
   // unshared cart-mandate key. Pass `signingKey`.
@@ -557,54 +557,60 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
   // transport (e.g. stdio) is not, so the tool handlers warm the catalog themselves.
   const DEFAULT_SESSION = "default";
   // The 2026-07-28 protocol revision has no sessions: each request stands alone, so there is no
-  // MCP session to key a server-side cart by. Falling back to DEFAULT_SESSION there would hand
-  // every such client ONE shared cart (cross-user bleed — Security invariant 4). So a
-  // session-less 2026-07-28 request keeps its cart in a signed token it carries itself: every
-  // cart tool returns `cartToken`, and the client passes it back on its next cart call.
+  // MCP session to key a server-side cart by — and nothing ties the widget's clicks to the agent's
+  // calls. Falling back to DEFAULT_SESSION there would hand every such client ONE shared cart
+  // (cross-user bleed — Security invariant 4). So a session-less request keys its cart by a CART ID
+  // (cart-id.ts): the first cart-related call issues one and returns it — to the agent AND the
+  // widget — and every later call passes it back, so both land on the same server-side cart, like
+  // the old session did.
   const sessionOf = (ctx: ServerContext): string | null =>
     ctx.sessionId ?? (isModernRequest(ctx) ? null : DEFAULT_SESSION);
-  const carts = cartTokens(stateSecret);
-  /** A request's cart, and how to save it — plus the token to hand back when the client carries it. */
-  interface OpenCart {
-    cart: Map<string, number>;
-    save(cart: Map<string, number>): Promise<string | undefined>;
-  }
-  /** The session's server-side cart, or the one in the client's token. null = a refused token. */
-  const openCart = async (ctx: ServerContext, token: string | undefined): Promise<OpenCart | null> => {
-    await source.load();
+  const ids = cartIds(stateSecret);
+  /**
+   * The cart store key for a request: its session, or — session-less — the caller's cart id (a new
+   * one when it has none, returned as `cartId` to hand back). null = an id this store never issued.
+   */
+  const cartKeyOf = (ctx: ServerContext, cartId: string | undefined): { key: string; cartId?: string } | null => {
     const sessionId = sessionOf(ctx);
-    if (sessionId !== null) {
-      return { cart: await cartStore.read(sessionId), save: async (cart) => { await cartStore.write(sessionId, cart); return undefined; } };
+    if (sessionId !== null) return { key: sessionId };
+    if (cartId === undefined) {
+      const minted = ids.mint();
+      return { key: minted, cartId: minted };
     }
-    const cart = token === undefined ? new Map<string, number>() : carts.open(token);
-    return cart && { cart, save: async (next) => carts.mint(next) };
+    return ids.verify(cartId) ? { key: cartId, cartId } : null;
   };
-  const REFUSED_CART_TOKEN: CallToolResult = {
-    content: [{ type: "text", text: "That cartToken was refused: it was edited, or it came from another store. Start a new cart by calling add-to-cart without a cartToken." }],
+  const UNKNOWN_CART_ID: CallToolResult = {
+    content: [{ type: "text", text: "That cartId isn't one this store issued. Pass the cartId from an earlier result in this conversation, or omit it to start a new cart." }],
     isError: true,
   };
   const priceFrom = (cart: Map<string, number>): PricedCart =>
     priceCart([...cart.entries()].map(([productId, quantity]) => ({ productId, quantity })), source.current());
   // Cart-bearing result, emitted three ways so either host reads it: structuredContent
   // (ChatGPT widget + model), a JSON text block, and _meta (Claude's out-of-band channel).
-  // A client that carries its cart also gets the new `cartToken` on all three.
-  const cartResult = (priced: PricedCart, cartToken?: string): CallToolResult => ({
-    structuredContent: { products: source.current(), cart: priced, ...(cartToken ? { cartToken } : {}) } as unknown as Record<string, unknown>,
-    content: [{ type: "text", text: JSON.stringify(cartToken ? { ...priced, cartToken } : priced) }],
-    _meta: { [CART_META_KEY]: priced, ...(cartToken ? { [CART_TOKEN_META_KEY]: cartToken } : {}) },
+  // A session-less conversation also gets its `cartId` on all three.
+  const cartResult = (priced: PricedCart, cartId?: string): CallToolResult => ({
+    structuredContent: { products: source.current(), cart: priced, ...(cartId ? { cartId } : {}) } as unknown as Record<string, unknown>,
+    content: [{ type: "text", text: JSON.stringify(cartId ? { ...priced, cartId } : priced) }],
+    _meta: { [CART_META_KEY]: priced, ...(cartId ? { [CART_ID_META_KEY]: cartId } : {}) },
   });
-  /** Open the request's cart, apply one change, save it, and answer with the priced result. */
-  const updateCart = async (ctx: ServerContext, token: string | undefined, change: (cart: Map<string, number>) => void): Promise<CallToolResult> => {
-    const open = await openCart(ctx, token);
-    if (!open) return REFUSED_CART_TOKEN;
-    change(open.cart);
-    return cartResult(priceFrom(open.cart), await open.save(open.cart));
+  /** Read the request's cart, apply a change (if any) and save it, and answer with the priced result. */
+  const cartCall = async (ctx: ServerContext, cartId: string | undefined, change?: (cart: Map<string, number>) => void): Promise<CallToolResult> => {
+    await source.load();
+    const ref = cartKeyOf(ctx, cartId);
+    if (!ref) return UNKNOWN_CART_ID;
+    const cart = await cartStore.read(ref.key);
+    if (change) {
+      change(cart);
+      await cartStore.write(ref.key, cart);
+    }
+    return cartResult(priceFrom(cart), ref.cartId);
   };
-  const CART_TOKEN_FIELD = z
+  const CART_ID_FIELD = z
     .string()
     .optional()
-    .describe("only if your last cart result included a cartToken: pass it back VERBATIM (never edit or invent one). Omit it to start a new cart.");
-  const CART_TOKEN_NOTE = " If a cart result includes a cartToken, the cart lives in that token: pass it to your next cart call and to checkout.";
+    .describe("this conversation's cartId, from an earlier result — pass it VERBATIM (never edit or invent one). Omit it only when no result has given you one yet.");
+  const CART_ID_NOTE =
+    " When a result includes a cartId, pass it on every later cart call, browse-products and checkout — the product picker and you share that one cart.";
 
   function buildServer(): McpServer {
     const server = new McpServer({ name: "credentagent-storefront", version: "0.1.0" });
@@ -619,17 +625,22 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
           "Show the storefront catalog as an interactive visual product picker (a grid with images). " +
           "Call this whenever the user asks what you sell, what's available, to see/show/browse products, or " +
           "to shop — it renders the grid for them. Prefer it over describing the catalog in text. To read the " +
-          "catalog as DATA for your own use (find an id, filter, search, page) without rendering anything, call list-products.",
-        inputSchema: { cartToken: CART_TOKEN_FIELD },
+          "catalog as DATA for your own use (find an id, filter, search, page) without rendering anything, call list-products." +
+          CART_ID_NOTE,
+        inputSchema: { cartId: CART_ID_FIELD },
         annotations: { readOnlyHint: true },
         _meta: UI_META,
       },
-      async ({ cartToken }, ctx): Promise<CallToolResult> => {
+      async ({ cartId: givenCartId }, ctx): Promise<CallToolResult> => {
         await source.load();
         // The same catalog read as list-products, so the picker and the data never disagree.
         const catalog = listProducts(source.current()).products;
-        // Display only: a refused token shows an empty cart here; the cart tools report the refusal.
-        const priced = priceFrom((await openCart(ctx, cartToken))?.cart ?? new Map());
+        // The picker opens on this conversation's cart — and issues its cart id if it has none yet,
+        // so the widget and the agent start out holding the same one. Display only: an id this
+        // store never issued shows an empty cart here; the cart tools report the refusal.
+        const ref = cartKeyOf(ctx, givenCartId);
+        const priced = priceFrom(ref ? await cartStore.read(ref.key) : new Map());
+        const cartId = ref?.cartId;
         // A compact, agent-legible catalog line (ids + names + prices + categories + age flags).
         // A host rendering the widget shows the grid to a human; a HEADLESS agent (no widget, no
         // human watching) has only this text — without the ids it can't call add-to-cart and dead-
@@ -645,20 +656,23 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
                 `The product picker is now showing the catalog visually to the user (${catalog.length} products in a grid with images). ` +
                 `Do NOT re-list the products as text to a user who can see the grid — briefly invite them to pick, or act on what they ask for. ` +
                 `Catalog ids for YOUR OWN use when adding to the cart: ${idLine}. ` +
-                `Adjust the cart by id with add-to-cart / set-quantity / remove-from-cart; check out with checkout.`,
+                `Adjust the cart by id with add-to-cart / set-quantity / remove-from-cart; check out with checkout.` +
+                (cartId
+                  ? ` This conversation's cartId is ${cartId} — the picker uses it too, so pass it on every cart call, browse-products and checkout to see what the user picked there.`
+                  : ""),
             },
           ],
-          structuredContent: { products: catalog, cart: priced },
-          _meta: { [CATALOG_META_KEY]: { products: catalog }, [CART_META_KEY]: priced },
+          structuredContent: { products: catalog, cart: priced, ...(cartId ? { cartId } : {}) },
+          _meta: { [CATALOG_META_KEY]: { products: catalog }, [CART_META_KEY]: priced, ...(cartId ? { [CART_ID_META_KEY]: cartId } : {}) },
         };
       },
     );
     registerAppTool(
       server,
       "add-to-cart",
-      { title: "Add to Cart", description: "Add products to the cart by id (quantities add on top)." + CART_TOKEN_NOTE, inputSchema: { items: z.array(z.object({ productId: z.string(), quantity: z.number().int().min(1) })), cartToken: CART_TOKEN_FIELD }, annotations: { readOnlyHint: false }, _meta: UI_META },
-      async ({ items, cartToken }, ctx): Promise<CallToolResult> =>
-        updateCart(ctx, cartToken, (cart) => {
+      { title: "Add to Cart", description: "Add products to the cart by id (quantities add on top)." + CART_ID_NOTE, inputSchema: { items: z.array(z.object({ productId: z.string(), quantity: z.number().int().min(1) })), cartId: CART_ID_FIELD }, annotations: { readOnlyHint: false }, _meta: UI_META },
+      async ({ items, cartId }, ctx): Promise<CallToolResult> =>
+        cartCall(ctx, cartId, (cart) => {
           for (const { productId, quantity } of items) {
             if (quantity <= 0) continue;
             cart.set(productId, (cart.get(productId) ?? 0) + quantity);
@@ -668,9 +682,9 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
     registerAppTool(
       server,
       "set-quantity",
-      { title: "Set Quantity", description: "Set the exact quantity of a product by id (0 removes)." + CART_TOKEN_NOTE, inputSchema: { productId: z.string(), quantity: z.number().int().min(0), cartToken: CART_TOKEN_FIELD }, annotations: { readOnlyHint: false }, _meta: UI_META },
-      async ({ productId, quantity, cartToken }, ctx): Promise<CallToolResult> =>
-        updateCart(ctx, cartToken, (cart) => {
+      { title: "Set Quantity", description: "Set the exact quantity of a product by id (0 removes)." + CART_ID_NOTE, inputSchema: { productId: z.string(), quantity: z.number().int().min(0), cartId: CART_ID_FIELD }, annotations: { readOnlyHint: false }, _meta: UI_META },
+      async ({ productId, quantity, cartId }, ctx): Promise<CallToolResult> =>
+        cartCall(ctx, cartId, (cart) => {
           if (quantity <= 0) cart.delete(productId);
           else cart.set(productId, quantity);
         }),
@@ -678,29 +692,27 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
     registerAppTool(
       server,
       "remove-from-cart",
-      { title: "Remove from Cart", description: "Remove a product from the cart by id." + CART_TOKEN_NOTE, inputSchema: { productId: z.string(), cartToken: CART_TOKEN_FIELD }, annotations: { readOnlyHint: false }, _meta: UI_META },
-      async ({ productId, cartToken }, ctx): Promise<CallToolResult> => updateCart(ctx, cartToken, (cart) => void cart.delete(productId)),
+      { title: "Remove from Cart", description: "Remove a product from the cart by id." + CART_ID_NOTE, inputSchema: { productId: z.string(), cartId: CART_ID_FIELD }, annotations: { readOnlyHint: false }, _meta: UI_META },
+      async ({ productId, cartId }, ctx): Promise<CallToolResult> => cartCall(ctx, cartId, (cart) => void cart.delete(productId)),
     );
     registerAppTool(
       server,
       "get-cart",
-      { title: "Get Cart", description: "Return the current cart: line items, quantities, total." + CART_TOKEN_NOTE, inputSchema: { cartToken: CART_TOKEN_FIELD }, annotations: { readOnlyHint: true }, _meta: UI_META },
-      async ({ cartToken }, ctx): Promise<CallToolResult> => updateCart(ctx, cartToken, () => {}),
+      { title: "Get Cart", description: "Return the current cart: line items, quantities, total." + CART_ID_NOTE, inputSchema: { cartId: CART_ID_FIELD }, annotations: { readOnlyHint: true }, _meta: UI_META },
+      async ({ cartId }, ctx): Promise<CallToolResult> => cartCall(ctx, cartId),
     );
     registerAppTool(
       server,
       "checkout",
-      { title: "Checkout", description: "Snapshot the cart into an order and return a checkout link; if gated, also a `requires` manifest of what the buyer must prove on the page." + CART_TOKEN_NOTE, inputSchema: { items: z.array(z.object({ productId: z.string(), quantity: z.number().int().positive() })).optional(), cartToken: CART_TOKEN_FIELD }, annotations: { readOnlyHint: false }, _meta: UI_META },
-      async ({ items, cartToken }, ctx): Promise<CallToolResult> => {
+      { title: "Checkout", description: "Snapshot the cart into an order and return a checkout link; if gated, also a `requires` manifest of what the buyer must prove on the page." + CART_ID_NOTE, inputSchema: { items: z.array(z.object({ productId: z.string(), quantity: z.number().int().positive() })).optional(), cartId: CART_ID_FIELD }, annotations: { readOnlyHint: false }, _meta: UI_META },
+      async ({ items, cartId }, ctx): Promise<CallToolResult> => {
         await source.load();
         const catalog = source.current();
-        const sessionId = sessionOf(ctx);
-        let entries: CartItemInput[] = items ?? [];
-        if (!entries.length) {
-          const open = await openCart(ctx, cartToken);
-          if (!open) return REFUSED_CART_TOKEN;
-          entries = [...open.cart.entries()].map(([productId, quantity]) => ({ productId, quantity }));
-        }
+        const ref = cartKeyOf(ctx, cartId);
+        if (!ref) return UNKNOWN_CART_ID;
+        const entries: CartItemInput[] = items?.length
+          ? items
+          : [...(await cartStore.read(ref.key)).entries()].map(([productId, quantity]) => ({ productId, quantity }));
         if (entries.length === 0) return { content: [{ type: "text", text: "The cart is empty — add items before checking out." }], isError: true };
         // Random id (not a per-instance counter): two serverless instances must
         // not both mint "ORD-1" for different carts.
@@ -709,7 +721,7 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
         // a store write — the checkout page + gate rails reconstruct + verify it (FR-007).
         const cart = statelessOrders ? cartParamFor(order) : null;
         if (!statelessOrders) await createdOrderStore.write(order.id, order);
-        if (sessionId !== null) orderSessions.set(order.id, sessionId); // so completion clears THIS session's cart
+        orderSessions.set(order.id, ref.key); // so completion clears THIS session's (or cart id's) cart
         const checkoutUrl = withCart(`${baseUrl}/checkout?order=${order.id}`, cart);
         // ← where CredentAgent mounts on. Re-home any /credentagent/* approve link onto this
         // server's origin (and propagate the cart param), so the gate links share the base.

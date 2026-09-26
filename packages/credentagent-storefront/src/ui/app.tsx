@@ -6,7 +6,7 @@ import type { CSSProperties } from "react";
 import { createRoot } from "react-dom/client";
 import {
   CART_META_KEY,
-  CART_TOKEN_META_KEY,
+  CART_ID_META_KEY,
   CATALOG_META_KEY,
   priceCart,
   SAMPLE_CATALOG as CATALOG,
@@ -228,12 +228,10 @@ function orderContextMarkdown(order: CompletedOrder): string {
 // Ambient context so the agent always knows the current cart (with ids) and how
 // to drive checkout. updateModelContext replaces prior context, so this stays
 // fresh without spamming the transcript.
-function cartContextMarkdown(cart: PricedCart, cartToken?: string): string {
-  // On MCP 2026-07-28 the cart lives in a token the client carries. The user edits it here too, so
-  // the agent must always use the widget's latest token — an older one would undo their changes.
-  const token = cartToken
-    ? `\n\nThe cart lives in this cartToken — pass it VERBATIM to your next cart call or checkout (it replaces any earlier one): ${cartToken}`
-    : "";
+function cartContextMarkdown(cart: PricedCart, cartId?: string): string {
+  // On MCP 2026-07-28 the cart is keyed by this conversation's cart id, which the agent already got
+  // from the tool result that opened this picker — repeated here in case it lost track of it.
+  const token = cartId ? `\n\nThis conversation's cartId (pass it on every cart call): ${cartId}` : "";
   if (cart.lines.length === 0) {
     return "The product picker is open. The user's cart is currently empty." + token;
   }
@@ -269,15 +267,16 @@ function HostApp() {
   // Mirrors `cart` so setQuantity can read the current value synchronously
   // (state is async) and compute the next optimistic cart.
   const cartRef = useRef<PricedCart>(emptyCart());
-  // The signed cart a session-less (MCP 2026-07-28) connection carries; undefined on a session.
-  const cartTokenRef = useRef<string | undefined>(undefined);
+  // This conversation's cart id on a session-less (MCP 2026-07-28) connection — issued by the tool
+  // result that opened the picker, the same one the agent holds. Undefined on a 2025-era session.
+  const cartIdRef = useRef<string | undefined>(undefined);
 
-  const applyCart = useCallback((c: PricedCart, cartToken?: string) => {
+  const applyCart = useCallback((c: PricedCart, cartId?: string) => {
     cartRef.current = c;
-    if (cartToken) cartTokenRef.current = cartToken;
+    if (cartId) cartIdRef.current = cartId;
     setCart(c);
     appRef.current
-      ?.updateModelContext({ content: [{ type: "text", text: cartContextMarkdown(c, cartTokenRef.current) }] })
+      ?.updateModelContext({ content: [{ type: "text", text: cartContextMarkdown(c, cartIdRef.current) }] })
       .catch(console.error);
   }, []);
 
@@ -300,16 +299,16 @@ function HostApp() {
         const catalog = result._meta?.[CATALOG_META_KEY] as { products?: Product[] } | undefined;
         if (catalog?.products) setProducts(catalog.products);
         const metaCart = result._meta?.[CART_META_KEY] as PricedCart | undefined;
-        const metaToken = result._meta?.[CART_TOKEN_META_KEY] as string | undefined;
+        const metaCartId = result._meta?.[CART_ID_META_KEY] as string | undefined;
         if (metaCart && Array.isArray(metaCart.lines)) {
           setGrantView(null); // a shopping result flips the widget back to the picker
-          applyCart(metaCart, metaToken);
+          applyCart(metaCart, metaCartId);
           return;
         }
-        const parsed = parseJsonContent<PricedCart & { cartToken?: string }>(result);
+        const parsed = parseJsonContent<PricedCart & { cartId?: string }>(result);
         if (parsed && Array.isArray(parsed.lines) && Array.isArray(parsed.unknownIds)) {
           setGrantView(null);
-          applyCart(parsed, parsed.cartToken);
+          applyCart(parsed, parsed.cartId);
         }
       };
       app.onhostcontextchanged = (params) => setInsets(params.safeAreaInsets);
@@ -322,13 +321,13 @@ function HostApp() {
     setConfirmedOrder(null); // editing the cart starts a new order
     setPendingCheckoutUrl(null); // …which invalidates any pending checkout link
     applyCart(withQuantity(cartRef.current, productId, quantity)); // optimistic
-    const cartToken = cartTokenRef.current;
+    const cartId = cartIdRef.current;
     const result = await appRef.current.callServerTool({
       name: "set-quantity",
-      arguments: { productId, quantity, ...(cartToken ? { cartToken } : {}) },
+      arguments: { productId, quantity, ...(cartId ? { cartId } : {}) },
     });
-    const parsed = parseJsonContent<PricedCart & { cartToken?: string }>(result);
-    if (parsed && Array.isArray(parsed.lines)) applyCart(parsed, parsed.cartToken); // authoritative
+    const parsed = parseJsonContent<PricedCart & { cartId?: string }>(result);
+    if (parsed && Array.isArray(parsed.lines)) applyCart(parsed, parsed.cartId); // authoritative
   }, [applyCart]);
 
   // Hand off to checkout: snapshot the cart into an order (server side) and open
@@ -343,7 +342,8 @@ function HostApp() {
     // Pass the on-screen cart so the order matches exactly what the user sees,
     // independent of whether prior set-quantity calls round-tripped to the server.
     const items = cartRef.current.lines.map((l) => ({ productId: l.id, quantity: l.quantity }));
-    const result = await appRef.current.callServerTool({ name: "checkout", arguments: { items } });
+    const cartId = cartIdRef.current;
+    const result = await appRef.current.callServerTool({ name: "checkout", arguments: { items, ...(cartId ? { cartId } : {}) } });
     const parsed = parseJsonContent<{ orderId?: string; checkoutUrl?: string }>(result);
     if (!parsed?.checkoutUrl) return;
     const { checkoutUrl, orderId } = parsed;
@@ -364,10 +364,10 @@ function HostApp() {
       if (!order || signal.cancelled) return;
       setPendingCheckoutUrl(null);
       setConfirmedOrder(order); // read-only confirmation panel in the widget
-      // The gate clears a session's cart server-side; a carried cart is simply dropped. Refresh
-      // the badge to match.
-      cartTokenRef.current = undefined;
-      const refreshed = await appRef.current?.callServerTool({ name: "get-cart", arguments: {} });
+      // The gate clears the cart server-side (the session's, or this conversation's cart id's);
+      // refresh the badge to match.
+      const doneCartId = cartIdRef.current;
+      const refreshed = await appRef.current?.callServerTool({ name: "get-cart", arguments: doneCartId ? { cartId: doneCartId } : {} });
       const c = refreshed && parseJsonContent<PricedCart>(refreshed);
       if (c) applyCart(c); // applyCart pushes cart context; override with the order below
       // Silent: agent knows the order without anything landing in the composer.

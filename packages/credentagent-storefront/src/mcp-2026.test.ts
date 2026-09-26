@@ -69,59 +69,81 @@ describe("one /mcp endpoint, both protocol eras", () => {
   });
 });
 
-describe("the cart a 2026-07-28 client carries (no sessions, so no shared cart — Security invariant 4)", () => {
+describe("the cart a 2026-07-28 conversation keys by its cart id (no sessions, so no shared cart — Security invariant 4)", () => {
   const call = async (c: Client, name: string, args: Record<string, unknown>) => sc(await c.callTool({ name, arguments: args }));
 
-  it("keeps the cart in the token the client passes back — through add, set, remove, get and checkout", async () => {
+  it("issues a cart id with the first picker, and keeps using that one cart — through add, set, remove, get and checkout", async () => {
     const c = await modernClient(await serve(createStorefront()));
-    let r = await call(c, "add-to-cart", { items: [{ productId: "court-sneakers", quantity: 1 }, { productId: "drift-mouse", quantity: 1 }] });
-    expect(r.cart.itemCount).toBe(2);
-    r = await call(c, "set-quantity", { productId: "court-sneakers", quantity: 3, cartToken: r.cartToken });
-    r = await call(c, "remove-from-cart", { productId: "drift-mouse", cartToken: r.cartToken });
-    r = await call(c, "get-cart", { cartToken: r.cartToken });
+    const { cartId } = await call(c, "browse-products", {});
+    expect(cartId).toMatch(/^cart_/);
+
+    let r = await call(c, "add-to-cart", { cartId, items: [{ productId: "court-sneakers", quantity: 1 }, { productId: "drift-mouse", quantity: 1 }] });
+    expect(r.cartId).toBe(cartId); // the id never changes
+    r = await call(c, "set-quantity", { cartId, productId: "court-sneakers", quantity: 3 });
+    r = await call(c, "remove-from-cart", { cartId, productId: "drift-mouse" });
+    r = await call(c, "get-cart", { cartId });
     expect(r.cart.lines.map((l: any) => [l.id, l.quantity])).toEqual([["court-sneakers", 3]]);
 
-    const order = await call(c, "checkout", { cartToken: r.cartToken });
+    const order = await call(c, "checkout", { cartId });
     expect(order.orderId).toMatch(/^ORD-/);
-    expect(order.cart.total).toBe(285); // re-priced from the catalog: 3 × $95 — the token carries no prices
+    expect(order.cart.total).toBe(285); // priced from the catalog: 3 × $95
   });
 
-  it("never lets one client's cart reach another — each has only its own token", async () => {
+  it("shows the agent what the user picked in the widget — both hold the same cart id", async () => {
+    // The widget and the agent are separate callers with nothing in common on 2026-07-28 except the
+    // cart id they both received from the result that opened the picker.
+    const url = await serve(createStorefront());
+    const agent = await modernClient(url);
+    const widget = await modernClient(url);
+    const { cartId } = await call(agent, "browse-products", {});
+
+    await call(widget, "set-quantity", { cartId, productId: "drift-mouse", quantity: 2 }); // the user's clicks
+    await call(agent, "add-to-cart", { cartId, items: [{ productId: "court-sneakers", quantity: 1 }] }); // "also add sneakers"
+
+    const reopened = await call(agent, "browse-products", { cartId }); // "show me the picker again"
+    expect(reopened.cart.lines.map((l: any) => [l.id, l.quantity])).toEqual([["drift-mouse", 2], ["court-sneakers", 1]]);
+    expect((await call(agent, "checkout", { cartId })).cart.total).toBe(193); // 2 × $49 + $95
+  });
+
+  it("never lets one conversation's cart reach another — each gets its own id", async () => {
     const url = await serve(createStorefront());
     const a = await modernClient(url);
     const b = await modernClient(url);
-    await call(a, "add-to-cart", { items: [{ productId: "oak-whiskey", quantity: 2 }] });
+    const { cartId: aId } = await call(a, "add-to-cart", { items: [{ productId: "oak-whiskey", quantity: 2 }] });
+    const bCart = await call(b, "get-cart", {});
 
     // Were the cart keyed by one fallback session, B would now see A's two bottles.
-    expect((await call(b, "get-cart", {})).cart.itemCount).toBe(0);
-    const bCheckout = await b.callTool({ name: "checkout", arguments: {} });
-    expect(bCheckout.isError).toBe(true); // B's cart is empty — nothing of A's to check out
+    expect(bCart.cart.itemCount).toBe(0);
+    expect(bCart.cartId).not.toBe(aId);
+    expect((await b.callTool({ name: "checkout", arguments: {} })).isError).toBe(true); // B's cart is empty
   });
 
-  it("REFUSES an edited cartToken — its items never reach the cart or an order", async () => {
-    const c = await modernClient(await serve(createStorefront()));
-    const { cartToken } = await call(c, "add-to-cart", { items: [{ productId: "court-sneakers", quantity: 1 }] });
-    const [prefix, , sig] = (cartToken as string).split(".");
-    const edited = `${prefix}.${Buffer.from(JSON.stringify([["oak-whiskey", 9]])).toString("base64url")}.${sig}`;
-
-    expect((await c.callTool({ name: "add-to-cart", arguments: { items: [{ productId: "drift-mouse", quantity: 1 }], cartToken: edited } })).isError).toBe(true);
-    expect((await c.callTool({ name: "checkout", arguments: { cartToken: edited } })).isError).toBe(true);
+  it("REFUSES a cart id the store never issued — an agent inventing one must not land on anyone's cart", async () => {
+    const url = await serve(createStorefront());
+    const c = await modernClient(url);
+    const other = await modernClient(url);
+    const invented = `cart_${"A".repeat(22)}_${"A".repeat(22)}`;
+    // Another conversation "invents" the same id first and fills it…
+    expect((await other.callTool({ name: "add-to-cart", arguments: { cartId: invented, items: [{ productId: "oak-whiskey", quantity: 9 }] } })).isError).toBe(true);
+    // …and nobody can read or check out a cart under an invented id.
+    expect((await c.callTool({ name: "get-cart", arguments: { cartId: invented } })).isError).toBe(true);
+    expect((await c.callTool({ name: "checkout", arguments: { cartId: invented } })).isError).toBe(true);
   });
 
-  it("checks out the items a client passes explicitly, with no token at all", async () => {
+  it("checks out the items a client passes explicitly, with no cart id at all", async () => {
     const c = await modernClient(await serve(createStorefront()));
     const r = await call(c, "checkout", { items: [{ productId: "court-sneakers", quantity: 1 }] });
     expect(r.orderId).toMatch(/^ORD-/);
     expect(r.cart.itemCount).toBe(1);
   });
 
-  it("leaves a 2025-era session's cart where it was — on the server, with no token", async () => {
+  it("leaves a 2025-era session's cart where it was — keyed by the session, with no cart id", async () => {
     const url = await serve(createStorefront());
     const c = new Client({ name: "legacy", version: "1.0.0" });
     await c.connect(new StreamableHTTPClientTransport(url));
     open.push(() => c.close());
     const added = await call(c, "add-to-cart", { items: [{ productId: "court-sneakers", quantity: 1 }] });
-    expect(added.cartToken).toBeUndefined();
+    expect(added.cartId).toBeUndefined();
     expect((await call(c, "get-cart", {})).cart.itemCount).toBe(1);
   });
 });

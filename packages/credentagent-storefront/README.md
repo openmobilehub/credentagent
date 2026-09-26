@@ -114,13 +114,14 @@ const store = createStorefront({ storage: redisStorage.fromEnv() });
 before. A client on **2026-07-28** is served per request by the SDK's `createMcpHandler` — that
 revision has no sessions — with two consequences:
 
-- **The client carries the cart.** There is no session to key a server-side cart by, and one
-  shared cart would leak one shopper's items to the next (Security invariant 4). So every cart tool
-  returns a signed `cartToken`, and the client passes it back on its next cart call and to
-  `checkout`. The token holds product ids and quantities only — prices are re-derived from the
-  catalog on every read — and an edited or forged token is refused. The widget carries it for you
-  and hands the latest one to the agent. Sign it with `signingKey` on a multi-instance deploy, or a
-  token minted on one instance is refused by the next.
+- **The conversation keeps a cart id.** There is no session to key a cart by, and one shared cart
+  would leak one shopper's items to the next (Security invariant 4). So the first cart-related call
+  (usually `browse-products`, which opens the picker) issues a `cartId` and returns it — to the
+  agent **and** the widget — and every later cart call, `browse-products` and `checkout` pass it
+  back. The cart itself stays on the server under that id, so a click in the picker and the agent's
+  next call land on the same cart, like the old session. Ids are unguessable and signed: an id this
+  store never issued (say, one an agent made up) is refused. On a multi-instance deploy, pass
+  `signingKey` and a shared `storage` — the same as for sessions.
 - **Real `input_required` rounds.** `create-spending-grant`'s questions arrive as MCP's
   multi round-trip result for a client that declared `elicitation`, and the SDK's client answers
   and retries by itself (`examples/mrtr-client.mjs`). Every other client gets the same questions as
