@@ -20,7 +20,7 @@ npm install @openmobilehub/credentagent-storefront @openmobilehub/credentagent-g
 ```
 
 Apache-2.0, ESM. Two entry points: `.` (the pure pricing model, dependency-light) and
-`./server` (the runnable MCP server, brings in `@modelcontextprotocol/sdk` + `express`).
+`./server` (the runnable MCP server, brings in the MCP SDK v2 (`@modelcontextprotocol/server`) + `express`).
 
 ## Quickstart — a credential-gated storefront in ≤ 10 lines
 
@@ -107,6 +107,24 @@ const store = createStorefront({ storage: redisStorage.fromEnv() });
   session/transport lives in per-instance memory — so a **multi-instance serverless** deployment needs
   **sticky sessions** for a shopper's cart to follow them. (Orders & verification are keyed by order id
   and are unaffected.)
+
+## MCP protocol versions — 2026-07-28 and 2025, one endpoint
+
+`/mcp` serves both. A client on the **2025** revisions gets its session exactly as
+before. A client on **2026-07-28** is served per request by the SDK's `createMcpHandler` — that
+revision has no sessions — with two consequences:
+
+- **The client carries the cart.** There is no session to key a server-side cart by, and one
+  shared cart would leak one shopper's items to the next (Security invariant 4). So every cart tool
+  returns a signed `cartToken`, and the client passes it back on its next cart call and to
+  `checkout`. The token holds product ids and quantities only — prices are re-derived from the
+  catalog on every read — and an edited or forged token is refused. The widget carries it for you
+  and hands the latest one to the agent. Sign it with `signingKey` on a multi-instance deploy, or a
+  token minted on one instance is refused by the next.
+- **Real `input_required` rounds.** `create-spending-grant`'s questions arrive as MCP's
+  multi round-trip result for a client that declared `elicitation`, and the SDK's client answers
+  and retries by itself (`examples/mrtr-client.mjs`). Every other client gets the same questions as
+  tool output plus a `requestState` to echo back — sealed and checked the same way on both paths.
 
 ## Live catalog — one option, no loader
 

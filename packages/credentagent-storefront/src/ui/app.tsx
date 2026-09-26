@@ -1,11 +1,12 @@
 import type { McpUiHostContext } from "@modelcontextprotocol/ext-apps";
 import { useApp } from "@modelcontextprotocol/ext-apps/react";
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import type { CallToolResult } from "@modelcontextprotocol/server";
 import { StrictMode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { createRoot } from "react-dom/client";
 import {
   CART_META_KEY,
+  CART_TOKEN_META_KEY,
   CATALOG_META_KEY,
   priceCart,
   SAMPLE_CATALOG as CATALOG,
@@ -227,9 +228,14 @@ function orderContextMarkdown(order: CompletedOrder): string {
 // Ambient context so the agent always knows the current cart (with ids) and how
 // to drive checkout. updateModelContext replaces prior context, so this stays
 // fresh without spamming the transcript.
-function cartContextMarkdown(cart: PricedCart): string {
+function cartContextMarkdown(cart: PricedCart, cartToken?: string): string {
+  // On MCP 2026-07-28 the cart lives in a token the client carries. The user edits it here too, so
+  // the agent must always use the widget's latest token — an older one would undo their changes.
+  const token = cartToken
+    ? `\n\nThe cart lives in this cartToken — pass it VERBATIM to your next cart call or checkout (it replaces any earlier one): ${cartToken}`
+    : "";
   if (cart.lines.length === 0) {
-    return "The product picker is open. The user's cart is currently empty.";
+    return "The product picker is open. The user's cart is currently empty." + token;
   }
   const lines = cart.lines
     .map((l) => `- ${l.quantity}× ${l.name} (id: ${l.id}) — ${formatMoney(l.lineTotal, l.currency)}`)
@@ -240,7 +246,7 @@ ${lines}
 
 Total: ${formatMoney(cart.total, cart.currency)} (${cart.itemCount} item(s)).
 
-Drive the experience in chat: confirm the cart and ask whether to add more or check out. Adjust items by id with add-to-cart / set-quantity / remove-from-cart. You CANNOT place orders or take payment — for checkout, call the checkout tool to get a link and share it; the user completes the purchase on the merchant page with their own account.`;
+Drive the experience in chat: confirm the cart and ask whether to add more or check out. Adjust items by id with add-to-cart / set-quantity / remove-from-cart. You CANNOT place orders or take payment — for checkout, call the checkout tool to get a link and share it; the user completes the purchase on the merchant page with their own account.${token}`;
 }
 
 // ----- Host mode: connects to the MCP host bridge -----
@@ -263,12 +269,15 @@ function HostApp() {
   // Mirrors `cart` so setQuantity can read the current value synchronously
   // (state is async) and compute the next optimistic cart.
   const cartRef = useRef<PricedCart>(emptyCart());
+  // The signed cart a session-less (MCP 2026-07-28) connection carries; undefined on a session.
+  const cartTokenRef = useRef<string | undefined>(undefined);
 
-  const applyCart = useCallback((c: PricedCart) => {
+  const applyCart = useCallback((c: PricedCart, cartToken?: string) => {
     cartRef.current = c;
+    if (cartToken) cartTokenRef.current = cartToken;
     setCart(c);
     appRef.current
-      ?.updateModelContext({ content: [{ type: "text", text: cartContextMarkdown(c) }] })
+      ?.updateModelContext({ content: [{ type: "text", text: cartContextMarkdown(c, cartTokenRef.current) }] })
       .catch(console.error);
   }, []);
 
@@ -291,15 +300,16 @@ function HostApp() {
         const catalog = result._meta?.[CATALOG_META_KEY] as { products?: Product[] } | undefined;
         if (catalog?.products) setProducts(catalog.products);
         const metaCart = result._meta?.[CART_META_KEY] as PricedCart | undefined;
+        const metaToken = result._meta?.[CART_TOKEN_META_KEY] as string | undefined;
         if (metaCart && Array.isArray(metaCart.lines)) {
           setGrantView(null); // a shopping result flips the widget back to the picker
-          applyCart(metaCart);
+          applyCart(metaCart, metaToken);
           return;
         }
-        const parsed = parseJsonContent<PricedCart>(result);
+        const parsed = parseJsonContent<PricedCart & { cartToken?: string }>(result);
         if (parsed && Array.isArray(parsed.lines) && Array.isArray(parsed.unknownIds)) {
           setGrantView(null);
-          applyCart(parsed);
+          applyCart(parsed, parsed.cartToken);
         }
       };
       app.onhostcontextchanged = (params) => setInsets(params.safeAreaInsets);
@@ -312,12 +322,13 @@ function HostApp() {
     setConfirmedOrder(null); // editing the cart starts a new order
     setPendingCheckoutUrl(null); // …which invalidates any pending checkout link
     applyCart(withQuantity(cartRef.current, productId, quantity)); // optimistic
+    const cartToken = cartTokenRef.current;
     const result = await appRef.current.callServerTool({
       name: "set-quantity",
-      arguments: { productId, quantity },
+      arguments: { productId, quantity, ...(cartToken ? { cartToken } : {}) },
     });
-    const parsed = parseJsonContent<PricedCart>(result);
-    if (parsed) applyCart(parsed); // authoritative
+    const parsed = parseJsonContent<PricedCart & { cartToken?: string }>(result);
+    if (parsed && Array.isArray(parsed.lines)) applyCart(parsed, parsed.cartToken); // authoritative
   }, [applyCart]);
 
   // Hand off to checkout: snapshot the cart into an order (server side) and open
@@ -353,7 +364,9 @@ function HostApp() {
       if (!order || signal.cancelled) return;
       setPendingCheckoutUrl(null);
       setConfirmedOrder(order); // read-only confirmation panel in the widget
-      // The gate clears the cart server-side; refresh the badge to match.
+      // The gate clears a session's cart server-side; a carried cart is simply dropped. Refresh
+      // the badge to match.
+      cartTokenRef.current = undefined;
       const refreshed = await appRef.current?.callServerTool({ name: "get-cart", arguments: {} });
       const c = refreshed && parseJsonContent<PricedCart>(refreshed);
       if (c) applyCart(c); // applyCart pushes cart context; override with the order below

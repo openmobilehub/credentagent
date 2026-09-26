@@ -527,10 +527,13 @@ client's reply as a **doorbell only**, re-reading the record server-side instead
 answer.
 
 > **Honesty.** The seal proves *this server* minted the blob and nobody edited it in transit. It does
-> not prove a human gave the answers inside: no shipping client implements MRTR yet, so today the
-> **agent** answers on the human's behalf (`answers`, the flat fallback channel). That is why the
-> resolved purchase is still spelled out on the approve page — the human's tap is what counts.
-> Implemented here because `@modelcontextprotocol/sdk` does not ship the MRTR types yet.
+> not prove a human gave the answers inside: on a host still speaking the 2025 protocol, the
+> **agent** answers on the human's behalf (`answers`, the flat fallback channel), and even an MCP
+> 2026-07-28 client may answer by itself. That is why the resolved purchase is still spelled out on
+> the approve page — the human's tap is what counts.
+> The gate stays free of the MCP SDK: it builds the `input_required` wire shape itself, and an MCP
+> server hands it to the SDK (`inputRequired(...)` in `@modelcontextprotocol/server` v2) — see
+> `@openmobilehub/credentagent-storefront`'s `create-spending-grant`.
 ### Device-signed grants — the wallet signs the grant first (spec 012)
 
 **Approving a grant is a signature.** A grant's `approveUrl` serves a signing ceremony, and the

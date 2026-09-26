@@ -13,6 +13,8 @@ export const LOYALTY_DISCOUNT_PCT = 10;
 /** `_meta` keys the storefront tools use to embed the catalog / cart for the widget to read. */
 export const CATALOG_META_KEY = "product-picker/catalog";
 export const CART_META_KEY = "product-picker/cart";
+/** `_meta` key for the signed cart a session-less (MCP 2026-07-28) client carries — see cart-token.ts. */
+export const CART_TOKEN_META_KEY = "product-picker/cart-token";
 
 /** A product review, surfaced by `get-product-reviews`. */
 export interface Review {

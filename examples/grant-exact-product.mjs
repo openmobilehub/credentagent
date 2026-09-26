@@ -8,12 +8,11 @@
 // under claude.ai's 60s tool-call kill) and returns the moment the tap lands; its answer is only
 // a doorbell — approval is re-read from the server's own record, never taken from what the agent
 // says. That's MCP's multi round-trip request pattern:
-//   https://modelcontextprotocol.io/specification/draft/basic/patterns/mrtr
+//   https://modelcontextprotocol.io/specification/2026-07-28/basic/patterns/mrtr
 //
 //   node examples/grant-exact-product.mjs        (after: npm run build:packages)
 
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { createStorefront } from "@openmobilehub/credentagent-storefront/server";
 import { CredentAgent } from "@openmobilehub/credentagent-gate";
 

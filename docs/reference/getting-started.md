@@ -42,7 +42,7 @@ npm install @openmobilehub/credentagent-gate @openmobilehub/credentagent-storefr
 
 Both packages are Apache-2.0 and ESM. `@openmobilehub/credentagent-storefront` has two
 entry points: `.` (the pure pricing/order model, dependency-light) and `./server`
-(the runnable MCP server, which brings in `@modelcontextprotocol/sdk` + `express`).
+(the runnable MCP server, which brings in the MCP SDK v2 (`@modelcontextprotocol/server`) + `express`).
 
 ## Quickstart — a credential-gated storefront in ~10 lines
 

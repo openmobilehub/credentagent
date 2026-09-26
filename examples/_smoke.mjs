@@ -1,5 +1,4 @@
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 const c = new Client({ name: "smoke", version: "1.0.0" });
 await c.connect(new StreamableHTTPClientTransport(new URL("https://mcp-apps-1q2ox9mnt-dfzuluagas-projects.vercel.app/mcp")));
 const b = await c.callTool({ name: "browse-products", arguments: {} });
