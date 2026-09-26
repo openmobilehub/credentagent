@@ -1,5 +1,7 @@
 // Multi Round-Trip Requests (MRTR) — the MCP pattern for "I need more information before I can
-// do this", implemented here because the pinned @modelcontextprotocol/sdk does not ship it yet.
+// do this". The MCP SDK (v2) carries the wire; this module is the part it leaves to the server —
+// sealing `requestState` and deciding what to believe — and stays free of the SDK so the gate
+// does too.
 //
 //   const rounds = new MultiRoundTrip({ secret });                  // configure once
 //

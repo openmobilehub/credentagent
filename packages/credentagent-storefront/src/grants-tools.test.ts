@@ -8,8 +8,7 @@
 // in the result's `spend`.
 
 import { describe, it, expect } from "vitest";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { createStorefront } from "./server.js";
 import type { Product } from "./index.js";
 import { SAMPLE_CATALOG } from "./index.js";

@@ -65,7 +65,7 @@ export type { SimulateOptions } from "./ceremony/intent-sign/simulate.js";
 // keeps NO session between rounds and a hand-edited blob is refused, never trusted.
 //   const round = rounds.open({ request: "create-spending-grant", params, state, responses });
 //   if (!round.answers.size) return round.ask({ size: { message: "Which size?", fields: { size: { type: "string" } } } });
-// Implemented here because @modelcontextprotocol/sdk does not ship the MRTR types yet.
+// Kept free of the MCP SDK: an MCP server hands the result to the SDK's `inputRequired(...)`.
 export { MultiRoundTrip, DEFAULT_MRTR_TTL_MS } from "./mrtr.js";
 export type {
   Ask,
