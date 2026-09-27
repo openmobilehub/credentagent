@@ -420,6 +420,9 @@ describe("CT11 — page + receipt state presence-only-demo (not a real safety co
     expect(html).toContain("Close this tab to return to your agent");
     // A subtle one-shot confetti burst, skipped for reduced-motion users.
     expect(html).toContain("prefers-reduced-motion: reduce");
+    // …and a left → right whoosh + headline reveal as the banner arrives.
+    expect(html).toContain("whoosh");
+    expect(html).toContain("inset(0 100% 0 0)");
   });
 
   it("the verify receipt carries trust_level presence-only-demo", async () => {

@@ -213,6 +213,12 @@ const DESIGN_CSS = `
   .complete-banner {
     background: var(--accent); color: #fff; border-radius: 14px; padding: 22px 18px 20px;
     text-align: center; margin-bottom: 14px; box-shadow: var(--shadow);
+    position: relative; overflow: hidden;
+  }
+  /* The light streak that sweeps left → right as the banner arrives (completedViewScript). */
+  .complete-banner .whoosh {
+    position: absolute; top: 0; left: 0; width: 35%; height: 100%; pointer-events: none;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,.45), transparent);
   }
   .complete-banner .big { font-size: 1.35rem; font-weight: 800; line-height: 1.2; }
   .complete-banner .sub { font-weight: 500; font-size: .92rem; opacity: .97; margin-top: 8px; line-height: 1.5; }
@@ -368,7 +374,18 @@ export function closeWindowButton(): string {
  * phone the buyer sees "close this window" first, not a disabled button above the fold.
  */
 export function completedViewScript(): string {
-  return `(function(){document.body.classList.add("completed");var b=document.querySelector("#receipt .complete-banner");var w=document.querySelector(".wrap");if(b&&w){var h=w.querySelector(".head")||w.querySelector(".brand");if(h)h.insertAdjacentElement("afterend",b);else w.prepend(b);}var r=document.getElementById("receipt");if(r&&r.firstChild){var d=document.createElement("details");d.className="receipt-details";var s=document.createElement("summary");s.textContent="Payment details";d.appendChild(s);while(r.firstChild)d.appendChild(r.firstChild);r.appendChild(d);}window.scrollTo(0,0);if(b)requestAnimationFrame(function(){${confettiScript()}});})();`;
+  return `(function(){document.body.classList.add("completed");var b=document.querySelector("#receipt .complete-banner");var w=document.querySelector(".wrap");if(b&&w){var h=w.querySelector(".head")||w.querySelector(".brand");if(h)h.insertAdjacentElement("afterend",b);else w.prepend(b);}var r=document.getElementById("receipt");if(r&&r.firstChild){var d=document.createElement("details");d.className="receipt-details";var s=document.createElement("summary");s.textContent="Payment details";d.appendChild(s);while(r.firstChild)d.appendChild(r.firstChild);r.appendChild(d);}window.scrollTo(0,0);if(b)requestAnimationFrame(function(){${entranceScript()}});})();`;
+}
+
+/**
+ * Client-side statement: the banner's entrance (the variable `b` in `completedViewScript`).
+ * A light streak whooshes across the banner left → right, "✓ Order complete" is revealed
+ * left → right right behind it, the sub-text and Close button fade up just after, and the
+ * confetti fires as the headline lands — all in under a second. Skipped entirely under
+ * `prefers-reduced-motion` (the banner then simply appears).
+ */
+function entranceScript(): string {
+  return `if(!b.animate||matchMedia("(prefers-reduced-motion: reduce)").matches)return;var big=b.querySelector(".big");var s=document.createElement("span");s.className="whoosh";b.appendChild(s);s.animate([{transform:"translateX(-120%) skewX(-20deg)",opacity:0},{opacity:1,offset:0.2},{transform:"translateX(320%) skewX(-20deg)",opacity:0}],{duration:650,easing:"cubic-bezier(.3,.7,.3,1)",fill:"forwards"}).onfinish=function(){s.remove();};if(big)big.animate([{clipPath:"inset(0 100% 0 0)",transform:"translateX(-14px)",opacity:0.4},{clipPath:"inset(0 0 0 0)",transform:"translateX(0)",opacity:1}],{duration:520,delay:60,easing:"cubic-bezier(.2,.8,.2,1)",fill:"backwards"});[].forEach.call(b.querySelectorAll(".sub,.close-btn,.ret"),function(el,i){el.animate([{opacity:0,transform:"translateY(6px)"},{opacity:1,transform:"none"}],{duration:320,delay:420+i*70,easing:"ease-out",fill:"backwards"});});setTimeout(function(){${confettiScript()}},380);`;
 }
 
 /**
