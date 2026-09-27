@@ -405,6 +405,26 @@ describe("CT11 — page + receipt state presence-only-demo (not a real safety co
     expect(html).toContain("continue in your agent");
   });
 
+  it("on completion, switches to a finished view: banner on top, pay controls hidden", () => {
+    const order = catalog.createOrder([{ productId: "aurora-headphones", quantity: 1 }], "ORD-DONE");
+    const html = renderPasskeyPage({ order });
+    // Without this the banner rendered at the bottom of the card, under the lede and the
+    // disabled Authorize button — below the fold on a phone, so "close this window" was missed.
+    expect(html).toContain('classList.add("completed")');
+    expect(html).toContain('insertAdjacentElement("afterend",b)');
+    expect(html).toContain("body.completed .card .btn");
+    expect(html).toContain("Payment details");
+    // The close action is a real button that tries window.close(), with a fallback label.
+    expect(html).toContain('class=\\"close-btn\\"');
+    expect(html).toContain("window.close()");
+    expect(html).toContain("Close this tab to return to your agent");
+    // A subtle one-shot confetti burst, skipped for reduced-motion users.
+    expect(html).toContain("prefers-reduced-motion: reduce");
+    // …and a left → right whoosh + headline reveal as the banner arrives.
+    expect(html).toContain("whoosh");
+    expect(html).toContain("inset(0 100% 0 0)");
+  });
+
   it("the verify receipt carries trust_level presence-only-demo", async () => {
     const h = harness();
     h.seed("ORD-P", [{ id: "aurora-headphones", quantity: 1 }]);

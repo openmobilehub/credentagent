@@ -17,7 +17,7 @@
 // control; it just keeps the UI honest about what the server will refuse.
 
 import type { Branding, VerificationManifestEntry } from "../types.js";
-import { pageHead, brandHeader, progressRail, trustFooter, type RailStep } from "./theme.js";
+import { pageHead, brandHeader, progressRail, trustFooter, closeWindowButton, type RailStep } from "./theme.js";
 
 // ── Inputs ──────────────────────────────────────────────────────────────────
 
@@ -490,7 +490,7 @@ function renderPaid(paid: RenderPaid): string {
   const via = backend ? ` via ${escapeHtml(backend)}` : paid.method === "passkey" ? " via passkey" : "";
   // The order is complete — lead with the prominent handoff (close the window, the
   // agent polls order-status and continues), then the settlement proof below.
-  const banner = `<div class="complete-banner"><div class="big">✓ Order paid · ${formatMoney(paid.amount, paid.currency)}${via}</div><div class="sub">You can <strong>close this window</strong> and continue in your agent — it has your order and will pick up from here.</div></div>`;
+  const banner = `<div class="complete-banner"><div class="big">✓ Order paid · ${formatMoney(paid.amount, paid.currency)}${via}</div><div class="sub">Your agent has your order and will pick up from here. You can close this window and continue in your agent.</div>${closeWindowButton()}</div>`;
   // Render only the fragments the record actually carries. A processor settlement has a
   // txn but no chain account / explorer; an on-chain one has both — each shows what it has.
   let detail: string;

@@ -213,12 +213,44 @@ const DESIGN_CSS = `
   .complete-banner {
     background: var(--accent); color: #fff; border-radius: 14px; padding: 22px 18px 20px;
     text-align: center; margin-bottom: 14px; box-shadow: var(--shadow);
+    position: relative; overflow: hidden;
+  }
+  /* The light streak that sweeps left → right as the banner arrives (completedViewScript). */
+  .complete-banner .whoosh {
+    position: absolute; top: 0; left: 0; width: 35%; height: 100%; pointer-events: none;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,.45), transparent);
   }
   .complete-banner .big { font-size: 1.35rem; font-weight: 800; line-height: 1.2; }
   .complete-banner .sub { font-weight: 500; font-size: .92rem; opacity: .97; margin-top: 8px; line-height: 1.5; }
   .complete-banner .sub strong { font-weight: 800; }
   .complete-banner .ret { display: inline-block; margin-top: 12px; font-size: .82rem; opacity: .92; }
   .complete-banner a { color: #fff; text-decoration: underline; }
+  /* A real, high-contrast button (white on the accent banner) — the one action left. */
+  .complete-banner .close-btn {
+    display: block; width: 100%; margin-top: 16px; padding: 14px 18px; border: 0; border-radius: 12px;
+    background: #fff; color: var(--accent); font: inherit; font-weight: 800; font-size: 1.05rem;
+    cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,.15);
+  }
+  /* Fallback (the browser refused window.close()): no longer an action, just an
+     instruction — an outlined note, so it stops inviting another tap. */
+  .complete-banner .close-btn:disabled {
+    cursor: default; box-shadow: none; background: transparent; color: #fff;
+    outline: 2px solid rgba(255,255,255,.85); outline-offset: -2px;
+  }
+
+  /* The finished page (body.completed, set by completedViewScript): the handoff banner
+     leads at the top, the now-pointless pay controls go away, and the technical receipt
+     folds into "Payment details" — so "you're done, close this window" is the first and
+     loudest thing on screen instead of a banner below the fold. */
+  body.completed .wrap > .head,
+  body.completed .card .lede,
+  body.completed .card .btn,
+  body.completed .card .toggle,
+  body.completed #log,
+  body.completed .settling-bar { display: none !important; }
+  body.completed #receipt { margin-top: 0 !important; }
+  body.completed .receipt-details summary { cursor: pointer; font-size: .85rem; font-weight: 600; color: var(--muted); }
+  body.completed .receipt-details[open] summary { margin-bottom: 8px; }
 
   /* Indeterminate settling bar — shown while x402 settles on-chain (~10s). A teal
      sliver slides across a hairline track so the buyer sees the wait is live work,
@@ -321,7 +353,50 @@ export function completionHandoffBanner(returnUrl?: string): string {
   const ret = returnUrl
     ? `<a class="ret" href="${escapeHtml(returnUrl)}">Staying in the browser? Return to checkout ›</a>`
     : "";
-  return `<div class="complete-banner"><div class="big">✓ Order complete</div><div class="sub">You can <strong>close this window</strong> and continue in your agent — it has your order and will pick up from here.</div>${ret}</div>`;
+  return `<div class="complete-banner"><div class="big">✓ Order complete</div><div class="sub">Your agent has your order and will pick up from here. You can close this window and continue in your agent.</div>${closeWindowButton()}${ret ? `<div>${ret}</div>` : ""}</div>`;
+}
+
+/**
+ * The "Close this window" button on the completion banners. It tries `window.close()`;
+ * browsers only honour that for windows a script opened, so if the page is still here a
+ * moment later the button turns into a plain instruction instead of silently doing nothing.
+ */
+export function closeWindowButton(): string {
+  return `<button type="button" class="close-btn" onclick="var b=this;window.close();setTimeout(function(){b.textContent='Close this tab to return to your agent';b.disabled=true;},300)">Close this window</button>`;
+}
+
+/**
+ * Client-side statement (embed inside a pay rail's completion handler, after the receipt
+ * is rendered into `#receipt`): turn the page into a finished screen. It lifts the
+ * `.complete-banner` to the top of the page (right under the brand header), hides the pay
+ * controls via `body.completed`, folds the rest of the receipt (mandate id, gates,
+ * settlement proof) into a collapsed "Payment details", and scrolls to the top — so on a
+ * phone the buyer sees "close this window" first, not a disabled button above the fold.
+ */
+export function completedViewScript(): string {
+  return `(function(){document.body.classList.add("completed");var b=document.querySelector("#receipt .complete-banner");var w=document.querySelector(".wrap");if(b&&w){var h=w.querySelector(".head")||w.querySelector(".brand");if(h)h.insertAdjacentElement("afterend",b);else w.prepend(b);}var r=document.getElementById("receipt");if(r&&r.firstChild){var d=document.createElement("details");d.className="receipt-details";var s=document.createElement("summary");s.textContent="Payment details";d.appendChild(s);while(r.firstChild)d.appendChild(r.firstChild);r.appendChild(d);}window.scrollTo(0,0);if(b)requestAnimationFrame(function(){${entranceScript()}});})();`;
+}
+
+/**
+ * Client-side statement: the banner's entrance (the variable `b` in `completedViewScript`).
+ * A light streak whooshes across the banner left → right, "✓ Order complete" is revealed
+ * left → right right behind it, the sub-text and Close button fade up just after, and the
+ * confetti fires as the headline lands — all in under a second. Skipped entirely under
+ * `prefers-reduced-motion` (the banner then simply appears).
+ */
+function entranceScript(): string {
+  return `if(!b.animate||matchMedia("(prefers-reduced-motion: reduce)").matches)return;var big=b.querySelector(".big");var s=document.createElement("span");s.className="whoosh";b.appendChild(s);s.animate([{transform:"translateX(-120%) skewX(-20deg)",opacity:0},{opacity:1,offset:0.2},{transform:"translateX(320%) skewX(-20deg)",opacity:0}],{duration:650,easing:"cubic-bezier(.3,.7,.3,1)",fill:"forwards"}).onfinish=function(){s.remove();};if(big)big.animate([{clipPath:"inset(0 100% 0 0)",transform:"translateX(-14px)",opacity:0.4},{clipPath:"inset(0 0 0 0)",transform:"translateX(0)",opacity:1}],{duration:520,delay:60,easing:"cubic-bezier(.2,.8,.2,1)",fill:"backwards"});[].forEach.call(b.querySelectorAll(".sub,.close-btn,.ret"),function(el,i){el.animate([{opacity:0,transform:"translateY(6px)"},{opacity:1,transform:"none"}],{duration:320,delay:420+i*70,easing:"ease-out",fill:"backwards"});});setTimeout(function(){${confettiScript()}},380);`;
+}
+
+/**
+ * Client-side statement: a short, subtle confetti burst from the `.complete-banner` (the
+ * variable `b` in `completedViewScript`) — ~40 small pieces that pop up, drift down and
+ * fade out in under two seconds, then remove themselves. It only runs at the live moment
+ * of completion (never when revisiting a paid order), is skipped under
+ * `prefers-reduced-motion`, and uses the Web Animations API — no library, no CSS keyframes.
+ */
+function confettiScript(): string {
+  return `if(!b.animate||matchMedia("(prefers-reduced-motion: reduce)").matches)return;var R=b.getBoundingClientRect();var acc=getComputedStyle(document.documentElement).getPropertyValue("--accent").trim()||"#0f8a7e";var C=[acc,"#f5c451","#ff8fa3","#7dd3fc","#a7f3d0"];for(var i=0;i<40;i++){var p=document.createElement("i");var w=4+Math.random()*4;p.style.cssText="position:fixed;z-index:9999;pointer-events:none;border-radius:1px;width:"+w+"px;height:"+(w*1.6)+"px;left:"+(R.left+R.width*(0.15+Math.random()*0.7))+"px;top:"+(R.top+24)+"px;background:"+C[i%C.length];document.body.appendChild(p);var dx=(Math.random()-0.5)*180,up=-(50+Math.random()*70),down=160+Math.random()*160,rot=(Math.random()-0.5)*720;p.animate([{transform:"translate(0,0) rotate(0)",opacity:0.95},{transform:"translate("+dx*0.6+"px,"+up+"px) rotate("+rot*0.4+"deg)",opacity:0.95,offset:0.3},{transform:"translate("+dx+"px,"+down+"px) rotate("+rot+"deg)",opacity:0}],{duration:1400+Math.random()*700,delay:Math.random()*150,easing:"cubic-bezier(.2,.6,.4,1)",fill:"forwards"}).onfinish=(function(el){return function(){el.remove();};})(p);}`;
 }
 
 /**
