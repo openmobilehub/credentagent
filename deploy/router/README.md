@@ -33,9 +33,10 @@ The one thing this project runs itself (`api/ask.mjs`, logic in `lib/ask-core.mj
 `ask.test.mjs`, run by the root `npm test`). The website's chat window sends
 `{ question, context: { cartId?, orderId?, grantId? }, history? }` and gets `{ answer, tools, model, app? }`.
 
-- **Model:** Z.ai's free `glm-4.5-flash`, falling back to `glm-4.7-flash` (also free). Needs the
-  `ZAI_API_KEY` environment variable on this project (Production); without it the endpoint answers
-  `503 not_configured`.
+- **Model:** Z.ai's `glm-4.5-air` (paid, ~$0.001 a question from the account's prepaid balance), falling
+  back to the free `glm-4.5-flash` when it's overloaded or the balance runs out (logged as `1113`). A 429
+  is retried with backoff first; the fallback always keeps 8 s of the budget. Needs the `ZAI_API_KEY`
+  environment variable on this project (Production); without it the endpoint answers `503 not_configured`.
 - **Read-only by construction:** the model is offered only `browse-products`, `get-order-status`,
   `get-cart`, `list-products`, `get-product-details`, `get-product-reviews` and `get-grant-status`
   (all `readOnlyHint` on the store), called on the dev store (`/marketplace-dev`, the same store the
