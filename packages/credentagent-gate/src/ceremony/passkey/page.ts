@@ -14,7 +14,7 @@
 // order id/token (invariant 2).
 import type { CeremonyOrder } from "../types.js";
 import type { Branding } from "../../types.js";
-import { pageHead, brandHeader, orderSummaryCard, trustFooter, settlingBar, completionHandoffBanner, railCompleteScript, refusalNotices } from "../theme.js";
+import { pageHead, brandHeader, orderSummaryCard, trustFooter, settlingBar, completionHandoffBanner, railCompleteScript, completedViewScript, refusalNotices } from "../theme.js";
 
 function money(amount: number, currency: string): string {
   return new Intl.NumberFormat("en-US", { style: "currency", currency }).format(amount);
@@ -168,6 +168,7 @@ ${pageHead(`Authorize payment · ${order.id}`, extraCss, args.branding)}
         btn.disabled = true;
         btn.textContent = "Authorized ✓";
         ${railCompleteScript()}
+        ${completedViewScript()}
       }
     }
   </script>
