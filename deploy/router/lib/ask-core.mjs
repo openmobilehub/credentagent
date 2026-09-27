@@ -1,13 +1,17 @@
-// Ask AI — a tiny read-only agent that answers a visitor's questions about their order, cart and the
+// Ask AI — a tiny agent that answers a visitor's questions about their order, cart and the
 // catalog, for the website's live demo. A Z.ai GLM model (see MODELS) picks a storefront tool, the tool runs
 // against the real store, and the model answers from its result.
 //
 // Pure: every network call goes through the injected `fetch`, so the tests drive it without a server.
 // Safety controls, each covered by a test in ../ask.test.mjs:
-//   - only READ_ONLY tools are offered, and any other tool the model names is refused, never called;
+//   - only READ_ONLY tools plus the CART_EDIT tools are offered, and any other tool the model names
+//     (checkout, every grant write) is refused, never called: the AI can fill the visitor's own cart
+//     (the store refuses a forged cartId) but never check out, pay or approve — that's the visitor;
 //   - tool results are trimmed (get-cart's widget catalog made models read the catalog as the cart);
 //   - a tool that declares an MCP App (_meta.ui.resourceUri) has its result relayed to the page, which
-//     renders the app like any MCP host would — the model itself still only reads;
+//     renders the app like any MCP host would (a cart edit shows up in the open picker);
+//   - an answer claiming a cart change with no CART_EDIT call behind it gets one corrective round, then
+//     is replaced by an honest line — the chat never says the cart changed when it didn't;
 //   - at most MAX_ROUNDS tool rounds, then one final call WITHOUT tools forces a plain answer;
 //   - input is bounded (question length, id shape, history size) before anything is sent upstream;
 //   - a model that answers 429 "overloaded" is retried with BACKOFF_MS, then the next model in MODELS is
@@ -17,14 +21,35 @@
 //     refusing it) and the whole question has a DEADLINE_MS budget inside the function's 30 s limit.
 
 export const READ_ONLY = ['browse-products', 'get-order-status', 'get-cart', 'list-products', 'get-product-details', 'get-product-reviews', 'get-grant-status'];
-// Paid glm-4.5-air first ($0.20 in / $1.10 out per 1M tokens, ~$0.001 a question, from a prepaid Z.ai
-// balance — it can't overspend): in a 2026-09-27 bake-off it got 5/5 (tool choice, the picker, "add the
-// mouse", empty cart, price compare) in ~2 s, where the free glm-4.5-flash took 4-13 s and was often
-// "overloaded" (429, code 1305). The free model is the fallback, e.g. if the balance runs out (1113).
-// Dropped: glm-4.7-flash (free tier refused or held most requests) and glm-4.7-flashx (paid, but just as
-// overloaded). glm-5 also scored 5/5 with nicer wording at ~5x the price — a one-line swap here.
-export const MODELS = ['glm-4.5-air', 'glm-4.5-flash'];
-export const BACKOFF_MS = { 'glm-4.5-air': [600], 'glm-4.5-flash': [700, 1500] };   // the wait before each retry after a 429
+// The visitor's own cart, by the page's cartId: adding, changing and removing items. Checkout stays theirs.
+export const CART_EDIT = ['add-to-cart', 'set-quantity', 'remove-from-cart'];
+const ALLOWED = [...READ_ONLY, ...CART_EDIT];
+// A claimed cart change must be backed by a CART_EDIT call the store accepted in this question: small models
+// copy their earlier "Added …" / "Done — 2 mice." replies from the history without calling anything (seen
+// live on 2026-09-27). A sentence claims a change when it has a change word and no negation ("you haven't
+// added", "nothing was added" are reads); a question asks for one when it reads like an edit request.
+const CHANGE = /\b(added|removed|updated|changed|put|increased|decreased|dropped|deleted|adjusted|done)\b|\bnow in your cart\b/i;
+const NEGATION = /n't\b|\b(not|never|nothing|no|unable|cannot)\b/i;
+export function claimsCartEdit(answer) {
+  return String(answer).split(/(?<=[.!?])\s+/).some((s) => CHANGE.test(s) && !NEGATION.test(s));
+}
+export function asksCartEdit(question) {
+  return /\b(add|remove|delete|take (it |them )?(out|off)|increase|decrease)\b|\bmake it \w+|\b(set|change) .+ to\b|\bput .+ in\b|\b(empty|clear) (my|the) cart\b/i.test(question);
+}
+const ANSWERS_THE_CHECK = /no cart tool (ran|was called)|\bthe check\b/i;
+const NOT_CHANGED = 'Check: no cart tool ran for this message, so the cart has NOT changed. If I asked to change the cart, ' +
+  'call add-to-cart, set-quantity or remove-from-cart now (get ids from get-cart or list-products) and answer only after ' +
+  'it succeeds; if I didn\'t ask for a change, answer without saying the cart changed.';
+const HONEST_NO_EDIT = 'Sorry — I didn\'t change your cart just then. Ask me again, or use the picker.';
+// Paid glm-5 first ($1.00 in / $3.20 out per 1M tokens, ~$0.005 a question, from a prepaid Z.ai balance —
+// it can't overspend). Editing the cart needs it: in a 2026-09-27 live run of add / "make it 2" / add /
+// remove / what's-in-my-cart / "check out for me", glm-5 made every edit for real (7/7), while
+// glm-4.5-air ($0.20/$1.10, fine for reading: 5/5 in ~2 s) claimed edits it never made. Fallbacks:
+// glm-4.5-air when glm-5 is overloaded (429, code 1305), then the free glm-4.5-flash — which also covers
+// a spent balance (1113). Dropped: glm-4.7-flash (free tier refused or held most requests) and
+// glm-4.7-flashx (paid, but just as overloaded).
+export const MODELS = ['glm-5', 'glm-4.5-air', 'glm-4.5-flash'];
+export const BACKOFF_MS = { 'glm-5': [600], 'glm-4.5-air': [600], 'glm-4.5-flash': [700, 1500] };   // the wait before each retry after a 429
 export const FALLBACK_RESERVE_MS = 8_000;   // a model before the last isn't tried with less than this left
 // One-line descriptions for a small model — the store's own are written for large agents, and every
 // token here is resent on each call. The input schemas still come from the store.
@@ -32,6 +57,9 @@ const SHORT = {
   'browse-products': 'Show the visitor the store\'s visual product picker (the page renders it). Use it whenever they want to see, browse or shop products; pass their cartId if they have one.',
   'get-order-status': 'Status of the visitor\'s order by orderId (pending until they finish checkout; then paid, with totals).',
   'get-cart': 'The visitor\'s cart by cartId: line items, quantities, total.',
+  'add-to-cart': 'Add products to the visitor\'s cart: items [{productId, quantity}] (ids from list-products); quantities add on top.',
+  'set-quantity': 'Set the exact quantity of one product in the visitor\'s cart (0 removes it).',
+  'remove-from-cart': 'Remove one product from the visitor\'s cart.',
   'list-products': 'Catalog as data for YOU (optional query/category): ids, names, prices, age restrictions. Nothing is shown to the visitor — to show products, use browse-products.',
   'get-product-details': 'Full details for product ids (use list-products first to find an id).',
   'get-product-reviews': 'Customer reviews for product ids (use list-products first to find an id).',
@@ -40,7 +68,7 @@ const SHORT = {
 export const MAX_ROUNDS = 3;
 export const MAX_QUESTION = 500;
 export const MAX_HISTORY = 6;
-export const MODEL_TIMEOUT_MS = 10_000;   // glm-4.5-air answers in ~1-3 s, glm-4.5-flash in ~1-5 s
+export const MODEL_TIMEOUT_MS = 10_000;   // glm-5 answers in ~2-5 s, glm-4.5-air ~1-3 s, glm-4.5-flash ~1-5 s
 export const STORE_TIMEOUT_MS = 8_000;
 export const DEADLINE_MS = 25_000;        // vercel.json gives the function 30 s
 const ZAI_URL = 'https://api.z.ai/api/paas/v4/chat/completions';
@@ -75,20 +103,25 @@ export function systemPrompt(context) {
   return 'You are the help assistant for the CredentAgent demo store. Answer ONLY questions about the visitor\'s ' +
     'order, cart, the products, and spending grants, using the tools. Never invent facts: if a tool did not return it, ' +
     'say you don\'t know. Keep answers to 1-3 sentences, plain text (no markdown). When the visitor wants to see or shop ' +
-    'products, call browse-products: the page shows them the picker, so don\'t list the products in text. You cannot place orders, change the cart, approve ' +
-    'anything, or verify anyone\'s age — say so if asked; the visitor does those in the demo itself. ' +
+    'products, call browse-products: the page shows them the picker, so don\'t list the products in text. When they ask to ' +
+    'add, change or remove items, do it with add-to-cart / set-quantity / remove-from-cart (find ids with list-products; ' +
+    'add-to-cart adds on top of what is already in the cart, so pass ONLY the newly requested items); the ' +
+    'picker on their page updates, so just confirm briefly. You cannot check out, pay, approve anything or verify anyone\'s ' +
+    'age: the visitor checks out in the picker, and 21+ items ask for their wallet proof there — say so if asked. ' +
     'Always look facts up with a tool before answering about products, prices, age limits, the cart or an order — ' +
-    'never from memory. If the visitor has no cartId yet, their cart is empty (they haven\'t shopped yet); never ask ' +
+    'never from memory. Only say the cart changed if you called a cart tool for THIS message and it succeeded — earlier ' +
+    'replies in the chat are not a record of the cart. If the visitor has no cartId yet, their cart is empty (they haven\'t shopped yet); never ask ' +
     `them for an id. The visitor's ids: ${ids}. Pass them to tools when needed.`;
 }
 
-// Only what the model needs: get-cart without the widget's catalog, and no inline images anywhere.
+// Only what the model needs: cart results without the widget's catalog, and no inline images anywhere.
 export function trimResult(name, result) {
   // browse-products: the store's own note to the model ("the picker is showing … don't re-list"), not the catalog.
   const note = name === 'browse-products' && result && Array.isArray(result.content) && result.content.find((c) => c.type === 'text');
   if (note) return note.text.slice(0, 4000);
   const s = result && (result.structuredContent ?? result.content ?? result);
-  const out = name === 'get-cart' && s && s.cart ? { cart: s.cart } : s;
+  const out = name === 'get-cart' && s && s.cart ? { cart: s.cart }
+    : CART_EDIT.includes(name) && s && s.cart ? { cart: s.cart, cartId: s.cartId } : s;
   return JSON.stringify(out ?? null, (k, v) => (k === 'image' ? undefined : v)).slice(0, 4000);
 }
 
@@ -115,14 +148,14 @@ async function mcpCall(fetchImpl, storeUrl, method, params) {
   return msg.result;
 }
 
-// tools/list, filtered to READ_ONLY and shaped as OpenAI-style function tools, plus each offered tool's
+// tools/list, filtered to ALLOWED and shaped as OpenAI-style function tools, plus each offered tool's
 // MCP App (its _meta.ui.resourceUri, if it declares one). Cached per instance.
 let toolCache = null;
 export function resetToolCache() { toolCache = null; }
 async function readOnlyTools(fetchImpl, storeUrl) {
   if (toolCache) return toolCache;
   const { tools } = await mcpCall(fetchImpl, storeUrl, 'tools/list', {});
-  const offered = tools.filter((t) => READ_ONLY.includes(t.name));
+  const offered = tools.filter((t) => ALLOWED.includes(t.name));
   const ui = {};
   for (const t of offered) {
     const uri = t._meta && t._meta.ui && t._meta.ui.resourceUri;
@@ -139,7 +172,7 @@ async function readOnlyTools(fetchImpl, storeUrl) {
 
 // The store's cart tools take this conversation's cartId; a small model often drops it, so the page's id
 // fills in when the model passed none (never overriding one it did pass — the store refuses a forged id).
-const CART_TOOLS = ['browse-products', 'get-cart'];
+const CART_TOOLS = ['browse-products', 'get-cart', ...CART_EDIT];
 
 async function chat({ fetchImpl, apiKey, sleep, now, deadline, modelTimeoutMs }, messages, tools, models) {
   let lastStatus = 0;
@@ -192,7 +225,7 @@ export async function ask(input, {
   const { tools, ui } = await readOnlyTools(fetchImpl, storeUrl);
   const messages = [{ role: 'system', content: systemPrompt(context) }, ...history, { role: 'user', content: question }];
   const used = [];
-  let model, app = null, pool = models;
+  let model, app = null, pool = models, nudged = false, edited = false;   // edited: a cart edit the store accepted
   for (let round = 0; ; round++) {
     const last = round === MAX_ROUNDS;
     const reply = await chat(deps, messages, last ? null : tools, pool);
@@ -200,15 +233,23 @@ export async function ask(input, {
     pool = pool.slice(pool.indexOf(model));   // the rest of this question stays on the model that answered
     const calls = reply.message.tool_calls || [];
     if (last || !calls.length) {
-      const answer = (reply.message.content || '').trim() || 'Sorry — I couldn\'t find an answer to that.';
+      let answer = (reply.message.content || '').trim() || 'Sorry — I couldn\'t find an answer to that.';
+      if (!edited && !last && !nudged && (asksCartEdit(question) || claimsCartEdit(answer))) {
+        nudged = true;   // one corrective round: do the edit for real, or say truthfully why not
+        messages.push({ role: 'assistant', content: answer }, { role: 'user', content: NOT_CHANGED });
+        continue;
+      }
+      // A claim still unbacked (or on the last round), or the model answering the check itself: say it plainly.
+      // A truthful decline ("we don't sell laptops, so nothing was added") stands.
+      if (!edited && (claimsCartEdit(answer) || (nudged && ANSWERS_THE_CHECK.test(answer)))) answer = HONEST_NO_EDIT;
       return { answer, tools: used, model, ...(app ? { app } : {}) };
     }
     messages.push({ role: 'assistant', content: reply.message.content || '', tool_calls: calls });
     for (const c of calls) {
       const name = c.function && c.function.name;
       let content;
-      if (!READ_ONLY.includes(name)) {
-        content = JSON.stringify({ error: `${name} is not available here: this assistant is read-only.` });
+      if (!ALLOWED.includes(name)) {
+        content = JSON.stringify({ error: `${name} is not available here: you can read the store and edit the cart, but the visitor checks out themselves.` });
       } else {
         let args = {};
         try { args = JSON.parse(c.function.arguments || '{}'); } catch { args = {}; }
@@ -217,6 +258,7 @@ export async function ask(input, {
         used.push(name);
         const result = await mcpCall(fetchImpl, storeUrl, 'tools/call', { name, arguments: args });
         if (ui[name] && result && !result.isError) app = { tool: name, resourceUri: ui[name], result };
+        if (CART_EDIT.includes(name) && result && !result.isError) edited = true;
         content = trimResult(name, result);
       }
       messages.push({ role: 'tool', tool_call_id: c.id, content });

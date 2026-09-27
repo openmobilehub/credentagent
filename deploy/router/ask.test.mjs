@@ -2,7 +2,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
   ask, parseRequest, trimResult, createLimiter, originAllowed, resetToolCache,
-  READ_ONLY, MODELS, BACKOFF_MS, FALLBACK_RESERVE_MS, MAX_ROUNDS, MAX_QUESTION, AskError,
+  READ_ONLY, CART_EDIT, MODELS, BACKOFF_MS, FALLBACK_RESERVE_MS, MAX_ROUNDS, MAX_QUESTION, AskError,
 } from './lib/ask-core.mjs';
 
 const STORE = 'https://store.test/mcp';
@@ -19,7 +19,7 @@ const ALL_TOOLS = ['browse-products', 'add-to-cart', 'set-quantity', 'remove-fro
     ...(UI_TOOLS.includes(name) ? { _meta: { ui: { resourceUri: PICKER } } } : {}) }));
 
 // A fake network: the store answers tools/list + tools/call; Z.ai replies from a scripted queue.
-function world(zaiReplies, { cart } = {}) {
+function world(zaiReplies, { cart, results = {} } = {}) {
   const log = { zai: [], storeCalls: [], storeArgs: [] };
   const fetch = async (url, init) => {
     const body = JSON.parse(init.body);
@@ -28,6 +28,7 @@ function world(zaiReplies, { cart } = {}) {
       log.storeCalls.push(body.params.name);
       log.storeArgs.push(body.params.arguments);
       if (body.params.name === 'browse-products') return sse(BROWSE);
+      if (results[body.params.name]) return sse(results[body.params.name]);
       if (body.params.name === 'get-cart') return sse(cart ?? { structuredContent: { cart: { lines: [], total: 0 }, products: [{ id: 'x', name: 'Catalog item', price: 99, image: 'data:…' }] } });
       return sse({ structuredContent: { ok: true, image: 'data:big' } });
     }
@@ -56,11 +57,12 @@ describe('ask', () => {
     expect(w.log.storeCalls).toEqual(['get-order-status']);
   });
 
-  it('offers the model ONLY the read-only tools', async () => {
+  it('offers the model ONLY the read-only tools plus the cart edits — never checkout or a grant write', async () => {
     const w = world([{ content: 'Hi.' }]);
     await ask({ question: 'hello' }, opts(w));
     const offered = w.log.zai[0].tools.map((t) => t.function.name).sort();
-    expect(offered).toEqual([...READ_ONLY].sort());
+    expect(offered).toEqual([...READ_ONLY, ...CART_EDIT].sort());
+    expect(CART_EDIT.sort()).toEqual(['add-to-cart', 'remove-from-cart', 'set-quantity']);
     expect(offered).not.toContain('checkout');
     expect(offered).not.toContain('spend-from-grant');
   });
@@ -71,7 +73,7 @@ describe('ask', () => {
     expect(w.log.storeCalls).toEqual([]);
     expect(out.tools).toEqual([]);
     const toolMsg = w.log.zai[1].messages.find((m) => m.role === 'tool');
-    expect(toolMsg.content).toMatch(/read-only/);
+    expect(toolMsg.content).toMatch(/checks out themselves/);
   });
 
   it('gives the model the cart, not the widget catalog that rides along with get-cart', async () => {
@@ -114,13 +116,13 @@ describe('ask', () => {
     const fetch = async (url, init) => { if (url === STORE) t += 20_000; return w.fetch(url, init); };   // a slow store eats the budget
     const out = await ask({ question: 'hi' }, opts(w, { fetch, now: () => t }));
     expect(25_000 - 20_000).toBeLessThan(FALLBACK_RESERVE_MS);
-    expect(out.model).toBe(MODELS[1]);
-    expect(w.log.zai.map((b) => b.model)).toEqual([MODELS[1]]);
+    expect(out.model).toBe(MODELS.at(-1));
+    expect(w.log.zai.map((b) => b.model)).toEqual([MODELS.at(-1)]);
   });
 
   it('stays on the model that answered for the rest of the question (no re-trying a busy model each round)', async () => {
     const tries = BACKOFF_MS[MODELS[0]].length + 1;
-    const w = world([...Array(tries).fill(429), { content: '', tool_calls: [call('list-products')] }, { content: 'Done.' }]);
+    const w = world([...Array(tries).fill(429), { content: '', tool_calls: [call('list-products')] }, { content: 'The whiskey is $124.' }]);
     await ask({ question: 'whiskey?' }, opts(w));
     expect(w.log.zai.map((b) => b.model)).toEqual([...Array(tries).fill(MODELS[0]), MODELS[1], MODELS[1]]);
   });
@@ -147,6 +149,87 @@ describe('ask', () => {
     const toolMsg = w.log.zai[1].messages.find((m) => m.role === 'tool');
     expect(toolMsg.content).toMatch(/Do NOT re-list/);
     expect(toolMsg.content).not.toMatch(/Catalog item/);
+  });
+
+  it('refuses — never calls — a grant write the model names anyway', async () => {
+    const w = world([{ content: '', tool_calls: [call('spend-from-grant', { grantId: 'g_1' })] }, { content: 'I can\'t.' }]);
+    const out = await ask({ question: 'spend my grant' }, opts(w));
+    expect(w.log.storeCalls).toEqual([]);
+    expect(out.tools).toEqual([]);
+  });
+
+  it('edits the visitor\'s own cart: add-to-cart gets the page\'s cartId, the model sees only the cart, the picker is relayed', async () => {
+    const added = { structuredContent: { products: [{ id: 'x', name: 'Catalog item', image: 'data:…' }], cart: { lines: [{ id: 'drift-mouse', quantity: 1 }], total: 49 }, cartId: 'cart_1' } };
+    const w = world([{ content: '', tool_calls: [call('add-to-cart', { items: [{ productId: 'drift-mouse', quantity: 1 }] })] }, { content: 'Added the mouse.' }], { results: { 'add-to-cart': added } });
+    const out = await ask({ question: 'add the mouse', context: { cartId: 'cart_1' } }, opts(w));
+    expect(w.log.storeArgs).toEqual([{ items: [{ productId: 'drift-mouse', quantity: 1 }], cartId: 'cart_1' }]);
+    expect(out.app).toEqual({ tool: 'add-to-cart', resourceUri: PICKER, result: added });
+    const toolMsg = w.log.zai[1].messages.find((m) => m.role === 'tool');
+    expect(JSON.parse(toolMsg.content)).toEqual({ cart: { lines: [{ id: 'drift-mouse', quantity: 1 }], total: 49 }, cartId: 'cart_1' });
+  });
+
+  it('never lets a claimed cart change stand without a cart tool: one corrective round, then the tool runs', async () => {
+    const w = world([{ content: 'Updated your cart to have 2 mice.' },
+      { content: '', tool_calls: [call('set-quantity', { productId: 'drift-mouse', quantity: 2 })] }, { content: 'Done — 2 mice.' }]);
+    const out = await ask({ question: 'make it 2 mice', context: { cartId: 'cart_1' } }, opts(w));
+    expect(w.log.storeCalls).toEqual(['set-quantity']);
+    expect(out.answer).toBe('Done — 2 mice.');
+    expect(w.log.zai[1].messages.at(-1).content).toMatch(/NOT changed/);
+  });
+
+  it('replaces a claimed cart change with an honest line when the model still calls no tool', async () => {
+    const w = world([{ content: 'Added the whiskey to your cart.' }, { content: 'Added the whiskey to your cart.' }]);
+    const out = await ask({ question: 'add the whiskey', context: { cartId: 'cart_1' } }, opts(w));
+    expect(w.log.storeCalls).toEqual([]);
+    expect(out.answer).toMatch(/didn.t change your cart/);
+  });
+
+  it('never shows the model answering the correction itself', async () => {
+    const w = world([{ content: 'Removed the mouse from your cart.' }, { content: 'I understand. No cart tool was called, so the cart has not changed.' }]);
+    const out = await ask({ question: 'remove the mouse', context: { cartId: 'cart_1' } }, opts(w));
+    expect(out.answer).toMatch(/didn.t change your cart/);
+  });
+
+  it('catches a brief confirmation with no tool behind it ("Done — 2 mice.")', async () => {
+    const w = world([{ content: 'Done — 2 mice.' }, { content: 'Done — 2 mice.' }]);
+    const out = await ask({ question: 'what did you just do?', context: { cartId: 'cart_1' } }, opts(w));
+    expect(w.log.zai).toHaveLength(2);
+    expect(out.answer).toMatch(/didn.t change your cart/);
+  });
+
+  it('checks a cart-change request that got no edit, even when the answer claims nothing', async () => {
+    const w = world([{ content: 'Sure thing!' }, { content: '', tool_calls: [call('add-to-cart', { items: [{ productId: 'drift-mouse', quantity: 1 }] })] }, { content: 'Added.' }]);
+    const out = await ask({ question: 'add the mouse', context: { cartId: 'cart_1' } }, opts(w));
+    expect(w.log.storeCalls).toEqual(['add-to-cart']);
+    expect(out.answer).toBe('Added.');
+  });
+
+  it('keeps a truthful decline after the check (nothing to add)', async () => {
+    const w = world([{ content: 'Sure thing!' }, { content: 'We don\'t sell laptops, so nothing was added to your cart.' }]);
+    const out = await ask({ question: 'add a laptop', context: { cartId: 'cart_1' } }, opts(w));
+    expect(out.answer).toBe('We don\'t sell laptops, so nothing was added to your cart.');
+  });
+
+  it('does not count a cart tool the store rejected as an edit', async () => {
+    const w = world([{ content: '', tool_calls: [call('set-quantity', { productId: 'drift-mouse', quantity: 2 })] }, { content: 'Updated your cart.' }, { content: 'Updated your cart.' }],
+      { results: { 'set-quantity': { isError: true, content: [{ type: 'text', text: 'invalid cartId' }] } } });
+    const out = await ask({ question: 'make it 2', context: { cartId: 'cart_1' } }, opts(w));
+    expect(out.answer).toMatch(/didn.t change your cart/);
+    expect(out).not.toHaveProperty('app');
+  });
+
+  it('leaves reads alone: "Your cart has …" and "you haven\'t added"', async () => {
+    const w = world([{ content: '', tool_calls: [call('get-cart', { cartId: 'cart_1' })] }, { content: 'Your cart has 1 mouse; you haven\'t added anything else.' }]);
+    const out = await ask({ question: 'what is in my cart?', context: { cartId: 'cart_1' } }, opts(w));
+    expect(out.answer).toBe('Your cart has 1 mouse; you haven\'t added anything else.');
+    expect(w.log.zai).toHaveLength(2);
+  });
+
+  it('leaves an answer that only reads the cart alone', async () => {
+    const w = world([{ content: '', tool_calls: [call('get-cart', { cartId: 'cart_1' })] }, { content: 'Your cart is empty. You haven\'t added any items yet.' }]);
+    const out = await ask({ question: 'my cart?', context: { cartId: 'cart_1' } }, opts(w));
+    expect(out.answer).toBe('Your cart is empty. You haven\'t added any items yet.');
+    expect(w.log.zai).toHaveLength(2);
   });
 
   it('relays no app for a data-only tool', async () => {

@@ -33,20 +33,26 @@ The one thing this project runs itself (`api/ask.mjs`, logic in `lib/ask-core.mj
 `ask.test.mjs`, run by the root `npm test`). The website's chat window sends
 `{ question, context: { cartId?, orderId?, grantId? }, history? }` and gets `{ answer, tools, model, app? }`.
 
-- **Model:** Z.ai's `glm-4.5-air` (paid, ~$0.001 a question from the account's prepaid balance), falling
-  back to the free `glm-4.5-flash` when it's overloaded or the balance runs out (logged as `1113`). A 429
-  is retried with backoff first; the fallback always keeps 8 s of the budget. Needs the `ZAI_API_KEY`
-  environment variable on this project (Production); without it the endpoint answers `503 not_configured`.
-- **Read-only by construction:** the model is offered only `browse-products`, `get-order-status`,
-  `get-cart`, `list-products`, `get-product-details`, `get-product-reviews` and `get-grant-status`
-  (all `readOnlyHint` on the store), called on the dev store (`/marketplace-dev`, the same store the
-  website demo uses); any other tool it names is refused without being called. It cannot change a cart,
-  check out, or touch a grant.
+- **Model:** Z.ai's `glm-5` (paid, ~$0.005 a question from the account's prepaid balance — it can't
+  overspend), then `glm-4.5-air` if it's overloaded, then the free `glm-4.5-flash`, which also covers a
+  spent balance (logged as `1113`). A 429 is retried with backoff first; the last model always keeps 8 s of
+  the budget. `glm-5` because editing the cart needs it: `glm-4.5-air` claimed edits it never made. Needs
+  the `ZAI_API_KEY` environment variable on this project (Production); without it the endpoint answers
+  `503 not_configured`.
+- **Reads the store, edits only the cart — never checks out:** the model is offered the store's read
+  tools (`browse-products`, `get-order-status`, `get-cart`, `list-products`, `get-product-details`,
+  `get-product-reviews`, `get-grant-status`) plus the cart edits `add-to-cart`, `set-quantity` and
+  `remove-from-cart`, called on the dev store (`/marketplace-dev`, the same store the website demo uses)
+  with the visitor's own signed `cartId`. `checkout` and every grant write are refused without being
+  called: the visitor checks out in the picker, where 21+ items ask for their wallet proof.
+- **No claimed edit without a real one:** if an answer says the cart changed but no cart tool ran for that
+  question (small models copy earlier "Added …" replies from the history), the model gets one corrective
+  round; if it still calls no tool, the answer is replaced by "I didn't change your cart just then".
 - **MCP Apps:** when the model calls a tool that declares an MCP App (`_meta.ui.resourceUri`, e.g.
   `browse-products` → the product picker), the reply carries `app: { tool, resourceUri, result }` with the
-  store's full result, and the page renders that `ui://` resource as any MCP host would. Whatever the
-  visitor then does in the app (add to cart, checkout) goes page → store through the app bridge, never
-  through the model. If the model drops the cartId, the page's `context.cartId` fills it in on cart tools.
+  store's full result, and the page renders that `ui://` resource as any MCP host would (a cart edit
+  refreshes the open picker). Whatever the visitor does in the app (add to cart, checkout) goes page →
+  store through the app bridge, never through the model. If the model drops the cartId, the page's `context.cartId` fills it in on cart tools.
 - **Bounded:** questions ≤ 500 characters, ids must look like ids, the last 6 turns of history at most,
   3 tool rounds then a forced plain answer, a 10 s timeout per model call, a 25 s budget per question
   (`maxDuration` 30 s in `vercel.json`), and a best-effort 8 questions/minute per IP.
