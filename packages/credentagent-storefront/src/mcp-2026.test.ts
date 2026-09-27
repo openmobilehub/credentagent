@@ -89,6 +89,10 @@ describe("the cart a 2026-07-28 conversation keys by its cart id (no sessions, s
     const order = await call(c, "checkout", { cartId });
     expect(order.orderId).toMatch(/^ORD-/);
     expect(order.cart.total).toBe(285); // priced from the catalog: 3 × $95
+    // The checkout result hands the id back too, so a picker opened from it keeps this cart.
+    expect(order.cartId).toBe(cartId);
+    const fromMeta = (await c.callTool({ name: "checkout", arguments: { cartId } }))._meta as Record<string, unknown>;
+    expect(fromMeta["product-picker/cart-id"]).toBe(cartId);
   });
 
   it("shows the agent what the user picked in the widget — both hold the same cart id", async () => {

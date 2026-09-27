@@ -15,6 +15,7 @@ import {
   type Product,
 } from "../index";
 import styles from "./app.module.css";
+import { updateQueue } from "./update-queue";
 import { GrantCard, GRANT_VIEW_KIND, type GrantViewData, type GrantActions } from "./grants";
 
 // A grant tool result (create/get/spend/revoke) carries the GrantViewData projection, discriminated
@@ -270,6 +271,8 @@ function HostApp() {
   // This conversation's cart id on a session-less (MCP 2026-07-28) connection — issued by the tool
   // result that opened the picker, the same one the agent holds. Undefined on a 2025-era session.
   const cartIdRef = useRef<string | undefined>(undefined);
+  // Quantity changes reach the server one at a time (see update-queue.ts).
+  const enqueueRef = useRef(updateQueue());
 
   const applyCart = useCallback((c: PricedCart, cartId?: string) => {
     cartRef.current = c;
@@ -321,13 +324,17 @@ function HostApp() {
     setConfirmedOrder(null); // editing the cart starts a new order
     setPendingCheckoutUrl(null); // …which invalidates any pending checkout link
     applyCart(withQuantity(cartRef.current, productId, quantity)); // optimistic
-    const cartId = cartIdRef.current;
-    const result = await appRef.current.callServerTool({
-      name: "set-quantity",
-      arguments: { productId, quantity, ...(cartId ? { cartId } : {}) },
+    const app = appRef.current;
+    // Read the cart id when the call RUNS, not when it was clicked: the call before it may
+    // have just been issued the id.
+    const { value: result, latest } = await enqueueRef.current(() => {
+      const cartId = cartIdRef.current;
+      return app.callServerTool({ name: "set-quantity", arguments: { productId, quantity, ...(cartId ? { cartId } : {}) } });
     });
     const parsed = parseJsonContent<PricedCart & { cartId?: string }>(result);
-    if (parsed && Array.isArray(parsed.lines)) applyCart(parsed, parsed.cartId); // authoritative
+    if (!parsed || !Array.isArray(parsed.lines)) return;
+    if (latest) applyCart(parsed, parsed.cartId); // authoritative
+    else if (parsed.cartId) cartIdRef.current = parsed.cartId; // stale reply: keep the id, not the cart
   }, [applyCart]);
 
   // Hand off to checkout: snapshot the cart into an order (server side) and open
