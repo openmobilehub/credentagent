@@ -2,7 +2,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
   ask, parseRequest, trimResult, createLimiter, originAllowed, resetToolCache,
-  READ_ONLY, CART_EDIT, MODELS, BACKOFF_MS, FALLBACK_RESERVE_MS, MAX_ROUNDS, MAX_QUESTION, AskError,
+  READ_ONLY, CART_EDIT, MODELS, EDIT_MODELS, BACKOFF_MS, FALLBACK_RESERVE_MS, MAX_ROUNDS, MAX_QUESTION, AskError,
 } from './lib/ask-core.mjs';
 
 const STORE = 'https://store.test/mcp';
@@ -249,6 +249,58 @@ describe('ask', () => {
     const w = world([{ content: '', tool_calls: [call('browse-products'), call('get-cart', { cartId: 'cart_model' })] }, { content: 'ok' }]);
     await ask({ question: 'show me', context: { cartId: 'cart_page' } }, opts(w));
     expect(w.log.storeArgs).toEqual([{ cartId: 'cart_page' }, { cartId: 'cart_model' }]);
+  });
+
+  it('answers reads on the cheaper MODELS, and cart-edit requests on EDIT_MODELS (glm-5)', async () => {
+    expect(MODELS[0]).toBe('glm-4.5-air');
+    expect(EDIT_MODELS[0]).toBe('glm-5');
+    const read = world([{ content: 'Hi.' }]);
+    await ask({ question: 'what do you sell?' }, opts(read));
+    expect(read.log.zai.map((b) => b.model)).toEqual([MODELS[0]]);
+    const edit = world([{ content: '', tool_calls: [call('add-to-cart', { items: [{ productId: 'drift-mouse', quantity: 1 }] })] }, { content: 'Added.' }]);
+    await ask({ question: 'add the mouse', context: { cartId: 'cart_1' } }, opts(edit));
+    expect(edit.log.zai.map((b) => b.model)).toEqual([EDIT_MODELS[0], EDIT_MODELS[0]]);
+  });
+
+  it('escalates the corrective round to EDIT_MODELS when the cheaper model claims an edit it didn\'t make', async () => {
+    const w = world([{ content: 'Added it to your cart.' },
+      { content: '', tool_calls: [call('add-to-cart', { items: [{ productId: 'drift-mouse', quantity: 1 }] })] }, { content: 'Added.' }]);
+    const out = await ask({ question: 'yes please', context: { cartId: 'cart_1' } }, opts(w));
+    expect(w.log.zai.map((b) => b.model)).toEqual([MODELS[0], EDIT_MODELS[0], EDIT_MODELS[0]]);
+    expect(w.log.storeCalls).toEqual(['add-to-cart']);
+    expect(out.answer).toBe('Added.');
+  });
+
+  it('does not count an add the store couldn\'t match (unknownIds) as an edit', async () => {
+    const miss = { structuredContent: { cart: { lines: [], unknownIds: ['lamp'], total: 0 }, cartId: 'cart_1' } };
+    const w = world([{ content: '', tool_calls: [call('add-to-cart', { items: [{ productId: 'lamp', quantity: 1 }] })] }, { content: 'I added one lamp to your cart.' }, { content: 'I added one lamp to your cart.' }],
+      { results: { 'add-to-cart': miss } });
+    const out = await ask({ question: 'add a lamp', context: { cartId: 'cart_1' } }, opts(w));
+    expect(out.answer).toMatch(/didn.t change your cart/);
+  });
+
+  it('counts an edit whose own ids matched, even when the cart still lists an older unknown id', async () => {
+    const ok = { structuredContent: { cart: { lines: [{ id: 'drift-mouse', quantity: 2 }], unknownIds: ['mouse'], total: 98 }, cartId: 'cart_1' } };
+    const w = world([{ content: '', tool_calls: [call('set-quantity', { productId: 'drift-mouse', quantity: 2 })] }, { content: 'Updated to 2 mice in your cart.' }],
+      { results: { 'set-quantity': ok } });
+    const out = await ask({ question: 'make it 2 mice', context: { cartId: 'cart_1' } }, opts(w));
+    expect(out.answer).toBe('Updated to 2 mice in your cart.');
+    expect(w.log.zai).toHaveLength(2);
+  });
+
+  it('after the check, keeps only an explicit decline — any other reply without an edit becomes the honest line', async () => {
+    const w = world([{ content: 'Sure!' }, { content: 'Understood! I\'ll only confirm cart changes when a cart tool runs. What can I help with?' }]);
+    const out = await ask({ question: 'put the lamp in too', context: { cartId: 'cart_1' } }, opts(w));
+    expect(out.answer).toMatch(/didn.t change your cart/);
+  });
+
+  it('reads "one more / another / 2 more" as a cart-edit request', async () => {
+    for (const q of ['yes, one more lamp please', 'another mouse', 'I want 2 more']) {
+      resetToolCache();
+      const w = world([{ content: '', tool_calls: [call('add-to-cart', { items: [{ productId: 'drift-mouse', quantity: 1 }] })] }, { content: 'Added.' }]);
+      await ask({ question: q, context: { cartId: 'cart_1' } }, opts(w));
+      expect(w.log.zai[0].model).toBe(EDIT_MODELS[0]);
+    }
   });
 
   it('turns thinking off (speed) on every call', async () => {
