@@ -9,6 +9,7 @@ import {
 const STORE = 'https://store.test/mcp';
 const MODEL_URLS = Object.values(PROVIDERS).map((p) => p.url);
 const id = (i) => modelId(MODELS.at(i));   // what the request body and the answer carry
+const backoff = (m) => BACKOFF_MS[m] || DEFAULT_BACKOFF_MS;
 const PICKER = 'ui://product-picker/app.html';
 const UI_TOOLS = ['browse-products', 'add-to-cart', 'set-quantity', 'remove-from-cart', 'get-cart', 'checkout', 'create-spending-grant', 'get-grant-status', 'spend-from-grant', 'revoke-grant'];
 const BROWSE = {
@@ -96,13 +97,13 @@ describe('ask', () => {
   });
 
   it('retries a throttled model with backoff, then falls back to the next one', async () => {
-    const tries = BACKOFF_MS[MODELS[0]].length + 1;
+    const tries = backoff(MODELS[0]).length + 1;
     const waits = [];
     const w = world([...Array(tries).fill(429), { content: 'From the fallback.' }]);
     const out = await ask({ question: 'hi' }, opts(w, { sleep: async (ms) => { waits.push(ms); } }));
     expect(out.model).toBe(id(1));
     expect(w.log.zai.map((b) => b.model)).toEqual([...Array(tries).fill(id(0)), id(1)]);
-    expect(waits).toEqual(BACKOFF_MS[MODELS[0]]);
+    expect(waits).toEqual(backoff(MODELS[0]));
   });
 
   it('answers from the first model after a transient 429, without touching the fallback', async () => {
@@ -123,7 +124,7 @@ describe('ask', () => {
   });
 
   it('stays on the model that answered for the rest of the question (no re-trying a busy model each round)', async () => {
-    const tries = BACKOFF_MS[MODELS[0]].length + 1;
+    const tries = backoff(MODELS[0]).length + 1;
     const w = world([...Array(tries).fill(429), { content: '', tool_calls: [call('list-products')] }, { content: 'The whiskey is $124.' }]);
     await ask({ question: 'whiskey?' }, opts(w));
     expect(w.log.zai.map((b) => b.model)).toEqual([...Array(tries).fill(id(0)), id(1), id(1)]);
@@ -290,7 +291,7 @@ describe('ask', () => {
   });
 
   it('reports a busy AI as 503 when every model stays throttled', async () => {
-    const all = MODELS.reduce((n, m) => n + (BACKOFF_MS[m] || DEFAULT_BACKOFF_MS).length + 1, 0);
+    const all = MODELS.reduce((n, m) => n + backoff(m).length + 1, 0);
     const w = world(Array(all).fill(429));
     await expect(ask({ question: 'hi' }, opts(w))).rejects.toMatchObject({ status: 503, code: 'model_unavailable' });
   });

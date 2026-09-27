@@ -41,19 +41,20 @@ const NOT_CHANGED = 'Check: no cart tool ran for this message, so the cart has N
   'call add-to-cart, set-quantity or remove-from-cart now (get ids from get-cart or list-products) and answer only after ' +
   'it succeeds; if I didn\'t ask for a change, answer without saying the cart changed.';
 const HONEST_NO_EDIT = 'Sorry — I didn\'t change your cart just then. Ask me again, or use the picker.';
-// Paid glm-5 first ($1.00 in / $3.20 out per 1M tokens, ~$0.005 a question, from a prepaid Z.ai balance —
-// it can't overspend). Editing the cart needs it: in a 2026-09-27 live run of add / "make it 2" / add /
-// remove / what's-in-my-cart / "check out for me", glm-5 made every edit for real (7/7), while
-// glm-4.5-air ($0.20/$1.10, fine for reading: 5/5 in ~2 s) claimed edits it never made. Fallbacks:
-// glm-4.5-air when glm-5 is overloaded (429, code 1305), then the free glm-4.5-flash — which also covers
-// a spent balance (1113). Dropped: glm-4.7-flash (free tier refused or held most requests) and
-// glm-4.7-flashx (paid, but just as overloaded).
+// Nebius gpt-oss-120b first ($0.15 in / $0.60 out per 1M tokens, ~$0.0007 a question, ~1.5 s, from a prepaid
+// Nebius Token Factory balance). In a 2026-09-27 live run of the 9-turn cart conversation (picker / add / "make
+// it 2" / price / add / one more / remove / what's-in-my-cart / "check out for me"), with the store's cart
+// checked after every turn, it scored 36/36 over 4 runs; Nebius GLM-5.3-Flash also 36/36 but ~4.5 s. Failed:
+// Qwen3-235B-2507 and MiniMax-M3 (claimed edits they never made, invented a product), GLM-5.3 (2 of 4 runs
+// broke, once printing a raw <tool_call>). Then Z.ai as a second provider: glm-5 (9/9, ~4.5 s, ~$0.005 a
+// question; glm-4.5-air claimed edits it never made), and the free glm-4.5-flash, which also covers both
+// balances running out (Z.ai logs 1113). Dropped earlier: glm-4.7-flash / glm-4.7-flashx (overloaded).
 // Each entry is 'provider:model-id' (see PROVIDERS); the ASK_MODELS env var replaces the chain without a code
 // change, e.g. ASK_MODELS=nebius:zai-org/GLM-5.3-Flash,zai:glm-5,zai:glm-4.5-flash. A model whose provider has
 // no key configured is skipped.
-export const MODELS = ['zai:glm-5', 'zai:glm-4.5-air', 'zai:glm-4.5-flash'];
+export const MODELS = ['nebius:openai/gpt-oss-120b', 'nebius:zai-org/GLM-5.3-Flash', 'zai:glm-5', 'zai:glm-4.5-flash'];
 // The wait before each retry after a 429; a model not listed here gets DEFAULT_BACKOFF_MS.
-export const BACKOFF_MS = { 'zai:glm-5': [600], 'zai:glm-4.5-air': [600], 'zai:glm-4.5-flash': [700, 1500] };
+export const BACKOFF_MS = { 'zai:glm-4.5-flash': [700, 1500] };
 export const DEFAULT_BACKOFF_MS = [600];
 // OpenAI-compatible chat-completions endpoints. `env` names the key's environment variable; `extra` is merged
 // into every request body (Z.ai's `thinking` switch is Z.ai-only — others may refuse unknown fields).
@@ -92,7 +93,7 @@ const SHORT = {
 export const MAX_ROUNDS = 3;
 export const MAX_QUESTION = 500;
 export const MAX_HISTORY = 6;
-export const MODEL_TIMEOUT_MS = 10_000;   // glm-5 answers in ~2-5 s, glm-4.5-air ~1-3 s, glm-4.5-flash ~1-5 s
+export const MODEL_TIMEOUT_MS = 10_000;   // gpt-oss-120b answers in ~1-2 s, GLM-5.3-Flash / glm-5 ~2-5 s, glm-4.5-flash ~1-5 s
 export const STORE_TIMEOUT_MS = 8_000;
 export const DEADLINE_MS = 25_000;        // vercel.json gives the function 30 s
 const ID = /^[A-Za-z0-9_.:-]{1,300}$/;

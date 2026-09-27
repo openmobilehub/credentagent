@@ -33,16 +33,17 @@ The one thing this project runs itself (`api/ask.mjs`, logic in `lib/ask-core.mj
 `ask.test.mjs`, run by the root `npm test`). The website's chat window sends
 `{ question, context: { cartId?, orderId?, grantId? }, history? }` and gets `{ answer, tools, model, app? }`.
 
-- **Model:** Z.ai's `glm-5` (paid, ~$0.005 a question from the account's prepaid balance — it can't
-  overspend), then `glm-4.5-air` if it's overloaded, then the free `glm-4.5-flash`, which also covers a
-  spent balance (logged as `1113`). A 429 is retried with backoff first; the last model always keeps 8 s of
-  the budget. `glm-5` because editing the cart needs it: `glm-4.5-air` claimed edits it never made. Needs
-  the `ZAI_API_KEY` environment variable on this project (Production); without any provider key the
-  endpoint answers `503 not_configured`.
+- **Model:** Nebius Token Factory's `openai/gpt-oss-120b` (paid, ~$0.0007 a question from a prepaid
+  balance, ~1.5 s), then Nebius `zai-org/GLM-5.3-Flash`, then Z.ai's `glm-5` (a second provider), then the
+  free Z.ai `glm-4.5-flash`, which also covers spent balances. Picked in a live cart-editing bake-off
+  (36/36 over 4 runs, the store's cart checked after every turn); see the comment on `MODELS`. A 429 is
+  retried with backoff first; the last model always keeps 8 s of the budget. Needs `NEBIUS_API_KEY` and
+  `ZAI_API_KEY` on this project (Production); a missing key skips that provider's models, and with no key
+  at all the endpoint answers `503 not_configured`.
 - **Swapping models / providers:** any OpenAI-compatible provider listed in `PROVIDERS` in
   `lib/ask-core.mjs` — today `zai` (`ZAI_API_KEY`) and `nebius` (Nebius Token Factory, `NEBIUS_API_KEY`).
   Set `ASK_MODELS` on this project to a comma-separated `provider:model-id` chain, e.g.
-  `nebius:zai-org/GLM-5.3-Flash,zai:glm-5,zai:glm-4.5-flash`, and redeploy; unset, the default chain above
+  `zai:glm-5,zai:glm-4.5-flash` to go back to Z.ai only, and redeploy; unset, the default chain above
   applies. A model whose provider has no key is skipped; an unknown provider fails the function at start.
   Adding a provider is one `PROVIDERS` line (URL, key variable, any provider-only request fields).
 - **Reads the store, edits only the cart — never checks out:** the model is offered the store's read
