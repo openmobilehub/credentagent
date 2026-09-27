@@ -2,7 +2,9 @@
 // All logic lives in ../lib/ask-core.mjs (kept out of api/, where every file becomes a public function).
 import { ask, AskError, createLimiter, originAllowed } from '../lib/ask-core.mjs';
 
-const STORE_URL = process.env.ASK_STORE_MCP || 'https://credentagent-demo.vercel.app/mcp';   // what /marketplace/mcp rewrites to
+// The store the website's in-browser demo uses — Ask AI must read the same one to find the visitor's
+// cart and order. The demo runs on /marketplace-dev (library main), so that's the default here too.
+const STORE_URL = process.env.ASK_STORE_MCP || 'https://credentagent-demo-dev.vercel.app/mcp';   // what /marketplace-dev/mcp rewrites to
 const allow = createLimiter({ perMinute: 8 });
 
 export default async function handler(req, res) {

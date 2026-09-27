@@ -38,10 +38,13 @@ The one thing this project runs itself (`api/ask.mjs`, logic in `lib/ask-core.mj
   `503 not_configured`.
 - **Read-only by construction:** the model is offered only `get-order-status`, `get-cart`,
   `list-products`, `get-product-details`, `get-product-reviews` and `get-grant-status`, called on the
-  production store; any other tool it names is refused without being called. It cannot change a cart,
+  dev store (`/marketplace-dev`, the same store the website demo uses); any other tool it names is
+  refused without being called. It cannot change a cart,
   check out, or touch a grant.
 - **Bounded:** questions ≤ 500 characters, ids must look like ids, the last 6 turns of history at most,
   3 tool rounds then a forced plain answer, a 10 s timeout per model call, a 25 s budget per question
   (`maxDuration` 30 s in `vercel.json`), and a best-effort 8 questions/minute per IP.
 - **Same-origin only:** requests without an `https://credentagent.ai` (or localhost) `Origin` get 403.
-- `ASK_STORE_MCP` overrides the store it reads (default `https://credentagent-demo.vercel.app/mcp`).
+- `ASK_STORE_MCP` overrides the store it reads (default `https://credentagent-demo-dev.vercel.app/mcp`,
+  what `/marketplace-dev/mcp` rewrites to). It must match the website demo's `ENDPOINT`, or Ask AI
+  can't find the visitor's cart or order.
