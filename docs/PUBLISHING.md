@@ -47,8 +47,8 @@ path also skips the record: 0.3.0/0.3.1 shipped tagless and had to be backfilled
 3. **Verify** — watch the `publish` run go green and `npm view` show the new versions, then open
    the **quickstart catch-up PR** (bump `examples/quickstart` to the new versions): that PR's
    `quickstart-smoke` is the real post-publish check — a clean install of the PUBLISHED
-   packages — and `deployed-smoke` re-runs the same assertions against the live demo once the
-   merge deploys.
+   packages — and merging it runs the `deploy-prod` workflow, which deploys the live demo with
+   the `VERCEL_TOKEN` secret and re-runs the same assertions against it.
 
 Release notes are **public copy, written for someone who didn't follow development**: plain
 language, each feature stated by what it does for the integrator, and the honesty gate (below)

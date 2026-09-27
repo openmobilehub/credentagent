@@ -21,5 +21,7 @@ To add a route, add a `rewrites` entry mapping `/<name>/:path*` to the target or
 
 **DNS** (GoDaddy): `A @ 76.76.21.21` and `CNAME www cname.vercel-dns.com.`
 
-**Deploy:** git-connected with Root Directory `deploy/router`. By hand:
-`vercel deploy --prod --scope cbg6` from a linked copy of this folder.
+**Deploy:** the `deploy-prod` workflow deploys this project whenever `deploy/router/` changes on
+`main` (or by hand: Actions → deploy-prod → Run workflow → `router`), from the repository root
+with the project's Root Directory `deploy/router`. It then checks that `/marketplace/mcp` and
+`/marketplace-dev/mcp` answer through credentagent.ai.
