@@ -34,25 +34,44 @@ export function claimsCartEdit(answer) {
   return String(answer).split(/(?<=[.!?])\s+/).some((s) => CHANGE.test(s) && !NEGATION.test(s));
 }
 export function asksCartEdit(question) {
-  return /\b(add|remove|delete|take (it |them )?(out|off)|increase|decrease)\b|\bmake it \w+|\b(set|change) .+ to\b|\bput .+ in\b|\b(empty|clear) (my|the) cart\b/i.test(question);
+  if (/\b(add|remove|delete|take (it |them )?(out|off)|increase|decrease)\b|\bmake it \w+|\b(set|change) .+ to\b|\bput .+ in\b|\b(empty|clear) (my|the) cart\b/i.test(question)) return true;
+  // "another mouse" / "one more lamp" / "2 more" are edits — unless the visitor is asking to see or learn
+  // something ("show me another product", "tell me one more detail"), which stays on the cheaper read models.
+  return /\b(another|(one|two|three|\d+) more)\b/i.test(question)
+    && !/\b(show|tell|see|explain|describe|recommend|suggest|what|which|how|why|is|are|does|do)\b/i.test(question);
 }
-const ANSWERS_THE_CHECK = /no cart tool (ran|was called)|\bthe check\b/i;
+const ANSWERS_THE_CHECK = /\bcart tool\b|\bthe check\b|\bonly confirm\b/i;   // the model talking about the check, not the cart
+// A store answer to a cart edit that actually changed something: no error, and at least one of THIS call's
+// product ids matched. (An unknown id is not an error — it lands in cart.unknownIds while the matched lines
+// are committed; that list also keeps ids from earlier calls on the same cart, so only this call's ids count.
+// A partly matched add IS an edit: treating it as none would send the corrective round to add it again.)
+function editAccepted(result, args) {
+  if (!result || result.isError) return false;
+  const unknown = result.structuredContent && result.structuredContent.cart && result.structuredContent.cart.unknownIds;
+  if (!Array.isArray(unknown) || !unknown.length) return true;
+  const ids = Array.isArray(args.items) ? args.items.map((i) => i && i.productId) : [args.productId];
+  return ids.some((id) => !unknown.includes(id));
+}
 const NOT_CHANGED = 'Check: no cart tool ran for this message, so the cart has NOT changed. If I asked to change the cart, ' +
   'call add-to-cart, set-quantity or remove-from-cart now (get ids from get-cart or list-products) and answer only after ' +
   'it succeeds; if I didn\'t ask for a change, answer without saying the cart changed.';
 const HONEST_NO_EDIT = 'Sorry — I didn\'t change your cart just then. Ask me again, or use the picker.';
-// Nebius gpt-oss-120b first ($0.15 in / $0.60 out per 1M tokens, ~$0.0007 a question, ~1.5 s, from a prepaid
-// Nebius Token Factory balance). In a 2026-09-27 live run of the 9-turn cart conversation (picker / add / "make
-// it 2" / price / add / one more / remove / what's-in-my-cart / "check out for me"), with the store's cart
-// checked after every turn, it scored 36/36 over 4 runs; Nebius GLM-5.3-Flash also 36/36 but ~4.5 s. Failed:
-// Qwen3-235B-2507 and MiniMax-M3 (claimed edits they never made, invented a product), GLM-5.3 (2 of 4 runs
-// broke, once printing a raw <tool_call>). Then Z.ai as a second provider: glm-5 (9/9, ~4.5 s, ~$0.005 a
-// question; glm-4.5-air claimed edits it never made), and the free glm-4.5-flash, which also covers both
-// balances running out (Z.ai logs 1113). Dropped earlier: glm-4.7-flash / glm-4.7-flashx (overloaded).
-// Each entry is 'provider:model-id' (see PROVIDERS); the ASK_MODELS env var replaces the chain without a code
-// change, e.g. ASK_MODELS=nebius:zai-org/GLM-5.3-Flash,zai:glm-5,zai:glm-4.5-flash. A model whose provider has
-// no key configured is skipped.
-export const MODELS = ['nebius:openai/gpt-oss-120b', 'nebius:zai-org/GLM-5.3-Flash', 'zai:glm-5', 'zai:glm-4.5-flash'];
+// Two chains of 'provider:model-id' (see PROVIDERS), each paid from a prepaid balance (it can't overspend):
+// - MODELS, for reading (most questions), and
+// - EDIT_MODELS, for a question that asks to change the cart, and for the corrective round when an answer
+//   claims an edit no tool made.
+// Both start on Nebius gpt-oss-120b ($0.15 in / $0.60 out per 1M tokens, ~$0.0007 a question, ~1.5 s). In a
+// 2026-09-27 live run of a 9-turn cart conversation (picker / add / "make it 2" / price / add / one more /
+// remove / what's-in-my-cart / "check out for me"), with the store's cart checked after every turn, it scored
+// 36/36 over 4 runs; Nebius GLM-5.3-Flash also 36/36 but ~4.5 s. Failed: Qwen3-235B-2507 and MiniMax-M3
+// (claimed edits they never made, invented a product), GLM-5.3 (2 of 4 runs broke). Z.ai stays as a second
+// provider: glm-4.5-air ($0.20/$1.10, 5/5 on reads, but it claimed cart edits it never made — so reads only),
+// glm-5 ($1.00/$3.20, 7/7 edits), and the free glm-4.5-flash, which also covers spent balances (Z.ai 1113).
+// Dropped: glm-4.7-flash (free tier refused or held most requests), glm-4.7-flashx (paid, just as overloaded).
+// ASK_MODELS / ASK_EDIT_MODELS (comma-separated) replace a chain without a code change; a model whose
+// provider has no key configured is skipped.
+export const MODELS = ['nebius:openai/gpt-oss-120b', 'zai:glm-4.5-air', 'zai:glm-4.5-flash'];
+export const EDIT_MODELS = ['nebius:openai/gpt-oss-120b', 'nebius:zai-org/GLM-5.3-Flash', 'zai:glm-5', 'zai:glm-4.5-flash'];
 // The wait before each retry after a 429; a model not listed here gets DEFAULT_BACKOFF_MS.
 export const BACKOFF_MS = { 'zai:glm-4.5-flash': [700, 1500] };
 export const DEFAULT_BACKOFF_MS = [600];
@@ -64,11 +83,12 @@ export const PROVIDERS = {
 };
 export const providerOf = (model) => model.slice(0, model.indexOf(':'));
 export const modelId = (model) => model.slice(model.indexOf(':') + 1);
-// ASK_MODELS (comma-separated) or the default chain; an entry with an unknown provider is a config error.
-export function modelChain(env = '') {
+// A chain from an env var (comma-separated) or the given default; an entry with an unknown provider is a
+// config error, so a typo can't silently drop a model.
+export function modelChain(env = '', fallback = MODELS) {
   const list = String(env).split(',').map((m) => m.trim()).filter(Boolean);
-  const chain = list.length ? list : MODELS;
-  for (const m of chain) if (!PROVIDERS[providerOf(m)]) throw new Error(`ASK_MODELS: unknown provider in "${m}" (use ${Object.keys(PROVIDERS).join(', ')})`);
+  const chain = list.length ? list : fallback;
+  for (const m of chain) if (!PROVIDERS[providerOf(m)]) throw new Error(`unknown provider in model "${m}" (use ${Object.keys(PROVIDERS).join(', ')})`);
   return chain;
 }
 // Every provider's key from the environment: { zai: '…', nebius: '…' } (missing ones left out).
@@ -231,7 +251,7 @@ async function chat({ fetchImpl, keys, sleep, now, deadline, modelTimeoutMs }, m
         break;   // out of retries, or not a throttle: go to the next model
       }
       const body = await r.json();
-      return { model, message: body.choices[0].message };   // model: the chain entry, e.g. 'zai:glm-5'
+      return { model, message: body.choices[0].message };
     }
   }
   // 503 when throttled or out of time (nothing was called), 502 when a model failed some other way.
@@ -242,17 +262,19 @@ async function chat({ fetchImpl, keys, sleep, now, deadline, modelTimeoutMs }, m
 // it), app is the last call to a tool with an MCP App:
 // { tool, resourceUri, result } with the store's full result, for the page to render that app.
 export async function ask(input, {
-  fetch: fetchImpl, keys = {}, storeUrl, models = MODELS,
+  fetch: fetchImpl, keys = {}, storeUrl, models = MODELS, editModels = EDIT_MODELS,
   sleep = (ms) => new Promise((r) => setTimeout(r, ms)), now = () => Date.now(), modelTimeoutMs = MODEL_TIMEOUT_MS,
 }) {
-  models = models.filter((m) => keys[providerOf(m)]);   // a model without its provider's key can't be called
-  if (!models.length) throw new AskError(503, 'not_configured', 'Ask AI is not configured on this server yet.');
+  const usable = (chain) => chain.filter((m) => keys[providerOf(m)]);   // a model without its provider's key can't be called
+  models = usable(models); editModels = usable(editModels);
+  if (!models.length || !editModels.length) throw new AskError(503, 'not_configured', 'Ask AI is not configured on this server yet.');
   const { question, context, history } = parseRequest(input);
   const deps = { fetchImpl, keys, sleep, now, deadline: now() + DEADLINE_MS, modelTimeoutMs };
   const { tools, ui } = await readOnlyTools(fetchImpl, storeUrl);
   const messages = [{ role: 'system', content: systemPrompt(context) }, ...history, { role: 'user', content: question }];
   const used = [];
-  let model, app = null, pool = models, nudged = false, edited = false;   // edited: a cart edit the store accepted
+  // edited: a cart edit the store accepted. A cart-edit request starts on the stronger EDIT_MODELS.
+  let model, app = null, pool = asksCartEdit(question) ? editModels : models, nudged = false, edited = false;
   for (let round = 0; ; round++) {
     const last = round === MAX_ROUNDS;
     const reply = await chat(deps, messages, last ? null : tools, pool);
@@ -263,12 +285,14 @@ export async function ask(input, {
       let answer = (reply.message.content || '').trim() || 'Sorry — I couldn\'t find an answer to that.';
       if (!edited && !last && !nudged && (asksCartEdit(question) || claimsCartEdit(answer))) {
         nudged = true;   // one corrective round: do the edit for real, or say truthfully why not
+        pool = editModels;   // on the model that makes edits for real (a follow-up like "yes please" reads as no edit)
         messages.push({ role: 'assistant', content: answer }, { role: 'user', content: NOT_CHANGED });
         continue;
       }
       // A claim still unbacked (or on the last round), or the model answering the check itself: say it plainly.
-      // A truthful decline ("we don't sell laptops, so nothing was added") stands.
-      if (!edited && (claimsCartEdit(answer) || (nudged && ANSWERS_THE_CHECK.test(answer)))) answer = HONEST_NO_EDIT;
+      // After the check, only an explicit decline stands ("we don't sell laptops, so nothing was added"): any
+      // other reply without an edit is the model answering the check itself ("Understood! I'll only confirm…").
+      if (!edited && (claimsCartEdit(answer) || (nudged && (!NEGATION.test(answer) || ANSWERS_THE_CHECK.test(answer))))) answer = HONEST_NO_EDIT;
       return { answer, tools: used, model: modelId(model), ...(app ? { app } : {}) };
     }
     messages.push({ role: 'assistant', content: reply.message.content || '', tool_calls: calls });
@@ -285,7 +309,7 @@ export async function ask(input, {
         used.push(name);
         const result = await mcpCall(fetchImpl, storeUrl, 'tools/call', { name, arguments: args });
         if (ui[name] && result && !result.isError) app = { tool: name, resourceUri: ui[name], result };
-        if (CART_EDIT.includes(name) && result && !result.isError) edited = true;
+        if (CART_EDIT.includes(name) && editAccepted(result, args)) edited = true;
         content = trimResult(name, result);
       }
       messages.push({ role: 'tool', tool_call_id: c.id, content });

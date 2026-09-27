@@ -2,13 +2,17 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
   ask, parseRequest, trimResult, createLimiter, originAllowed, resetToolCache,
-  READ_ONLY, CART_EDIT, MODELS, BACKOFF_MS, DEFAULT_BACKOFF_MS, FALLBACK_RESERVE_MS, MAX_ROUNDS, MAX_QUESTION, AskError,
-  PROVIDERS, modelId, modelChain, keysFrom,
+  READ_ONLY, CART_EDIT, MODELS, EDIT_MODELS, BACKOFF_MS, DEFAULT_BACKOFF_MS, FALLBACK_RESERVE_MS, MAX_ROUNDS, MAX_QUESTION, AskError,
+  PROVIDERS, providerOf, modelId, modelChain, keysFrom,
 } from './lib/ask-core.mjs';
 
 const STORE = 'https://store.test/mcp';
 const MODEL_URLS = Object.values(PROVIDERS).map((p) => p.url);
-const id = (i) => modelId(MODELS.at(i));   // what the request body and the answer carry
+// The tests' own read / cart-edit chains (distinct first models, so a test can tell which chain answered);
+// the production defaults are pinned in 'model config' below.
+const R = ['zai:glm-4.5-air', 'zai:glm-4.5-flash'];
+const E = ['zai:glm-5', 'zai:glm-4.5-air', 'zai:glm-4.5-flash'];
+const rid = (i) => modelId(R.at(i)), eid = (i) => modelId(E.at(i));   // what the request body and the answer carry
 const backoff = (m) => BACKOFF_MS[m] || DEFAULT_BACKOFF_MS;
 const PICKER = 'ui://product-picker/app.html';
 const UI_TOOLS = ['browse-products', 'add-to-cart', 'set-quantity', 'remove-from-cart', 'get-cart', 'checkout', 'create-spending-grant', 'get-grant-status', 'spend-from-grant', 'revoke-grant'];
@@ -48,7 +52,7 @@ function world(zaiReplies, { cart, results = {} } = {}) {
 }
 const sse = (result) => new Response('event: message\ndata: ' + JSON.stringify({ jsonrpc: '2.0', id: 1, result }) + '\n\n', { status: 200 });
 const call = (name, args = {}) => ({ id: 'c_' + name, type: 'function', function: { name, arguments: JSON.stringify(args) } });
-const opts = (w, extra) => ({ fetch: w.fetch, keys: { zai: 'k', nebius: 'k' }, storeUrl: STORE, sleep: async () => {}, ...extra });
+const opts = (w, extra) => ({ fetch: w.fetch, keys: { zai: 'k', nebius: 'k' }, models: R, editModels: E, storeUrl: STORE, sleep: async () => {}, ...extra });
 
 beforeEach(() => resetToolCache());
 
@@ -56,7 +60,7 @@ describe('ask', () => {
   it('answers from a real read-only tool call', async () => {
     const w = world([{ content: '', tool_calls: [call('get-order-status', { orderId: 'ord_1' })] }, { content: 'It is pending.' }]);
     const out = await ask({ question: 'Has it shipped?', context: { orderId: 'ord_1' } }, opts(w));
-    expect(out).toEqual({ answer: 'It is pending.', tools: ['get-order-status'], model: id(0) });
+    expect(out).toEqual({ answer: 'It is pending.', tools: ['get-order-status'], model: rid(0) });
     expect(w.log.storeCalls).toEqual(['get-order-status']);
   });
 
@@ -97,20 +101,20 @@ describe('ask', () => {
   });
 
   it('retries a throttled model with backoff, then falls back to the next one', async () => {
-    const tries = backoff(MODELS[0]).length + 1;
+    const tries = backoff(R[0]).length + 1;
     const waits = [];
     const w = world([...Array(tries).fill(429), { content: 'From the fallback.' }]);
     const out = await ask({ question: 'hi' }, opts(w, { sleep: async (ms) => { waits.push(ms); } }));
-    expect(out.model).toBe(id(1));
-    expect(w.log.zai.map((b) => b.model)).toEqual([...Array(tries).fill(id(0)), id(1)]);
-    expect(waits).toEqual(backoff(MODELS[0]));
+    expect(out.model).toBe(rid(1));
+    expect(w.log.zai.map((b) => b.model)).toEqual([...Array(tries).fill(rid(0)), rid(1)]);
+    expect(waits).toEqual(backoff(R[0]));
   });
 
   it('answers from the first model after a transient 429, without touching the fallback', async () => {
     const w = world([429, { content: 'First answer.' }]);
     const out = await ask({ question: 'hi' }, opts(w));
-    expect(out.model).toBe(id(0));
-    expect(w.log.zai.map((b) => b.model)).toEqual([id(0), id(0)]);
+    expect(out.model).toBe(rid(0));
+    expect(w.log.zai.map((b) => b.model)).toEqual([rid(0), rid(0)]);
   });
 
   it('keeps FALLBACK_RESERVE_MS for the fallback: with less time left, the first model is skipped', async () => {
@@ -119,21 +123,21 @@ describe('ask', () => {
     const fetch = async (url, init) => { if (url === STORE) t += 20_000; return w.fetch(url, init); };   // a slow store eats the budget
     const out = await ask({ question: 'hi' }, opts(w, { fetch, now: () => t }));
     expect(25_000 - 20_000).toBeLessThan(FALLBACK_RESERVE_MS);
-    expect(out.model).toBe(id(-1));
-    expect(w.log.zai.map((b) => b.model)).toEqual([id(-1)]);
+    expect(out.model).toBe(rid(-1));
+    expect(w.log.zai.map((b) => b.model)).toEqual([rid(-1)]);
   });
 
   it('stays on the model that answered for the rest of the question (no re-trying a busy model each round)', async () => {
-    const tries = backoff(MODELS[0]).length + 1;
+    const tries = backoff(R[0]).length + 1;
     const w = world([...Array(tries).fill(429), { content: '', tool_calls: [call('list-products')] }, { content: 'The whiskey is $124.' }]);
     await ask({ question: 'whiskey?' }, opts(w));
-    expect(w.log.zai.map((b) => b.model)).toEqual([...Array(tries).fill(id(0)), id(1), id(1)]);
+    expect(w.log.zai.map((b) => b.model)).toEqual([...Array(tries).fill(rid(0)), rid(1), rid(1)]);
   });
 
   it('times out a model that holds the request, and falls back to the next model', async () => {
     const w = world(['hang', { content: 'From the fallback.' }]);
     const out = await ask({ question: 'hi' }, opts(w, { modelTimeoutMs: 20 }));
-    expect(out).toMatchObject({ answer: 'From the fallback.', model: id(1) });
+    expect(out).toMatchObject({ answer: 'From the fallback.', model: rid(1) });
   });
 
   it('gives up with 503 once the question deadline is spent, instead of running past the function limit', async () => {
@@ -254,34 +258,103 @@ describe('ask', () => {
     expect(w.log.storeArgs).toEqual([{ cartId: 'cart_page' }, { cartId: 'cart_model' }]);
   });
 
-  it('turns thinking off (speed) on every Z.ai call', async () => {
-    const w = world([{ content: 'ok' }]);
-    await ask({ question: 'hi' }, opts(w, { models: ['zai:glm-5'] }));
-    expect(w.log.zai[0].thinking).toEqual({ type: 'disabled' });
+  it('answers reads on the read chain, and cart-edit requests on the cart-edit chain', async () => {
+    const read = world([{ content: 'Hi.' }]);
+    await ask({ question: 'what do you sell?' }, opts(read));
+    expect(read.log.zai.map((b) => b.model)).toEqual([rid(0)]);
+    const edit = world([{ content: '', tool_calls: [call('add-to-cart', { items: [{ productId: 'drift-mouse', quantity: 1 }] })] }, { content: 'Added.' }]);
+    await ask({ question: 'add the mouse', context: { cartId: 'cart_1' } }, opts(edit));
+    expect(edit.log.zai.map((b) => b.model)).toEqual([eid(0), eid(0)]);
+  });
+
+  it('escalates the corrective round to the cart-edit chain when the cheaper model claims an edit it didn\'t make', async () => {
+    const w = world([{ content: 'Added it to your cart.' },
+      { content: '', tool_calls: [call('add-to-cart', { items: [{ productId: 'drift-mouse', quantity: 1 }] })] }, { content: 'Added.' }]);
+    const out = await ask({ question: 'yes please', context: { cartId: 'cart_1' } }, opts(w));
+    expect(w.log.zai.map((b) => b.model)).toEqual([rid(0), eid(0), eid(0)]);
+    expect(w.log.storeCalls).toEqual(['add-to-cart']);
+    expect(out.answer).toBe('Added.');
+  });
+
+  it('does not count an add the store couldn\'t match (unknownIds) as an edit', async () => {
+    const miss = { structuredContent: { cart: { lines: [], unknownIds: ['lamp'], total: 0 }, cartId: 'cart_1' } };
+    const w = world([{ content: '', tool_calls: [call('add-to-cart', { items: [{ productId: 'lamp', quantity: 1 }] })] }, { content: 'I added one lamp to your cart.' }, { content: 'I added one lamp to your cart.' }],
+      { results: { 'add-to-cart': miss } });
+    const out = await ask({ question: 'add a lamp', context: { cartId: 'cart_1' } }, opts(w));
+    expect(out.answer).toMatch(/didn.t change your cart/);
+  });
+
+  it('counts an edit whose own ids matched, even when the cart still lists an older unknown id', async () => {
+    const ok = { structuredContent: { cart: { lines: [{ id: 'drift-mouse', quantity: 2 }], unknownIds: ['mouse'], total: 98 }, cartId: 'cart_1' } };
+    const w = world([{ content: '', tool_calls: [call('set-quantity', { productId: 'drift-mouse', quantity: 2 })] }, { content: 'Updated to 2 mice in your cart.' }],
+      { results: { 'set-quantity': ok } });
+    const out = await ask({ question: 'make it 2 mice', context: { cartId: 'cart_1' } }, opts(w));
+    expect(out.answer).toBe('Updated to 2 mice in your cart.');
+    expect(w.log.zai).toHaveLength(2);
+  });
+
+  it('counts a partly matched multi-item add as an edit (the store commits the matched lines)', async () => {
+    const part = { structuredContent: { cart: { lines: [{ id: 'drift-mouse', quantity: 1 }], unknownIds: ['lamp'], total: 49 }, cartId: 'cart_1' } };
+    const w = world([{ content: '', tool_calls: [call('add-to-cart', { items: [{ productId: 'drift-mouse', quantity: 1 }, { productId: 'lamp', quantity: 1 }] })] },
+      { content: 'Added the mouse to your cart; I couldn\'t find "lamp".' }], { results: { 'add-to-cart': part } });
+    const out = await ask({ question: 'add the mouse and the lamp', context: { cartId: 'cart_1' } }, opts(w));
+    expect(w.log.storeCalls).toEqual(['add-to-cart']);   // no corrective round, so no duplicate add
+    expect(out.answer).toBe('Added the mouse to your cart; I couldn\'t find "lamp".');
+  });
+
+  it('keeps "another" / "one more" catalog questions on the cheaper read models', async () => {
+    for (const q of ['show me another product', 'tell me one more detail about the lamp', 'what is another option?']) {
+      resetToolCache();
+      const w = world([{ content: 'Here you go.' }]);
+      await ask({ question: q }, opts(w));
+      expect(w.log.zai[0].model).toBe(rid(0));
+    }
+  });
+
+  it('after the check, keeps only an explicit decline — any other reply without an edit becomes the honest line', async () => {
+    const w = world([{ content: 'Sure!' }, { content: 'Understood! I\'ll only confirm cart changes when a cart tool runs. What can I help with?' }]);
+    const out = await ask({ question: 'put the lamp in too', context: { cartId: 'cart_1' } }, opts(w));
+    expect(out.answer).toMatch(/didn.t change your cart/);
+  });
+
+  it('reads "one more / another / 2 more" as a cart-edit request', async () => {
+    for (const q of ['yes, one more lamp please', 'another mouse', 'I want 2 more']) {
+      resetToolCache();
+      const w = world([{ content: '', tool_calls: [call('add-to-cart', { items: [{ productId: 'drift-mouse', quantity: 1 }] })] }, { content: 'Added.' }]);
+      await ask({ question: q, context: { cartId: 'cart_1' } }, opts(w));
+      expect(w.log.zai[0].model).toBe(eid(0));
+    }
   });
 
   it('sends a Nebius model to Nebius with the Nebius key and the bare model id, without Z.ai-only fields', async () => {
     const w = world([{ content: 'ok' }]);
-    const out = await ask({ question: 'hi' }, opts(w, { models: ['nebius:zai-org/GLM-5.3-Flash'], keys: { zai: 'kz', nebius: 'kn' } }));
+    const out = await ask({ question: 'hi' }, opts(w, { models: ['nebius:openai/gpt-oss-120b'], keys: { zai: 'kz', nebius: 'kn' } }));
     expect(w.log.urls).toEqual([PROVIDERS.nebius.url]);
     expect(w.log.auth).toEqual(['Bearer kn']);
-    expect(w.log.zai[0].model).toBe('zai-org/GLM-5.3-Flash');
+    expect(w.log.zai[0].model).toBe('openai/gpt-oss-120b');
     expect(w.log.zai[0]).not.toHaveProperty('thinking');
-    expect(out.model).toBe('zai-org/GLM-5.3-Flash');
+    expect(out.model).toBe('openai/gpt-oss-120b');
   });
 
   it('falls back across providers: a throttled Nebius model hands over to Z.ai', async () => {
     const w = world([...Array(DEFAULT_BACKOFF_MS.length + 1).fill(429), { content: 'From Z.ai.' }]);
-    const out = await ask({ question: 'hi' }, opts(w, { models: ['nebius:Qwen/Qwen3-235B-A22B-Instruct-2507', 'zai:glm-4.5-flash'] }));
+    const out = await ask({ question: 'hi' }, opts(w, { models: ['nebius:openai/gpt-oss-120b', 'zai:glm-4.5-flash'] }));
     expect(out).toMatchObject({ answer: 'From Z.ai.', model: 'glm-4.5-flash' });
     expect(w.log.urls.at(-1)).toBe(PROVIDERS.zai.url);
   });
 
-  it('skips a model whose provider has no key configured', async () => {
-    const w = world([{ content: 'ok' }]);
-    const out = await ask({ question: 'hi' }, opts(w, { models: ['nebius:openai/gpt-oss-120b', 'zai:glm-5'], keys: { zai: 'k' } }));
+  it('skips a model whose provider has no key configured, in both chains', async () => {
+    const w = world([{ content: '', tool_calls: [call('add-to-cart', { items: [{ productId: 'drift-mouse', quantity: 1 }] })] }, { content: 'Added.' }]);
+    const out = await ask({ question: 'add the mouse', context: { cartId: 'cart_1' } },
+      opts(w, { models: ['nebius:openai/gpt-oss-120b', 'zai:glm-4.5-air'], editModels: ['nebius:openai/gpt-oss-120b', 'zai:glm-5'], keys: { zai: 'k' } }));
     expect(out.model).toBe('glm-5');
-    expect(w.log.urls).toEqual([PROVIDERS.zai.url]);
+    expect(w.log.urls).toEqual([PROVIDERS.zai.url, PROVIDERS.zai.url]);
+  });
+
+  it('turns thinking off (speed) on every Z.ai call', async () => {
+    const w = world([{ content: 'ok' }]);
+    await ask({ question: 'hi' }, opts(w));
+    expect(w.log.zai[0].thinking).toEqual({ type: 'disabled' });
   });
 
   it('says 503 not_configured without a key, before any network call', async () => {
@@ -291,7 +364,7 @@ describe('ask', () => {
   });
 
   it('reports a busy AI as 503 when every model stays throttled', async () => {
-    const all = MODELS.reduce((n, m) => n + backoff(m).length + 1, 0);
+    const all = R.reduce((n, m) => n + backoff(m).length + 1, 0);
     const w = world(Array(all).fill(429));
     await expect(ask({ question: 'hi' }, opts(w))).rejects.toMatchObject({ status: 503, code: 'model_unavailable' });
   });
@@ -341,9 +414,17 @@ describe('originAllowed', () => {
 });
 
 describe('model config', () => {
-  it('ASK_MODELS replaces the default chain; empty means the default', () => {
+  it('defaults: both chains start on Nebius gpt-oss-120b, with Z.ai (ending on the free glm-4.5-flash) behind it', () => {
+    expect(MODELS[0]).toBe('nebius:openai/gpt-oss-120b');
+    expect(EDIT_MODELS[0]).toBe('nebius:openai/gpt-oss-120b');
+    expect(MODELS.at(-1)).toBe('zai:glm-4.5-flash');
+    expect(EDIT_MODELS.at(-1)).toBe('zai:glm-4.5-flash');
+    expect(EDIT_MODELS).not.toContain('zai:glm-4.5-air');   // it claimed cart edits it never made
+    for (const m of [...MODELS, ...EDIT_MODELS]) expect(PROVIDERS[providerOf(m)]).toBeDefined();
+  });
+  it('an env chain replaces the default; empty means the default', () => {
     expect(modelChain(' nebius:zai-org/GLM-5.3-Flash , zai:glm-5 ')).toEqual(['nebius:zai-org/GLM-5.3-Flash', 'zai:glm-5']);
-    expect(modelChain('')).toEqual(MODELS);
+    expect(modelChain('', EDIT_MODELS)).toEqual(EDIT_MODELS);
     expect(modelChain(undefined)).toEqual(MODELS);
   });
   it('refuses an entry with an unknown or missing provider (a typo must not silently drop a model)', () => {
