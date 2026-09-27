@@ -2,11 +2,13 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
   ask, parseRequest, trimResult, createLimiter, originAllowed, resetToolCache,
-  READ_ONLY, CART_EDIT, MODELS, BACKOFF_MS, FALLBACK_RESERVE_MS, MAX_ROUNDS, MAX_QUESTION, AskError,
+  READ_ONLY, CART_EDIT, MODELS, BACKOFF_MS, DEFAULT_BACKOFF_MS, FALLBACK_RESERVE_MS, MAX_ROUNDS, MAX_QUESTION, AskError,
+  PROVIDERS, modelId, modelChain, keysFrom,
 } from './lib/ask-core.mjs';
 
 const STORE = 'https://store.test/mcp';
-const ZAI = 'https://api.z.ai/api/paas/v4/chat/completions';
+const MODEL_URLS = Object.values(PROVIDERS).map((p) => p.url);
+const id = (i) => modelId(MODELS.at(i));   // what the request body and the answer carry
 const PICKER = 'ui://product-picker/app.html';
 const UI_TOOLS = ['browse-products', 'add-to-cart', 'set-quantity', 'remove-from-cart', 'get-cart', 'checkout', 'create-spending-grant', 'get-grant-status', 'spend-from-grant', 'revoke-grant'];
 const BROWSE = {
@@ -18,9 +20,9 @@ const ALL_TOOLS = ['browse-products', 'add-to-cart', 'set-quantity', 'remove-fro
   .map((name) => ({ name, description: name, inputSchema: { type: 'object', properties: {} },
     ...(UI_TOOLS.includes(name) ? { _meta: { ui: { resourceUri: PICKER } } } : {}) }));
 
-// A fake network: the store answers tools/list + tools/call; Z.ai replies from a scripted queue.
+// A fake network: the store answers tools/list + tools/call; every model provider replies from one scripted queue.
 function world(zaiReplies, { cart, results = {} } = {}) {
-  const log = { zai: [], storeCalls: [], storeArgs: [] };
+  const log = { zai: [], urls: [], auth: [], storeCalls: [], storeArgs: [] };
   const fetch = async (url, init) => {
     const body = JSON.parse(init.body);
     if (url === STORE) {
@@ -32,8 +34,8 @@ function world(zaiReplies, { cart, results = {} } = {}) {
       if (body.params.name === 'get-cart') return sse(cart ?? { structuredContent: { cart: { lines: [], total: 0 }, products: [{ id: 'x', name: 'Catalog item', price: 99, image: 'data:…' }] } });
       return sse({ structuredContent: { ok: true, image: 'data:big' } });
     }
-    if (url === ZAI) {
-      log.zai.push(body);
+    if (MODEL_URLS.includes(url)) {
+      log.zai.push(body); log.urls.push(url); log.auth.push(init.headers.authorization);
       const next = zaiReplies.shift();
       if (next === 'hang') return new Promise((_, reject) => init.signal.addEventListener('abort', () => reject(init.signal.reason)));
       if (typeof next === 'number') return new Response('{}', { status: next });
@@ -45,7 +47,7 @@ function world(zaiReplies, { cart, results = {} } = {}) {
 }
 const sse = (result) => new Response('event: message\ndata: ' + JSON.stringify({ jsonrpc: '2.0', id: 1, result }) + '\n\n', { status: 200 });
 const call = (name, args = {}) => ({ id: 'c_' + name, type: 'function', function: { name, arguments: JSON.stringify(args) } });
-const opts = (w, extra) => ({ fetch: w.fetch, apiKey: 'k', storeUrl: STORE, sleep: async () => {}, ...extra });
+const opts = (w, extra) => ({ fetch: w.fetch, keys: { zai: 'k', nebius: 'k' }, storeUrl: STORE, sleep: async () => {}, ...extra });
 
 beforeEach(() => resetToolCache());
 
@@ -53,7 +55,7 @@ describe('ask', () => {
   it('answers from a real read-only tool call', async () => {
     const w = world([{ content: '', tool_calls: [call('get-order-status', { orderId: 'ord_1' })] }, { content: 'It is pending.' }]);
     const out = await ask({ question: 'Has it shipped?', context: { orderId: 'ord_1' } }, opts(w));
-    expect(out).toEqual({ answer: 'It is pending.', tools: ['get-order-status'], model: MODELS[0] });
+    expect(out).toEqual({ answer: 'It is pending.', tools: ['get-order-status'], model: id(0) });
     expect(w.log.storeCalls).toEqual(['get-order-status']);
   });
 
@@ -98,16 +100,16 @@ describe('ask', () => {
     const waits = [];
     const w = world([...Array(tries).fill(429), { content: 'From the fallback.' }]);
     const out = await ask({ question: 'hi' }, opts(w, { sleep: async (ms) => { waits.push(ms); } }));
-    expect(out.model).toBe(MODELS[1]);
-    expect(w.log.zai.map((b) => b.model)).toEqual([...Array(tries).fill(MODELS[0]), MODELS[1]]);
+    expect(out.model).toBe(id(1));
+    expect(w.log.zai.map((b) => b.model)).toEqual([...Array(tries).fill(id(0)), id(1)]);
     expect(waits).toEqual(BACKOFF_MS[MODELS[0]]);
   });
 
   it('answers from the first model after a transient 429, without touching the fallback', async () => {
     const w = world([429, { content: 'First answer.' }]);
     const out = await ask({ question: 'hi' }, opts(w));
-    expect(out.model).toBe(MODELS[0]);
-    expect(w.log.zai.map((b) => b.model)).toEqual([MODELS[0], MODELS[0]]);
+    expect(out.model).toBe(id(0));
+    expect(w.log.zai.map((b) => b.model)).toEqual([id(0), id(0)]);
   });
 
   it('keeps FALLBACK_RESERVE_MS for the fallback: with less time left, the first model is skipped', async () => {
@@ -116,21 +118,21 @@ describe('ask', () => {
     const fetch = async (url, init) => { if (url === STORE) t += 20_000; return w.fetch(url, init); };   // a slow store eats the budget
     const out = await ask({ question: 'hi' }, opts(w, { fetch, now: () => t }));
     expect(25_000 - 20_000).toBeLessThan(FALLBACK_RESERVE_MS);
-    expect(out.model).toBe(MODELS.at(-1));
-    expect(w.log.zai.map((b) => b.model)).toEqual([MODELS.at(-1)]);
+    expect(out.model).toBe(id(-1));
+    expect(w.log.zai.map((b) => b.model)).toEqual([id(-1)]);
   });
 
   it('stays on the model that answered for the rest of the question (no re-trying a busy model each round)', async () => {
     const tries = BACKOFF_MS[MODELS[0]].length + 1;
     const w = world([...Array(tries).fill(429), { content: '', tool_calls: [call('list-products')] }, { content: 'The whiskey is $124.' }]);
     await ask({ question: 'whiskey?' }, opts(w));
-    expect(w.log.zai.map((b) => b.model)).toEqual([...Array(tries).fill(MODELS[0]), MODELS[1], MODELS[1]]);
+    expect(w.log.zai.map((b) => b.model)).toEqual([...Array(tries).fill(id(0)), id(1), id(1)]);
   });
 
   it('times out a model that holds the request, and falls back to the next model', async () => {
     const w = world(['hang', { content: 'From the fallback.' }]);
     const out = await ask({ question: 'hi' }, opts(w, { modelTimeoutMs: 20 }));
-    expect(out).toMatchObject({ answer: 'From the fallback.', model: MODELS[1] });
+    expect(out).toMatchObject({ answer: 'From the fallback.', model: id(1) });
   });
 
   it('gives up with 503 once the question deadline is spent, instead of running past the function limit', async () => {
@@ -251,20 +253,44 @@ describe('ask', () => {
     expect(w.log.storeArgs).toEqual([{ cartId: 'cart_page' }, { cartId: 'cart_model' }]);
   });
 
-  it('turns thinking off (speed) on every call', async () => {
+  it('turns thinking off (speed) on every Z.ai call', async () => {
     const w = world([{ content: 'ok' }]);
-    await ask({ question: 'hi' }, opts(w));
+    await ask({ question: 'hi' }, opts(w, { models: ['zai:glm-5'] }));
     expect(w.log.zai[0].thinking).toEqual({ type: 'disabled' });
+  });
+
+  it('sends a Nebius model to Nebius with the Nebius key and the bare model id, without Z.ai-only fields', async () => {
+    const w = world([{ content: 'ok' }]);
+    const out = await ask({ question: 'hi' }, opts(w, { models: ['nebius:zai-org/GLM-5.3-Flash'], keys: { zai: 'kz', nebius: 'kn' } }));
+    expect(w.log.urls).toEqual([PROVIDERS.nebius.url]);
+    expect(w.log.auth).toEqual(['Bearer kn']);
+    expect(w.log.zai[0].model).toBe('zai-org/GLM-5.3-Flash');
+    expect(w.log.zai[0]).not.toHaveProperty('thinking');
+    expect(out.model).toBe('zai-org/GLM-5.3-Flash');
+  });
+
+  it('falls back across providers: a throttled Nebius model hands over to Z.ai', async () => {
+    const w = world([...Array(DEFAULT_BACKOFF_MS.length + 1).fill(429), { content: 'From Z.ai.' }]);
+    const out = await ask({ question: 'hi' }, opts(w, { models: ['nebius:Qwen/Qwen3-235B-A22B-Instruct-2507', 'zai:glm-4.5-flash'] }));
+    expect(out).toMatchObject({ answer: 'From Z.ai.', model: 'glm-4.5-flash' });
+    expect(w.log.urls.at(-1)).toBe(PROVIDERS.zai.url);
+  });
+
+  it('skips a model whose provider has no key configured', async () => {
+    const w = world([{ content: 'ok' }]);
+    const out = await ask({ question: 'hi' }, opts(w, { models: ['nebius:openai/gpt-oss-120b', 'zai:glm-5'], keys: { zai: 'k' } }));
+    expect(out.model).toBe('glm-5');
+    expect(w.log.urls).toEqual([PROVIDERS.zai.url]);
   });
 
   it('says 503 not_configured without a key, before any network call', async () => {
     const w = world([]);
-    await expect(ask({ question: 'hi' }, opts(w, { apiKey: '' }))).rejects.toMatchObject({ status: 503, code: 'not_configured' });
+    await expect(ask({ question: 'hi' }, opts(w, { keys: {} }))).rejects.toMatchObject({ status: 503, code: 'not_configured' });
     expect(w.log.zai).toEqual([]);
   });
 
   it('reports a busy AI as 503 when every model stays throttled', async () => {
-    const all = MODELS.reduce((n, m) => n + (BACKOFF_MS[m] || []).length + 1, 0);
+    const all = MODELS.reduce((n, m) => n + (BACKOFF_MS[m] || DEFAULT_BACKOFF_MS).length + 1, 0);
     const w = world(Array(all).fill(429));
     await expect(ask({ question: 'hi' }, opts(w))).rejects.toMatchObject({ status: 503, code: 'model_unavailable' });
   });
@@ -310,5 +336,21 @@ describe('originAllowed', () => {
     expect(originAllowed('https://evil.example')).toBe(false);
     expect(originAllowed('https://credentagent.ai.evil.example')).toBe(false);
     expect(originAllowed(undefined)).toBe(false);
+  });
+});
+
+describe('model config', () => {
+  it('ASK_MODELS replaces the default chain; empty means the default', () => {
+    expect(modelChain(' nebius:zai-org/GLM-5.3-Flash , zai:glm-5 ')).toEqual(['nebius:zai-org/GLM-5.3-Flash', 'zai:glm-5']);
+    expect(modelChain('')).toEqual(MODELS);
+    expect(modelChain(undefined)).toEqual(MODELS);
+  });
+  it('refuses an entry with an unknown or missing provider (a typo must not silently drop a model)', () => {
+    expect(() => modelChain('openai:gpt-6-luna')).toThrow(/unknown provider/);
+    expect(() => modelChain('glm-5')).toThrow(/unknown provider/);
+  });
+  it('reads each provider\'s key from its env var, leaving out missing ones', () => {
+    expect(keysFrom({ ZAI_API_KEY: 'a', NEBIUS_API_KEY: '' })).toEqual({ zai: 'a' });
+    expect(keysFrom({ ZAI_API_KEY: 'a', NEBIUS_API_KEY: 'b' })).toEqual({ zai: 'a', nebius: 'b' });
   });
 });

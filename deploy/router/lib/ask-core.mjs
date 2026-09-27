@@ -1,5 +1,5 @@
 // Ask AI — a tiny agent that answers a visitor's questions about their order, cart and the
-// catalog, for the website's live demo. A Z.ai GLM model (see MODELS) picks a storefront tool, the tool runs
+// catalog, for the website's live demo. A model (see MODELS and PROVIDERS) picks a storefront tool, the tool runs
 // against the real store, and the model answers from its result.
 //
 // Pure: every network call goes through the injected `fetch`, so the tests drive it without a server.
@@ -48,8 +48,32 @@ const HONEST_NO_EDIT = 'Sorry — I didn\'t change your cart just then. Ask me a
 // glm-4.5-air when glm-5 is overloaded (429, code 1305), then the free glm-4.5-flash — which also covers
 // a spent balance (1113). Dropped: glm-4.7-flash (free tier refused or held most requests) and
 // glm-4.7-flashx (paid, but just as overloaded).
-export const MODELS = ['glm-5', 'glm-4.5-air', 'glm-4.5-flash'];
-export const BACKOFF_MS = { 'glm-5': [600], 'glm-4.5-air': [600], 'glm-4.5-flash': [700, 1500] };   // the wait before each retry after a 429
+// Each entry is 'provider:model-id' (see PROVIDERS); the ASK_MODELS env var replaces the chain without a code
+// change, e.g. ASK_MODELS=nebius:zai-org/GLM-5.3-Flash,zai:glm-5,zai:glm-4.5-flash. A model whose provider has
+// no key configured is skipped.
+export const MODELS = ['zai:glm-5', 'zai:glm-4.5-air', 'zai:glm-4.5-flash'];
+// The wait before each retry after a 429; a model not listed here gets DEFAULT_BACKOFF_MS.
+export const BACKOFF_MS = { 'zai:glm-5': [600], 'zai:glm-4.5-air': [600], 'zai:glm-4.5-flash': [700, 1500] };
+export const DEFAULT_BACKOFF_MS = [600];
+// OpenAI-compatible chat-completions endpoints. `env` names the key's environment variable; `extra` is merged
+// into every request body (Z.ai's `thinking` switch is Z.ai-only — others may refuse unknown fields).
+export const PROVIDERS = {
+  zai: { url: 'https://api.z.ai/api/paas/v4/chat/completions', env: 'ZAI_API_KEY', extra: { thinking: { type: 'disabled' } } },
+  nebius: { url: 'https://api.tokenfactory.nebius.com/v1/chat/completions', env: 'NEBIUS_API_KEY' },
+};
+export const providerOf = (model) => model.slice(0, model.indexOf(':'));
+export const modelId = (model) => model.slice(model.indexOf(':') + 1);
+// ASK_MODELS (comma-separated) or the default chain; an entry with an unknown provider is a config error.
+export function modelChain(env = '') {
+  const list = String(env).split(',').map((m) => m.trim()).filter(Boolean);
+  const chain = list.length ? list : MODELS;
+  for (const m of chain) if (!PROVIDERS[providerOf(m)]) throw new Error(`ASK_MODELS: unknown provider in "${m}" (use ${Object.keys(PROVIDERS).join(', ')})`);
+  return chain;
+}
+// Every provider's key from the environment: { zai: '…', nebius: '…' } (missing ones left out).
+export function keysFrom(env) {
+  return Object.fromEntries(Object.entries(PROVIDERS).map(([p, c]) => [p, env[c.env]]).filter(([, k]) => k));
+}
 export const FALLBACK_RESERVE_MS = 8_000;   // a model before the last isn't tried with less than this left
 // One-line descriptions for a small model — the store's own are written for large agents, and every
 // token here is resent on each call. The input schemas still come from the store.
@@ -71,7 +95,6 @@ export const MAX_HISTORY = 6;
 export const MODEL_TIMEOUT_MS = 10_000;   // glm-5 answers in ~2-5 s, glm-4.5-air ~1-3 s, glm-4.5-flash ~1-5 s
 export const STORE_TIMEOUT_MS = 8_000;
 export const DEADLINE_MS = 25_000;        // vercel.json gives the function 30 s
-const ZAI_URL = 'https://api.z.ai/api/paas/v4/chat/completions';
 const ID = /^[A-Za-z0-9_.:-]{1,300}$/;
 
 export class AskError extends Error {
@@ -174,21 +197,22 @@ async function readOnlyTools(fetchImpl, storeUrl) {
 // fills in when the model passed none (never overriding one it did pass — the store refuses a forged id).
 const CART_TOOLS = ['browse-products', 'get-cart', ...CART_EDIT];
 
-async function chat({ fetchImpl, apiKey, sleep, now, deadline, modelTimeoutMs }, messages, tools, models) {
+async function chat({ fetchImpl, keys, sleep, now, deadline, modelTimeoutMs }, messages, tools, models) {
   let lastStatus = 0;
   for (const model of models) {
-    const waits = BACKOFF_MS[model] || [];
+    const waits = BACKOFF_MS[model] || DEFAULT_BACKOFF_MS;
+    const provider = PROVIDERS[providerOf(model)];
     const floor = model === models[models.length - 1] ? 1000 : FALLBACK_RESERVE_MS;
     for (let attempt = 0; attempt <= waits.length; attempt++) {
       const left = deadline - now();
       if (left < floor) break;
       let r;
       try {
-        r = await fetchImpl(ZAI_URL, {
+        r = await fetchImpl(provider.url, {
           method: 'POST',
-          headers: { 'content-type': 'application/json', authorization: 'Bearer ' + apiKey },
+          headers: { 'content-type': 'application/json', authorization: 'Bearer ' + keys[providerOf(model)] },
           body: JSON.stringify({
-            model, messages, thinking: { type: 'disabled' }, max_tokens: 400, temperature: 0.2,
+            model: modelId(model), messages, max_tokens: 400, temperature: 0.2, ...provider.extra,
             ...(tools ? { tools, tool_choice: 'auto' } : {}),
           }),
           signal: AbortSignal.timeout(Math.min(modelTimeoutMs, left)),
@@ -200,28 +224,30 @@ async function chat({ fetchImpl, apiKey, sleep, now, deadline, modelTimeoutMs },
       }
       lastStatus = r.status;
       if (!r.ok) {
-        // Visible in the function logs: 1305 = overloaded, 1113 = the prepaid balance ran out (top up at z.ai).
+        // Visible in the function logs. Z.ai: 1305 = overloaded, 1113 = the prepaid balance ran out (top up at z.ai).
         console.warn('ask: %s answered %d %s', model, r.status, (await r.text().catch(() => '')).slice(0, 160));
         if (r.status === 429 && attempt < waits.length) { await sleep(waits[attempt]); continue; }
         break;   // out of retries, or not a throttle: go to the next model
       }
       const body = await r.json();
-      return { model, message: body.choices[0].message };
+      return { model, message: body.choices[0].message };   // model: the chain entry, e.g. 'zai:glm-5'
     }
   }
   // 503 when throttled or out of time (nothing was called), 502 when a model failed some other way.
   throw new AskError(lastStatus === 429 || lastStatus === 0 ? 503 : 502, 'model_unavailable', 'The AI is busy right now — try again in a moment.');
 }
 
-// The whole agent: returns { answer, tools, model, app? } — app is the last call to a tool with an MCP App:
+// The whole agent: returns { answer, tools, model, app? } — model is the bare id that answered (the page shows
+// it), app is the last call to a tool with an MCP App:
 // { tool, resourceUri, result } with the store's full result, for the page to render that app.
 export async function ask(input, {
-  fetch: fetchImpl, apiKey, storeUrl, models = MODELS,
+  fetch: fetchImpl, keys = {}, storeUrl, models = MODELS,
   sleep = (ms) => new Promise((r) => setTimeout(r, ms)), now = () => Date.now(), modelTimeoutMs = MODEL_TIMEOUT_MS,
 }) {
-  if (!apiKey) throw new AskError(503, 'not_configured', 'Ask AI is not configured on this server yet.');
+  models = models.filter((m) => keys[providerOf(m)]);   // a model without its provider's key can't be called
+  if (!models.length) throw new AskError(503, 'not_configured', 'Ask AI is not configured on this server yet.');
   const { question, context, history } = parseRequest(input);
-  const deps = { fetchImpl, apiKey, sleep, now, deadline: now() + DEADLINE_MS, modelTimeoutMs };
+  const deps = { fetchImpl, keys, sleep, now, deadline: now() + DEADLINE_MS, modelTimeoutMs };
   const { tools, ui } = await readOnlyTools(fetchImpl, storeUrl);
   const messages = [{ role: 'system', content: systemPrompt(context) }, ...history, { role: 'user', content: question }];
   const used = [];
@@ -242,7 +268,7 @@ export async function ask(input, {
       // A claim still unbacked (or on the last round), or the model answering the check itself: say it plainly.
       // A truthful decline ("we don't sell laptops, so nothing was added") stands.
       if (!edited && (claimsCartEdit(answer) || (nudged && ANSWERS_THE_CHECK.test(answer)))) answer = HONEST_NO_EDIT;
-      return { answer, tools: used, model, ...(app ? { app } : {}) };
+      return { answer, tools: used, model: modelId(model), ...(app ? { app } : {}) };
     }
     messages.push({ role: 'assistant', content: reply.message.content || '', tool_calls: calls });
     for (const c of calls) {
@@ -266,8 +292,8 @@ export async function ask(input, {
   }
 }
 
-// Best-effort per-instance limiter (serverless instances don't share memory). The models are free,
-// so this protects the free-tier quota from one noisy client rather than a bill.
+// Best-effort per-instance limiter (serverless instances don't share memory): keeps one noisy client from
+// draining the prepaid balances (which cap the bill) or the free-tier quota.
 export function createLimiter({ perMinute = 8, now = () => Date.now() } = {}) {
   const hits = new Map();
   return function allow(key) {
