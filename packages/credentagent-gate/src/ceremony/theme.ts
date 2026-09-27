@@ -219,10 +219,13 @@ const DESIGN_CSS = `
   .complete-banner .sub strong { font-weight: 800; }
   .complete-banner .ret { display: inline-block; margin-top: 12px; font-size: .82rem; opacity: .92; }
   .complete-banner a { color: #fff; text-decoration: underline; }
-  .complete-banner .close-hint {
-    display: inline-block; margin-top: 14px; padding: 8px 14px; border-radius: 999px;
-    background: rgba(255,255,255,.18); font-weight: 700; font-size: .95rem;
+  /* A real, high-contrast button (white on the accent banner) — the one action left. */
+  .complete-banner .close-btn {
+    display: block; width: 100%; margin-top: 16px; padding: 14px 18px; border: 0; border-radius: 12px;
+    background: #fff; color: var(--accent); font: inherit; font-weight: 800; font-size: 1.05rem;
+    cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,.15);
   }
+  .complete-banner .close-btn:disabled { cursor: default; box-shadow: none; }
 
   /* The finished page (body.completed, set by completedViewScript): the handoff banner
      leads at the top, the now-pointless pay controls go away, and the technical receipt
@@ -339,7 +342,16 @@ export function completionHandoffBanner(returnUrl?: string): string {
   const ret = returnUrl
     ? `<a class="ret" href="${escapeHtml(returnUrl)}">Staying in the browser? Return to checkout ›</a>`
     : "";
-  return `<div class="complete-banner"><div class="big">✓ Order complete</div><div class="sub">Nothing left to do here. Your agent has your order and will pick up from here — continue in your agent.</div><div class="close-hint">You can close this window now</div>${ret ? `<div>${ret}</div>` : ""}</div>`;
+  return `<div class="complete-banner"><div class="big">✓ Order complete</div><div class="sub">Your agent has your order and will pick up from here. You can close this window and continue in your agent.</div>${closeWindowButton()}${ret ? `<div>${ret}</div>` : ""}</div>`;
+}
+
+/**
+ * The "Close this window" button on the completion banners. It tries `window.close()`;
+ * browsers only honour that for windows a script opened, so if the page is still here a
+ * moment later the button turns into a plain instruction instead of silently doing nothing.
+ */
+export function closeWindowButton(): string {
+  return `<button type="button" class="close-btn" onclick="var b=this;window.close();setTimeout(function(){b.textContent='Close this tab to return to your agent';b.disabled=true;},300)">Close this window</button>`;
 }
 
 /**

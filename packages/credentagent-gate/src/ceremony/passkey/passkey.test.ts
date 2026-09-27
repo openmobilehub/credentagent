@@ -414,6 +414,10 @@ describe("CT11 — page + receipt state presence-only-demo (not a real safety co
     expect(html).toContain('insertAdjacentElement("afterend",b)');
     expect(html).toContain("body.completed .card .btn");
     expect(html).toContain("Payment details");
+    // The close action is a real button that tries window.close(), with a fallback label.
+    expect(html).toContain('class=\\"close-btn\\"');
+    expect(html).toContain("window.close()");
+    expect(html).toContain("Close this tab to return to your agent");
   });
 
   it("the verify receipt carries trust_level presence-only-demo", async () => {
