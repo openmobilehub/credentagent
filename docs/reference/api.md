@@ -511,7 +511,7 @@ paths are unaffected.
 The storefront core — a runnable MCP shopping server (ten tools + the widget bundle +
 a checkout page), **catalog-injected**, gate-ready. Two entry points: `.` (the pure
 pricing/order model) and `./server` (the runnable server, brings in
-`@modelcontextprotocol/sdk` + `express`).
+the MCP SDK v2 (`@modelcontextprotocol/server`) + `express`).
 
 ```ts
 import { createStorefront } from "@openmobilehub/credentagent-storefront/server";

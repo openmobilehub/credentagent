@@ -20,7 +20,7 @@ npm install @openmobilehub/credentagent-storefront @openmobilehub/credentagent-g
 ```
 
 Apache-2.0, ESM. Two entry points: `.` (the pure pricing model, dependency-light) and
-`./server` (the runnable MCP server, brings in `@modelcontextprotocol/sdk` + `express`).
+`./server` (the runnable MCP server, brings in the MCP SDK v2 (`@modelcontextprotocol/server`) + `express`).
 
 ## Quickstart — a credential-gated storefront in ≤ 10 lines
 
@@ -100,13 +100,34 @@ const store = createStorefront({ storage: redisStorage.fromEnv() });
   still wins over the provider for that slot (bring any custom backend).
 - **Lean by default:** `@upstash/redis` is an **optional peer dependency**, loaded lazily only on the
   `{ url, token }` path — in-memory users never install it.
-- Order and verification state is **keyed per order id**, and the **cart is keyed per MCP session**
-  (`${namespace}:cart:${sessionId}`) — never process-global (Security invariant 4); the store persists
-  state only and is **not** a trust anchor.
-- **Per-user carts need session affinity on serverless.** Each MCP session gets its own cart, but the
-  session/transport lives in per-instance memory — so a **multi-instance serverless** deployment needs
-  **sticky sessions** for a shopper's cart to follow them. (Orders & verification are keyed by order id
-  and are unaffected.)
+- Order and verification state is **keyed per order id**, and the **cart is keyed per conversation** —
+  by the MCP session when there is one, otherwise by a cart id the store issues (see *MCP protocol
+  versions* below) — never process-global (Security invariant 4); the store persists state only and is
+  **not** a trust anchor.
+- **Multi-instance serverless: turn on `statelessMcp`.** The default transport keeps each MCP session in
+  one instance's memory, so a follow-up that lands on another instance is refused unless you have
+  **sticky sessions**. With `statelessMcp: true` there is no session to lose: each conversation's cart is
+  keyed by its cart id, and a shared `storage` makes it readable from any instance. (Orders &
+  verification are keyed by order id and are unaffected.)
+
+## MCP protocol versions — 2026-07-28 and 2025, one endpoint
+
+`/mcp` serves both. A client on the **2025** revisions gets its session exactly as
+before. A client on **2026-07-28** is served per request by the SDK's `createMcpHandler` — that
+revision has no sessions — with two consequences:
+
+- **The conversation keeps a cart id.** There is no session to key a cart by, and one shared cart
+  would leak one shopper's items to the next (Security invariant 4). So the first cart-related call
+  (usually `browse-products`, which opens the picker) issues a `cartId` and returns it — to the
+  agent **and** the widget — and every later cart call, `browse-products` and `checkout` pass it
+  back. The cart itself stays on the server under that id, so a click in the picker and the agent's
+  next call land on the same cart, like the old session. Ids are unguessable and signed: an id this
+  store never issued (say, one an agent made up) is refused. On a multi-instance deploy, pass
+  `signingKey` and a shared `storage` — the same as for sessions.
+- **Real `input_required` rounds.** `create-spending-grant`'s questions arrive as MCP's
+  multi round-trip result for a client that declared `elicitation`, and the SDK's client answers
+  and retries by itself (`examples/mrtr-client.mjs`). Every other client gets the same questions as
+  tool output plus a `requestState` to echo back — sealed and checked the same way on both paths.
 
 ## Live catalog — one option, no loader
 

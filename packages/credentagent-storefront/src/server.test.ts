@@ -4,10 +4,8 @@
 // isolation), CT9/FR-014 (the ChatGPT widget meta — widgetAccessible).
 
 import { describe, it, expect, vi } from "vitest";
+import { Client, InMemoryTransport, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import request from "supertest";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { AddressInfo } from "node:net";
 import { readFileSync } from "node:fs";
 import { createStorefront, originFromRequest, verificationRevision, bundleVersion, type Storefront, type CompletedOrderRecord } from "./server.js";

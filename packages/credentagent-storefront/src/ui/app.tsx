@@ -1,11 +1,12 @@
 import type { McpUiHostContext } from "@modelcontextprotocol/ext-apps";
 import { useApp } from "@modelcontextprotocol/ext-apps/react";
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import type { CallToolResult } from "@modelcontextprotocol/server";
 import { StrictMode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { createRoot } from "react-dom/client";
 import {
   CART_META_KEY,
+  CART_ID_META_KEY,
   CATALOG_META_KEY,
   priceCart,
   SAMPLE_CATALOG as CATALOG,
@@ -227,9 +228,12 @@ function orderContextMarkdown(order: CompletedOrder): string {
 // Ambient context so the agent always knows the current cart (with ids) and how
 // to drive checkout. updateModelContext replaces prior context, so this stays
 // fresh without spamming the transcript.
-function cartContextMarkdown(cart: PricedCart): string {
+function cartContextMarkdown(cart: PricedCart, cartId?: string): string {
+  // On MCP 2026-07-28 the cart is keyed by this conversation's cart id, which the agent already got
+  // from the tool result that opened this picker — repeated here in case it lost track of it.
+  const token = cartId ? `\n\nThis conversation's cartId (pass it on every cart call): ${cartId}` : "";
   if (cart.lines.length === 0) {
-    return "The product picker is open. The user's cart is currently empty.";
+    return "The product picker is open. The user's cart is currently empty." + token;
   }
   const lines = cart.lines
     .map((l) => `- ${l.quantity}× ${l.name} (id: ${l.id}) — ${formatMoney(l.lineTotal, l.currency)}`)
@@ -240,7 +244,7 @@ ${lines}
 
 Total: ${formatMoney(cart.total, cart.currency)} (${cart.itemCount} item(s)).
 
-Drive the experience in chat: confirm the cart and ask whether to add more or check out. Adjust items by id with add-to-cart / set-quantity / remove-from-cart. You CANNOT place orders or take payment — for checkout, call the checkout tool to get a link and share it; the user completes the purchase on the merchant page with their own account.`;
+Drive the experience in chat: confirm the cart and ask whether to add more or check out. Adjust items by id with add-to-cart / set-quantity / remove-from-cart. You CANNOT place orders or take payment — for checkout, call the checkout tool to get a link and share it; the user completes the purchase on the merchant page with their own account.${token}`;
 }
 
 // ----- Host mode: connects to the MCP host bridge -----
@@ -263,12 +267,16 @@ function HostApp() {
   // Mirrors `cart` so setQuantity can read the current value synchronously
   // (state is async) and compute the next optimistic cart.
   const cartRef = useRef<PricedCart>(emptyCart());
+  // This conversation's cart id on a session-less (MCP 2026-07-28) connection — issued by the tool
+  // result that opened the picker, the same one the agent holds. Undefined on a 2025-era session.
+  const cartIdRef = useRef<string | undefined>(undefined);
 
-  const applyCart = useCallback((c: PricedCart) => {
+  const applyCart = useCallback((c: PricedCart, cartId?: string) => {
     cartRef.current = c;
+    if (cartId) cartIdRef.current = cartId;
     setCart(c);
     appRef.current
-      ?.updateModelContext({ content: [{ type: "text", text: cartContextMarkdown(c) }] })
+      ?.updateModelContext({ content: [{ type: "text", text: cartContextMarkdown(c, cartIdRef.current) }] })
       .catch(console.error);
   }, []);
 
@@ -291,15 +299,16 @@ function HostApp() {
         const catalog = result._meta?.[CATALOG_META_KEY] as { products?: Product[] } | undefined;
         if (catalog?.products) setProducts(catalog.products);
         const metaCart = result._meta?.[CART_META_KEY] as PricedCart | undefined;
+        const metaCartId = result._meta?.[CART_ID_META_KEY] as string | undefined;
         if (metaCart && Array.isArray(metaCart.lines)) {
           setGrantView(null); // a shopping result flips the widget back to the picker
-          applyCart(metaCart);
+          applyCart(metaCart, metaCartId);
           return;
         }
-        const parsed = parseJsonContent<PricedCart>(result);
+        const parsed = parseJsonContent<PricedCart & { cartId?: string }>(result);
         if (parsed && Array.isArray(parsed.lines) && Array.isArray(parsed.unknownIds)) {
           setGrantView(null);
-          applyCart(parsed);
+          applyCart(parsed, parsed.cartId);
         }
       };
       app.onhostcontextchanged = (params) => setInsets(params.safeAreaInsets);
@@ -312,12 +321,13 @@ function HostApp() {
     setConfirmedOrder(null); // editing the cart starts a new order
     setPendingCheckoutUrl(null); // …which invalidates any pending checkout link
     applyCart(withQuantity(cartRef.current, productId, quantity)); // optimistic
+    const cartId = cartIdRef.current;
     const result = await appRef.current.callServerTool({
       name: "set-quantity",
-      arguments: { productId, quantity },
+      arguments: { productId, quantity, ...(cartId ? { cartId } : {}) },
     });
-    const parsed = parseJsonContent<PricedCart>(result);
-    if (parsed) applyCart(parsed); // authoritative
+    const parsed = parseJsonContent<PricedCart & { cartId?: string }>(result);
+    if (parsed && Array.isArray(parsed.lines)) applyCart(parsed, parsed.cartId); // authoritative
   }, [applyCart]);
 
   // Hand off to checkout: snapshot the cart into an order (server side) and open
@@ -332,7 +342,8 @@ function HostApp() {
     // Pass the on-screen cart so the order matches exactly what the user sees,
     // independent of whether prior set-quantity calls round-tripped to the server.
     const items = cartRef.current.lines.map((l) => ({ productId: l.id, quantity: l.quantity }));
-    const result = await appRef.current.callServerTool({ name: "checkout", arguments: { items } });
+    const cartId = cartIdRef.current;
+    const result = await appRef.current.callServerTool({ name: "checkout", arguments: { items, ...(cartId ? { cartId } : {}) } });
     const parsed = parseJsonContent<{ orderId?: string; checkoutUrl?: string }>(result);
     if (!parsed?.checkoutUrl) return;
     const { checkoutUrl, orderId } = parsed;
@@ -353,8 +364,10 @@ function HostApp() {
       if (!order || signal.cancelled) return;
       setPendingCheckoutUrl(null);
       setConfirmedOrder(order); // read-only confirmation panel in the widget
-      // The gate clears the cart server-side; refresh the badge to match.
-      const refreshed = await appRef.current?.callServerTool({ name: "get-cart", arguments: {} });
+      // The gate clears the cart server-side (the session's, or this conversation's cart id's);
+      // refresh the badge to match.
+      const doneCartId = cartIdRef.current;
+      const refreshed = await appRef.current?.callServerTool({ name: "get-cart", arguments: doneCartId ? { cartId: doneCartId } : {} });
       const c = refreshed && parseJsonContent<PricedCart>(refreshed);
       if (c) applyCart(c); // applyCart pushes cart context; override with the order below
       // Silent: agent knows the order without anything landing in the composer.

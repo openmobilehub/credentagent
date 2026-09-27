@@ -6,9 +6,7 @@
 // buy THAT product and nothing else. Every REFUSES/IGNORES test here is a bypass test.
 
 import { describe, it, expect } from "vitest";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
+import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { createStorefront } from "./server.js";
 import { CredentAgent } from "@openmobilehub/credentagent-gate";
 
@@ -71,15 +69,16 @@ describe("create-spending-grant — asking until the product is pinned down", ()
     expect(v2.item).toMatchObject({ productId: "court-sneakers", selections: { size: "US 10", colour: "Black" } });
   });
 
-  it("answers in the MRTR wire shape (resultType / inputRequests / requestState)", async () => {
+  it("answers a 2025-era client in tool output, even one that declared elicitation (that revision has no input_required)", async () => {
     const c = await connect(agent());
     const r = await create(c, { budget: 200, perSpend: 120, item: "sneakers" });
-    expect(r.resultType).toBe("input_required");
-    const requests = r.inputRequests as Record<string, any>;
-    expect(requests.size.method).toBe("elicitation/create");
-    expect(requests.size.params.mode).toBe("form");
-    expect(requests.size.params.requestedSchema).toMatchObject({ type: "object", required: ["size"] });
-    expect(typeof r.requestState).toBe("string");
+    expect(r.resultType).toBeUndefined();
+    expect(r.inputRequests).toBeUndefined();
+    const v = sc(r);
+    expect(v.code).toBe("input-required");
+    expect(v.questions.map((q: any) => q.key).sort()).toEqual(["colour", "size"]);
+    expect(typeof v.requestState).toBe("string");
+    // The real input_required wire shape is a 2026-07-28 answer — see mcp-2026.test.ts.
   });
 
   it("sends NO inputRequests to a client that never declared elicitation (spec requirement 7)", async () => {
@@ -110,14 +109,13 @@ describe("create-spending-grant — asking until the product is pinned down", ()
         params: {
           name: "create-spending-grant",
           arguments: { budget: 200, perSpend: 120, item: "sneakers" },
-          requestState: first.requestState,
+          requestState: sc(first).requestState,
           inputResponses: {
             size: { action: "accept", content: { size: "US 10" } },
             colour: { action: "accept", content: { colour: "Black" } },
           },
         },
       },
-      CallToolResultSchema,
     );
     expect(sc(retry as never)).toMatchObject({ status: "pending", allow: { skus: ["court-sneakers"] } });
   });
@@ -132,11 +130,10 @@ describe("create-spending-grant — asking until the product is pinned down", ()
         params: {
           name: "create-spending-grant",
           arguments: { budget: 200, perSpend: 120, item: "sneakers" },
-          requestState: first.requestState,
+          requestState: sc(first).requestState,
           inputResponses: { size: { action: "decline" }, colour: { action: "accept", content: { colour: "Black" } } },
         },
       },
-      CallToolResultSchema,
     );
     const v = sc(retry as never);
     expect(v).toMatchObject({ ok: false, code: "declined", declined: ["size"] });

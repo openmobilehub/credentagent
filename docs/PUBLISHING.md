@@ -57,7 +57,7 @@ as a real safety control.
 
 ## Optional polish (non-blocking, deferred)
 
-- `@modelcontextprotocol/sdk`, `zod`, `express` are regular `dependencies` of the storefront. They are
+- The MCP SDK v2 packages (`@modelcontextprotocol/server` / `node` / `express` / `ext-apps`), `zod`, and `express` are regular `dependencies` of the storefront. They are
   correct as-is (the storefront *is* the MCP server), but if hosts are expected to instantiate their own
   MCP SDK / zod, consider moving those to `peerDependencies` to avoid duplicate instances. Decide before
   a `1.0`.
