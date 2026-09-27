@@ -3,6 +3,7 @@
   "framework": null,
   "buildCommand": "",
   "outputDirectory": ".",
+  "functions": { "api/ask.mjs": { "maxDuration": 30 } },
   "rewrites": [
     { "source": "/", "destination": "https://openmobilehub.org/credentagent/" },
     { "source": "/marketplace-dev/:path*", "destination": "https://credentagent-demo-dev.vercel.app/:path*" },
