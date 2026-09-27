@@ -21,7 +21,8 @@ To add a route, add a `rewrites` entry mapping `/<name>/:path*` to the target or
 
 **DNS** (GoDaddy): `A @ 76.76.21.21` and `CNAME www cname.vercel-dns.com.`
 
-**Deploy:** the `deploy-prod` workflow deploys this project whenever `deploy/router/` changes on
-`main` (or by hand: Actions → deploy-prod → Run workflow → `router`), from the repository root
+**Deploy:** the `deploy-prod` workflow deploys this project (together with the demo) whenever
+`deploy/router/`, `examples/quickstart/` or the workflow itself changes on `main` (or by hand:
+Actions → deploy-prod → Run workflow → `router`), from the repository root
 with the project's Root Directory `deploy/router`. It then checks that `/marketplace/mcp` and
 `/marketplace-dev/mcp` answer through credentagent.ai.
