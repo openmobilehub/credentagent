@@ -7,18 +7,27 @@ import {
 
 const STORE = 'https://store.test/mcp';
 const ZAI = 'https://api.z.ai/api/paas/v4/chat/completions';
+const PICKER = 'ui://product-picker/app.html';
+const UI_TOOLS = ['browse-products', 'add-to-cart', 'set-quantity', 'remove-from-cart', 'get-cart', 'checkout', 'create-spending-grant', 'get-grant-status', 'spend-from-grant', 'revoke-grant'];
+const BROWSE = {
+  content: [{ type: 'text', text: 'The product picker is now showing the catalog. Do NOT re-list the products.' }],
+  structuredContent: { products: [{ id: 'x', name: 'Catalog item', price: 99, image: 'data:…' }], cart: { lines: [], total: 0 }, cartId: 'cart_signed' },
+};
 const ALL_TOOLS = ['browse-products', 'add-to-cart', 'set-quantity', 'remove-from-cart', 'get-cart', 'checkout', 'list-products',
   'get-product-details', 'get-product-reviews', 'get-order-status', 'create-spending-grant', 'get-grant-status', 'spend-from-grant', 'revoke-grant']
-  .map((name) => ({ name, description: name, inputSchema: { type: 'object', properties: {} } }));
+  .map((name) => ({ name, description: name, inputSchema: { type: 'object', properties: {} },
+    ...(UI_TOOLS.includes(name) ? { _meta: { ui: { resourceUri: PICKER } } } : {}) }));
 
 // A fake network: the store answers tools/list + tools/call; Z.ai replies from a scripted queue.
 function world(zaiReplies, { cart } = {}) {
-  const log = { zai: [], storeCalls: [] };
+  const log = { zai: [], storeCalls: [], storeArgs: [] };
   const fetch = async (url, init) => {
     const body = JSON.parse(init.body);
     if (url === STORE) {
       if (body.method === 'tools/list') return sse({ tools: ALL_TOOLS });
       log.storeCalls.push(body.params.name);
+      log.storeArgs.push(body.params.arguments);
+      if (body.params.name === 'browse-products') return sse(BROWSE);
       if (body.params.name === 'get-cart') return sse(cart ?? { structuredContent: { cart: { lines: [], total: 0 }, products: [{ id: 'x', name: 'Catalog item', price: 99, image: 'data:…' }] } });
       return sse({ structuredContent: { ok: true, image: 'data:big' } });
     }
@@ -101,6 +110,35 @@ describe('ask', () => {
     const fetch = async (url, init) => { t += 30_000; return w.fetch(url, init); };   // every upstream call "takes" 30 s
     await expect(ask({ question: 'hi' }, opts(w, { fetch, now: () => t }))).rejects.toMatchObject({ status: 503, code: 'model_unavailable' });
     expect(w.log.zai).toHaveLength(0);
+  });
+
+  it('relays a tool\'s MCP App (ui:// resource + full result) to the page, and gives the model only the store\'s note', async () => {
+    const w = world([{ content: '', tool_calls: [call('browse-products')] }, { content: 'The picker is open — pick what you like.' }]);
+    const out = await ask({ question: 'Show me the product picker' }, opts(w));
+    expect(out.app).toEqual({ tool: 'browse-products', resourceUri: PICKER, result: BROWSE });
+    expect(out.tools).toEqual(['browse-products']);
+    const toolMsg = w.log.zai[1].messages.find((m) => m.role === 'tool');
+    expect(toolMsg.content).toMatch(/Do NOT re-list/);
+    expect(toolMsg.content).not.toMatch(/Catalog item/);
+  });
+
+  it('relays no app for a data-only tool', async () => {
+    const w = world([{ content: '', tool_calls: [call('list-products')] }, { content: 'We sell things.' }]);
+    const out = await ask({ question: 'what do you sell?' }, opts(w));
+    expect(out).not.toHaveProperty('app');
+  });
+
+  it('relays no app when the tool call failed', async () => {
+    const w = world([{ content: '', tool_calls: [call('get-cart', { cartId: 'cart_1' })] }, { content: 'I couldn\'t read the cart.' }],
+      { cart: { isError: true, content: [{ type: 'text', text: 'unknown cartId' }] } });
+    const out = await ask({ question: 'my cart?', context: { cartId: 'cart_1' } }, opts(w));
+    expect(out).not.toHaveProperty('app');
+  });
+
+  it('fills in the page\'s cartId when the model drops it, and never overrides one it passed', async () => {
+    const w = world([{ content: '', tool_calls: [call('browse-products'), call('get-cart', { cartId: 'cart_model' })] }, { content: 'ok' }]);
+    await ask({ question: 'show me', context: { cartId: 'cart_page' } }, opts(w));
+    expect(w.log.storeArgs).toEqual([{ cartId: 'cart_page' }, { cartId: 'cart_model' }]);
   });
 
   it('turns thinking off (speed) on every call', async () => {

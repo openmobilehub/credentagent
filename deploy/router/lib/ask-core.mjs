@@ -6,22 +6,25 @@
 // Safety controls, each covered by a test in ../ask.test.mjs:
 //   - only READ_ONLY tools are offered, and any other tool the model names is refused, never called;
 //   - tool results are trimmed (get-cart's widget catalog made models read the catalog as the cart);
+//   - a tool that declares an MCP App (_meta.ui.resourceUri) has its result relayed to the page, which
+//     renders the app like any MCP host would — the model itself still only reads;
 //   - at most MAX_ROUNDS tool rounds, then one final call WITHOUT tools forces a plain answer;
 //   - input is bounded (question length, id shape, history size) before anything is sent upstream;
 //   - a model that answers 429 "overloaded" is retried once, then the next model in MODELS is tried;
 //   - every upstream call has a timeout (the free tier can hold a request for minutes instead of
 //     refusing it) and the whole question has a DEADLINE_MS budget inside the function's 30 s limit.
 
-export const READ_ONLY = ['get-order-status', 'get-cart', 'list-products', 'get-product-details', 'get-product-reviews', 'get-grant-status'];
+export const READ_ONLY = ['browse-products', 'get-order-status', 'get-cart', 'list-products', 'get-product-details', 'get-product-reviews', 'get-grant-status'];
 // Both free on Z.ai. 4.5 first: in testing it got every tool and answer right and was never throttled,
 // while 4.7's free tier refused or held most requests.
 export const MODELS = ['glm-4.5-flash', 'glm-4.7-flash'];
 // One-line descriptions for a small model — the store's own are written for large agents, and every
 // token here is resent on each call. The input schemas still come from the store.
 const SHORT = {
+  'browse-products': 'Show the visitor the store\'s visual product picker (the page renders it). Use it whenever they want to see, browse or shop products; pass their cartId if they have one.',
   'get-order-status': 'Status of the visitor\'s order by orderId (pending until they finish checkout; then paid, with totals).',
   'get-cart': 'The visitor\'s cart by cartId: line items, quantities, total.',
-  'list-products': 'Search or list the catalog (optional query/category): ids, names, prices, age restrictions.',
+  'list-products': 'Catalog as data for YOU (optional query/category): ids, names, prices, age restrictions. Nothing is shown to the visitor — to show products, use browse-products.',
   'get-product-details': 'Full details for product ids (use list-products first to find an id).',
   'get-product-reviews': 'Customer reviews for product ids (use list-products first to find an id).',
   'get-grant-status': 'A spending grant by grantId: status, budget left, per-purchase limit.',
@@ -63,13 +66,17 @@ export function systemPrompt(context) {
   const ids = Object.entries(context).map(([k, v]) => `${k}=${v}`).join(', ') || 'none yet';
   return 'You are the help assistant for the CredentAgent demo store. Answer ONLY questions about the visitor\'s ' +
     'order, cart, the products, and spending grants, using the tools. Never invent facts: if a tool did not return it, ' +
-    'say you don\'t know. Keep answers to 1-3 sentences, plain text. You cannot place orders, change the cart, approve ' +
+    'say you don\'t know. Keep answers to 1-3 sentences, plain text (no markdown). When the visitor wants to see or shop ' +
+    'products, call browse-products: the page shows them the picker, so don\'t list the products in text. You cannot place orders, change the cart, approve ' +
     'anything, or verify anyone\'s age — say so if asked; the visitor does those in the demo itself. ' +
     `The visitor's ids: ${ids}. Pass them to tools when needed.`;
 }
 
 // Only what the model needs: get-cart without the widget's catalog, and no inline images anywhere.
 export function trimResult(name, result) {
+  // browse-products: the store's own note to the model ("the picker is showing … don't re-list"), not the catalog.
+  const note = name === 'browse-products' && result && Array.isArray(result.content) && result.content.find((c) => c.type === 'text');
+  if (note) return note.text.slice(0, 4000);
   const s = result && (result.structuredContent ?? result.content ?? result);
   const out = name === 'get-cart' && s && s.cart ? { cart: s.cart } : s;
   return JSON.stringify(out ?? null, (k, v) => (k === 'image' ? undefined : v)).slice(0, 4000);
@@ -98,17 +105,31 @@ async function mcpCall(fetchImpl, storeUrl, method, params) {
   return msg.result;
 }
 
-// tools/list, filtered to READ_ONLY and shaped as OpenAI-style function tools. Cached per instance.
+// tools/list, filtered to READ_ONLY and shaped as OpenAI-style function tools, plus each offered tool's
+// MCP App (its _meta.ui.resourceUri, if it declares one). Cached per instance.
 let toolCache = null;
 export function resetToolCache() { toolCache = null; }
 async function readOnlyTools(fetchImpl, storeUrl) {
   if (toolCache) return toolCache;
   const { tools } = await mcpCall(fetchImpl, storeUrl, 'tools/list', {});
-  toolCache = tools.filter((t) => READ_ONLY.includes(t.name)).map((t) => ({
-    type: 'function', function: { name: t.name, description: SHORT[t.name] || t.description, parameters: t.inputSchema },
-  }));
+  const offered = tools.filter((t) => READ_ONLY.includes(t.name));
+  const ui = {};
+  for (const t of offered) {
+    const uri = t._meta && t._meta.ui && t._meta.ui.resourceUri;
+    if (typeof uri === 'string' && uri.startsWith('ui://')) ui[t.name] = uri;
+  }
+  toolCache = {
+    ui,
+    tools: offered.map((t) => ({
+      type: 'function', function: { name: t.name, description: SHORT[t.name] || t.description, parameters: t.inputSchema },
+    })),
+  };
   return toolCache;
 }
+
+// The store's cart tools take this conversation's cartId; a small model often drops it, so the page's id
+// fills in when the model passed none (never overriding one it did pass — the store refuses a forged id).
+const CART_TOOLS = ['browse-products', 'get-cart'];
 
 async function chat({ fetchImpl, apiKey, sleep, now, deadline, modelTimeoutMs }, messages, tools, models) {
   let lastStatus = 0;
@@ -142,7 +163,8 @@ async function chat({ fetchImpl, apiKey, sleep, now, deadline, modelTimeoutMs },
   throw new AskError(lastStatus === 429 ? 503 : 502, 'model_unavailable', 'The AI is busy right now — try again in a moment.');
 }
 
-// The whole agent: returns { answer, tools, model }.
+// The whole agent: returns { answer, tools, model, app? } — app is the last call to a tool with an MCP App:
+// { tool, resourceUri, result } with the store's full result, for the page to render that app.
 export async function ask(input, {
   fetch: fetchImpl, apiKey, storeUrl, models = MODELS,
   sleep = (ms) => new Promise((r) => setTimeout(r, ms)), now = () => Date.now(), modelTimeoutMs = MODEL_TIMEOUT_MS,
@@ -150,10 +172,10 @@ export async function ask(input, {
   if (!apiKey) throw new AskError(503, 'not_configured', 'Ask AI is not configured on this server yet.');
   const { question, context, history } = parseRequest(input);
   const deps = { fetchImpl, apiKey, sleep, now, deadline: now() + DEADLINE_MS, modelTimeoutMs };
-  const tools = await readOnlyTools(fetchImpl, storeUrl);
+  const { tools, ui } = await readOnlyTools(fetchImpl, storeUrl);
   const messages = [{ role: 'system', content: systemPrompt(context) }, ...history, { role: 'user', content: question }];
   const used = [];
-  let model;
+  let model, app = null;
   for (let round = 0; ; round++) {
     const last = round === MAX_ROUNDS;
     const reply = await chat(deps, messages, last ? null : tools, models);
@@ -161,7 +183,7 @@ export async function ask(input, {
     const calls = reply.message.tool_calls || [];
     if (last || !calls.length) {
       const answer = (reply.message.content || '').trim() || 'Sorry — I couldn\'t find an answer to that.';
-      return { answer, tools: used, model };
+      return { answer, tools: used, model, ...(app ? { app } : {}) };
     }
     messages.push({ role: 'assistant', content: reply.message.content || '', tool_calls: calls });
     for (const c of calls) {
@@ -172,8 +194,12 @@ export async function ask(input, {
       } else {
         let args = {};
         try { args = JSON.parse(c.function.arguments || '{}'); } catch { args = {}; }
+        if (!args || typeof args !== 'object' || Array.isArray(args)) args = {};
+        if (CART_TOOLS.includes(name) && !args.cartId && context.cartId) args.cartId = context.cartId;
         used.push(name);
-        content = trimResult(name, await mcpCall(fetchImpl, storeUrl, 'tools/call', { name, arguments: args }));
+        const result = await mcpCall(fetchImpl, storeUrl, 'tools/call', { name, arguments: args });
+        if (ui[name] && result && !result.isError) app = { tool: name, resourceUri: ui[name], result };
+        content = trimResult(name, result);
       }
       messages.push({ role: 'tool', tool_call_id: c.id, content });
     }
