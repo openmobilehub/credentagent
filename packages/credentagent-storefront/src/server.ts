@@ -177,10 +177,11 @@ export interface StorefrontOptions {
    * a fresh transport per request, no `Mcp-Session-Id`, nothing kept in per-instance memory.
    * Multi-instance serverless (e.g. Vercel) has no session affinity, so the default stateful
    * transport (a per-instance session map) rejects a follow-up request that lands on another
-   * instance with `No valid session`. Enable this on such deploys. Trade-off: no per-session
-   * server cart — tools that need the cart must receive it explicitly (the widget's checkout
-   * passes its on-screen `items`), and `ctx.sessionId` is absent so cart tools fall back to
-   * a shared key. Pair with `statelessOrders` for a fully instance-independent checkout.
+   * instance with `No valid session`. Enable this on such deploys. With no session to key the
+   * cart by, each conversation's cart is keyed by a cart id the store issues on its first cart
+   * call (the same as on MCP 2026-07-28, which has no sessions at all) — never one shared cart.
+   * Pair with `statelessOrders` for a fully instance-independent checkout, and a shared `storage`
+   * so a cart written on one instance is readable on the next.
    */
   statelessMcp?: boolean;
   /**
@@ -562,16 +563,18 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
   // (cross-user bleed — Security invariant 4). So a session-less request keys its cart by a CART ID
   // (cart-id.ts): the first cart-related call issues one and returns it — to the agent AND the
   // widget — and every later call passes it back, so both land on the same server-side cart, like
-  // the old session did.
-  const sessionOf = (ctx: ServerContext): string | null =>
-    ctx.sessionId ?? (isModernRequest(ctx) ? null : DEFAULT_SESSION);
+  // the old session did. The same holds for 2025-era requests served statelessly (`statelessMcp`),
+  // which have no session either. DEFAULT_SESSION remains only for a single-connection transport
+  // (stdio, the in-memory test pair), where one connection is one user.
+  const sessionOf = (ctx: ServerContext, sessionless: boolean): string | null =>
+    ctx.sessionId ?? (sessionless || isModernRequest(ctx) ? null : DEFAULT_SESSION);
   const ids = cartIds(stateSecret);
   /**
    * The cart store key for a request: its session, or — session-less — the caller's cart id (a new
    * one when it has none, returned as `cartId` to hand back). null = an id this store never issued.
    */
-  const cartKeyOf = (ctx: ServerContext, cartId: string | undefined): { key: string; cartId?: string } | null => {
-    const sessionId = sessionOf(ctx);
+  const cartKeyOf = (ctx: ServerContext, cartId: string | undefined, sessionless: boolean): { key: string; cartId?: string } | null => {
+    const sessionId = sessionOf(ctx, sessionless);
     if (sessionId !== null) return { key: sessionId };
     if (cartId === undefined) {
       const minted = ids.mint();
@@ -594,9 +597,14 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
     _meta: { [CART_META_KEY]: priced, ...(cartId ? { [CART_ID_META_KEY]: cartId } : {}) },
   });
   /** Read the request's cart, apply a change (if any) and save it, and answer with the priced result. */
-  const cartCall = async (ctx: ServerContext, cartId: string | undefined, change?: (cart: Map<string, number>) => void): Promise<CallToolResult> => {
+  const cartCall = async (
+    ctx: ServerContext,
+    cartId: string | undefined,
+    sessionless: boolean,
+    change?: (cart: Map<string, number>) => void,
+  ): Promise<CallToolResult> => {
     await source.load();
-    const ref = cartKeyOf(ctx, cartId);
+    const ref = cartKeyOf(ctx, cartId, sessionless);
     if (!ref) return UNKNOWN_CART_ID;
     const cart = await cartStore.read(ref.key);
     if (change) {
@@ -612,7 +620,12 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
   const CART_ID_NOTE =
     " When a result includes a cartId, pass it on every later cart call, browse-products and checkout — the product picker and you share that one cart.";
 
-  function buildServer(): McpServer {
+  /**
+   * One MCP server over this storefront. `sessionless`: the transport carries no session (the
+   * stateless `statelessMcp` HTTP path), so a cart must be keyed by a cart id, never the shared
+   * fallback key. 2026-07-28 requests are detected per request and need no flag.
+   */
+  function buildServer({ sessionless = false }: { sessionless?: boolean } = {}): McpServer {
     const server = new McpServer({ name: "credentagent-storefront", version: "0.1.0" });
 
     // ── UI-linked tools (6) — registerAppTool + the canonical UI_META ───────
@@ -638,7 +651,7 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
         // The picker opens on this conversation's cart — and issues its cart id if it has none yet,
         // so the widget and the agent start out holding the same one. Display only: an id this
         // store never issued shows an empty cart here; the cart tools report the refusal.
-        const ref = cartKeyOf(ctx, givenCartId);
+        const ref = cartKeyOf(ctx, givenCartId, sessionless);
         const priced = priceFrom(ref ? await cartStore.read(ref.key) : new Map());
         const cartId = ref?.cartId;
         // A compact, agent-legible catalog line (ids + names + prices + categories + age flags).
@@ -672,7 +685,7 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
       "add-to-cart",
       { title: "Add to Cart", description: "Add products to the cart by id (quantities add on top)." + CART_ID_NOTE, inputSchema: { items: z.array(z.object({ productId: z.string(), quantity: z.number().int().min(1) })), cartId: CART_ID_FIELD }, annotations: { readOnlyHint: false }, _meta: UI_META },
       async ({ items, cartId }, ctx): Promise<CallToolResult> =>
-        cartCall(ctx, cartId, (cart) => {
+        cartCall(ctx, cartId, sessionless, (cart) => {
           for (const { productId, quantity } of items) {
             if (quantity <= 0) continue;
             cart.set(productId, (cart.get(productId) ?? 0) + quantity);
@@ -684,7 +697,7 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
       "set-quantity",
       { title: "Set Quantity", description: "Set the exact quantity of a product by id (0 removes)." + CART_ID_NOTE, inputSchema: { productId: z.string(), quantity: z.number().int().min(0), cartId: CART_ID_FIELD }, annotations: { readOnlyHint: false }, _meta: UI_META },
       async ({ productId, quantity, cartId }, ctx): Promise<CallToolResult> =>
-        cartCall(ctx, cartId, (cart) => {
+        cartCall(ctx, cartId, sessionless, (cart) => {
           if (quantity <= 0) cart.delete(productId);
           else cart.set(productId, quantity);
         }),
@@ -693,13 +706,13 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
       server,
       "remove-from-cart",
       { title: "Remove from Cart", description: "Remove a product from the cart by id." + CART_ID_NOTE, inputSchema: { productId: z.string(), cartId: CART_ID_FIELD }, annotations: { readOnlyHint: false }, _meta: UI_META },
-      async ({ productId, cartId }, ctx): Promise<CallToolResult> => cartCall(ctx, cartId, (cart) => void cart.delete(productId)),
+      async ({ productId, cartId }, ctx): Promise<CallToolResult> => cartCall(ctx, cartId, sessionless, (cart) => void cart.delete(productId)),
     );
     registerAppTool(
       server,
       "get-cart",
       { title: "Get Cart", description: "Return the current cart: line items, quantities, total." + CART_ID_NOTE, inputSchema: { cartId: CART_ID_FIELD }, annotations: { readOnlyHint: true }, _meta: UI_META },
-      async ({ cartId }, ctx): Promise<CallToolResult> => cartCall(ctx, cartId),
+      async ({ cartId }, ctx): Promise<CallToolResult> => cartCall(ctx, cartId, sessionless),
     );
     registerAppTool(
       server,
@@ -708,7 +721,7 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
       async ({ items, cartId }, ctx): Promise<CallToolResult> => {
         await source.load();
         const catalog = source.current();
-        const ref = cartKeyOf(ctx, cartId);
+        const ref = cartKeyOf(ctx, cartId, sessionless);
         if (!ref) return UNKNOWN_CART_ID;
         const entries: CartItemInput[] = items?.length
           ? items
@@ -1295,7 +1308,7 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
   // MCP 2026-07-28 is per request by design — no session, no initialize — so the SDK's entry
   // serves it with a fresh server per request. The 2025-era routes below stay as they were;
   // `isLegacyRequest` is the SDK's own routing decision, so the two legs never disagree.
-  const serveModern = toNodeHandler(createMcpHandler(buildServer, { legacy: "reject" }));
+  const serveModern = toNodeHandler(createMcpHandler(() => buildServer(), { legacy: "reject" }));
   app.all("/mcp", async (req: Request, res: Response) => {
     // Self-derive the public origin from the first request so checkout URLs are
     // absolute behind any proxy (Vercel, a tunnel) with zero config — without it,
@@ -1314,7 +1327,7 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
       const transport = new NodeStreamableHTTPServerTransport({ sessionIdGenerator: undefined });
       res.on("close", () => { void transport.close(); });
       try {
-        await buildServer().connect(transport);
+        await buildServer({ sessionless: true }).connect(transport);
         await transport.handleRequest(req, res, req.body);
       } catch {
         if (!res.headersSent) res.status(500).json({ jsonrpc: "2.0", error: { code: -32603, message: "error" }, id: null });
@@ -1489,7 +1502,7 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
     // Static source: the injected array. Dynamic source: the last-known-good snapshot
     // (throws if read before the first successful load — the server primes it per request).
     get catalog(): Product[] { return source.current(); },
-    mcpServer: buildServer,
+    mcpServer: () => buildServer(),
     gate(resolve: GateResolver) { resolveGate = resolve; },
     async listen(port = 3005): Promise<{ url: string; port: number }> {
       if (!baseUrl) baseUrl = `http://localhost:${port}`;

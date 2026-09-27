@@ -14,6 +14,7 @@ import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/cli
 import { CredentAgent } from "@openmobilehub/credentagent-gate";
 import { createStorefront } from "./server.js";
 import type { Storefront } from "./server.js";
+import { MemoryCartStore } from "./state.js";
 
 const MODERN = "2026-07-28";
 
@@ -145,6 +146,49 @@ describe("the cart a 2026-07-28 conversation keys by its cart id (no sessions, s
     const added = await call(c, "add-to-cart", { items: [{ productId: "court-sneakers", quantity: 1 }] });
     expect(added.cartId).toBeUndefined();
     expect((await call(c, "get-cart", {})).cart.itemCount).toBe(1);
+  });
+});
+
+// `statelessMcp` serves 2025-era clients with no session either (multi-instance serverless, e.g.
+// Vercel). It used to fall back to ONE shared cart key there — every shopper saw every other
+// shopper's items (issue #204). It now keys the cart by a cart id, exactly as on 2026-07-28.
+describe("2025-era clients on a statelessMcp store — a cart per conversation, never one shared cart", () => {
+  const call = async (c: Client, name: string, args: Record<string, unknown>) => sc(await c.callTool({ name, arguments: args }));
+  async function legacyClient(url: URL): Promise<Client> {
+    const c = new Client({ name: "legacy", version: "1.0.0" });
+    await c.connect(new StreamableHTTPClientTransport(url));
+    open.push(() => c.close());
+    expect(c.getProtocolEra()).toBe("legacy");
+    return c;
+  }
+
+  it("REFUSES to share a cart between two shoppers (the #204 leak)", async () => {
+    const url = await serve(createStorefront({ statelessMcp: true }));
+    const a = await legacyClient(url);
+    const b = await legacyClient(url);
+    const { cartId: aId } = await call(a, "add-to-cart", { items: [{ productId: "oak-whiskey", quantity: 2 }] });
+    expect(aId).toMatch(/^cart_/);
+
+    // Were the cart keyed by the shared fallback key, B would now see A's two bottles.
+    const bCart = await call(b, "get-cart", {});
+    expect(bCart.cart.itemCount).toBe(0);
+    expect(bCart.cartId).not.toBe(aId);
+  });
+
+  it("follows the conversation across server instances by its cart id (one shared storage)", async () => {
+    // Two instances, as on Vercel: same signing key, same cart storage, no shared memory.
+    const shared = { statelessMcp: true, signingKey: "shared-key", cartStore: new MemoryCartStore() };
+    const one = await legacyClient(await serve(createStorefront(shared)));
+    const two = await legacyClient(await serve(createStorefront(shared)));
+
+    const { cartId } = await call(one, "add-to-cart", { items: [{ productId: "court-sneakers", quantity: 1 }] });
+    const onTwo = await call(two, "get-cart", { cartId }); // the next request lands on the other instance
+    expect(onTwo.cart.lines.map((l: any) => [l.id, l.quantity])).toEqual([["court-sneakers", 1]]);
+  });
+
+  it("REFUSES a cart id the store never issued", async () => {
+    const c = await legacyClient(await serve(createStorefront({ statelessMcp: true })));
+    expect((await c.callTool({ name: "get-cart", arguments: { cartId: "cart_1" } })).isError).toBe(true);
   });
 });
 

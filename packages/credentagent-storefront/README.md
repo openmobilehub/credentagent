@@ -100,13 +100,15 @@ const store = createStorefront({ storage: redisStorage.fromEnv() });
   still wins over the provider for that slot (bring any custom backend).
 - **Lean by default:** `@upstash/redis` is an **optional peer dependency**, loaded lazily only on the
   `{ url, token }` path — in-memory users never install it.
-- Order and verification state is **keyed per order id**, and the **cart is keyed per MCP session**
-  (`${namespace}:cart:${sessionId}`) — never process-global (Security invariant 4); the store persists
-  state only and is **not** a trust anchor.
-- **Per-user carts need session affinity on serverless.** Each MCP session gets its own cart, but the
-  session/transport lives in per-instance memory — so a **multi-instance serverless** deployment needs
-  **sticky sessions** for a shopper's cart to follow them. (Orders & verification are keyed by order id
-  and are unaffected.)
+- Order and verification state is **keyed per order id**, and the **cart is keyed per conversation** —
+  by the MCP session when there is one, otherwise by a cart id the store issues (see *MCP protocol
+  versions* below) — never process-global (Security invariant 4); the store persists state only and is
+  **not** a trust anchor.
+- **Multi-instance serverless: turn on `statelessMcp`.** The default transport keeps each MCP session in
+  one instance's memory, so a follow-up that lands on another instance is refused unless you have
+  **sticky sessions**. With `statelessMcp: true` there is no session to lose: each conversation's cart is
+  keyed by its cart id, and a shared `storage` makes it readable from any instance. (Orders &
+  verification are keyed by order id and are unaffected.)
 
 ## MCP protocol versions — 2026-07-28 and 2025, one endpoint
 
