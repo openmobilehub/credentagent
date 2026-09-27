@@ -225,7 +225,12 @@ const DESIGN_CSS = `
     background: #fff; color: var(--accent); font: inherit; font-weight: 800; font-size: 1.05rem;
     cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,.15);
   }
-  .complete-banner .close-btn:disabled { cursor: default; box-shadow: none; }
+  /* Fallback (the browser refused window.close()): no longer an action, just an
+     instruction — an outlined note, so it stops inviting another tap. */
+  .complete-banner .close-btn:disabled {
+    cursor: default; box-shadow: none; background: transparent; color: #fff;
+    outline: 2px solid rgba(255,255,255,.85); outline-offset: -2px;
+  }
 
   /* The finished page (body.completed, set by completedViewScript): the handoff banner
      leads at the top, the now-pointless pay controls go away, and the technical receipt
