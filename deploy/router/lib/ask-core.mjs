@@ -34,18 +34,23 @@ export function claimsCartEdit(answer) {
   return String(answer).split(/(?<=[.!?])\s+/).some((s) => CHANGE.test(s) && !NEGATION.test(s));
 }
 export function asksCartEdit(question) {
-  return /\b(add|remove|delete|take (it |them )?(out|off)|increase|decrease|another)\b|\bmake it \w+|\b(set|change) .+ to\b|\bput .+ in\b|\b(empty|clear) (my|the) cart\b|\b(one|two|three|\d+) more\b/i.test(question);
+  if (/\b(add|remove|delete|take (it |them )?(out|off)|increase|decrease)\b|\bmake it \w+|\b(set|change) .+ to\b|\bput .+ in\b|\b(empty|clear) (my|the) cart\b/i.test(question)) return true;
+  // "another mouse" / "one more lamp" / "2 more" are edits — unless the visitor is asking to see or learn
+  // something ("show me another product", "tell me one more detail"), which stays on the cheaper read models.
+  return /\b(another|(one|two|three|\d+) more)\b/i.test(question)
+    && !/\b(show|tell|see|explain|describe|recommend|suggest|what|which|how|why|is|are|does|do)\b/i.test(question);
 }
 const ANSWERS_THE_CHECK = /\bcart tool\b|\bthe check\b|\bonly confirm\b/i;   // the model talking about the check, not the cart
-// A store answer to a cart edit that actually changed something: no error, and none of THIS call's product
-// ids came back unknown. (An unknown id is not an error — it lands in cart.unknownIds and the cart is
-// unchanged; that list also keeps ids from earlier calls on the same cart, so only this call's ids count.)
+// A store answer to a cart edit that actually changed something: no error, and at least one of THIS call's
+// product ids matched. (An unknown id is not an error — it lands in cart.unknownIds while the matched lines
+// are committed; that list also keeps ids from earlier calls on the same cart, so only this call's ids count.
+// A partly matched add IS an edit: treating it as none would send the corrective round to add it again.)
 function editAccepted(result, args) {
   if (!result || result.isError) return false;
   const unknown = result.structuredContent && result.structuredContent.cart && result.structuredContent.cart.unknownIds;
   if (!Array.isArray(unknown) || !unknown.length) return true;
   const ids = Array.isArray(args.items) ? args.items.map((i) => i && i.productId) : [args.productId];
-  return !ids.some((id) => unknown.includes(id));
+  return ids.some((id) => !unknown.includes(id));
 }
 const NOT_CHANGED = 'Check: no cart tool ran for this message, so the cart has NOT changed. If I asked to change the cart, ' +
   'call add-to-cart, set-quantity or remove-from-cart now (get ids from get-cart or list-products) and answer only after ' +

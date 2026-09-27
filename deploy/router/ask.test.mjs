@@ -288,6 +288,24 @@ describe('ask', () => {
     expect(w.log.zai).toHaveLength(2);
   });
 
+  it('counts a partly matched multi-item add as an edit (the store commits the matched lines)', async () => {
+    const part = { structuredContent: { cart: { lines: [{ id: 'drift-mouse', quantity: 1 }], unknownIds: ['lamp'], total: 49 }, cartId: 'cart_1' } };
+    const w = world([{ content: '', tool_calls: [call('add-to-cart', { items: [{ productId: 'drift-mouse', quantity: 1 }, { productId: 'lamp', quantity: 1 }] })] },
+      { content: 'Added the mouse to your cart; I couldn\'t find "lamp".' }], { results: { 'add-to-cart': part } });
+    const out = await ask({ question: 'add the mouse and the lamp', context: { cartId: 'cart_1' } }, opts(w));
+    expect(w.log.storeCalls).toEqual(['add-to-cart']);   // no corrective round, so no duplicate add
+    expect(out.answer).toBe('Added the mouse to your cart; I couldn\'t find "lamp".');
+  });
+
+  it('keeps "another" / "one more" catalog questions on the cheaper read models', async () => {
+    for (const q of ['show me another product', 'tell me one more detail about the lamp', 'what is another option?']) {
+      resetToolCache();
+      const w = world([{ content: 'Here you go.' }]);
+      await ask({ question: q }, opts(w));
+      expect(w.log.zai[0].model).toBe(MODELS[0]);
+    }
+  });
+
   it('after the check, keeps only an explicit decline — any other reply without an edit becomes the honest line', async () => {
     const w = world([{ content: 'Sure!' }, { content: 'Understood! I\'ll only confirm cart changes when a cart tool runs. What can I help with?' }]);
     const out = await ask({ question: 'put the lamp in too', context: { cartId: 'cart_1' } }, opts(w));
