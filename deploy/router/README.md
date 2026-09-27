@@ -31,15 +31,20 @@ with the project's Root Directory `deploy/router`. It then checks that `/marketp
 
 The one thing this project runs itself (`api/ask.mjs`, logic in `lib/ask-core.mjs`, tests in
 `ask.test.mjs`, run by the root `npm test`). The website's chat window sends
-`{ question, context: { cartId?, orderId?, grantId? }, history? }` and gets `{ answer, tools, model }`.
+`{ question, context: { cartId?, orderId?, grantId? }, history? }` and gets `{ answer, tools, model, app? }`.
 
 - **Model:** Z.ai's free `glm-4.5-flash`, falling back to `glm-4.7-flash` (also free). Needs the
   `ZAI_API_KEY` environment variable on this project (Production); without it the endpoint answers
   `503 not_configured`.
-- **Read-only by construction:** the model is offered only `get-order-status`, `get-cart`,
-  `list-products`, `get-product-details`, `get-product-reviews` and `get-grant-status`, called on the
-  production store; any other tool it names is refused without being called. It cannot change a cart,
-  check out, or touch a grant.
+- **Read-only by construction:** the model is offered only `browse-products`, `get-order-status`,
+  `get-cart`, `list-products`, `get-product-details`, `get-product-reviews` and `get-grant-status`
+  (all `readOnlyHint` on the store), called on the production store; any other tool it names is refused
+  without being called. It cannot change a cart, check out, or touch a grant.
+- **MCP Apps:** when the model calls a tool that declares an MCP App (`_meta.ui.resourceUri`, e.g.
+  `browse-products` → the product picker), the reply carries `app: { tool, resourceUri, result }` with the
+  store's full result, and the page renders that `ui://` resource as any MCP host would. Whatever the
+  visitor then does in the app (add to cart, checkout) goes page → store through the app bridge, never
+  through the model. If the model drops the cartId, the page's `context.cartId` fills it in on cart tools.
 - **Bounded:** questions ≤ 500 characters, ids must look like ids, the last 6 turns of history at most,
   3 tool rounds then a forced plain answer, a 10 s timeout per model call, a 25 s budget per question
   (`maxDuration` 30 s in `vercel.json`), and a best-effort 8 questions/minute per IP.
