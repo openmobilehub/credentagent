@@ -368,7 +368,18 @@ export function closeWindowButton(): string {
  * phone the buyer sees "close this window" first, not a disabled button above the fold.
  */
 export function completedViewScript(): string {
-  return `(function(){document.body.classList.add("completed");var b=document.querySelector("#receipt .complete-banner");var w=document.querySelector(".wrap");if(b&&w){var h=w.querySelector(".head")||w.querySelector(".brand");if(h)h.insertAdjacentElement("afterend",b);else w.prepend(b);}var r=document.getElementById("receipt");if(r&&r.firstChild){var d=document.createElement("details");d.className="receipt-details";var s=document.createElement("summary");s.textContent="Payment details";d.appendChild(s);while(r.firstChild)d.appendChild(r.firstChild);r.appendChild(d);}window.scrollTo(0,0);})();`;
+  return `(function(){document.body.classList.add("completed");var b=document.querySelector("#receipt .complete-banner");var w=document.querySelector(".wrap");if(b&&w){var h=w.querySelector(".head")||w.querySelector(".brand");if(h)h.insertAdjacentElement("afterend",b);else w.prepend(b);}var r=document.getElementById("receipt");if(r&&r.firstChild){var d=document.createElement("details");d.className="receipt-details";var s=document.createElement("summary");s.textContent="Payment details";d.appendChild(s);while(r.firstChild)d.appendChild(r.firstChild);r.appendChild(d);}window.scrollTo(0,0);if(b)requestAnimationFrame(function(){${confettiScript()}});})();`;
+}
+
+/**
+ * Client-side statement: a short, subtle confetti burst from the `.complete-banner` (the
+ * variable `b` in `completedViewScript`) — ~40 small pieces that pop up, drift down and
+ * fade out in under two seconds, then remove themselves. It only runs at the live moment
+ * of completion (never when revisiting a paid order), is skipped under
+ * `prefers-reduced-motion`, and uses the Web Animations API — no library, no CSS keyframes.
+ */
+function confettiScript(): string {
+  return `if(!b.animate||matchMedia("(prefers-reduced-motion: reduce)").matches)return;var R=b.getBoundingClientRect();var acc=getComputedStyle(document.documentElement).getPropertyValue("--accent").trim()||"#0f8a7e";var C=[acc,"#f5c451","#ff8fa3","#7dd3fc","#a7f3d0"];for(var i=0;i<40;i++){var p=document.createElement("i");var w=4+Math.random()*4;p.style.cssText="position:fixed;z-index:9999;pointer-events:none;border-radius:1px;width:"+w+"px;height:"+(w*1.6)+"px;left:"+(R.left+R.width*(0.15+Math.random()*0.7))+"px;top:"+(R.top+24)+"px;background:"+C[i%C.length];document.body.appendChild(p);var dx=(Math.random()-0.5)*180,up=-(50+Math.random()*70),down=160+Math.random()*160,rot=(Math.random()-0.5)*720;p.animate([{transform:"translate(0,0) rotate(0)",opacity:0.95},{transform:"translate("+dx*0.6+"px,"+up+"px) rotate("+rot*0.4+"deg)",opacity:0.95,offset:0.3},{transform:"translate("+dx+"px,"+down+"px) rotate("+rot+"deg)",opacity:0}],{duration:1400+Math.random()*700,delay:Math.random()*150,easing:"cubic-bezier(.2,.6,.4,1)",fill:"forwards"}).onfinish=(function(el){return function(){el.remove();};})(p);}`;
 }
 
 /**

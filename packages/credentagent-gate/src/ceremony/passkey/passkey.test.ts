@@ -418,6 +418,8 @@ describe("CT11 — page + receipt state presence-only-demo (not a real safety co
     expect(html).toContain('class=\\"close-btn\\"');
     expect(html).toContain("window.close()");
     expect(html).toContain("Close this tab to return to your agent");
+    // A subtle one-shot confetti burst, skipped for reduced-motion users.
+    expect(html).toContain("prefers-reduced-motion: reduce");
   });
 
   it("the verify receipt carries trust_level presence-only-demo", async () => {
