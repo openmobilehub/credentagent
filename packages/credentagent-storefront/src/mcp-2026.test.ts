@@ -71,6 +71,39 @@ describe("one /mcp endpoint, both protocol eras", () => {
   });
 });
 
+// 2026-07-28 replaces the 2025 GET stream with `subscriptions/listen`: a POST the server holds
+// open to push list-changed notifications. This store never publishes one, so a held stream
+// only burns a serverless function until the host's timeout kills it (60 s on Vercel), and the
+// client opens the next — the dev demo's whole compute bill. It is refused up front instead.
+describe("subscriptions/listen on 2026-07-28 — refused, never held open", () => {
+  it("answers a listen at once with an in-band error, not a stream left open", async () => {
+    const store = createStorefront();
+    const res = await request(store.app)
+      .post("/mcp")
+      .timeout(3_000)
+      .set("content-type", "application/json")
+      .set("accept", "application/json, text/event-stream")
+      .set("mcp-protocol-version", MODERN)
+      .set("mcp-method", "subscriptions/listen")
+      .send({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "subscriptions/listen",
+        params: {
+          notifications: { toolsListChanged: true, resourcesListChanged: true },
+          _meta: {
+            "io.modelcontextprotocol/protocolVersion": MODERN,
+            "io.modelcontextprotocol/clientInfo": { name: "probe", version: "0" },
+            "io.modelcontextprotocol/clientCapabilities": {},
+          },
+        },
+      });
+    expect(res.status).toBe(200);
+    expect(res.text).not.toContain("notifications/subscriptions/acknowledged");
+    expect(res.text).toContain("Subscription limit reached");
+  });
+});
+
 describe("the cart a 2026-07-28 conversation keys by its cart id (no sessions, so no shared cart — Security invariant 4)", () => {
   const call = async (c: Client, name: string, args: Record<string, unknown>) => sc(await c.callTool({ name, arguments: args }));
 
