@@ -24,9 +24,19 @@ export const READ_ONLY = ['browse-products', 'get-order-status', 'get-cart', 'li
 // The visitor's own cart, by the page's cartId: adding, changing and removing items. Checkout stays theirs.
 export const CART_EDIT = ['add-to-cart', 'set-quantity', 'remove-from-cart'];
 const ALLOWED = [...READ_ONLY, ...CART_EDIT];
-// An answer that says the cart changed. Only a CART_EDIT call in this question may back it: small models copy
-// their earlier "Added …" replies from the history without calling anything (seen live on 2026-09-27).
-export const CLAIMS_CART_EDIT = /\b(added|removed|updated|changed|put)\b[^.!?]*\bcart\b|\bcart now (has|contains)\b/i;
+// A claimed cart change must be backed by a CART_EDIT call the store accepted in this question: small models
+// copy their earlier "Added …" / "Done — 2 mice." replies from the history without calling anything (seen
+// live on 2026-09-27). A sentence claims a change when it has a change word and no negation ("you haven't
+// added", "nothing was added" are reads); a question asks for one when it reads like an edit request.
+const CHANGE = /\b(added|removed|updated|changed|put|increased|decreased|dropped|deleted|adjusted|done)\b|\bnow in your cart\b/i;
+const NEGATION = /n't\b|\b(not|never|nothing|no|unable|cannot)\b/i;
+export function claimsCartEdit(answer) {
+  return String(answer).split(/(?<=[.!?])\s+/).some((s) => CHANGE.test(s) && !NEGATION.test(s));
+}
+export function asksCartEdit(question) {
+  return /\b(add|remove|delete|take (it |them )?(out|off)|increase|decrease)\b|\bmake it \w+|\b(set|change) .+ to\b|\bput .+ in\b|\b(empty|clear) (my|the) cart\b/i.test(question);
+}
+const ANSWERS_THE_CHECK = /no cart tool (ran|was called)|\bthe check\b/i;
 const NOT_CHANGED = 'Check: no cart tool ran for this message, so the cart has NOT changed. If I asked to change the cart, ' +
   'call add-to-cart, set-quantity or remove-from-cart now (get ids from get-cart or list-products) and answer only after ' +
   'it succeeds; if I didn\'t ask for a change, answer without saying the cart changed.';
@@ -215,7 +225,7 @@ export async function ask(input, {
   const { tools, ui } = await readOnlyTools(fetchImpl, storeUrl);
   const messages = [{ role: 'system', content: systemPrompt(context) }, ...history, { role: 'user', content: question }];
   const used = [];
-  let model, app = null, pool = models, nudged = false;
+  let model, app = null, pool = models, nudged = false, edited = false;   // edited: a cart edit the store accepted
   for (let round = 0; ; round++) {
     const last = round === MAX_ROUNDS;
     const reply = await chat(deps, messages, last ? null : tools, pool);
@@ -224,14 +234,14 @@ export async function ask(input, {
     const calls = reply.message.tool_calls || [];
     if (last || !calls.length) {
       let answer = (reply.message.content || '').trim() || 'Sorry — I couldn\'t find an answer to that.';
-      const edited = used.some((n) => CART_EDIT.includes(n));
-      if (!edited && CLAIMS_CART_EDIT.test(answer) && !last && !nudged) {
-        nudged = true;   // one corrective round: do the edit for real, or stop claiming it
+      if (!edited && !last && !nudged && (asksCartEdit(question) || claimsCartEdit(answer))) {
+        nudged = true;   // one corrective round: do the edit for real, or say truthfully why not
         messages.push({ role: 'assistant', content: answer }, { role: 'user', content: NOT_CHANGED });
         continue;
       }
-      // Still no edit after the correction (the model tends to answer the check itself), or a claim on the last round.
-      if (!edited && (nudged || CLAIMS_CART_EDIT.test(answer))) answer = HONEST_NO_EDIT;
+      // A claim still unbacked (or on the last round), or the model answering the check itself: say it plainly.
+      // A truthful decline ("we don't sell laptops, so nothing was added") stands.
+      if (!edited && (claimsCartEdit(answer) || (nudged && ANSWERS_THE_CHECK.test(answer)))) answer = HONEST_NO_EDIT;
       return { answer, tools: used, model, ...(app ? { app } : {}) };
     }
     messages.push({ role: 'assistant', content: reply.message.content || '', tool_calls: calls });
@@ -248,6 +258,7 @@ export async function ask(input, {
         used.push(name);
         const result = await mcpCall(fetchImpl, storeUrl, 'tools/call', { name, arguments: args });
         if (ui[name] && result && !result.isError) app = { tool: name, resourceUri: ui[name], result };
+        if (CART_EDIT.includes(name) && result && !result.isError) edited = true;
         content = trimResult(name, result);
       }
       messages.push({ role: 'tool', tool_call_id: c.id, content });

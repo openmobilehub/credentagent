@@ -122,7 +122,7 @@ describe('ask', () => {
 
   it('stays on the model that answered for the rest of the question (no re-trying a busy model each round)', async () => {
     const tries = BACKOFF_MS[MODELS[0]].length + 1;
-    const w = world([...Array(tries).fill(429), { content: '', tool_calls: [call('list-products')] }, { content: 'Done.' }]);
+    const w = world([...Array(tries).fill(429), { content: '', tool_calls: [call('list-products')] }, { content: 'The whiskey is $124.' }]);
     await ask({ question: 'whiskey?' }, opts(w));
     expect(w.log.zai.map((b) => b.model)).toEqual([...Array(tries).fill(MODELS[0]), MODELS[1], MODELS[1]]);
   });
@@ -188,6 +188,41 @@ describe('ask', () => {
     const w = world([{ content: 'Removed the mouse from your cart.' }, { content: 'I understand. No cart tool was called, so the cart has not changed.' }]);
     const out = await ask({ question: 'remove the mouse', context: { cartId: 'cart_1' } }, opts(w));
     expect(out.answer).toMatch(/didn.t change your cart/);
+  });
+
+  it('catches a brief confirmation with no tool behind it ("Done — 2 mice.")', async () => {
+    const w = world([{ content: 'Done — 2 mice.' }, { content: 'Done — 2 mice.' }]);
+    const out = await ask({ question: 'what did you just do?', context: { cartId: 'cart_1' } }, opts(w));
+    expect(w.log.zai).toHaveLength(2);
+    expect(out.answer).toMatch(/didn.t change your cart/);
+  });
+
+  it('checks a cart-change request that got no edit, even when the answer claims nothing', async () => {
+    const w = world([{ content: 'Sure thing!' }, { content: '', tool_calls: [call('add-to-cart', { items: [{ productId: 'drift-mouse', quantity: 1 }] })] }, { content: 'Added.' }]);
+    const out = await ask({ question: 'add the mouse', context: { cartId: 'cart_1' } }, opts(w));
+    expect(w.log.storeCalls).toEqual(['add-to-cart']);
+    expect(out.answer).toBe('Added.');
+  });
+
+  it('keeps a truthful decline after the check (nothing to add)', async () => {
+    const w = world([{ content: 'Sure thing!' }, { content: 'We don\'t sell laptops, so nothing was added to your cart.' }]);
+    const out = await ask({ question: 'add a laptop', context: { cartId: 'cart_1' } }, opts(w));
+    expect(out.answer).toBe('We don\'t sell laptops, so nothing was added to your cart.');
+  });
+
+  it('does not count a cart tool the store rejected as an edit', async () => {
+    const w = world([{ content: '', tool_calls: [call('set-quantity', { productId: 'drift-mouse', quantity: 2 })] }, { content: 'Updated your cart.' }, { content: 'Updated your cart.' }],
+      { results: { 'set-quantity': { isError: true, content: [{ type: 'text', text: 'invalid cartId' }] } } });
+    const out = await ask({ question: 'make it 2', context: { cartId: 'cart_1' } }, opts(w));
+    expect(out.answer).toMatch(/didn.t change your cart/);
+    expect(out).not.toHaveProperty('app');
+  });
+
+  it('leaves reads alone: "Your cart has …" and "you haven\'t added"', async () => {
+    const w = world([{ content: '', tool_calls: [call('get-cart', { cartId: 'cart_1' })] }, { content: 'Your cart has 1 mouse; you haven\'t added anything else.' }]);
+    const out = await ask({ question: 'what is in my cart?', context: { cartId: 'cart_1' } }, opts(w));
+    expect(out.answer).toBe('Your cart has 1 mouse; you haven\'t added anything else.');
+    expect(w.log.zai).toHaveLength(2);
   });
 
   it('leaves an answer that only reads the cart alone', async () => {
