@@ -1,5 +1,5 @@
 // Ask AI — a tiny read-only agent that answers a visitor's questions about their order, cart and the
-// catalog, for the website's live demo. Z.ai's free GLM models pick a storefront tool, the tool runs
+// catalog, for the website's live demo. A Z.ai GLM model (see MODELS) picks a storefront tool, the tool runs
 // against the real store, and the model answers from its result.
 //
 // Pure: every network call goes through the injected `fetch`, so the tests drive it without a server.
@@ -10,14 +10,22 @@
 //     renders the app like any MCP host would — the model itself still only reads;
 //   - at most MAX_ROUNDS tool rounds, then one final call WITHOUT tools forces a plain answer;
 //   - input is bounded (question length, id shape, history size) before anything is sent upstream;
-//   - a model that answers 429 "overloaded" is retried once, then the next model in MODELS is tried;
+//   - a model that answers 429 "overloaded" is retried with BACKOFF_MS, then the next model in MODELS is
+//     tried; the last (fallback) model always keeps FALLBACK_RESERVE_MS of the budget, and once a model
+//     answers the rest of the question stays on it;
 //   - every upstream call has a timeout (the free tier can hold a request for minutes instead of
 //     refusing it) and the whole question has a DEADLINE_MS budget inside the function's 30 s limit.
 
 export const READ_ONLY = ['browse-products', 'get-order-status', 'get-cart', 'list-products', 'get-product-details', 'get-product-reviews', 'get-grant-status'];
-// Both free on Z.ai. 4.5 first: in testing it got every tool and answer right and was never throttled,
-// while 4.7's free tier refused or held most requests.
-export const MODELS = ['glm-4.5-flash', 'glm-4.7-flash'];
+// Paid glm-4.5-air first ($0.20 in / $1.10 out per 1M tokens, ~$0.001 a question, from a prepaid Z.ai
+// balance — it can't overspend): in a 2026-09-27 bake-off it got 5/5 (tool choice, the picker, "add the
+// mouse", empty cart, price compare) in ~2 s, where the free glm-4.5-flash took 4-13 s and was often
+// "overloaded" (429, code 1305). The free model is the fallback, e.g. if the balance runs out (1113).
+// Dropped: glm-4.7-flash (free tier refused or held most requests) and glm-4.7-flashx (paid, but just as
+// overloaded). glm-5 also scored 5/5 with nicer wording at ~5x the price — a one-line swap here.
+export const MODELS = ['glm-4.5-air', 'glm-4.5-flash'];
+export const BACKOFF_MS = { 'glm-4.5-air': [600], 'glm-4.5-flash': [700, 1500] };   // the wait before each retry after a 429
+export const FALLBACK_RESERVE_MS = 8_000;   // a model before the last isn't tried with less than this left
 // One-line descriptions for a small model — the store's own are written for large agents, and every
 // token here is resent on each call. The input schemas still come from the store.
 const SHORT = {
@@ -32,7 +40,7 @@ const SHORT = {
 export const MAX_ROUNDS = 3;
 export const MAX_QUESTION = 500;
 export const MAX_HISTORY = 6;
-export const MODEL_TIMEOUT_MS = 10_000;   // glm-4.7-flash answers in ~1 s, glm-4.5-flash in ~5 s
+export const MODEL_TIMEOUT_MS = 10_000;   // glm-4.5-air answers in ~1-3 s, glm-4.5-flash in ~1-5 s
 export const STORE_TIMEOUT_MS = 8_000;
 export const DEADLINE_MS = 25_000;        // vercel.json gives the function 30 s
 const ZAI_URL = 'https://api.z.ai/api/paas/v4/chat/completions';
@@ -69,7 +77,9 @@ export function systemPrompt(context) {
     'say you don\'t know. Keep answers to 1-3 sentences, plain text (no markdown). When the visitor wants to see or shop ' +
     'products, call browse-products: the page shows them the picker, so don\'t list the products in text. You cannot place orders, change the cart, approve ' +
     'anything, or verify anyone\'s age — say so if asked; the visitor does those in the demo itself. ' +
-    `The visitor's ids: ${ids}. Pass them to tools when needed.`;
+    'Always look facts up with a tool before answering about products, prices, age limits, the cart or an order — ' +
+    'never from memory. If the visitor has no cartId yet, their cart is empty (they haven\'t shopped yet); never ask ' +
+    `them for an id. The visitor's ids: ${ids}. Pass them to tools when needed.`;
 }
 
 // Only what the model needs: get-cart without the widget's catalog, and no inline images anywhere.
@@ -134,9 +144,11 @@ const CART_TOOLS = ['browse-products', 'get-cart'];
 async function chat({ fetchImpl, apiKey, sleep, now, deadline, modelTimeoutMs }, messages, tools, models) {
   let lastStatus = 0;
   for (const model of models) {
-    for (let attempt = 0; attempt < 2; attempt++) {
+    const waits = BACKOFF_MS[model] || [];
+    const floor = model === models[models.length - 1] ? 1000 : FALLBACK_RESERVE_MS;
+    for (let attempt = 0; attempt <= waits.length; attempt++) {
       const left = deadline - now();
-      if (left < 1000) throw new AskError(503, 'model_unavailable', 'The AI is busy right now — try again in a moment.');
+      if (left < floor) break;
       let r;
       try {
         r = await fetchImpl(ZAI_URL, {
@@ -154,13 +166,18 @@ async function chat({ fetchImpl, apiKey, sleep, now, deadline, modelTimeoutMs },
         break;
       }
       lastStatus = r.status;
-      if (r.status === 429) { if (attempt === 0) await sleep(800); continue; }
-      if (!r.ok) break;   // not a throttle: go straight to the next model
+      if (!r.ok) {
+        // Visible in the function logs: 1305 = overloaded, 1113 = the prepaid balance ran out (top up at z.ai).
+        console.warn('ask: %s answered %d %s', model, r.status, (await r.text().catch(() => '')).slice(0, 160));
+        if (r.status === 429 && attempt < waits.length) { await sleep(waits[attempt]); continue; }
+        break;   // out of retries, or not a throttle: go to the next model
+      }
       const body = await r.json();
       return { model, message: body.choices[0].message };
     }
   }
-  throw new AskError(lastStatus === 429 ? 503 : 502, 'model_unavailable', 'The AI is busy right now — try again in a moment.');
+  // 503 when throttled or out of time (nothing was called), 502 when a model failed some other way.
+  throw new AskError(lastStatus === 429 || lastStatus === 0 ? 503 : 502, 'model_unavailable', 'The AI is busy right now — try again in a moment.');
 }
 
 // The whole agent: returns { answer, tools, model, app? } — app is the last call to a tool with an MCP App:
@@ -175,11 +192,12 @@ export async function ask(input, {
   const { tools, ui } = await readOnlyTools(fetchImpl, storeUrl);
   const messages = [{ role: 'system', content: systemPrompt(context) }, ...history, { role: 'user', content: question }];
   const used = [];
-  let model, app = null;
+  let model, app = null, pool = models;
   for (let round = 0; ; round++) {
     const last = round === MAX_ROUNDS;
-    const reply = await chat(deps, messages, last ? null : tools, models);
+    const reply = await chat(deps, messages, last ? null : tools, pool);
     model = reply.model;
+    pool = pool.slice(pool.indexOf(model));   // the rest of this question stays on the model that answered
     const calls = reply.message.tool_calls || [];
     if (last || !calls.length) {
       const answer = (reply.message.content || '').trim() || 'Sorry — I couldn\'t find an answer to that.';

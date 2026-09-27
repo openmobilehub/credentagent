@@ -2,7 +2,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
   ask, parseRequest, trimResult, createLimiter, originAllowed, resetToolCache,
-  READ_ONLY, MODELS, MAX_ROUNDS, MAX_QUESTION, AskError,
+  READ_ONLY, MODELS, BACKOFF_MS, FALLBACK_RESERVE_MS, MAX_ROUNDS, MAX_QUESTION, AskError,
 } from './lib/ask-core.mjs';
 
 const STORE = 'https://store.test/mcp';
@@ -91,11 +91,38 @@ describe('ask', () => {
     expect(w.log.zai[MAX_ROUNDS].tools).toBeUndefined();
   });
 
-  it('retries a throttled model once, then falls back to the next model', async () => {
-    const w = world([429, 429, { content: 'From the fallback.' }]);
-    const out = await ask({ question: 'hi' }, opts(w));
+  it('retries a throttled model with backoff, then falls back to the next one', async () => {
+    const tries = BACKOFF_MS[MODELS[0]].length + 1;
+    const waits = [];
+    const w = world([...Array(tries).fill(429), { content: 'From the fallback.' }]);
+    const out = await ask({ question: 'hi' }, opts(w, { sleep: async (ms) => { waits.push(ms); } }));
     expect(out.model).toBe(MODELS[1]);
-    expect(w.log.zai.map((b) => b.model)).toEqual([MODELS[0], MODELS[0], MODELS[1]]);
+    expect(w.log.zai.map((b) => b.model)).toEqual([...Array(tries).fill(MODELS[0]), MODELS[1]]);
+    expect(waits).toEqual(BACKOFF_MS[MODELS[0]]);
+  });
+
+  it('answers from the first model after a transient 429, without touching the fallback', async () => {
+    const w = world([429, { content: 'First answer.' }]);
+    const out = await ask({ question: 'hi' }, opts(w));
+    expect(out.model).toBe(MODELS[0]);
+    expect(w.log.zai.map((b) => b.model)).toEqual([MODELS[0], MODELS[0]]);
+  });
+
+  it('keeps FALLBACK_RESERVE_MS for the fallback: with less time left, the first model is skipped', async () => {
+    let t = 0;
+    const w = world([{ content: 'Fallback answer.' }]);
+    const fetch = async (url, init) => { if (url === STORE) t += 20_000; return w.fetch(url, init); };   // a slow store eats the budget
+    const out = await ask({ question: 'hi' }, opts(w, { fetch, now: () => t }));
+    expect(25_000 - 20_000).toBeLessThan(FALLBACK_RESERVE_MS);
+    expect(out.model).toBe(MODELS[1]);
+    expect(w.log.zai.map((b) => b.model)).toEqual([MODELS[1]]);
+  });
+
+  it('stays on the model that answered for the rest of the question (no re-trying a busy model each round)', async () => {
+    const tries = BACKOFF_MS[MODELS[0]].length + 1;
+    const w = world([...Array(tries).fill(429), { content: '', tool_calls: [call('list-products')] }, { content: 'Done.' }]);
+    await ask({ question: 'whiskey?' }, opts(w));
+    expect(w.log.zai.map((b) => b.model)).toEqual([...Array(tries).fill(MODELS[0]), MODELS[1], MODELS[1]]);
   });
 
   it('times out a model that holds the request, and falls back to the next model', async () => {
@@ -154,7 +181,8 @@ describe('ask', () => {
   });
 
   it('reports a busy AI as 503 when every model stays throttled', async () => {
-    const w = world([429, 429, 429, 429]);
+    const all = MODELS.reduce((n, m) => n + (BACKOFF_MS[m] || []).length + 1, 0);
+    const w = world(Array(all).fill(429));
     await expect(ask({ question: 'hi' }, opts(w))).rejects.toMatchObject({ status: 503, code: 'model_unavailable' });
   });
 });
