@@ -219,6 +219,24 @@ const DESIGN_CSS = `
   .complete-banner .sub strong { font-weight: 800; }
   .complete-banner .ret { display: inline-block; margin-top: 12px; font-size: .82rem; opacity: .92; }
   .complete-banner a { color: #fff; text-decoration: underline; }
+  .complete-banner .close-hint {
+    display: inline-block; margin-top: 14px; padding: 8px 14px; border-radius: 999px;
+    background: rgba(255,255,255,.18); font-weight: 700; font-size: .95rem;
+  }
+
+  /* The finished page (body.completed, set by completedViewScript): the handoff banner
+     leads at the top, the now-pointless pay controls go away, and the technical receipt
+     folds into "Payment details" — so "you're done, close this window" is the first and
+     loudest thing on screen instead of a banner below the fold. */
+  body.completed .wrap > .head,
+  body.completed .card .lede,
+  body.completed .card .btn,
+  body.completed .card .toggle,
+  body.completed #log,
+  body.completed .settling-bar { display: none !important; }
+  body.completed #receipt { margin-top: 0 !important; }
+  body.completed .receipt-details summary { cursor: pointer; font-size: .85rem; font-weight: 600; color: var(--muted); }
+  body.completed .receipt-details[open] summary { margin-bottom: 8px; }
 
   /* Indeterminate settling bar — shown while x402 settles on-chain (~10s). A teal
      sliver slides across a hairline track so the buyer sees the wait is live work,
@@ -321,7 +339,19 @@ export function completionHandoffBanner(returnUrl?: string): string {
   const ret = returnUrl
     ? `<a class="ret" href="${escapeHtml(returnUrl)}">Staying in the browser? Return to checkout ›</a>`
     : "";
-  return `<div class="complete-banner"><div class="big">✓ Order complete</div><div class="sub">You can <strong>close this window</strong> and continue in your agent — it has your order and will pick up from here.</div>${ret}</div>`;
+  return `<div class="complete-banner"><div class="big">✓ Order complete</div><div class="sub">Nothing left to do here. Your agent has your order and will pick up from here — continue in your agent.</div><div class="close-hint">You can close this window now</div>${ret ? `<div>${ret}</div>` : ""}</div>`;
+}
+
+/**
+ * Client-side statement (embed inside a pay rail's completion handler, after the receipt
+ * is rendered into `#receipt`): turn the page into a finished screen. It lifts the
+ * `.complete-banner` to the top of the page (right under the brand header), hides the pay
+ * controls via `body.completed`, folds the rest of the receipt (mandate id, gates,
+ * settlement proof) into a collapsed "Payment details", and scrolls to the top — so on a
+ * phone the buyer sees "close this window" first, not a disabled button above the fold.
+ */
+export function completedViewScript(): string {
+  return `(function(){document.body.classList.add("completed");var b=document.querySelector("#receipt .complete-banner");var w=document.querySelector(".wrap");if(b&&w){var h=w.querySelector(".head")||w.querySelector(".brand");if(h)h.insertAdjacentElement("afterend",b);else w.prepend(b);}var r=document.getElementById("receipt");if(r&&r.firstChild){var d=document.createElement("details");d.className="receipt-details";var s=document.createElement("summary");s.textContent="Payment details";d.appendChild(s);while(r.firstChild)d.appendChild(r.firstChild);r.appendChild(d);}window.scrollTo(0,0);})();`;
 }
 
 /**

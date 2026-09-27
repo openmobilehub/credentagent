@@ -16,7 +16,7 @@
 // control. Self-contained: takes the re-priced amount + lines, not a demo Order type.
 
 import type { Branding } from "../../types.js";
-import { pageHead, brandHeader, orderSummaryCard, trustFooter, settlingBar, completionHandoffBanner, railCompleteScript, refusalNotices } from "../theme.js";
+import { pageHead, brandHeader, orderSummaryCard, trustFooter, settlingBar, completionHandoffBanner, railCompleteScript, completedViewScript, refusalNotices } from "../theme.js";
 
 export interface DcPaymentLine {
   name: string;
@@ -231,6 +231,7 @@ ${pageHead(`Authorize payment (cross-device) · ${order}`, extraCss, args.brandi
         goDc.disabled = true;
         btn.textContent = "Authorized ✓";
         ${railCompleteScript()}
+        ${completedViewScript()}
       } else if (!out.settlementError) {
         // Recoverable by definition: the buyer proves what's missing (age, a credential)
         // and authorizes again. Leaving both buttons dead was the other half of the dead end.
