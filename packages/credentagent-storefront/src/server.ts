@@ -1344,7 +1344,11 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
   // MCP 2026-07-28 is per request by design — no session, no initialize — so the SDK's entry
   // serves it with a fresh server per request. The 2025-era routes below stay as they were;
   // `isLegacyRequest` is the SDK's own routing decision, so the two legs never disagree.
-  const serveModern = toNodeHandler(createMcpHandler(() => buildServer(), { legacy: "reject" }));
+  // `maxSubscriptions: 0` refuses every `subscriptions/listen` up front. This store never
+  // publishes a list-changed event, so a held listen stream carries only keepalives — on
+  // serverless it pins a function until the host's timeout (60 s on Vercel), then the client
+  // opens the next one, all billed as provisioned memory.
+  const serveModern = toNodeHandler(createMcpHandler(() => buildServer(), { legacy: "reject", maxSubscriptions: 0 }));
   app.all("/mcp", async (req: Request, res: Response) => {
     // Self-derive the public origin from the first request so checkout URLs are
     // absolute behind any proxy (Vercel, a tunnel) with zero config — without it,
