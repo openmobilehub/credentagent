@@ -15,12 +15,14 @@
 import { readFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { createRequire } from "node:module";
 import { createMcpExpressApp } from "@modelcontextprotocol/express";
 import { NodeStreamableHTTPServerTransport, toNodeHandler, toWebRequest } from "@modelcontextprotocol/node";
 import {
   CLIENT_CAPABILITIES_META_KEY,
   PROTOCOL_VERSION_META_KEY,
+  SUPPORTED_PROTOCOL_VERSIONS,
   McpServer,
   createMcpHandler,
   inputRequired,
@@ -184,6 +186,13 @@ export interface StorefrontOptions {
    * so a cart written on one instance is readable on the next.
    */
   statelessMcp?: boolean;
+  /**
+   * Optional label for THIS deployment — e.g. `"dev.3f9c2a1"` (where + which commit) — so two
+   * deployments of the same package version can be told apart. Reported next to the version by
+   * `GET /version`, and to MCP clients as semver build metadata (`0.5.0+dev.3f9c2a1`).
+   * Characters outside `[0-9A-Za-z.-]` become `-`.
+   */
+  build?: string;
   /**
    * Optional demo-mode settlement seam (e.g. on-chain). Throwing GATES completion:
    * a configured-but-failed settle records nothing and leaves the cart intact.
@@ -367,6 +376,23 @@ const envelopeOf = (ctx: ServerContext): Record<string, unknown> | undefined =>
   ctx.mcpReq.envelope as Record<string, unknown> | undefined;
 /** Whether this request speaks MCP 2026-07-28 (the session-less, per-request revision). */
 const isModernRequest = (ctx: ServerContext): boolean => envelopeOf(ctx)?.[PROTOCOL_VERSION_META_KEY] !== undefined;
+
+// What this server is, for anyone asking which build is live: MCP clients read it from the
+// protocol's server info, and a browser from GET /version. Versions come from the installed
+// packages' own package.json, so they can't drift from what is actually deployed.
+const require_ = createRequire(import.meta.url);
+const STOREFRONT_VERSION: string = require_("../package.json").version;
+const GATE_VERSION: string | undefined = (() => {
+  try {
+    // The gate's exports map doesn't expose package.json; find it next to the gate's entry file.
+    const entry = require_.resolve("@openmobilehub/credentagent-gate");
+    return JSON.parse(readFileSync(join(dirname(entry), "..", "package.json"), "utf8")).version;
+  } catch {
+    return undefined;
+  }
+})();
+/** The session-less MCP revision `/mcp` serves next to the 2025-era ones (the SDK exports no constant for it). */
+const MODERN_MCP_VERSION = "2026-07-28";
 /** The capabilities a 2026-07-28 request declares for itself (undefined on a 2025-era request). */
 const modernClientCapabilities = (ctx: ServerContext): ClientCapabilities | undefined =>
   envelopeOf(ctx)?.[CLIENT_CAPABILITIES_META_KEY] as ClientCapabilities | undefined;
@@ -428,6 +454,9 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
   // (single-process dev / tests) — mirroring the gate's `allowEphemeralKey` escape hatch.
   const statelessOrders = opts.statelessOrders ?? false;
   const statelessMcp = opts.statelessMcp ?? false;
+  // The deployment label, kept to the characters semver build metadata allows.
+  const build = opts.build ? opts.build.replace(/[^0-9A-Za-z.-]/g, "-") : undefined;
+  const serverVersion = build ? `${STOREFRONT_VERSION}+${build}` : STOREFRONT_VERSION;
   if (statelessOrders && !opts.signingKey && !opts.allowEphemeralKey) {
     throw new Error(
       "[credentagent-storefront] statelessOrders requires a stable `signingKey` so a cart mandate minted on " +
@@ -626,7 +655,7 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
    * fallback key. 2026-07-28 requests are detected per request and need no flag.
    */
   function buildServer({ sessionless = false }: { sessionless?: boolean } = {}): McpServer {
-    const server = new McpServer({ name: "credentagent-storefront", version: "0.1.0" });
+    const server = new McpServer({ name: "credentagent-storefront", version: serverVersion });
 
     // ── UI-linked tools (6) — registerAppTool + the canonical UI_META ───────
     registerAppTool(
@@ -1364,6 +1393,17 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
     } catch {
       if (!res.headersSent) res.status(500).json({ jsonrpc: "2.0", error: { code: -32603, message: "error" }, id: null });
     }
+  });
+
+  // Which build is live, readable in a browser — the same versions MCP clients see.
+  app.get("/version", (_req: Request, res: Response) => {
+    res.json({
+      name: "credentagent-storefront",
+      version: STOREFRONT_VERSION,
+      ...(build ? { build } : {}),
+      ...(GATE_VERSION ? { gate: GATE_VERSION } : {}),
+      mcpProtocolVersions: [MODERN_MCP_VERSION, ...SUPPORTED_PROTOCOL_VERSIONS],
+    });
   });
 
   // The checkout page: the ONE shared three-gate page (renderRequirements), so the

@@ -88,7 +88,9 @@ jobs:
         working-directory: ${{ runner.temp }}/dev-deploy
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-        run: npx vercel@latest deploy --prod --yes --token "$VERCEL_TOKEN"
+        # CREDENTAGENT_BUILD labels this deployment at GET /version (dev + commit), since the
+        # dev twin runs main's code under the last released version number.
+        run: npx vercel@latest deploy --prod --yes --token "$VERCEL_TOKEN" --env CREDENTAGENT_BUILD="dev.${GITHUB_SHA::7}"
 
       - name: Smoke the live dev endpoint
         if: steps.gate.outputs.configured == 'true'
