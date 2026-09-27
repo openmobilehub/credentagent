@@ -743,8 +743,15 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
         const priced = priceFrom(new Map(entries.map((e) => [e.productId, e.quantity])));
         // Cart-bearing structuredContent (FR-014): a fresh ChatGPT widget instance
         // hydrates the real cart instead of an empty one.
-        const payload = { orderId: order.id, checkoutUrl, ...(requires?.length ? { requires } : {}), products: catalog, cart: priced };
-        return { structuredContent: payload, content: [{ type: "text", text: JSON.stringify({ orderId: order.id, checkoutUrl, requires: requires ?? [] }) }], _meta: { [CART_META_KEY]: priced } };
+        // A session-less conversation also gets its cartId back, so a picker opened from this
+        // result keeps editing the same cart instead of starting an empty one.
+        const withId = ref.cartId ? { cartId: ref.cartId } : {};
+        const payload = { orderId: order.id, checkoutUrl, ...(requires?.length ? { requires } : {}), products: catalog, cart: priced, ...withId };
+        return {
+          structuredContent: payload,
+          content: [{ type: "text", text: JSON.stringify({ orderId: order.id, checkoutUrl, requires: requires ?? [], ...withId }) }],
+          _meta: { [CART_META_KEY]: priced, ...(ref.cartId ? { [CART_ID_META_KEY]: ref.cartId } : {}) },
+        };
       },
     );
 
