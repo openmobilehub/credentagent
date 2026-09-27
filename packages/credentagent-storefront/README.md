@@ -129,6 +129,20 @@ revision has no sessions — with two consequences:
   and retries by itself (`examples/mrtr-client.mjs`). Every other client gets the same questions as
   tool output plus a `requestState` to echo back — sealed and checked the same way on both paths.
 
+## Which version is live — `GET /version`
+
+Every storefront answers `GET /version` with its package versions and the MCP versions `/mcp`
+serves — the same version MCP clients see in the protocol's server info:
+
+```json
+{ "name": "credentagent-storefront", "version": "0.5.0", "build": "dev.3f9c2a1", "gate": "0.5.0",
+  "mcpProtocolVersions": ["2026-07-28", "2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05", "2024-10-07"] }
+```
+
+`build` is optional: pass `createStorefront({ build })` to label a deployment (say, where it runs
+and which commit), so two deployments of the same version can be told apart. MCP clients then see
+`0.5.0+dev.3f9c2a1`.
+
 ## Live catalog — one option, no loader
 
 `createStorefront({ catalog })` takes a static `Product[]` by default — perfect for the quickstart.

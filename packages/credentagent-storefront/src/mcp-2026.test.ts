@@ -15,6 +15,7 @@ import { CredentAgent } from "@openmobilehub/credentagent-gate";
 import { createStorefront } from "./server.js";
 import type { Storefront } from "./server.js";
 import { MemoryCartStore } from "./state.js";
+import { readFileSync } from "node:fs";
 
 const MODERN = "2026-07-28";
 
@@ -189,6 +190,39 @@ describe("2025-era clients on a statelessMcp store — a cart per conversation, 
   it("REFUSES a cart id the store never issued", async () => {
     const c = await legacyClient(await serve(createStorefront({ statelessMcp: true })));
     expect((await c.callTool({ name: "get-cart", arguments: { cartId: "cart_1" } })).isError).toBe(true);
+  });
+});
+
+// Which build is live: the real package versions, never a hard-coded number.
+describe("the server reports its real version", () => {
+  const pkg = (p: string) => JSON.parse(readFileSync(new URL(p, import.meta.url), "utf8")).version as string;
+  const storefront = pkg("../package.json");
+  const gate = pkg("../../credentagent-gate/package.json");
+
+  it("GET /version names both package versions and the MCP versions it serves", async () => {
+    const res = await request(createStorefront().app).get("/version");
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ name: "credentagent-storefront", version: storefront, gate });
+    expect(res.body.mcpProtocolVersions).toEqual(expect.arrayContaining(["2026-07-28", "2025-11-25"]));
+  });
+
+  it("labels the deployment with `build`, so two deploys of one version can be told apart", async () => {
+    const store = createStorefront({ build: "dev.3f9c2a1" });
+    expect((await request(store.app).get("/version")).body).toMatchObject({ version: storefront, build: "dev.3f9c2a1" });
+    const c = await modernClient(await serve(store));
+    await c.listTools();
+    expect(c.getServerVersion()?.version).toBe(`${storefront}+dev.3f9c2a1`);
+  });
+
+  it("tells MCP clients the same version, on both protocol eras", async () => {
+    const url = await serve(createStorefront());
+    const modern = await modernClient(url);
+    const legacy = new Client({ name: "legacy", version: "1.0.0" });
+    await legacy.connect(new StreamableHTTPClientTransport(url));
+    open.push(() => legacy.close());
+    await modern.listTools(); // server info rides on a 2026-07-28 response's _meta
+    expect(modern.getServerVersion()?.version).toBe(storefront);
+    expect(legacy.getServerVersion()?.version).toBe(storefront);
   });
 });
 
