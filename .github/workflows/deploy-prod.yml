@@ -12,10 +12,13 @@ name: deploy-prod
 # doesn't matter who authored or merged the change. Turn the Git integration off for both
 # projects (Vercel → Project → Settings → Git) so they stop posting failed checks.
 #
-# The demo installs the PUBLISHED packages (examples/quickstart/package.json), so it needs a
-# deploy only when examples/quickstart changes — typically the catch-up PR after a release.
-# The router needs one only when deploy/router changes. A change to this workflow deploys
-# both. Run it by hand (Actions → deploy-prod → Run workflow) to redeploy either one.
+# The demo installs the PUBLISHED packages (examples/quickstart/package.json), so a push runs
+# this only when examples/quickstart, deploy/router or this workflow changes — typically the
+# catch-up PR after a release. Every such push deploys BOTH projects from its commit: with
+# `concurrency`, GitHub keeps only the NEWEST waiting run, so a run that deployed only "what its
+# own commit changed" could silently drop a change from a run it replaced. Deploying both from
+# the newest commit can't drop anything, and a redundant deploy is cheap. Run it by hand
+# (Actions → deploy-prod → Run workflow) to redeploy one or both.
 #
 # Both projects have a Root Directory set in Vercel (examples/quickstart, deploy/router), so
 # `vercel deploy` runs from the repository root and Vercel builds from that folder with the
@@ -56,33 +59,21 @@ jobs:
       demo: ${{ steps.plan.outputs.demo }}
       router: ${{ steps.plan.outputs.router }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
       - name: Decide what to deploy
         id: plan
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           EVENT: ${{ github.event_name }}
           TARGET: ${{ inputs.target }}
-          BEFORE: ${{ github.event.before }}
         run: |
           if [ -z "$VERCEL_TOKEN" ]; then
             echo "::notice::VERCEL_TOKEN not configured — skipping the production deploy."
             echo "demo=false" >> "$GITHUB_OUTPUT"; echo "router=false" >> "$GITHUB_OUTPUT"; exit 0
           fi
+          demo=true; router=true # a push deploys both (see the header)
           if [ "$EVENT" = "workflow_dispatch" ]; then
-            demo=false; router=false
-            [ "$TARGET" = both ] || [ "$TARGET" = demo ] && demo=true
-            [ "$TARGET" = both ] || [ "$TARGET" = router ] && router=true
-          elif ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
-            demo=true; router=true # no usable previous commit to diff against: deploy both
-          else
-            changed=$(git diff --name-only "$BEFORE" "$GITHUB_SHA")
-            all=false; echo "$changed" | grep -q '^.github/workflows/deploy-prod.yml$' && all=true
-            demo=$all; router=$all
-            echo "$changed" | grep -q '^examples/quickstart/' && demo=true
-            echo "$changed" | grep -q '^deploy/router/' && router=true
+            [ "$TARGET" = both ] || [ "$TARGET" = demo ] || demo=false
+            [ "$TARGET" = both ] || [ "$TARGET" = router ] || router=false
           fi
           echo "demo=$demo" >> "$GITHUB_OUTPUT"; echo "router=$router" >> "$GITHUB_OUTPUT"
           echo "Deploying — demo: $demo, router: $router"
@@ -103,7 +94,10 @@ jobs:
       - name: Deploy credentagent-demo (production)
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-        run: npx vercel@latest deploy --prod --yes --token "$VERCEL_TOKEN"
+        # CREDENTAGENT_BUILD labels this deployment at GET /version (prod + commit). The demo runs
+        # the PUBLISHED storefront, so the label (and /version itself) only takes effect once a
+        # release that includes them is published and the quickstart is bumped to it.
+        run: npx vercel@latest deploy --prod --yes --token "$VERCEL_TOKEN" --env CREDENTAGENT_BUILD="prod.${GITHUB_SHA::7}"
       # The same security-bearing assertions ci.yml runs against a local server, pointed at
       # the live demo.
       - name: Smoke the live demo

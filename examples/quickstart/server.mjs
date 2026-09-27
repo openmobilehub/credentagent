@@ -58,6 +58,9 @@ const store = createStorefront({
   signingKey: process.env.GATE_SECRET,
   statelessOrders: deployed, // the signed cart mandate carries the order between instances
   statelessMcp: deployed, // no per-instance MCP session — survives Vercel's instance split
+  // Which deployment this is (set by the deploy workflows, e.g. "dev.3f9c2a1"), shown at
+  // GET /version and to MCP clients next to the package version.
+  build: process.env.CREDENTAGENT_BUILD,
   // STORAGE_NAMESPACE isolates this deployment's keys when two deployments share one Redis
   // (a prod demo and its dev twin). Keys are `${namespace}:…`, so two deployments on the
   // default namespace could collide on a session or order id. Absent ⇒ the package default,
