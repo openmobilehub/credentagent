@@ -34,21 +34,38 @@ export function claimsCartEdit(answer) {
   return String(answer).split(/(?<=[.!?])\s+/).some((s) => CHANGE.test(s) && !NEGATION.test(s));
 }
 export function asksCartEdit(question) {
-  return /\b(add|remove|delete|take (it |them )?(out|off)|increase|decrease)\b|\bmake it \w+|\b(set|change) .+ to\b|\bput .+ in\b|\b(empty|clear) (my|the) cart\b/i.test(question);
+  if (/\b(add|remove|delete|take (it |them )?(out|off)|increase|decrease)\b|\bmake it \w+|\b(set|change) .+ to\b|\bput .+ in\b|\b(empty|clear) (my|the) cart\b/i.test(question)) return true;
+  // "another mouse" / "one more lamp" / "2 more" are edits — unless the visitor is asking to see or learn
+  // something ("show me another product", "tell me one more detail"), which stays on the cheaper read models.
+  return /\b(another|(one|two|three|\d+) more)\b/i.test(question)
+    && !/\b(show|tell|see|explain|describe|recommend|suggest|what|which|how|why|is|are|does|do)\b/i.test(question);
 }
-const ANSWERS_THE_CHECK = /no cart tool (ran|was called)|\bthe check\b/i;
+const ANSWERS_THE_CHECK = /\bcart tool\b|\bthe check\b|\bonly confirm\b/i;   // the model talking about the check, not the cart
+// A store answer to a cart edit that actually changed something: no error, and at least one of THIS call's
+// product ids matched. (An unknown id is not an error — it lands in cart.unknownIds while the matched lines
+// are committed; that list also keeps ids from earlier calls on the same cart, so only this call's ids count.
+// A partly matched add IS an edit: treating it as none would send the corrective round to add it again.)
+function editAccepted(result, args) {
+  if (!result || result.isError) return false;
+  const unknown = result.structuredContent && result.structuredContent.cart && result.structuredContent.cart.unknownIds;
+  if (!Array.isArray(unknown) || !unknown.length) return true;
+  const ids = Array.isArray(args.items) ? args.items.map((i) => i && i.productId) : [args.productId];
+  return ids.some((id) => !unknown.includes(id));
+}
 const NOT_CHANGED = 'Check: no cart tool ran for this message, so the cart has NOT changed. If I asked to change the cart, ' +
   'call add-to-cart, set-quantity or remove-from-cart now (get ids from get-cart or list-products) and answer only after ' +
   'it succeeds; if I didn\'t ask for a change, answer without saying the cart changed.';
 const HONEST_NO_EDIT = 'Sorry — I didn\'t change your cart just then. Ask me again, or use the picker.';
-// Paid glm-5 first ($1.00 in / $3.20 out per 1M tokens, ~$0.005 a question, from a prepaid Z.ai balance —
-// it can't overspend). Editing the cart needs it: in a 2026-09-27 live run of add / "make it 2" / add /
-// remove / what's-in-my-cart / "check out for me", glm-5 made every edit for real (7/7), while
-// glm-4.5-air ($0.20/$1.10, fine for reading: 5/5 in ~2 s) claimed edits it never made. Fallbacks:
-// glm-4.5-air when glm-5 is overloaded (429, code 1305), then the free glm-4.5-flash — which also covers
-// a spent balance (1113). Dropped: glm-4.7-flash (free tier refused or held most requests) and
-// glm-4.7-flashx (paid, but just as overloaded).
-export const MODELS = ['glm-5', 'glm-4.5-air', 'glm-4.5-flash'];
+// Two chains, both paid from a prepaid Z.ai balance (it can't overspend):
+// - MODELS, for reading (most questions): glm-4.5-air ($0.20 in / $1.10 out per 1M tokens, ~$0.001 a
+//   question; 5/5 on reads in ~2 s), then the free glm-4.5-flash — which also covers a spent balance (1113).
+// - EDIT_MODELS, for a question that asks to change the cart, and for the corrective round when an answer
+//   claims an edit no tool made: glm-5 ($1.00/$3.20, ~$0.005 a question). In a 2026-09-27 live run of
+//   add / "make it 2" / add / remove / what's-in-my-cart / "check out for me", glm-5 made every edit for
+//   real (7/7) while glm-4.5-air claimed edits it never made. It falls back like MODELS on a 429 (1305).
+// Dropped: glm-4.7-flash (free tier refused or held most requests), glm-4.7-flashx (paid, just as overloaded).
+export const MODELS = ['glm-4.5-air', 'glm-4.5-flash'];
+export const EDIT_MODELS = ['glm-5', 'glm-4.5-air', 'glm-4.5-flash'];
 export const BACKOFF_MS = { 'glm-5': [600], 'glm-4.5-air': [600], 'glm-4.5-flash': [700, 1500] };   // the wait before each retry after a 429
 export const FALLBACK_RESERVE_MS = 8_000;   // a model before the last isn't tried with less than this left
 // One-line descriptions for a small model — the store's own are written for large agents, and every
@@ -216,7 +233,7 @@ async function chat({ fetchImpl, apiKey, sleep, now, deadline, modelTimeoutMs },
 // The whole agent: returns { answer, tools, model, app? } — app is the last call to a tool with an MCP App:
 // { tool, resourceUri, result } with the store's full result, for the page to render that app.
 export async function ask(input, {
-  fetch: fetchImpl, apiKey, storeUrl, models = MODELS,
+  fetch: fetchImpl, apiKey, storeUrl, models = MODELS, editModels = EDIT_MODELS,
   sleep = (ms) => new Promise((r) => setTimeout(r, ms)), now = () => Date.now(), modelTimeoutMs = MODEL_TIMEOUT_MS,
 }) {
   if (!apiKey) throw new AskError(503, 'not_configured', 'Ask AI is not configured on this server yet.');
@@ -225,7 +242,8 @@ export async function ask(input, {
   const { tools, ui } = await readOnlyTools(fetchImpl, storeUrl);
   const messages = [{ role: 'system', content: systemPrompt(context) }, ...history, { role: 'user', content: question }];
   const used = [];
-  let model, app = null, pool = models, nudged = false, edited = false;   // edited: a cart edit the store accepted
+  // edited: a cart edit the store accepted. A cart-edit request starts on the stronger EDIT_MODELS.
+  let model, app = null, pool = asksCartEdit(question) ? editModels : models, nudged = false, edited = false;
   for (let round = 0; ; round++) {
     const last = round === MAX_ROUNDS;
     const reply = await chat(deps, messages, last ? null : tools, pool);
@@ -236,12 +254,14 @@ export async function ask(input, {
       let answer = (reply.message.content || '').trim() || 'Sorry — I couldn\'t find an answer to that.';
       if (!edited && !last && !nudged && (asksCartEdit(question) || claimsCartEdit(answer))) {
         nudged = true;   // one corrective round: do the edit for real, or say truthfully why not
+        pool = editModels;   // on the model that makes edits for real (a follow-up like "yes please" reads as no edit)
         messages.push({ role: 'assistant', content: answer }, { role: 'user', content: NOT_CHANGED });
         continue;
       }
       // A claim still unbacked (or on the last round), or the model answering the check itself: say it plainly.
-      // A truthful decline ("we don't sell laptops, so nothing was added") stands.
-      if (!edited && (claimsCartEdit(answer) || (nudged && ANSWERS_THE_CHECK.test(answer)))) answer = HONEST_NO_EDIT;
+      // After the check, only an explicit decline stands ("we don't sell laptops, so nothing was added"): any
+      // other reply without an edit is the model answering the check itself ("Understood! I'll only confirm…").
+      if (!edited && (claimsCartEdit(answer) || (nudged && (!NEGATION.test(answer) || ANSWERS_THE_CHECK.test(answer))))) answer = HONEST_NO_EDIT;
       return { answer, tools: used, model, ...(app ? { app } : {}) };
     }
     messages.push({ role: 'assistant', content: reply.message.content || '', tool_calls: calls });
@@ -258,7 +278,7 @@ export async function ask(input, {
         used.push(name);
         const result = await mcpCall(fetchImpl, storeUrl, 'tools/call', { name, arguments: args });
         if (ui[name] && result && !result.isError) app = { tool: name, resourceUri: ui[name], result };
-        if (CART_EDIT.includes(name) && result && !result.isError) edited = true;
+        if (CART_EDIT.includes(name) && editAccepted(result, args)) edited = true;
         content = trimResult(name, result);
       }
       messages.push({ role: 'tool', tool_call_id: c.id, content });

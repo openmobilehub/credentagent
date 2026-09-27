@@ -33,12 +33,13 @@ The one thing this project runs itself (`api/ask.mjs`, logic in `lib/ask-core.mj
 `ask.test.mjs`, run by the root `npm test`). The website's chat window sends
 `{ question, context: { cartId?, orderId?, grantId? }, history? }` and gets `{ answer, tools, model, app? }`.
 
-- **Model:** Z.ai's `glm-5` (paid, ~$0.005 a question from the account's prepaid balance — it can't
-  overspend), then `glm-4.5-air` if it's overloaded, then the free `glm-4.5-flash`, which also covers a
-  spent balance (logged as `1113`). A 429 is retried with backoff first; the last model always keeps 8 s of
-  the budget. `glm-5` because editing the cart needs it: `glm-4.5-air` claimed edits it never made. Needs
-  the `ZAI_API_KEY` environment variable on this project (Production); without it the endpoint answers
-  `503 not_configured`.
+- **Models (Z.ai, paid from the account's prepaid balance — it can't overspend):** reads go to
+  `glm-4.5-air` (~$0.001 a question), then the free `glm-4.5-flash`, which also covers a spent balance
+  (logged as `1113`). A question that asks to change the cart ("add the mouse", "make it 2", "one more"),
+  and the corrective round when an answer claims an edit no tool made, go to `glm-5` (~$0.005 a question)
+  first — `glm-4.5-air` claimed edits it never made. A 429 is retried with backoff first; the last model
+  always keeps 8 s of the budget. Needs the `ZAI_API_KEY` environment variable on this project
+  (Production); without it the endpoint answers `503 not_configured`.
 - **Reads the store, edits only the cart — never checks out:** the model is offered the store's read
   tools (`browse-products`, `get-order-status`, `get-cart`, `list-products`, `get-product-details`,
   `get-product-reviews`, `get-grant-status`) plus the cart edits `add-to-cart`, `set-quantity` and
