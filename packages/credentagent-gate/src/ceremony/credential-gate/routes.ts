@@ -34,7 +34,8 @@ import { RESERVED_CREDENTIAL_IDS, claimLeaf } from "../../credentials.js";
 import type { Credential } from "../../types.js";
 import type { RequestLike } from "../origin.js";
 import { buildCredentialRequest, buildSignedRequestForDcql } from "./request.js";
-import { evaluateCredential, evaluateCustom, requiredAgeForOrder, verifyCredentialPresentation, type CredentialKind, type CredGateResult } from "./verify.js";
+import { evaluateCredential, evaluateCustom, requiredAgeForOrder, verifyCredentialPresentation, type CredentialKind, type PresentationResult } from "./verify.js";
+import { inspectionResponse } from "../inspect.js";
 import { verifyMdocPresentation } from "./mdoc-verify.js";
 import { buildMdocRequestParts, sealMdocContext } from "../mdoc/mdoc-iso.js";
 import { mdocDocSpec, mdocDocSpecsFromDcql } from "./doc-spec.js";
@@ -274,7 +275,7 @@ export const registerCredentialGate: RailRegistrar = (app: CeremonyApp, ctx: Cer
     const percent = resolved.kind === "membership" ? percentFor(order) : undefined;
 
     try {
-      let out: CredGateResult;
+      let out: PresentationResult;
       const result = body.result as { protocol?: string; data?: unknown } | undefined;
       if (result && typeof result === "object") {
         // REAL wallet presentation — dispatch by the protocol the wallet used. A custom
@@ -302,7 +303,9 @@ export const registerCredentialGate: RailRegistrar = (app: CeremonyApp, ctx: Cer
         if (credential) await recordVerifiedGate(ctx, order.id, credential.id);
         else await recordVerified(ctx, order.id, kind, out.membershipNumber);
       }
-      res.json(out);
+      // The wallet's DeviceResponse goes back to this page only when the host opted in
+      // (inspectPresentations) — for a refused proof too, the case worth inspecting.
+      res.json(inspectionResponse(out, ctx.inspectPresentations));
     } catch (err) {
       res.status(400).json({ verified: false, error: (err as Error).message, trust_level: "presence-only-demo" });
     }

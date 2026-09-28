@@ -258,6 +258,21 @@ export interface CredentAgentOptions {
    * {@link Branding}). Omit for the built-in look. Never overrides the honesty trust footer.
    */
   branding?: Branding;
+  /**
+   * Let the buyer (or you, while developing) inspect the credential their wallet actually
+   * presented. When `true`, a credential / dc-payment verify response also carries
+   * `presentation: { format: "mso_mdoc", deviceResponse, inspectUrl }` — the decrypted
+   * ISO 18013-5 DeviceResponse (base64url) and a link that opens it in Multipaz Tools'
+   * viewer (tools.multipaz.org, which decodes it in the browser; the payload rides in the
+   * URL #fragment, which is never sent to a server) — and the consent page shows an
+   * "Inspect this presentation" link. A refused proof is returned too.
+   *
+   * Default `false`: a DeviceResponse from a real ID can hold personal data (the disclosed
+   * claims, the issuer chain, a device public key). It only ever goes back to the browser
+   * that presented it — it is never stored. This verifies nothing new: `trust_level` is
+   * unchanged, and the page says the gate does not check the issuer signature.
+   */
+  inspectPresentations?: boolean;
   /** Per-order verification state; default in-memory, pluggable (Redis). */
   store?: VerificationStore;
   /**

@@ -29,6 +29,7 @@ import { buildDcPaymentRequest } from "./request.js";
 import { buildDcMandate, runDcGates, verifyDcPresentation, type DcMandate, type GateResult } from "./verify.js";
 import { renderDcPaymentPage } from "./page.js";
 import { checkoutRail } from "../theme.js";
+import { presentationForInspection } from "../inspect.js";
 
 // Minimal structural request/response shapes — the real Express req/res satisfy
 // them, so the package never imports express.
@@ -168,9 +169,13 @@ export const registerDcPaymentGate: RailRegistrar = (app: CeremonyApp, ctx: Cere
       ...(cartMandate !== undefined ? { cartMandate: cartMandate as CompletionInput["cartMandate"] } : {}),
     };
     const result = await ctx.completion(input);
+    // inspectPresentations: the wallet's DeviceResponse (the mandate already carries it as
+    // vpToken on the real path) + the inspector link, so the page can offer "Inspect".
+    const vpToken = mandate.userAuthorization.vpToken;
+    const presentation = ctx.inspectPresentations === true && vpToken ? { presentation: presentationForInspection(vpToken) } : {};
     // Forward the on-chain settlement (when configured + succeeded) AND the
     // settlementError (a configured-but-failed settle → authorized-but-not-settled,
     // FR-013) so the page can render the x402 receipt or the calm refusal line.
-    res.json({ mandate, gates, completed: result.completed, ...(result.reason ? { reason: result.reason } : {}), ...(result.settlement ? { settlement: result.settlement } : {}), ...(result.settlementError ? { settlementError: result.settlementError } : {}) });
+    res.json({ mandate, gates, completed: result.completed, ...(result.reason ? { reason: result.reason } : {}), ...(result.settlement ? { settlement: result.settlement } : {}), ...(result.settlementError ? { settlementError: result.settlementError } : {}), ...presentation });
   });
 };

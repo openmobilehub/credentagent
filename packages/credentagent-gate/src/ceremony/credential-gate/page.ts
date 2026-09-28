@@ -13,7 +13,7 @@
 // states trust_level "presence-only-demo" (CT11 / Principle VII / FR-011): the wire
 // crypto is real; the issuer trust anchor is not — never a real safety control.
 import type { Branding } from "../../types.js";
-import { pageHead, brandHeader, trustFooter } from "../theme.js";
+import { pageHead, brandHeader, trustFooter, inspectLinkScript } from "../theme.js";
 
 export interface CredentialPageArgs {
   /** `"age"` / `"membership"` (built-ins) OR a custom credential id (007). */
@@ -155,9 +155,13 @@ ${pageHead(title, extraCss, args.branding)}
     const doneEl = document.getElementById("done");
     const step = (t, c = "") => { const d = document.createElement("div"); d.className = "step " + c; d.textContent = t; log.appendChild(d); };
     function notice(html) { const d = document.createElement("div"); d.className = "notice"; d.innerHTML = html; log.appendChild(d); }
-    function done() {
+    ${inspectLinkScript()}
+    function done(stay) {
       goDc.disabled = true; go.disabled = true;
       doneEl.style.display = "block";
+      // An "Inspect this presentation" link is showing (inspectPresentations): stay so the
+      // buyer can open it — the banner's "continue now ›" link is the way on.
+      if (stay) { doneEl.firstChild.textContent = "✓ Done — "; return; }
       // Return to the checkout hub so the next gate is one tap away (no manual
       // browser-back). The hub re-reads verification state and shows this gate ✓.
       setTimeout(() => { window.location.assign(RETURN_URL); }, 650);
@@ -213,9 +217,11 @@ ${pageHead(title, extraCss, args.branding)}
             method: "POST", headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ order: ORDER, cart: CART, cred: CRED, readerContextToken: rd.readerContextToken, mdocContextToken: rd.mdocContextToken, result: { protocol: (result && result.protocol) || null, data } }),
           }).then((r) => r.json());
+          // Shown for a refused proof too — that's when it's most worth a look.
+          showInspectLink(out.presentation);
           if (!out.verified) throw new Error(out.error || "not verified");
           step("✓ verified (" + out.trust_level + ")", "ok");
-          done();
+          done(!!out.presentation);
         })
         .catch((err) => {
           step("✗ " + ((err && err.message) || String(err)), "err");

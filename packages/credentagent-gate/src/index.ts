@@ -19,6 +19,8 @@ export type { ExpressApp } from "./client.js";
 // ── Config preflight (#25) — `credentagent.doctor()` validates a deployment's config in
 // one place and returns typed plain data `{ ok, findings: [{ level, code, message, fix }] }`.
 export type { DoctorReport, DoctorFinding, DoctorLevel } from "./doctor.js";
+// ── `inspectPresentations` — the `presentation` block a verify response carries when on.
+export type { InspectablePresentation } from "./ceremony/inspect.js";
 
 // ── Policy builders + extensibility ────────────────────────────────────────
 export { age, membership, payment, required, optional, defineCredential, dcql, gate, discount, authorize } from "./credentials.js";

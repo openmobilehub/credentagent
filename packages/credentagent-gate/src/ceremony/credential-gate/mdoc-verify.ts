@@ -9,7 +9,7 @@
 // signature (trust anchor) — same posture as the OpenID4VP path; trust_level stays
 // presence-only-demo.
 import type { Origin } from "../origin.js";
-import { evaluateDisclosed, evaluateDisclosedCustom, type CredGateResult } from "./verify.js";
+import { evaluateDisclosed, evaluateDisclosedCustom, type PresentationResult } from "./verify.js";
 import type { Credential } from "../../types.js";
 import type { CredentialKind } from "./dcql.js";
 import { mdocDocSpec } from "./doc-spec.js";
@@ -31,7 +31,7 @@ export async function verifyMdocPresentation(args: {
   /** Custom credential (007): when present, its OWN `verify` runs on the disclosed
    *  claims instead of the built-in age/membership policy. */
   credential?: Credential;
-}): Promise<CredGateResult> {
+}): Promise<PresentationResult> {
   const { kind, result, mdocContextToken, origin, secret, minimumAge, percent, credential } = args;
   const ctx = await openMdocContext(mdocContextToken, secret);
 
@@ -51,9 +51,12 @@ export async function verifyMdocPresentation(args: {
     sessionTranscript,
   });
   const disclosed = disclosedFromDeviceResponse(deviceResponse);
-  if (credential) return evaluateDisclosedCustom(credential, disclosed);
+  // The DeviceResponse the decision was made on (base64url) — returned to the page only
+  // when the host opted in to inspectPresentations.
+  const presented = { deviceResponse: Buffer.from(deviceResponse).toString("base64url") };
+  if (credential) return { ...evaluateDisclosedCustom(credential, disclosed), ...presented };
   // The iOS DeviceRequest is built from this same doc spec; keep it referenced so
   // the request/verify pair stays aligned to one doctype definition.
   void mdocDocSpec(kind, minimumAge);
-  return evaluateDisclosed(kind, disclosed, { minimumAge, percent });
+  return { ...evaluateDisclosed(kind, disclosed, { minimumAge, percent }), ...presented };
 }
