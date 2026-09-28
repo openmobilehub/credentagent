@@ -3,17 +3,12 @@
 // verifier-bound request object, sealed reader context) — what differs is WHAT the wallet is
 // asked to sign.
 //
-// WHAT CHANGED (spec 014). The rail used to fold the grant's bounds into the ceremony nonce
-// and rely on the wallet's mdoc DeviceAuth signature over a session transcript carrying it.
-// It now uses the mechanism AP2 specifies: the Mandate Content rides in a `transaction_data`
-// entry of type `delegate`, and the wallet returns it inside the Key Binding JWT. The user's
-// key binding IS the authorization, and what they authorized is readable by anyone who knows
-// AP2 rather than only by this project.
+// The Mandate Content rides in a `transaction_data` entry of type `delegate`, and the wallet
+// returns it inside the Key Binding JWT: the user's key binding IS the authorization.
 //
-// The bounds-bound nonce is KEPT. It is no longer the binding that carries the grant — the
-// signed `delegate_payload` is — but it costs nothing, it keeps the sealed context's
-// tamper-evidence for the grant record, and a second independent binding on a security path
-// is not something to remove for tidiness.
+// The nonce is bound to the grant's bounds as well. The signed `delegate_payload` is what
+// carries the grant, so this is a SECOND, independent binding — it keeps the sealed context's
+// tamper-evidence for the grant record, and is not something to drop for tidiness.
 //
 // The crypto is REAL (signed request, origin/RP binding, sealed context, encrypted response,
 // and /verify checks the HOLDER's key-binding signature). The issuer trust anchor is not — the

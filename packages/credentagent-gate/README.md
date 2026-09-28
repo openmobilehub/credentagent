@@ -631,7 +631,7 @@ sendToUser(grant.approveUrl);                         // → the signing ceremon
 const g = await credentagent.grants.retrieve(grant.id);
 g.status;      // "authorized" — ONLY after the gate verified the device signature over these bounds
 g.trustLevel;  // "device-signed"
-g.mandate;     // { boundsHash, signedAt, credentialType, verifiedBy, trustLevel, mandates } — plain data
+g.mandate;     // { boundsHash, signedAt, credentialType, verifiedBy, mandates } — the evidence, plain data
 const s = await g.spend({ idempotencyKey: "order-1", items: [{ sku: "coffee" }] });
 // s.mandate → { id, boundsHash } — every spend traces to the signed Intent Mandate (FR-5)
 ```

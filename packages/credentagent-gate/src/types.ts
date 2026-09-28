@@ -46,12 +46,16 @@ export interface DcqlQuery {
  * manifest and the envelope both carry this so the limitation is stated in the
  * type, not buried in prose: it's a flow demo, not a real safety control yet.
  *
- * `"device-signed"` (spec 012) sits BETWEEN the two: the wallet's mdoc DeviceAuth
- * signature IS verified (real holder-of-key binding over the exact grant bounds),
- * but the device key rides in a self-minted demo credential with no issuer/VICAL
- * anchor (that is #14). So it is stronger than presence-only (the signature is real)
- * yet still short of `"issuer-verified"` (the anchor is not) — a self-crafted device
- * key would pass. The gate reports it for in-gate verification and NEVER claims
+ * `"device-signed"` sits BETWEEN the two: the HOLDER's signature IS verified. The
+ * wallet returns an SD-JWT VC presentation whose Key Binding JWT carries the terms,
+ * and the gate checks that key binding against the key the credential commits to in
+ * `cnf`, checks the `sd_hash` that binds it to the disclosures presented, checks each
+ * revealed claim against the issuer-signed `_sd` digests, and rebuilds the terms from
+ * its own record to require the wallet signed those exact bytes. What is NOT checked
+ * is the anchor: the credential is self-minted with no issuer trust (that is #14). So
+ * it is stronger than presence-only (the signature is real) yet still short of
+ * `"issuer-verified"` (the anchor is not) — a self-crafted credential would pass.
+ * The gate reports it for in-gate verification and NEVER claims
  * `"issuer-verified"` itself; only an external verifier may report that (relayed
  * verbatim through the delegated seam).
  */

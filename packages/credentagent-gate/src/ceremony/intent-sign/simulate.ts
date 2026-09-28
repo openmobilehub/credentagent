@@ -14,7 +14,7 @@
 // The `override*` options exist to drive the bypass tests. Each one produces a presentation
 // that a correct verifier MUST refuse; if any of them starts passing, a control has gone.
 import * as jose from "jose";
-import { createHash, generateKeyPairSync, sign as nodeSign, webcrypto, type KeyObject } from "node:crypto";
+import { generateKeyPairSync, sign as nodeSign, webcrypto, type KeyObject } from "node:crypto";
 import * as x509 from "@peculiar/x509";
 import { SDJwtInstance } from "@sd-jwt/core";
 import { dcApiAudience, hasher } from "./presentation.js";
@@ -112,6 +112,10 @@ export interface SimulateOptions {
    *  disclosures actually presented — what tampering with the disclosure list after the holder
    *  signed looks like on the wire. */
   breakSdHash?: boolean;
+  /** TEST-ONLY: present the SAME disclosure twice, with the key binding re-signed over it. One
+   *  digest, two disclosures claiming it — a malformed presentation a verifier must not unpack
+   *  into a claim it then trusts. */
+  duplicateDisclosure?: boolean;
 }
 
 /**
@@ -214,6 +218,11 @@ export async function devSimulateWalletSignature(
     // KB-JWT must be typed `kb+sd-jwt` (Delegate SD-JWT §5.1.4). Everything else is the same
     // JWS the library would have produced.
     const kbKey = opts.forgeHolderKey ? p256().privateKey : holder.privateKey;
+    if (opts.duplicateDisclosure) {
+      // `<jwt>~<d1>~…~<dn>~` — repeat the last disclosure before the trailing separator.
+      const parts = disclosed.split("~").filter((x) => x !== "");
+      disclosed = `${[...parts, parts[parts.length - 1]].join("~")}~`;
+    }
     // An RFC 9901 object disclosure is `base64url(JSON([salt, key, value]))`. Appending one the
     // issuer never committed to is the forgery; the wallet then hashes over the tampered bytes,
     // so `sd_hash` still matches and only the `_sd` digest check is left to refuse it.
@@ -224,16 +233,17 @@ export async function devSimulateWalletSignature(
       ).toString("base64url");
       disclosed = `${disclosed}${forged}~`;
     }
-    const sdHash = opts.breakSdHash
-      ? createHash("sha256").update(`${disclosed}tampered`, "ascii").digest("base64url")
-      : createHash("sha256").update(disclosed, "ascii").digest("base64url");
+    // The SHARED hasher, so the wallet hashes exactly the way the verifier does. A private copy
+    // here would let the two drift, and a drift in `sd_hash` reads as a bad signature.
+    const sdHash = (input: string) => Buffer.from(hasher(input, "sha-256")).toString("base64url");
+    const sdHashValue = opts.breakSdHash ? sdHash(`${disclosed}tampered`) : sdHash(disclosed);
     const kbHeader = { alg: "ES256", typ: opts.overrideKbTyp ?? DELEGATE_KB_TYP[0] };
     const kbPayload = {
       iat: Math.floor(Date.now() / 1000),
       // The DC API form, per OpenID4VP §B.3.6 — what a real wallet sends.
       aud: dcApiAudience(origin),
       nonce,
-      sd_hash: sdHash,
+      sd_hash: sdHashValue,
       // Delegate SD-JWT §7.1: the KB-JWT carries the DIGEST of the delegate payload.
       [DELEGATE_PAYLOAD_CLAIM]: delegatePayload,
     };

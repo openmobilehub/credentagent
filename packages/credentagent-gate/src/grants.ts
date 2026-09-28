@@ -233,6 +233,9 @@ interface GrantRecord {
    * fine here: the human's wallet signed `checkout.line_items`, a concrete set of products, and
    * a product added to an allowed category afterwards is not in it. Spending it would be
    * spending outside the signature.
+   *
+   * Absent ONLY on a page-approved grant. `_authorizeDevice` refuses to seal a device grant
+   * whose evidence names no list, so "device-signed and unbounded" is not a reachable state.
    */
   signedSkus?: string[];
   /** Idempotent spend cache: key → the door already returned (a retry replays it). */
@@ -642,6 +645,15 @@ export class Grants {
     return this.locks.run(id, async () => {
       const rec = this.records.get(id);
       if (!rec || rec.status !== "pending" || rec.opts.signing !== "device") return false;
+
+      // FAIL CLOSED before anything is sealed. What a device grant may buy is the list its
+      // mandate names; evidence that carries no list leaves nothing to hold the grant to, and
+      // `allowed()` would quietly fall back to the live catalog — which is the drift this
+      // freezing exists to stop. `/verify` always reports the list today, so this is not
+      // reachable from the rail; it is here so that it stays unreachable.
+      const signedSkus = signedSkusFrom(evidence.mandates);
+      if (!signedSkus || signedSkus.length === 0) return false;
+
       rec.engine = await this.engineGate().preApprove({
         merchant: rec.opts.merchant,
         perOrder: toCents(rec.opts.perSpend),
@@ -663,10 +675,10 @@ export class Grants {
       rec.status = "authorized";
       rec.mandate = evidence;
       rec.mandateId = rec.engine.id;
-      // Freeze what may be bought to what the wallet SIGNED, read back out of the mandate rather
-      // than recomputed — a value recomputed from the catalog would drift with it, which is the
-      // whole problem. `/verify` already required the signature to cover these bytes.
-      rec.signedSkus = signedSkusFrom(evidence.mandates);
+      // Read out of the mandate rather than recomputed — a value recomputed from the catalog
+      // would drift with it, which is the whole problem. `/verify` already required the
+      // signature to cover these bytes.
+      rec.signedSkus = signedSkus;
       return true;
     });
   }
@@ -848,11 +860,11 @@ export interface Grant {
   /** The loyalty membership the human proved before authorizing, if they did (#172). Present ⇒
    *  every purchase under this grant is priced at `discountPct` off, on every path. */
   readonly membershipProof?: SealedMembershipProof;
-  /** The device-signature evidence (spec 012) — present ONLY once a device-mode grant is signed:
-   *  the exact bounds the device signed (`boundsHash`), when, which credential doctype, and who
-   *  verified. Absent on page-mode grants and unsigned device grants. */
-  /** The device-signature evidence. `mandates` is the AP2 Mandate Content the wallet signed —
-   *  the TERMS, so "what did I authorize?" is answerable from the grant, not only from a digest. */
+  /** The device-signature evidence — present ONLY once a device-mode grant is signed: the exact
+   *  bounds the device signed (`boundsHash`), when, which credential type, and who verified.
+   *  `mandates` is the AP2 Mandate Content the wallet signed — the TERMS, so "what did I
+   *  authorize?" is answerable from the grant and not only from a digest. Absent on page-mode
+   *  grants and unsigned device grants. */
   readonly mandate?: {
     boundsHash: string;
     signedAt: string;

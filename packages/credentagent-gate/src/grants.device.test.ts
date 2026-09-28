@@ -174,16 +174,24 @@ describe("device-signed grants — FR-3/6 controls", () => {
   // level, relayed verbatim. This pins _authorizeDevice to relay whatever evidence it is handed.
   it("_authorizeDevice relays the attested trustLevel + verifiedBy VERBATIM (no self-judgment)", async () => {
     const ca = makeAgent();
+    // Any evidence that seals a device grant must name the products it authorizes, so both halves
+    // of this test carry one — it is what the wallet signed, and the seam refuses without it.
+    const mandates = [
+      {
+        vct: "mandate.checkout.open.1",
+        constraints: [{ type: "checkout.line_items", items: [{ id: "coffee", acceptable_items: [{ id: "coffee", title: "coffee" }], quantity: 1 }] }],
+      },
+    ];
     // In-gate evidence.
     const gate = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30, signing: "device" });
-    await ca.grants._authorizeDevice(gate.id, { boundsHash: "h1", signedAt: "2026-07-28T00:00:00Z", credentialType: "urn:emvco:dpc:card:1", verifiedBy: "gate", trustLevel: "device-signed" });
+    await ca.grants._authorizeDevice(gate.id, { boundsHash: "h1", signedAt: "2026-07-28T00:00:00Z", credentialType: "urn:emvco:dpc:card:1", verifiedBy: "gate", trustLevel: "device-signed", mandates });
     const gateAuthed = (await ca.grants.retrieve(gate.id))!;
     expect(gateAuthed.trustLevel).toBe("device-signed");
     expect(gateAuthed.mandate?.verifiedBy).toBe("gate");
 
     // A stronger, issuer-backed level from an external verifier is relayed verbatim WITH its id.
     const delegated = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30, signing: "device" });
-    await ca.grants._authorizeDevice(delegated.id, { boundsHash: "h2", signedAt: "2026-07-28T00:00:00Z", credentialType: "urn:emvco:dpc:card:1", verifiedBy: "upay-verifier", trustLevel: "issuer-verified" });
+    await ca.grants._authorizeDevice(delegated.id, { boundsHash: "h2", signedAt: "2026-07-28T00:00:00Z", credentialType: "urn:emvco:dpc:card:1", verifiedBy: "upay-verifier", trustLevel: "issuer-verified", mandates });
     const delegatedAuthed = (await ca.grants.retrieve(delegated.id))!;
     expect(delegatedAuthed.trustLevel).toBe("issuer-verified"); // relayed, not the gate's own claim
     expect(delegatedAuthed.mandate?.verifiedBy).toBe("upay-verifier");
@@ -413,5 +421,38 @@ describe("a device grant may only buy what its mandate actually names", () => {
     catalog.matcha = { price: 12, category: "Beverages" };
     const authorized = (await ca.grants.retrieve(g.id))!;
     expect((await authorized.spend({ idempotencyKey: "page-1", items: [{ sku: "matcha" }] })).ok).toBe(true);
+  });
+});
+
+// The freeze above is only a control if it can never be absent. If the evidence carries no
+// signed product list, `signedSkus` stays undefined and `allowed()` falls straight back to the
+// live catalog — the grant would be device-signed AND unbounded, which is worse than either.
+// `/verify` always reports the list today, so this seals the door rather than fixing a leak.
+describe("a device grant will not seal without a signed product list", () => {
+  const evidence = {
+    boundsHash: "not-checked-here",
+    signedAt: "2026-09-26T00:00:00.000Z",
+    credentialType: "com.emvco.dpc",
+    verifiedBy: "gate",
+    trustLevel: "device-signed" as const,
+  };
+
+  // BYPASS: delete the `signedSkus` guard in `_authorizeDevice` and this goes green while the
+  // grant quietly becomes spendable against whatever the catalog holds later.
+  it("BYPASS: evidence with no mandates does not authorize the grant", async () => {
+    const ca = makeAgent();
+    const g = await ca.grants.create({ merchant: "utopia", budget: 200, perSpend: 130, allow: { categories: ["Beverages"] }, signing: "device" });
+
+    expect(await ca.grants._authorizeDevice(g.id, evidence)).toBe(false);
+    expect((await ca.grants.retrieve(g.id))!.status).toBe("pending");
+  });
+
+  it("BYPASS: mandates that name no products do not authorize it either", async () => {
+    const ca = makeAgent();
+    const g = await ca.grants.create({ merchant: "utopia", budget: 200, perSpend: 130, allow: { categories: ["Beverages"] }, signing: "device" });
+
+    const empty = [{ vct: "mandate.checkout.open.1", constraints: [{ type: "checkout.line_items", items: [] }] }];
+    expect(await ca.grants._authorizeDevice(g.id, { ...evidence, mandates: empty })).toBe(false);
+    expect((await ca.grants.retrieve(g.id))!.status).toBe("pending");
   });
 });

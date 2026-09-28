@@ -455,3 +455,16 @@ describe("Delegate SD-JWT conformance (draft-gco-oauth-delegate-sd-jwt-00)", () 
     expect(out).toMatchObject({ ok: false, reason: expect.stringContaining("mandate mismatch") });
   });
 });
+
+// Diego's re-check tried a duplicated disclosure and the library refused it. Nothing in the
+// suite would have noticed if a library upgrade stopped refusing, so this pins the behaviour
+// we rely on rather than the implementation that provides it.
+describe("a malformed disclosure set is refused, not unpacked", () => {
+  it("BYPASS: the same disclosure presented twice, with the key binding re-signed → refused", async () => {
+    const b = bounds();
+    const { req, result } = await signFor(b, { duplicateDisclosure: true });
+    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
+    expect(out.ok).toBe(false);
+    if (!out.ok) expect(out.reason).toMatch(/disclosure/i);
+  });
+});
