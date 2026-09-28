@@ -52,7 +52,15 @@ const readerIdentity =
   process.env.CREDENTAGENT_READER_KEY && process.env.CREDENTAGENT_READER_CERT
     ? { key: process.env.CREDENTAGENT_READER_KEY, cert: process.env.CREDENTAGENT_READER_CERT }
     : undefined;
-const credentagent = new CredentAgent({ walletOrigin, catalog: grantCatalog, ...(readerIdentity ? { readerIdentity } : {}) });
+const credentagent = new CredentAgent({
+  walletOrigin,
+  catalog: grantCatalog,
+  ...(readerIdentity ? { readerIdentity } : {}),
+  // Demo/dev only: hand the wallet's credential back for inspection ("Inspect this presentation"
+  // + the order proof receipt). A real ID's credential can hold personal data — never enable it
+  // for real users. The dev demo (deploy-dev.yml) sets CREDENTAGENT_INSPECT_PRESENTATIONS=1.
+  inspectPresentations: process.env.CREDENTAGENT_INSPECT_PRESENTATIONS === "1",
+});
 
 const store = createStorefront({
   signingKey: process.env.GATE_SECRET,
