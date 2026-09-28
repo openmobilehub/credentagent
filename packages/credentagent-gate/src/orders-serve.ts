@@ -17,6 +17,7 @@
 // threshold from the STORED lines, never from the token.
 
 import { mountCeremony, type CeremonyApp } from "./ceremony/mount.js";
+import { basePathOf } from "./ceremony/origin.js";
 import { completeOrder, type CompletedRecord, type CompletedOrderStore } from "./ceremony/completion.js";
 import { renderRequirements, type RenderOrder } from "./ceremony/checkout-page.js";
 import type { CartItemRef, CeremonyCatalog, CeremonyOrder, CeremonyOrderStore, RepriceOpts } from "./ceremony/types.js";
@@ -213,11 +214,12 @@ export function serveOrders(app: CeremonyApp, deps: ServeOrdersDeps): void {
     // storefront's `/checkout` default (which the orders interface doesn't serve).
     returnUrl: (id) => `${deps.walletOrigin}/credentagent/orders/${encodeURIComponent(id)}`,
     // The pay pages link this order's status record ("Order record ›") — same host as the pages.
-    statusUrl: (id) => `/credentagent/orders/${encodeURIComponent(id)}/status`,
+    statusUrl: (id) => `${basePathOf(deps.walletOrigin)}/credentagent/orders/${encodeURIComponent(id)}/status`,
     ...(deps.readerIdentity ? { readerIdentity: deps.readerIdentity } : {}),
     ...(deps.branding ? { branding: deps.branding } : {}),
     ...(deps.inspectPresentations ? { inspectPresentations: true } : {}),
     ...(deps.signingKey ? { signingKey: deps.signingKey } : { allowEphemeralKey: true }),
+    basePath: basePathOf(deps.walletOrigin),
   });
 
   const get = app.get?.bind(app);
@@ -257,10 +259,10 @@ export function serveOrders(app: CeremonyApp, deps: ServeOrdersDeps): void {
           methods: [
             { value: "demo", name: `Complete purchase (demo) — ${order.total} ${order.currency}`, desc: "No real charge — records the order.", placeOrder: true },
           ],
-          placeOrderPath: `/credentagent/orders/${orderQ}/place`,
+          placeOrderPath: `${basePathOf(deps.walletOrigin)}/credentagent/orders/${orderQ}/place`,
           orderToken: id,
         };
-    const statusUrl = `/credentagent/orders/${orderQ}/status`;
+    const statusUrl = `${basePathOf(deps.walletOrigin)}/credentagent/orders/${orderQ}/status`;
     res.type("html").send(renderRequirements(toRenderOrder(order), manifest, verification, { payment, paid, statusUrl, ...(deps.branding ? { branding: deps.branding } : {}) }));
   };
 

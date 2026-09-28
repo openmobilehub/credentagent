@@ -8,14 +8,21 @@ itself — `vercel.json` forwards each path to the demo that serves it:
 | --- | --- |
 | `https://credentagent.ai/marketplace/mcp` | `credentagent-demo` — the published npm packages |
 | `https://credentagent.ai/marketplace-dev/mcp` | `credentagent-demo-dev` — `main`'s unpublished packages |
+| `https://credentagent.ai/marketplace-dev/checkout?…` and the other store pages | `credentagent-demo-dev` — its checkout and consent pages (see below) |
 | `https://credentagent.ai/` | the product page from https://openmobilehub.org/credentagent, served under credentagent.ai (the address bar stays on credentagent.ai) |
 
-**Why a separate project, not a domain on `credentagent-demo`:** the demo mints its checkout
-and wallet links from `VERCEL_PROJECT_PRODUCTION_URL`, which Vercel resolves to the project's
-*shortest* domain. A custom domain there would move every checkout link to `credentagent.ai`
-at the next deploy — where the gate pages' root paths (`/checkout`, `/credentagent/...`)
-don't exist. Here only the MCP endpoint moves; checkout pages stay on each demo's own
-`*.vercel.app` origin, so passkey and wallet-reader bindings are unchanged.
+**Why a separate project, not a domain on `credentagent-demo`:** a demo mints its checkout and
+wallet links from `PUBLIC_URL`, falling back to `VERCEL_PROJECT_PRODUCTION_URL`, which Vercel
+resolves to the project's *shortest* domain. A custom domain on a demo would silently move its
+links whenever that ordering changes; `PUBLIC_URL` states the address outright.
+
+**Store pages under credentagent.ai (#226):** `deploy-dev.yml` sets the dev demo's `PUBLIC_URL` to
+`https://credentagent.ai/marketplace-dev`. The gate and storefront then put `/marketplace-dev` on
+every checkout link, consent-page fetch and redirect, so a buyer stays on credentagent.ai end to
+end — the router strips the prefix on the way in. The wallet binds to the page's origin
+(`https://credentagent.ai`, from the forwarded host), so passkeys and wallet requests name
+credentagent.ai. The prod demo keeps its `*.vercel.app` links until a release carries this (0.5.0's
+pages use root paths); then set `PUBLIC_URL=https://credentagent.ai/marketplace` in `deploy-prod.yml`.
 
 To add a route, add a `rewrites` entry mapping `/<name>/:path*` to the target origin.
 

@@ -363,7 +363,10 @@ the catalog; unknown ids are collected (`unknownIds`), not thrown.
 
 `createStorefront()` accepts `{ catalog, reviews, baseUrl, cartStore, orderStore, createdOrderStore,
 verificationStore, storage, signingKey, allowEphemeralKey, settle, verifier }`. `catalog` is a
-`Product[]` (static) or a `CatalogSource` (dynamic, e.g. `firestoreCatalog(...)`). The optional
+`Product[]` (static) or a `CatalogSource` (dynamic, e.g. `firestoreCatalog(...)`). `baseUrl` is the
+public URL checkout links start from (default: the first request's origin); behind a proxy that serves
+the store under a path, include it (`https://shop.example/store`) and give the gate the same
+`walletOrigin`, so the checkout and consent pages link and fetch under `/store`. The optional
 `settle` seam (e.g. on-chain) **gates** completion: a configured-but-failed settle records nothing and
 leaves the cart intact.
 

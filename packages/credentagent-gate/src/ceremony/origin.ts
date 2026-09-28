@@ -23,3 +23,16 @@ export function deriveOrigin(req: RequestLike): Origin {
   const rpID = host.split(":")[0];
   return { rpID, origin: `${proto}://${host}` };
 }
+
+// The path a public URL is served under, as the BROWSER sees it: "https://shop.example/store/"
+// → "/store"; a bare origin → "". A gate behind a proxy that mounts it under a path (e.g. a
+// router forwarding https://shop.example/store/* to this server's /*) sees request paths
+// WITHOUT that prefix, so every URL a page hands the browser must put it back.
+export function basePathOf(publicUrl: string | undefined): string {
+  if (!publicUrl) return "";
+  try {
+    return new URL(publicUrl).pathname.replace(/\/+$/, "");
+  } catch {
+    return "";
+  }
+}
