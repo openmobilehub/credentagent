@@ -20,6 +20,7 @@
 
 import type { Branding } from "../types.js";
 import type { CompletionRefusalReason } from "./types.js";
+import { INSPECTOR_URL } from "./inspect.js";
 
 function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -559,6 +560,18 @@ export function checkoutRail(
  */
 export function railCompleteScript(): string {
   return `(function(){var s=document.querySelector(".rail .rail-step.current");if(s){s.classList.remove("current");s.classList.add("done");var d=s.querySelector(".rail-dot");if(d)d.textContent="✓";}})();`;
+}
+
+/**
+ * Client-side declaration: `showInspectLink(presentation, containerId = "log")` — when a
+ * verify response carries `presentation` (the host set `inspectPresentations`), append an
+ * "Inspect this presentation" link that opens the wallet's DeviceResponse in Multipaz
+ * Tools, with the honest note that this gate does not check the issuer signature. A no-op
+ * when `presentation` is absent (the default), so pages call it unconditionally. Only a
+ * tools.multipaz.org link is ever rendered, and it is built with DOM APIs (no innerHTML).
+ */
+export function inspectLinkScript(): string {
+  return `function showInspectLink(p,id){if(!p||typeof p.inspectUrl!=="string"||p.inspectUrl.indexOf("${INSPECTOR_URL}#")!==0)return;var c=document.getElementById(id||"log")||document.body;var d=document.createElement("div");d.className="inspect";d.style.cssText="margin-top:12px;padding:10px 12px;border:1px solid var(--hairline);border-radius:10px";var a=document.createElement("a");a.href=p.inspectUrl;a.target="_blank";a.rel="noopener noreferrer";a.style.fontWeight="600";a.textContent="Inspect this presentation ›";var n=document.createElement("div");n.className="small";n.textContent="The ISO mdoc credential your wallet sent, decoded in your browser by Multipaz Tools (nothing is uploaded). This gate checks what was disclosed and that it answers this request; it does not check the issuer signature (presence-only-demo).";d.appendChild(a);d.appendChild(n);c.appendChild(d);}`;
 }
 
 // ── Trust footer ────────────────────────────────────────────────────────────

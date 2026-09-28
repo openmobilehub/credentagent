@@ -16,7 +16,7 @@
 // control. Self-contained: takes the re-priced amount + lines, not a demo Order type.
 
 import type { Branding } from "../../types.js";
-import { pageHead, brandHeader, orderSummaryCard, trustFooter, settlingBar, completionHandoffBanner, railCompleteScript, completedViewScript, refusalNotices } from "../theme.js";
+import { pageHead, brandHeader, orderSummaryCard, trustFooter, settlingBar, completionHandoffBanner, railCompleteScript, completedViewScript, refusalNotices, inspectLinkScript } from "../theme.js";
 
 export interface DcPaymentLine {
   name: string;
@@ -116,6 +116,7 @@ ${pageHead(`Authorize payment (cross-device) · ${order}`, extraCss, args.brandi
     // Escape any server-returned value before it goes into innerHTML (txId, accountId,
     // the settlementError message): they're built server-side but never trusted raw.
     const esc = (s) => String(s).replace(/[&<>"']/g, (c) => "&#" + c.charCodeAt(0) + ";");
+    ${inspectLinkScript()}
 
     // Pre-fetch the REAL signed OpenID4VP request so navigator.credentials.get() can be
     // called SYNCHRONOUSLY inside the tap. iOS WebKit drops the transient user
@@ -158,6 +159,8 @@ ${pageHead(`Authorize payment (cross-device) · ${order}`, extraCss, args.brandi
           if (!out.mandate) throw new Error(out.error || "authorization failed");
           step("✓ presentation verified · mandate built (" + out.mandate.trust_level + ")", "ok");
           renderReceipt(out);
+          // Into #receipt, not #log: the completed view hides the log.
+          showInspectLink(out.presentation, "receipt");
           // Configured-but-failed settle: authorized, not settled — let the buyer retry.
           if (out.settlementError) { step("✗ settlement failed — authorized, not settled (retry below)", "err"); goDc.disabled = false; prefetch(); }
         })

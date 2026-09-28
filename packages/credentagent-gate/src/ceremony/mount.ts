@@ -93,6 +93,10 @@ export interface CeremonySeams {
    *  once on `new CredentAgent({ branding })` and threaded here; every rail page picks it up.
    *  Absent ⇒ the built-in look. Never affects the honesty trust footer. */
   branding?: Branding;
+  /** Return the wallet's decrypted DeviceResponse to the page that presented it, with an
+   *  "Inspect this presentation" link (see `CredentAgentOptions.inspectPresentations`).
+   *  Absent/false ⇒ off. */
+  inspectPresentations?: boolean;
 }
 
 /** The resolved context each rail receives (every required seam present). */
@@ -123,6 +127,8 @@ export interface CeremonyContext {
   returnUrl?: (orderId: string) => string;
   /** Host brand for the ceremony pages (absent ⇒ the built-in look). Never brands the footer. */
   branding?: Branding;
+  /** Hand the presented DeviceResponse back to the page for inspection (absent ⇒ off). */
+  inspectPresentations?: boolean;
 }
 
 /** A rail attaches its routes to the host app given the resolved context. */
@@ -159,6 +165,7 @@ export function mountCeremony(app: CeremonyApp, options: Partial<CeremonySeams> 
   const orderPolicies = options.orderPolicies ?? locals.orderPolicies;
   const returnUrl = options.returnUrl ?? locals.returnUrl;
   const branding = options.branding ?? locals.branding;
+  const inspectPresentations = options.inspectPresentations ?? locals.inspectPresentations ?? false;
   let signingKey = options.signingKey ?? locals.signingKey;
 
   // Fail fast (CT2) — a load-bearing seam must never silently default. (`origin`
@@ -219,6 +226,7 @@ export function mountCeremony(app: CeremonyApp, options: Partial<CeremonySeams> 
     ...(readerIdentity ? { readerIdentity } : {}),
     ...(returnUrl ? { returnUrl } : {}),
     ...(branding ? { branding } : {}),
+    ...(inspectPresentations ? { inspectPresentations } : {}),
   };
 
   // Re-expose the resolved seams on app.locals so the storefront's gate routes

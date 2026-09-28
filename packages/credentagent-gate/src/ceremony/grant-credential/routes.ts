@@ -42,7 +42,8 @@
 // never a real safety control, until issuer-verified trust lands (#14).
 import { deriveOrigin, type RequestLike } from "../origin.js";
 import { buildCredentialRequest } from "../credential-gate/request.js";
-import { evaluateCredential, verifyCredentialPresentation, type CredGateResult } from "../credential-gate/verify.js";
+import { evaluateCredential, verifyCredentialPresentation, type PresentationResult } from "../credential-gate/verify.js";
+import { inspectionResponse } from "../inspect.js";
 import { verifyMdocPresentation } from "../credential-gate/mdoc-verify.js";
 import { mdocDocSpec } from "../credential-gate/doc-spec.js";
 import type { CredentialKind } from "../credential-gate/dcql.js";
@@ -214,7 +215,7 @@ export function registerGrantCredentialGate(app: CredentialRailApp, grants: Gran
       const { minimumAge, percent } = r;
 
       try {
-        let out: CredGateResult;
+        let out: PresentationResult;
         const result = body.result as { protocol?: string; data?: unknown } | undefined;
         if (result && typeof result === "object") {
           // REAL wallet presentation — dispatch by the protocol the wallet used.
@@ -250,7 +251,9 @@ export function registerGrantCredentialGate(app: CredentialRailApp, grants: Gran
             return;
           }
         }
-        res.json(out);
+        // Never forward the raw DeviceResponse the verifier carried (the grant rail has no
+        // inspectPresentations opt-in yet).
+        res.json(inspectionResponse(out, false));
       } catch (err) {
         res.status(400).json({ verified: false, error: (err as Error).message, trust_level: "presence-only-demo" });
       }

@@ -85,6 +85,44 @@ credentagent.mount(store.app); // every /credentagent/* page now carries ACME's 
   `https:`/`http:` URL, or a root-relative `/path`. A host-supplied string can't inject markup or CSS
   onto a consent screen.
 
+### Inspecting what the wallet sent (`inspectPresentations`)
+
+Want to see the actual verifiable credential behind a proof — while you develop, or to show a
+buyer? Turn on `inspectPresentations` and the consent page adds an **Inspect this presentation**
+link after the wallet answers:
+
+```ts
+const credentagent = new CredentAgent({ walletOrigin, inspectPresentations: true });
+```
+
+The link opens the wallet's decrypted ISO 18013-5 `DeviceResponse` in
+[Multipaz Tools](https://tools.multipaz.org/mdocDeviceResponse) (from the OpenWallet Foundation
+Multipaz project), which decodes it in your browser: document type, every issuer-signed claim,
+the Mobile Security Object's validity dates and digests, the device key. The same data rides on
+the verify response for your own tooling:
+
+```jsonc
+// POST /credentagent/credential/verify  (and /credentagent/dc-payment/verify)
+{ "verified": true, "trust_level": "presence-only-demo", "gates": [ … ],
+  "presentation": {
+    "format": "mso_mdoc",
+    "deviceResponse": "o2d2ZXJzaW9u…",   // base64url CBOR, exactly what the wallet sent
+    "inspectUrl": "https://tools.multipaz.org/mdocDeviceResponse#o2d2ZXJzaW9u…" } }
+```
+
+- **Off by default.** A DeviceResponse from a real ID can carry personal data (the disclosed claims,
+  the issuer's certificate chain, a device public key). With the option on, it goes back only to the
+  browser that just presented it — it is never stored, logged, or put in a webhook. The payload
+  rides in the link's `#fragment`, which the browser never sends to the inspector's server. (One
+  pre-existing exception: the dc-payment verify response has always carried the same bytes inside
+  `mandate.userAuthorization.vpToken`; the option adds only the `presentation` block and the link.)
+- **A refused proof is returned too** — the moment you most want to look at what came back.
+- **It verifies nothing new.** `trust_level` is unchanged, and the page says so: the gate checks what
+  was disclosed and that it answers this request, not the issuer signature (see
+  [Honest status](#honest-status)).
+- **Covers** the credential rail (age, membership, `defineCredential()`; Android OpenID4VP and iOS
+  `org-iso-mdoc`) and the dc-payment rail. The grant rails don't expose it yet.
+
 ## Orders — a checkout without a storefront
 
 Don't have (or want) the MCP storefront? Drive the checkout yourself with `credentagent.orders`.
@@ -678,7 +716,7 @@ provide those are later increments.
 ```ts
 // Client (configure once, then declarative calls)
 class CredentAgent {
-  constructor(opts?: { walletOrigin?: string; store?: VerificationStore; credentials?: Credential[]; branding?: Branding });
+  constructor(opts?: { walletOrigin?: string; store?: VerificationStore; credentials?: Credential[]; branding?: Branding; inspectPresentations?: boolean });
   requirements(order: GateOrder, policy: Step[]): VerificationManifestEntry[];   // Context 1
   mount(app: ExpressApp, ceremony?: MountCeremony): void;                        // Context 2
   doctor(opts?: { print?: boolean }): DoctorReport;                              // config preflight (#25)

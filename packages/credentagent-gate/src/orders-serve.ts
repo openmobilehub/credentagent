@@ -51,6 +51,8 @@ export interface ServeOrdersDeps {
   readerIdentity?: ReaderIdentity;
   /** Host brand for the checkout page + rails (omit ⇒ the built-in look). Never brands the footer. */
   branding?: Branding;
+  /** Return the presented DeviceResponse to the rail page for inspection (omit ⇒ off). */
+  inspectPresentations?: boolean;
   /** Stable HMAC key for the challenge (survives an instance split). Omit ⇒ ephemeral dev key. */
   signingKey?: string;
 }
@@ -210,6 +212,7 @@ export function serveOrders(app: CeremonyApp, deps: ServeOrdersDeps): void {
     returnUrl: (id) => `${deps.walletOrigin}/credentagent/orders/${encodeURIComponent(id)}`,
     ...(deps.readerIdentity ? { readerIdentity: deps.readerIdentity } : {}),
     ...(deps.branding ? { branding: deps.branding } : {}),
+    ...(deps.inspectPresentations ? { inspectPresentations: true } : {}),
     ...(deps.signingKey ? { signingKey: deps.signingKey } : { allowEphemeralKey: true }),
   });
 
