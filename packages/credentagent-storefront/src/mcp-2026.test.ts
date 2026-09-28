@@ -13,8 +13,9 @@ import request from "supertest";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { CredentAgent } from "@openmobilehub/credentagent-gate";
 import { createStorefront } from "./server.js";
-import type { Storefront } from "./server.js";
-import { MemoryCartStore } from "./state.js";
+import type { Storefront, CompletedOrderRecord } from "./server.js";
+import { MemoryCartStore, MemoryOrderStore } from "./state.js";
+import type { Order } from "./index.js";
 import { readFileSync } from "node:fs";
 
 const MODERN = "2026-07-28";
@@ -126,6 +127,22 @@ describe("the cart a 2026-07-28 conversation keys by its cart id (no sessions, s
     expect(order.cartId).toBe(cartId);
     const fromMeta = (await c.callTool({ name: "checkout", arguments: { cartId } }))._meta as Record<string, unknown>;
     expect(fromMeta["product-picker/cart-id"]).toBe(cartId);
+  });
+
+  it("empties the cart when the order completes on ANOTHER instance (serverless, no affinity)", async () => {
+    // Two instances sharing their stores (what Redis gives a Vercel deploy). The checkout runs on A,
+    // the buyer's completion lands on B — B must still know which cart this order came from.
+    const shared = { cartStore: new MemoryCartStore(), createdOrderStore: new MemoryOrderStore<Order>(), orderStore: new MemoryOrderStore<CompletedOrderRecord>(), orderCartStore: new MemoryOrderStore<string>() };
+    const a = createStorefront({ ...shared, signingKey: "k" });
+    const b = createStorefront({ ...shared, signingKey: "k" });
+    const c = await modernClient(await serve(a));
+    const { cartId } = await call(c, "browse-products", {});
+    await call(c, "add-to-cart", { cartId, items: [{ productId: "drift-mouse", quantity: 1 }] });
+    const { orderId } = await call(c, "checkout", { cartId });
+
+    await request(b.app).post("/checkout/place-order").type("form").send({ order: orderId }).expect(200);
+
+    expect((await call(c, "get-cart", { cartId })).cart.lines).toEqual([]);
   });
 
   it("shows the agent what the user picked in the widget — both hold the same cart id", async () => {

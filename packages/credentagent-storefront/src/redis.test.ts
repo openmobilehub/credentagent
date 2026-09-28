@@ -83,6 +83,15 @@ describe("redisStorage — cross-instance round-trip (US1 / FR-004)", () => {
   });
 });
 
+describe("redisStorage — the order→cart link survives an instance split", () => {
+  it("a second provider reads which cart an order came from, under its own key", async () => {
+    const client = fakeRedis();
+    await redisStorage({ client, namespace: "shop" }).orderCartStore!.write("ORD-1", "cart_abc");
+    expect(await redisStorage({ client, namespace: "shop" }).orderCartStore!.read("ORD-1")).toBe("cart_abc");
+    expect(client.store.has("shop:order:cart:ORD-1")).toBe(true);
+  });
+});
+
 describe("redisStorage — per-order isolation (US1 / FR-005, Security Invariant #4)", () => {
   it("verification proven for one order never marks a different order verified", async () => {
     const s = redisStorage({ client: fakeRedis(), namespace: "shop" });
@@ -228,8 +237,8 @@ describe("redisStorage.fromEnv — storage from standard deployment env (issue #
     const provider = redisStorage.fromEnv({ _env: { ...KV }, _load: load });
 
     expect(provider).toBeDefined();
-    // All four stores present.
-    expect(Object.keys(provider!)).toEqual(["cartStore", "createdOrderStore", "orderStore", "verificationStore"]);
+    // Every store present.
+    expect(Object.keys(provider!)).toEqual(["cartStore", "createdOrderStore", "orderStore", "verificationStore", "orderCartStore"]);
     // The lazy client is constructed with EXACTLY the KV url/token — proves fromEnv read them.
     await provider!.cartStore.read("sess-1");
     expect(built).toEqual([{ url: KV.KV_REST_API_URL, token: KV.KV_REST_API_TOKEN }]);
