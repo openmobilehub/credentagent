@@ -105,7 +105,7 @@ import {
 export type GateResolver = (order: Order) => unknown[] | undefined;
 
 /**
- * A persistence provider that supplies all four stores at once (e.g. `redisStorage(...)`
+ * A persistence provider that supplies every store at once (e.g. `redisStorage(...)`
  * from `@openmobilehub/credentagent-storefront/redis`). Passed as `StorefrontOptions.storage`
  * so a production deployment gets shared, cross-instance state with one option instead of
  * hand-written adapters. An explicit per-slot store (`cartStore`, `orderStore`, …) still
@@ -116,6 +116,8 @@ export interface StorageProvider {
   createdOrderStore: OrderStore<Order>;
   orderStore: OrderStore<CompletedOrderRecord>;
   verificationStore: VerificationStore;
+  /** Which cart each order was checked out from. Optional so an older custom provider still fits. */
+  orderCartStore?: OrderStore<string>;
 }
 
 export interface StorefrontOptions {
@@ -151,9 +153,16 @@ export interface StorefrontOptions {
    */
   verificationStore?: VerificationStore;
   /**
+   * Order id → the cart key it was checked out from (a session id, or a session-less
+   * conversation's `cartId`), recorded at checkout so completion empties THAT cart. Default
+   * in-memory; inject a shared store on a multi-instance deployment, or a completion that lands
+   * on another instance leaves the bought items in the cart.
+   */
+  orderCartStore?: OrderStore<string>;
+  /**
    * A persistence provider (e.g. `redisStorage({ url, token, namespace })`) that supplies
-   * all four stores at once. Optional — omit for the in-memory default. An explicit store
-   * above (`cartStore` / `orderStore` / `createdOrderStore` / `verificationStore`) takes
+   * every store at once. Optional — omit for the in-memory default. An explicit store
+   * above (`cartStore` / `orderStore` / `createdOrderStore` / `verificationStore` / `orderCartStore`) takes
    * precedence over the provider's store for that slot.
    */
   storage?: StorageProvider;
@@ -428,11 +437,17 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
   // store for that slot (e.g. `redisStorage(...)`), else the in-memory default. Keeping
   // the in-memory fallback last means zero-config stays unchanged (no `storage` → memory).
   const cartStore: CartStore = opts.cartStore ?? opts.storage?.cartStore ?? new MemoryCartStore();
-  // orderId → sessionId, recorded at checkout so the completion path (browser / place-order,
-  // which has no MCP session) can clear the RIGHT session's cart. In-memory, so on
-  // multi-instance serverless it shares the stateful-session limitation (needs sticky
-  // sessions); elsewhere it's best-effort and the cart simply isn't cleared.
-  const orderSessions = new Map<string, string>();
+  // orderId → cart key, recorded at checkout so the completion path (browser / place-order,
+  // which has no MCP session) can clear the RIGHT cart. A store, not a process Map: on
+  // multi-instance serverless the completion usually lands on another instance.
+  const orderCarts: OrderStore<string> =
+    opts.orderCartStore ?? opts.storage?.orderCartStore ?? new MemoryOrderStore<string>();
+  const clearOrderCart = async (orderId: string): Promise<void> => {
+    const key = await orderCarts.read(orderId);
+    if (key === null) return;
+    await cartStore.write(key, new Map());
+    await orderCarts.clear(orderId);
+  };
   const orderStore: OrderStore<CompletedOrderRecord> =
     opts.orderStore ?? opts.storage?.orderStore ?? new MemoryOrderStore<CompletedOrderRecord>();
   // Created-but-not-completed orders, for the checkout page + place-order. A store
@@ -556,7 +571,7 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
         read: async (orderId: string) => ((await orderStore.read(orderId)) ?? undefined) as CompletedRecord | undefined,
         write: async (record: CompletedRecord) => { await orderStore.write(record.orderId, record); },
       },
-      cart: { clear: async () => { const sid = orderSessions.get(input.order.id); if (sid) await cartStore.write(sid, new Map()); } },
+      cart: { clear: () => clearOrderCart(input.order.id) },
       // Custom-gate enforcement (007): hand `completeOrder` the credential registry
       // `credentagent.mount(store.app)` published on app.locals — read LAZILY at completion
       // time (mount runs after this closure is defined) so an applicable custom gate() is
@@ -769,7 +784,7 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
         // a store write — the checkout page + gate rails reconstruct + verify it (FR-007).
         const cart = statelessOrders ? cartParamFor(order) : null;
         if (!statelessOrders) await createdOrderStore.write(order.id, order);
-        orderSessions.set(order.id, ref.key); // so completion clears THIS session's (or cart id's) cart
+        await orderCarts.write(order.id, ref.key); // so completion clears THIS session's (or cart id's) cart
         const checkoutUrl = withCart(`${baseUrl}/checkout?order=${order.id}`, cart);
         // ← where CredentAgent mounts on. Re-home any /credentagent/* approve link onto this
         // server's origin (and propagate the cart param), so the gate links share the base.
@@ -1535,8 +1550,7 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
         return;
       }
       await orderStore.write(order.id, { orderId: order.id, amount: order.total, currency: order.currency, method: "demo", completedAt: new Date().toISOString() });
-      const sid = orderSessions.get(order.id); // completion empties THIS session's cart
-      if (sid) await cartStore.write(sid, new Map());
+      await clearOrderCart(order.id); // completion empties THIS order's cart
     }
     res.type("html").send(`<!doctype html><meta charset="utf-8"><body style="font-family:system-ui;max-width:32rem;margin:3rem auto"><h1>✓ Order placed (demo)</h1><p>You can close this tab — the storefront will update.</p></body>`);
   });
