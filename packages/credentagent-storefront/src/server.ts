@@ -1457,7 +1457,7 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
     // (#107). Dropping it here made EVERY completed order — even a real x402 or processor
     // settlement — render "no settlement", the receipt-honesty bug this fixes.
     const paid = done
-      ? { amount: done.amount, currency: done.currency, method: done.method, ...(done.settlement ? { settlement: done.settlement as RenderPaid["settlement"] } : {}) }
+      ? { amount: done.amount, currency: done.currency, method: done.method, ...(done.settlement ? { settlement: done.settlement as RenderPaid["settlement"] } : {}), ...(done.proofs?.length ? { proofs: done.proofs } : {}) }
       : null;
 
     // An UNGATED storefront has no payment gate, so the manifest carries no

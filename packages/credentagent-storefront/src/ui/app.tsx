@@ -150,7 +150,14 @@ type CompletedOrder = {
   };
   // What was proven for the order (the gate's order proof receipt), when the store keeps it.
   proofs?: WidgetProof[];
+  // The store's order-status record this widget polled — linked as "Order record ↗".
+  recordUrl?: string;
 };
+
+// The confirmed order plus the URL of the record the widget just read it from.
+function withRecordUrl(order: CompletedOrder, checkoutUrl: string, orderId: string): CompletedOrder {
+  return { ...order, recordUrl: `${new URL(checkoutUrl).origin}/checkout/order-status?orderId=${encodeURIComponent(orderId)}` };
+}
 
 // How the payment was authorized, for the in-widget confirmation panel.
 function methodLabel(method: string | undefined, settled: boolean): string {
@@ -372,7 +379,7 @@ function HostApp() {
       const order = await pollOrderCompletion(new URL(checkoutUrl).origin, orderId, signal);
       if (!order || signal.cancelled) return;
       setPendingCheckoutUrl(null);
-      setConfirmedOrder(order); // read-only confirmation panel in the widget
+      setConfirmedOrder(withRecordUrl(order, checkoutUrl, orderId)); // read-only confirmation panel in the widget
       // The gate clears the cart server-side (the session's, or this conversation's cart id's);
       // refresh the badge to match.
       const doneCartId = cartIdRef.current;
@@ -484,7 +491,7 @@ function ChatGptApp() {
       const order = await pollOrderCompletion(new URL(checkoutUrl).origin, orderId, signal);
       if (!order || signal.cancelled) return;
       setPendingCheckoutUrl(null);
-      setConfirmedOrder(order); // read-only confirmation panel in the widget
+      setConfirmedOrder(withRecordUrl(order, checkoutUrl, orderId)); // read-only confirmation panel in the widget
       const refreshed = await oai.callTool?.("get-cart", {});
       applyToolOutput(structuredOf(refreshed));
     })();
@@ -662,7 +669,7 @@ function Picker({ products, cart, insets, setQuantity, checkout, openLink, confi
               <dt>Payment</dt>
               <dd>{methodLabel(confirmedOrder.method, !!confirmedOrder.settlement)}</dd>
             </div>
-            <ProofRows proofs={confirmedOrder.proofs} openLink={openLink} />
+            <ProofRows proofs={confirmedOrder.proofs} recordUrl={confirmedOrder.recordUrl} openLink={openLink} />
             {confirmedOrder.settlement && (
               <div className={styles.confirmRow}>
                 <dt>Settlement</dt>

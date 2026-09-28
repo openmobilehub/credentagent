@@ -17,7 +17,8 @@
 // control; it just keeps the UI honest about what the server will refuse.
 
 import type { Branding, VerificationManifestEntry } from "../types.js";
-import { pageHead, brandHeader, progressRail, trustFooter, closeWindowButton, type RailStep } from "./theme.js";
+import { pageHead, brandHeader, progressRail, trustFooter, closeWindowButton, proofLinksHtml, type RailStep } from "./theme.js";
+import type { ProofEntry } from "./proofs.js";
 
 // ── Inputs ──────────────────────────────────────────────────────────────────
 
@@ -84,6 +85,9 @@ export interface RenderPaid {
     /** Block-explorer link, when the backend settles on a chain. */
     hashscanUrl?: string;
   } | null;
+  /** What was proven for the order (the order proof receipt) — listed under the banner with the
+   *  Multipaz Tools links a wallet proof carries. */
+  proofs?: ProofEntry[];
 }
 
 /**
@@ -263,7 +267,7 @@ export function renderRequirements(
       ? [{ value: "pay", name: paymentEntry.label ?? "Authorize payment", desc: "Authorize on your device.", href: paymentEntry.approveUrl, checked: true }]
       : []);
   const paymentNumber = gateEntries.length + 1;
-  const paidSection = paid ? renderPaid(paid) : "";
+  const paidSection = paid ? renderPaid(paid) + proofLinksHtml(paid.proofs, opts.statusUrl) : "";
   // Calm, muted lock — never alarming. Keeps the literal "Payment is locked" the flow
   // tests pin, framed as a gentle "unlocks after age verification" message.
   const paymentSection = paid

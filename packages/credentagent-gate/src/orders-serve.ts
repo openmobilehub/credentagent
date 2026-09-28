@@ -243,7 +243,7 @@ export function serveOrders(app: CeremonyApp, deps: ServeOrdersDeps): void {
     const done = await deps.completed.read(id);
     const gated = isGated(manifest);
     const verification = { ageVerified, loyaltyApplied, ...(v.verifiedGates ? { verifiedGates: v.verifiedGates } : {}) };
-    const paid = done ? { amount: done.amount ?? order.total, currency: done.currency ?? order.currency, ...(done.method ? { method: done.method } : {}) } : null;
+    const paid = done ? { amount: done.amount ?? order.total, currency: done.currency ?? order.currency, ...(done.method ? { method: done.method } : {}), ...(done.proofs?.length ? { proofs: done.proofs } : {}) } : null;
 
     const orderQ = encodeURIComponent(id);
     const payment = gated
