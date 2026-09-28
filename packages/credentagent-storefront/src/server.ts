@@ -569,6 +569,9 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
     verificationStore,
     catalog: ceremonyCatalog,
     completion,
+    // The pay pages link the finished order's record ("Order record ›") — the same
+    // /checkout/order-status the widget polls, proofs included. Same host as the pages.
+    statusUrl: (orderId: string) => `/checkout/order-status?orderId=${encodeURIComponent(orderId)}`,
     // signingKey survives an instance split; default to an ephemeral per-process key
     // for a single-process dev server / tests when none is configured (but statelessOrders
     // forces a concrete, storefront-owned key so it can sign the mandate).

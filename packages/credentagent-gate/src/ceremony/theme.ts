@@ -574,6 +574,18 @@ export function inspectLinkScript(): string {
   return `function showInspectLink(p,id){if(!p||typeof p.inspectUrl!=="string"||p.inspectUrl.indexOf("${INSPECTOR_URL}#")!==0)return;var c=document.getElementById(id||"log")||document.body;var d=document.createElement("div");d.className="inspect";d.style.cssText="margin-top:12px;padding:10px 12px;border:1px solid var(--hairline);border-radius:10px";var a=document.createElement("a");a.href=p.inspectUrl;a.target="_blank";a.rel="noopener noreferrer";a.style.fontWeight="600";a.textContent="Inspect this presentation ›";var n=document.createElement("div");n.className="small";n.textContent="The ISO mdoc credential your wallet sent, decoded in your browser by Multipaz Tools (nothing is uploaded). This gate checks what was disclosed and that it answers this request; it does not check the issuer signature (presence-only-demo).";d.appendChild(a);d.appendChild(n);c.appendChild(d);}`;
 }
 
+/**
+ * Client-side declaration: `showRecordLink()` — once the order completes, append an "Order record ›"
+ * link to `#receipt` that opens the store's own order-status JSON (the completed order, with what was
+ * proven for it). `statusUrl` comes from the host's `statusUrl` seam; only a root-relative path or an
+ * https URL is linked, anything else (or absent) makes this a no-op. Built with DOM APIs (no innerHTML).
+ */
+export function recordLinkScript(statusUrl: string | undefined): string {
+  const safe = typeof statusUrl === "string" && (/^\/(?!\/)/.test(statusUrl) || /^https:\/\//i.test(statusUrl));
+  if (!safe) return "function showRecordLink(){}";
+  return `function showRecordLink(){if(document.getElementById("record-link"))return;var c=document.getElementById("receipt")||document.body;var d=document.createElement("div");d.id="record-link";d.className="inspect";d.style.cssText="margin-top:12px;padding:10px 12px;border:1px solid var(--hairline);border-radius:10px";var a=document.createElement("a");a.href=${JSON.stringify(statusUrl).replace(/</g, "\\u003c")};a.target="_blank";a.rel="noopener noreferrer";a.style.fontWeight="600";a.textContent="Order record ›";var n=document.createElement("div");n.className="small";n.textContent="The store's order-status record (JSON): the completed order and what was proven for it, each with its trust level.";d.appendChild(a);d.appendChild(n);c.appendChild(d);}`;
+}
+
 // ── Trust footer ────────────────────────────────────────────────────────────
 
 /**

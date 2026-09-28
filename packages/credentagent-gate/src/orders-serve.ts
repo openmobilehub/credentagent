@@ -212,6 +212,8 @@ export function serveOrders(app: CeremonyApp, deps: ServeOrdersDeps): void {
     // After a rail proves / pays, return the buyer to THIS order's checkout page — not the
     // storefront's `/checkout` default (which the orders interface doesn't serve).
     returnUrl: (id) => `${deps.walletOrigin}/credentagent/orders/${encodeURIComponent(id)}`,
+    // The pay pages link this order's status record ("Order record ›") — same host as the pages.
+    statusUrl: (id) => `/credentagent/orders/${encodeURIComponent(id)}/status`,
     ...(deps.readerIdentity ? { readerIdentity: deps.readerIdentity } : {}),
     ...(deps.branding ? { branding: deps.branding } : {}),
     ...(deps.inspectPresentations ? { inspectPresentations: true } : {}),
