@@ -111,6 +111,22 @@ describe("the credential rail records its proof on the order", () => {
   });
 });
 
+const DEMO_INSTRUMENT = { issuer_name: "Demo Bank", payment_instrument_id: "pi-1", masked_account_reference: "•••• 4242", holder_name: "Demo", expiry_date: "2032-09-01" };
+
+describe("payment rails add their proof", () => {
+  it("age wallet proof + instant-demo payment → the completed record lists both, in order", async () => {
+    const h = storeHarness(true);
+    await proveAge(h.server, "W1");
+    const pay = await request(h.server).post("/credentagent/dc-payment/verify").send({ order: "W1", amount: 124, claims: DEMO_INSTRUMENT });
+    expect(pay.body.completed).toBe(true);
+    const proofs = h.records.get("W1")!.proofs!;
+    expect(proofs.map((p) => [p.gate, p.rail])).toEqual([["Age 21+", "credential"], ["Pay (USD)", "instant-demo"]]);
+    expect(proofs[0].presentation).toBeDefined();
+    expect(proofs[1]).not.toHaveProperty("presentation");
+    expect(proofs[1].checks.length).toBeGreaterThan(0);
+  });
+});
+
 describe("completeOrder keeps the proofs", () => {
   it("copies the order's credential proofs + the payment proof into the completed record, then clears verification", async () => {
     const verificationStore = new MemoryVerificationStore();

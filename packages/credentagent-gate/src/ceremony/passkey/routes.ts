@@ -184,6 +184,14 @@ export const registerPasskeyGate: RailRegistrar = (app: CeremonyApp, ctx: Ceremo
         method: "passkey",
         instrument: { issuer: mandate.payment.instrument, maskedAccount: mandate.payment.instrumentReference, holder: null },
         gates: gates.map((g) => ({ gate: g.gate, pass: g.pass, detail: g.detail })),
+        // The order proof receipt: the passkey approval, at the level this rail reports.
+        proof: {
+          gate: `Pay (${mandate.payment.currency})`,
+          rail: "passkey",
+          trust_level: mandate.trust_level,
+          checks: gates.map((g) => ({ gate: g.gate, pass: g.pass, detail: g.detail })),
+          presentedAt: new Date().toISOString(),
+        },
         ...(cartMandate !== undefined ? { cartMandate: cartMandate as CompletionInput["cartMandate"] } : {}),
       });
       res.json({

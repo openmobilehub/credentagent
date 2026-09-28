@@ -156,6 +156,11 @@ export const registerDcPaymentGate: RailRegistrar = (app: CeremonyApp, ctx: Cere
       return;
     }
 
+    // inspectPresentations: the wallet's DeviceResponse (the mandate carries it as vpToken ONLY
+    // on the real path) + the inspector link, so the page can offer "Inspect".
+    const vpToken = mandate.userAuthorization.vpToken;
+    const presentation = ctx.inspectPresentations === true && vpToken ? { presentation: presentationForInspection(vpToken) } : {};
+
     // Complete through the SHARED seam (idempotent record + re-price + age gate +
     // optional settle + clear cart & per-order verification). No second path.
     const input: CompletionInput = {
@@ -166,13 +171,18 @@ export const registerDcPaymentGate: RailRegistrar = (app: CeremonyApp, ctx: Cere
       method: "dc-payment",
       instrument: mandate.payment.instrument,
       gates,
+      // The order proof receipt: this payment's proof, kept on the completed record.
+      proof: {
+        gate: `Pay (${mandate.payment.currency})`,
+        rail: vpToken ? "dc-payment" : "instant-demo",
+        trust_level: mandate.trust_level,
+        checks: gates,
+        presentedAt: new Date().toISOString(),
+        ...presentation,
+      },
       ...(cartMandate !== undefined ? { cartMandate: cartMandate as CompletionInput["cartMandate"] } : {}),
     };
     const result = await ctx.completion(input);
-    // inspectPresentations: the wallet's DeviceResponse (the mandate already carries it as
-    // vpToken on the real path) + the inspector link, so the page can offer "Inspect".
-    const vpToken = mandate.userAuthorization.vpToken;
-    const presentation = ctx.inspectPresentations === true && vpToken ? { presentation: presentationForInspection(vpToken) } : {};
     // Forward the on-chain settlement (when configured + succeeded) AND the
     // settlementError (a configured-but-failed settle → authorized-but-not-settled,
     // FR-013) so the page can render the x402 receipt or the calm refusal line.
