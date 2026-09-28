@@ -91,6 +91,7 @@ import {
   type CompletionInput,
   type CompletionResult,
   type DelegatedVerifier,
+  type ProofEntry,
   type RepriceOpts,
   type RenderPaid,
   type RenderVerification,
@@ -252,6 +253,8 @@ export interface CompletedOrderRecord {
   instrument?: unknown;
   gates?: { gate: string; pass: boolean; detail: string }[];
   settlement?: unknown;
+  /** What was proven for this order (the gate's order proof receipt) — shown by the widget. */
+  proofs?: ProofEntry[];
 }
 
 export interface Storefront {
@@ -566,6 +569,9 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
     verificationStore,
     catalog: ceremonyCatalog,
     completion,
+    // The gate's order proof receipt route (GET /credentagent/orders/:id/proof) answers a
+    // finished order from the SAME completed store get-order-status reads.
+    completedOrders: { read: (orderId: string) => orderStore.read(orderId) },
     // signingKey survives an instance split; default to an ephemeral per-process key
     // for a single-process dev server / tests when none is configured (but statelessOrders
     // forces a concrete, storefront-owned key so it can sign the mandate).

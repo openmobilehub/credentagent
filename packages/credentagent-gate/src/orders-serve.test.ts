@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { CredentAgent } from "./client.js";
 import { age, payment, membership, required, optional, defineCredential, dcql, gate } from "./credentials.js";
 import type { CompletionInput, CompletionResult } from "./ceremony/types.js";
+import { Orders, MemoryOrderStore, type CompletedOrder } from "./orders.js";
 
 // A minimal dependency-free Express double: capture the registered route handlers so we can
 // invoke the orders page / place / status handlers directly (the rails register too; we don't
@@ -203,5 +204,46 @@ describe("orders.serve — checkout wiring", () => {
     await app._post.get("/credentagent/orders/:id/place")!({ params: { id } }, res);
     expect(res._status).toBe(200);
     expect((await ca.orders.retrieve(id)).ok).toBe(true);
+  });
+});
+
+// The order proof receipt (spec 2026-09-27): orders.serve keeps each proof on the completed
+// order, serves it at /credentagent/orders/:id/proof, and never lets credential bytes leave in
+// the order.settled webhook (it goes to ANOTHER service).
+describe("orders.serve — the order proof receipt", () => {
+  it("a payment's proof reaches orders.retrieve() and GET /credentagent/orders/:id/proof", async () => {
+    const ca = new CredentAgent({ walletOrigin: "http://localhost:4000" });
+    const app = fakeApp();
+    ca.orders.serve(app);
+    const { id } = await ca.orders.create({ order: stickerOrder(), policy: [required(payment.in("usd"))] });
+
+    const pay = fakeRes();
+    await app._post.get("/credentagent/dc-payment/verify")!({
+      query: {}, headers: { host: "localhost:4000" }, protocol: "http",
+      body: { order: id, amount: 5, claims: { issuer_name: "Demo Bank", payment_instrument_id: "pi-1", masked_account_reference: "•••• 4242", holder_name: "Demo", expiry_date: "2032-09-01" } },
+    }, pay);
+    expect(pay._json.completed).toBe(true);
+
+    const done = await ca.orders.retrieve(id);
+    expect(done.ok && done.completion.proofs?.map((p) => [p.gate, p.rail])).toEqual([["Pay (USD)", "instant-demo"]]);
+
+    const proof = fakeRes();
+    await app._get.get("/credentagent/orders/:id/proof")!({ params: { id } }, proof);
+    expect(proof._json).toMatchObject({ orderId: id, status: "completed", proofs: [{ gate: "Pay (USD)" }] });
+  });
+
+  it("the order.settled webhook carries the proofs WITHOUT credential bytes; the stored order keeps them", async () => {
+    const delivered: { proofs?: { presentation?: unknown }[] }[] = [];
+    const completed = new MemoryOrderStore<CompletedOrder>();
+    const orders = new Orders({
+      walletOrigin: "http://localhost:4000", requirements: () => [], created: new MemoryOrderStore(), completed,
+      emit: () => {}, deliverWebhook: (_type, object) => { delivered.push(object as never); },
+    });
+    const presentation = { format: "mso_mdoc" as const, deviceResponse: "RAW", inspectUrl: "https://tools.multipaz.org/mdocDeviceResponse#RAW" };
+    await orders._complete({ orderId: "O1", proofs: [{ gate: "Age 21+", rail: "credential", trust_level: "presence-only-demo", checks: [], presentedAt: "t", presentation }] });
+
+    expect(delivered[0].proofs).toEqual([{ gate: "Age 21+", rail: "credential", trust_level: "presence-only-demo", checks: [], presentedAt: "t" }]);
+    expect(JSON.stringify(delivered[0])).not.toContain("RAW");
+    expect((await completed.read("O1"))?.proofs?.[0].presentation).toEqual(presentation);
   });
 });

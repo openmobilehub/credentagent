@@ -13,6 +13,7 @@
 // process-global); inject a shared store (Redis) for multi-instance deploys.
 
 import type { GateOrder, Step, VerificationManifestEntry, TrustLevel } from "./types.js";
+import { withoutPresentations, type ProofEntry } from "./ceremony/proofs.js";
 
 /** A created-but-not-yet-completed order: the inputs the door + page re-derive from. */
 export interface CreatedOrder {
@@ -31,6 +32,8 @@ export interface CompletedOrder {
   completedAt?: string;
   /** The signed AP2 records, when the completion path surfaces them. */
   mandateBundle?: unknown;
+  /** What was proven for this order (the order proof receipt) — each with its own trust_level. */
+  proofs?: ProofEntry[];
 }
 
 /** Minimal per-order KV, mirroring VerificationStore. In-memory default; inject for prod. */
@@ -133,6 +136,8 @@ export class Orders {
     // One completion choke point feeds both signals: the in-process listener AND the HTTP
     // webhook fan-out. Delivery is fire-and-forget — it never blocks or rolls back completion.
     this.deps.emit("order.settled", { id: record.orderId });
-    this.deps.deliverWebhook?.("order.settled", record);
+    // The webhook goes to ANOTHER service: it gets the proofs, never the credential bytes
+    // (inspectPresentations keeps those for the buyer's own inspect link only).
+    this.deps.deliverWebhook?.("order.settled", record.proofs ? { ...record, proofs: withoutPresentations(record.proofs) } : record);
   }
 }

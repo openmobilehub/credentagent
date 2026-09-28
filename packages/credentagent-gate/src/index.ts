@@ -21,6 +21,8 @@ export type { ExpressApp } from "./client.js";
 export type { DoctorReport, DoctorFinding, DoctorLevel } from "./doctor.js";
 // ── `inspectPresentations` — the `presentation` block a verify response carries when on.
 export type { InspectablePresentation } from "./ceremony/inspect.js";
+// ── The order proof receipt — what was proven for an order (`GET /credentagent/orders/:id/proof`).
+export type { ProofEntry, ProofRail } from "./ceremony/proofs.js";
 
 // ── Policy builders + extensibility ────────────────────────────────────────
 export { age, membership, payment, required, optional, defineCredential, dcql, gate, discount, authorize } from "./credentials.js";
