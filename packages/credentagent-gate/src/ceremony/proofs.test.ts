@@ -70,6 +70,7 @@ function storeHarness(inspectPresentations: boolean) {
     verificationStore, catalog: ageCatalog, signingKey: "stable-test-secret", inspectPresentations,
     orderStore: { read: async (id) => orders.get(id) ?? null },
     completion: (input) => completeOrder(input, { catalog: ageCatalog, verificationStore, records: { read: (id) => records.get(id), write: (r) => void records.set(r.orderId, r) } }),
+    completedOrders: { read: (id) => records.get(id) },
   });
   return { server: http.createServer(app), verificationStore, records };
 }
@@ -124,6 +125,30 @@ describe("payment rails add their proof", () => {
     expect(proofs[0].presentation).toBeDefined();
     expect(proofs[1]).not.toHaveProperty("presentation");
     expect(proofs[1].checks.length).toBeGreaterThan(0);
+  });
+});
+
+describe("GET /credentagent/orders/:id/proof", () => {
+  it("returns a completed order's proofs", async () => {
+    const h = storeHarness(true);
+    await proveAge(h.server, "W1");
+    await request(h.server).post("/credentagent/dc-payment/verify").send({ order: "W1", amount: 124, claims: DEMO_INSTRUMENT });
+    const res = await request(h.server).get("/credentagent/orders/W1/proof");
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ orderId: "W1", status: "completed" });
+    expect(res.body.proofs.map((p: ProofEntry) => p.gate)).toEqual(["Age 21+", "Pay (USD)"]);
+  });
+
+  it("returns the proofs so far for an order that hasn't completed", async () => {
+    const h = storeHarness(false);
+    await proveAge(h.server, "W1");
+    const res = await request(h.server).get("/credentagent/orders/W1/proof");
+    expect(res.body).toMatchObject({ orderId: "W1", status: "pending", proofs: [{ gate: "Age 21+" }] });
+  });
+
+  it("404s an order it has never seen", async () => {
+    const res = await request(storeHarness(false).server).get("/credentagent/orders/NOPE/proof");
+    expect(res.status).toBe(404);
   });
 });
 
