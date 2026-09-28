@@ -123,6 +123,30 @@ the verify response for your own tooling:
 - **Covers** the credential rail (age, membership, `defineCredential()`; Android OpenID4VP and iOS
   `org-iso-mdoc`) and the dc-payment rail. The grant rails don't expose it yet.
 
+#### The order's proof receipt
+
+Every successful proof is kept **with its order**, so what the buyer proved is still there after the
+order completes — whether or not `inspectPresentations` is on. It rides on the completed order you
+already read (`orders.retrieve()`, `GET /credentagent/orders/:id/status`, and the storefront's
+`get-order-status` / `/checkout/order-status`):
+
+```jsonc
+// the completed order's `proofs`
+"proofs": [
+  { "gate": "Age 21+", "rail": "credential", "trust_level": "presence-only-demo",
+    "checks": [{ "gate": "Age over 21", "pass": true, "detail": "age_over_21 disclosed true" }],
+    "presentedAt": "2026-09-27T18:52:10.000Z",
+    "presentation": { "format": "mso_mdoc", "deviceResponse": "o2d2…", "inspectUrl": "https://tools.multipaz.org/mdocDeviceResponse#o2d2…" } },
+  { "gate": "Pay (USD)", "rail": "instant-demo", "trust_level": "presence-only-demo", "checks": [ … ], "presentedAt": "…" } ]
+```
+
+- The storefront widget lists each proof on the confirmed order, with an **Inspect ↗** link when
+  `presentation` is there.
+- `presentation` appears only when the store set `inspectPresentations`; without it nothing is stored
+  but the gate, the checks, and the trust level.
+- The **`order.settled` webhook never carries `presentation`** — it goes to another service.
+- `rail: "instant-demo"` marks a demo tap, never a wallet proof. Each proof states its own `trust_level`.
+
 ## Orders — a checkout without a storefront
 
 Don't have (or want) the MCP storefront? Drive the checkout yourself with `credentagent.orders`.

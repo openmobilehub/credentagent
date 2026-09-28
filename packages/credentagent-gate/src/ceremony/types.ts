@@ -131,6 +131,9 @@ export interface CompletionInput {
    *  verifier's verdict. The gate never synthesizes it — only records a level it received.
    *  Absent ⇒ the record omits it (the built-in rails' honesty level stays the manifest's). */
   trustLevel?: import("../types.js").TrustLevel;
+  /** The payment rail's own proof (the order proof receipt) — appended after the order's
+   *  credential proofs on the completed record. Absent ⇒ only those are kept. */
+  proof?: import("./proofs.js").ProofEntry;
   /**
    * The custom-credential ids in THIS order's resolved policy (007 / #59 finding 2). The
    * completion sweep enforces a custom `gate()` only when its id is in this set — so a gate

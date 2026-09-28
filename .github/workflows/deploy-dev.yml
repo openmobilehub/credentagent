@@ -90,7 +90,10 @@ jobs:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
         # CREDENTAGENT_BUILD labels this deployment at GET /version (dev + commit), since the
         # dev twin runs main's code under the last released version number.
-        run: npx vercel@latest deploy --prod --yes --token "$VERCEL_TOKEN" --env CREDENTAGENT_BUILD="dev.${GITHUB_SHA::7}"
+        # CREDENTAGENT_INSPECT_PRESENTATIONS=1 turns on inspectPresentations for the DEV demo only
+        # (the website's demo runs here): consent pages + the order proof receipt link the wallet's
+        # demo credential to Multipaz Tools. Prod stays off.
+        run: npx vercel@latest deploy --prod --yes --token "$VERCEL_TOKEN" --env CREDENTAGENT_BUILD="dev.${GITHUB_SHA::7}" --env CREDENTAGENT_INSPECT_PRESENTATIONS=1
 
       - name: Smoke the live dev endpoint
         if: steps.gate.outputs.configured == 'true'

@@ -182,6 +182,9 @@ export interface VerificationRecord {
    * reads `verifiedGates` — a silent un-enforcement. One representation wins.)
    */
   verifiedGates?: Record<string, true>;
+  /** What was proven for THIS order so far (the credential rail) — copied onto the completed
+   *  record by `completeOrder`, so each proof outlives this record (the order proof receipt). */
+  proofs?: import("./ceremony/proofs.js").ProofEntry[];
 }
 
 export interface VerificationStore {

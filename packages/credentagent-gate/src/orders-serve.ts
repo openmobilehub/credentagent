@@ -177,7 +177,7 @@ export function serveOrders(app: CeremonyApp, deps: ServeOrdersDeps): void {
       const done = await deps.completed.read(orderId);
       if (!done) return undefined;
       // Enough for `completeOrder`'s idempotency echo (it checks truthiness + settlement).
-      return { orderId, mandateId: done.txId ?? "", amount: done.amount ?? 0, currency: done.currency ?? "", method: done.method ?? "", gates: [], completedAt: done.completedAt ?? "" };
+      return { orderId, mandateId: done.txId ?? "", amount: done.amount ?? 0, currency: done.currency ?? "", method: done.method ?? "", gates: [], completedAt: done.completedAt ?? "", ...(done.proofs ? { proofs: done.proofs } : {}) };
     },
     write: async (record: CompletedRecord): Promise<void> => {
       await deps.complete({
@@ -188,6 +188,8 @@ export function serveOrders(app: CeremonyApp, deps: ServeOrdersDeps): void {
         ...(record.settlement?.txId ? { txId: record.settlement.txId } : {}),
         ...(record.settlement?.network ? { network: record.settlement.network } : {}),
         completedAt: record.completedAt,
+        // The order proof receipt rides onto the completed order (orders.retrieve + the proof route).
+        ...(record.proofs?.length ? { proofs: record.proofs } : {}),
       });
     },
   };

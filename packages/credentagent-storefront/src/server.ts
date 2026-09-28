@@ -91,6 +91,7 @@ import {
   type CompletionInput,
   type CompletionResult,
   type DelegatedVerifier,
+  type ProofEntry,
   type RepriceOpts,
   type RenderPaid,
   type RenderVerification,
@@ -252,6 +253,8 @@ export interface CompletedOrderRecord {
   instrument?: unknown;
   gates?: { gate: string; pass: boolean; detail: string }[];
   settlement?: unknown;
+  /** What was proven for this order (the gate's order proof receipt) — shown by the widget. */
+  proofs?: ProofEntry[];
 }
 
 export interface Storefront {
