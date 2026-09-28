@@ -124,6 +124,25 @@ describe("payment rails add their proof", () => {
     expect(proofs[1]).not.toHaveProperty("presentation");
     expect(proofs[1].checks.length).toBeGreaterThan(0);
   });
+
+  it("the payment page gets ONE block for every credential of the order — the age proof's links included", async () => {
+    const h = storeHarness(true);
+    const dr = await proveAge(h.server, "W1");
+    const pay = await request(h.server).post("/credentagent/dc-payment/verify").send({ order: "W1", amount: 124, claims: DEMO_INSTRUMENT });
+    expect(pay.body.completed).toBe(true);
+    const html: string = pay.body.proofsHtml;
+    expect(html).toContain("What was proven");
+    expect(html).toContain("Age 21+");
+    expect(html).toContain(`${INSPECTOR_URL}#${dr}`); // the EARLIER age credential, still inspectable here
+    expect(html).toContain("Pay (USD)");
+  });
+
+  it("no proofs block until the order completes", async () => {
+    const h = storeHarness(true);
+    const pay = await request(h.server).post("/credentagent/dc-payment/verify").send({ order: "W1", amount: 124, claims: DEMO_INSTRUMENT });
+    expect(pay.body.completed).toBe(false); // age not proven → refused
+    expect(pay.body).not.toHaveProperty("proofsHtml");
+  });
 });
 
 describe("completeOrder keeps the proofs", () => {

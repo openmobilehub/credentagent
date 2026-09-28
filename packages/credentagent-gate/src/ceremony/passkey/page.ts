@@ -14,13 +14,13 @@
 // order id/token (invariant 2).
 import type { CeremonyOrder } from "../types.js";
 import type { Branding } from "../../types.js";
-import { pageHead, brandHeader, orderSummaryCard, trustFooter, settlingBar, completionHandoffBanner, railCompleteScript, completedViewScript, refusalNotices } from "../theme.js";
+import { pageHead, brandHeader, orderSummaryCard, trustFooter, settlingBar, completionHandoffBanner, railCompleteScript, completedViewScript, refusalNotices, recordLinkScript } from "../theme.js";
 
 function money(amount: number, currency: string): string {
   return new Intl.NumberFormat("en-US", { style: "currency", currency }).format(amount);
 }
 
-export function renderPasskeyPage(args: { order: CeremonyOrder; crossDevice?: boolean; returnUrl?: string; cart?: string; rail?: string; branding?: Branding }): string {
+export function renderPasskeyPage(args: { order: CeremonyOrder; crossDevice?: boolean; returnUrl?: string; statusUrl?: string; cart?: string; rail?: string; branding?: Branding }): string {
   const { order, crossDevice = false } = args;
   // Where the completed receipt links back to — the checkout hub, which then renders
   // the paid state (a forward, fresh GET — so the buyer never browser-backs onto a
@@ -91,6 +91,7 @@ ${pageHead(`Authorize payment · ${order.id}`, extraCss, args.branding)}
     // server-side (escaped there) and picked by reason at runtime. Without this a refused
     // order painted the authorized mandate + green gates and then nothing at all.
     const REFUSALS = ${JSON.stringify(refusalNotices({ returnUrl }))};
+    ${recordLinkScript(args.statusUrl)}
     const log = document.getElementById("log");
     const btn = document.getElementById("go");
     const settling = document.getElementById("settling");
@@ -169,6 +170,10 @@ ${pageHead(`Authorize payment · ${order.id}`, extraCss, args.branding)}
         btn.textContent = "Authorized ✓";
         ${railCompleteScript()}
         ${completedViewScript()}
+        // "What was proven": every credential of the order with its Multipaz Tools links, then Check
+        // the signatures + Order record — server-rendered and escaped by the gate (proofLinksHtml).
+        if (typeof out.proofsHtml === "string" && out.proofsHtml) el.insertAdjacentHTML("beforeend", out.proofsHtml);
+        else showRecordLink();
       }
     }
   </script>

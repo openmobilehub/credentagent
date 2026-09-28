@@ -89,6 +89,11 @@ export interface CeremonySeams {
    *  storefront's route). A host that serves its checkout elsewhere — e.g. `orders.serve`
    *  at `/credentagent/orders/:id` — sets this so the buyer lands back on the right page. */
   returnUrl?: (orderId: string) => string;
+  /** Where the store serves an order's status record (JSON, with what was proven for it). The
+   *  payment pages link it as "Order record ›" once the order completes. The storefront sets
+   *  `/checkout/order-status?orderId=<id>`; `orders.serve` its `/credentagent/orders/<id>/status`.
+   *  Absent ⇒ no link. */
+  statusUrl?: (orderId: string) => string;
   /** Host brand for the ceremony pages (wordmark / accent / logo / demo-pill). Normally set
    *  once on `new CredentAgent({ branding })` and threaded here; every rail page picks it up.
    *  Absent ⇒ the built-in look. Never affects the honesty trust footer. */
@@ -125,6 +130,8 @@ export interface CeremonyContext {
   orderPolicies?: ReadonlyMap<string, readonly string[]>;
   /** Build the buyer's return-to-checkout URL for an order (absent ⇒ the rail default). */
   returnUrl?: (orderId: string) => string;
+  /** The store's order-status record URL for an order (absent ⇒ no "Order record" link). */
+  statusUrl?: (orderId: string) => string;
   /** Host brand for the ceremony pages (absent ⇒ the built-in look). Never brands the footer. */
   branding?: Branding;
   /** Hand the presented DeviceResponse back to the page for inspection (absent ⇒ off). */
@@ -164,6 +171,7 @@ export function mountCeremony(app: CeremonyApp, options: Partial<CeremonySeams> 
   const credentialRegistry = options.credentialRegistry ?? locals.credentialRegistry;
   const orderPolicies = options.orderPolicies ?? locals.orderPolicies;
   const returnUrl = options.returnUrl ?? locals.returnUrl;
+  const statusUrl = options.statusUrl ?? locals.statusUrl;
   const branding = options.branding ?? locals.branding;
   const inspectPresentations = options.inspectPresentations ?? locals.inspectPresentations ?? false;
   let signingKey = options.signingKey ?? locals.signingKey;
@@ -225,6 +233,7 @@ export function mountCeremony(app: CeremonyApp, options: Partial<CeremonySeams> 
     ...(verifier ? { verifier } : {}),
     ...(readerIdentity ? { readerIdentity } : {}),
     ...(returnUrl ? { returnUrl } : {}),
+    ...(statusUrl ? { statusUrl } : {}),
     ...(branding ? { branding } : {}),
     ...(inspectPresentations ? { inspectPresentations } : {}),
   };

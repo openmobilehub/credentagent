@@ -212,6 +212,8 @@ export function serveOrders(app: CeremonyApp, deps: ServeOrdersDeps): void {
     // After a rail proves / pays, return the buyer to THIS order's checkout page — not the
     // storefront's `/checkout` default (which the orders interface doesn't serve).
     returnUrl: (id) => `${deps.walletOrigin}/credentagent/orders/${encodeURIComponent(id)}`,
+    // The pay pages link this order's status record ("Order record ›") — same host as the pages.
+    statusUrl: (id) => `/credentagent/orders/${encodeURIComponent(id)}/status`,
     ...(deps.readerIdentity ? { readerIdentity: deps.readerIdentity } : {}),
     ...(deps.branding ? { branding: deps.branding } : {}),
     ...(deps.inspectPresentations ? { inspectPresentations: true } : {}),
@@ -241,7 +243,7 @@ export function serveOrders(app: CeremonyApp, deps: ServeOrdersDeps): void {
     const done = await deps.completed.read(id);
     const gated = isGated(manifest);
     const verification = { ageVerified, loyaltyApplied, ...(v.verifiedGates ? { verifiedGates: v.verifiedGates } : {}) };
-    const paid = done ? { amount: done.amount ?? order.total, currency: done.currency ?? order.currency, ...(done.method ? { method: done.method } : {}) } : null;
+    const paid = done ? { amount: done.amount ?? order.total, currency: done.currency ?? order.currency, ...(done.method ? { method: done.method } : {}), ...(done.proofs?.length ? { proofs: done.proofs } : {}) } : null;
 
     const orderQ = encodeURIComponent(id);
     const payment = gated

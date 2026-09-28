@@ -30,7 +30,7 @@ import type { CompletionInput } from "../types.js";
 import { buildPasskeyMandate, buildBindingFields, runGates } from "../mandate.js";
 import { buildRegistrationOptions, verifyPasskeyAssertion } from "./verify.js";
 import { renderPasskeyPage } from "./page.js";
-import { checkoutRail } from "../theme.js";
+import { checkoutRail, proofLinksHtml } from "../theme.js";
 
 // Minimal structural request/response shapes — the real Express req/res satisfy
 // them, so the package never imports express.
@@ -142,7 +142,7 @@ export const registerPasskeyGate: RailRegistrar = (app: CeremonyApp, ctx: Ceremo
     const verified = (await ctx.verificationStore.read(order.id)) ?? {};
     const rail = checkoutRail(order, "pay", { ageVerified: verified.ageVerified === true });
     try {
-      res.status(200).type("html").send(renderPasskeyPage({ order, crossDevice: isCrossDevice(req.query.xdev), cart: typeof req.query.cart === "string" ? req.query.cart : undefined, rail, returnUrl: ctx.returnUrl?.(order.id), branding: ctx.branding }));
+      res.status(200).type("html").send(renderPasskeyPage({ order, crossDevice: isCrossDevice(req.query.xdev), cart: typeof req.query.cart === "string" ? req.query.cart : undefined, rail, returnUrl: ctx.returnUrl?.(order.id), statusUrl: ctx.statusUrl?.(order.id), branding: ctx.branding }));
     } catch {
       // A hand-edited order can carry a bad currency that throws in Intl; never 500.
       res.status(404).type("html").send("<!doctype html><h1>Order not found</h1>");
@@ -176,6 +176,16 @@ export const registerPasskeyGate: RailRegistrar = (app: CeremonyApp, ctx: Ceremo
       });
       const mandate = buildPasskeyMandate({ order, authenticator, origin });
       const gates = runGates(mandate);
+      // The order's earlier proofs — read BEFORE completion clears the verification record, so the
+      // finished page can list every credential of the order.
+      const priorProofs = (await ctx.verificationStore.read(order.id))?.proofs ?? [];
+      const paymentProof = {
+        gate: `Pay (${mandate.payment.currency})`,
+        rail: "passkey" as const,
+        trust_level: mandate.trust_level,
+        checks: gates.map((g) => ({ gate: g.gate, pass: g.pass, detail: g.detail })),
+        presentedAt: new Date().toISOString(),
+      };
       const completion = await ctx.completion({
         order,
         mandateId: mandate.id,
@@ -185,13 +195,7 @@ export const registerPasskeyGate: RailRegistrar = (app: CeremonyApp, ctx: Ceremo
         instrument: { issuer: mandate.payment.instrument, maskedAccount: mandate.payment.instrumentReference, holder: null },
         gates: gates.map((g) => ({ gate: g.gate, pass: g.pass, detail: g.detail })),
         // The order proof receipt: the passkey approval, at the level this rail reports.
-        proof: {
-          gate: `Pay (${mandate.payment.currency})`,
-          rail: "passkey",
-          trust_level: mandate.trust_level,
-          checks: gates.map((g) => ({ gate: g.gate, pass: g.pass, detail: g.detail })),
-          presentedAt: new Date().toISOString(),
-        },
+        proof: paymentProof,
         ...(cartMandate !== undefined ? { cartMandate: cartMandate as CompletionInput["cartMandate"] } : {}),
       });
       res.json({
@@ -203,6 +207,8 @@ export const registerPasskeyGate: RailRegistrar = (app: CeremonyApp, ctx: Ceremo
         reason: completion.reason ?? null,
         binding: buildBindingFields(order, origin),
         trust_level: "presence-only-demo",
+        // Once complete: every credential of the order, with its Multipaz Tools links + Order record.
+        ...(completion.completed ? { proofsHtml: proofLinksHtml([...priorProofs, paymentProof], ctx.statusUrl?.(order.id)) } : {}),
       });
     } catch (err) {
       res.status(400).json({ completed: false, error: (err as Error).message });

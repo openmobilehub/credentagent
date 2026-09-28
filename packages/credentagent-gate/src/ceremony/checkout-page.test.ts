@@ -240,7 +240,9 @@ describe("renderRequirements — live completion poll (#63)", () => {
 
   it("does NOT poll once the order is already paid (no redundant reload loop)", () => {
     const html = renderRequirements(order, manifest, {}, { statusUrl, paid: { amount: 124, currency: "USD", method: "passkey" } });
-    expect(html).not.toContain(statusUrl);
+    // No poll script — the status URL appears only as the paid view's "Order record ›" link.
+    expect(html).not.toContain("setInterval");
+    expect(html).toContain(`href="${statusUrl}"`);
   });
 
   it("emits no poll when the host supplies no statusUrl (unchanged for hosts without one)", () => {

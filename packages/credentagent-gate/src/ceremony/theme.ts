@@ -20,7 +20,7 @@
 
 import type { Branding } from "../types.js";
 import type { CompletionRefusalReason } from "./types.js";
-import { INSPECTOR_URL } from "./inspect.js";
+import { INSPECTOR_URL, VERIFIER_URL, X509_URL } from "./inspect.js";
 
 function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -571,7 +571,53 @@ export function railCompleteScript(): string {
  * tools.multipaz.org link is ever rendered, and it is built with DOM APIs (no innerHTML).
  */
 export function inspectLinkScript(): string {
-  return `function showInspectLink(p,id){if(!p||typeof p.inspectUrl!=="string"||p.inspectUrl.indexOf("${INSPECTOR_URL}#")!==0)return;var c=document.getElementById(id||"log")||document.body;var d=document.createElement("div");d.className="inspect";d.style.cssText="margin-top:12px;padding:10px 12px;border:1px solid var(--hairline);border-radius:10px";var a=document.createElement("a");a.href=p.inspectUrl;a.target="_blank";a.rel="noopener noreferrer";a.style.fontWeight="600";a.textContent="Inspect this presentation ›";var n=document.createElement("div");n.className="small";n.textContent="The ISO mdoc credential your wallet sent, decoded in your browser by Multipaz Tools (nothing is uploaded). This gate checks what was disclosed and that it answers this request; it does not check the issuer signature (presence-only-demo).";d.appendChild(a);d.appendChild(n);c.appendChild(d);}`;
+  // Three Multipaz Tools links, each opening in a new tab: the credential itself (decoded), the
+  // certificate that signed it (only when the credential carries one), and the Multipaz verifier
+  // for an independent signature check. Only tools.multipaz.org links ever render.
+  return `function showInspectLink(p,id){if(!p||typeof p.inspectUrl!=="string"||p.inspectUrl.indexOf("${INSPECTOR_URL}#")!==0)return;var c=document.getElementById(id||"log")||document.body;var d=document.createElement("div");d.className="inspect";d.style.cssText="margin-top:12px;padding:10px 12px;border:1px solid var(--hairline);border-radius:10px";function link(href,label,note){var a=document.createElement("a");a.href=href;a.target="_blank";a.rel="noopener noreferrer";a.style.fontWeight="600";a.style.display="inline-block";a.style.marginTop="6px";a.textContent=label;var n=document.createElement("div");n.className="small";n.textContent=note;d.appendChild(a);d.appendChild(n);}link(p.inspectUrl,"Inspect this presentation ›","The ISO mdoc credential your wallet sent, decoded in your browser by Multipaz Tools (nothing is uploaded).");if(typeof p.issuerCertUrl==="string"&&p.issuerCertUrl.indexOf("${X509_URL}#")===0)link(p.issuerCertUrl,"Issuer certificate ›","Who signed this credential — the certificate it carries, in the Multipaz X.509 viewer.");link("${VERIFIER_URL}","Check the signatures ›","The Multipaz verifier asks your wallet directly and checks the issuer and device signatures itself.");var t=document.createElement("div");t.className="small";t.style.marginTop="8px";t.textContent="This gate checks what was disclosed and that it answers this request; it does not check the issuer signature (presence-only-demo).";d.appendChild(t);c.appendChild(d);}`;
+}
+
+/**
+ * Client-side declaration: `showRecordLink()` — once the order completes, append an "Order record ›"
+ * link to `#receipt` that opens the store's own order-status JSON (the completed order, with what was
+ * proven for it). `statusUrl` comes from the host's `statusUrl` seam; only a root-relative path or an
+ * https URL is linked, anything else (or absent) makes this a no-op. Built with DOM APIs (no innerHTML).
+ */
+export function recordLinkScript(statusUrl: string | undefined): string {
+  const safe = typeof statusUrl === "string" && (/^\/(?!\/)/.test(statusUrl) || /^https:\/\//i.test(statusUrl));
+  if (!safe) return "function showRecordLink(){}";
+  return `function showRecordLink(){if(document.getElementById("record-link"))return;var c=document.getElementById("receipt")||document.body;var d=document.createElement("div");d.id="record-link";d.className="inspect";d.style.cssText="margin-top:12px;padding:10px 12px;border:1px solid var(--hairline);border-radius:10px";var a=document.createElement("a");a.href=${JSON.stringify(statusUrl).replace(/</g, "\\u003c")};a.target="_blank";a.rel="noopener noreferrer";a.style.fontWeight="600";a.textContent="Order record ›";var n=document.createElement("div");n.className="small";n.textContent="The store's order-status record (JSON): the completed order and what was proven for it, each with its trust level.";d.appendChild(a);d.appendChild(n);c.appendChild(d);}`;
+}
+
+/**
+ * Server-rendered "What was proven" block for a finished order: one line per proof (gate · trust
+ * level, or "instant demo"), with the Multipaz Tools links a wallet proof carries (Inspect this
+ * presentation, Issuer certificate), one "Check the signatures" link to the Multipaz verifier when
+ * any wallet proof is shown, and "Order record ›" to the store's order-status record. Only
+ * tools.multipaz.org URLs and a root-relative / https record URL are ever linked; labels are
+ * escaped. Empty when there is nothing to show.
+ */
+export function proofLinksHtml(
+  proofs: readonly { gate: string; rail: string; trust_level: string; presentation?: { inspectUrl?: string; issuerCertUrl?: string } }[] | undefined,
+  statusUrl: string | undefined,
+): string {
+  const link = (href: string, label: string) => `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${label}</a>`;
+  const record = typeof statusUrl === "string" && (/^\/(?!\/)/.test(statusUrl) || /^https:\/\//i.test(statusUrl)) ? statusUrl : null;
+  let anyWallet = false;
+  const rows = (proofs ?? []).map((p) => {
+    const inspect = p.presentation?.inspectUrl?.startsWith(`${INSPECTOR_URL}#`) ? p.presentation.inspectUrl : null;
+    const cert = p.presentation?.issuerCertUrl?.startsWith(`${X509_URL}#`) ? p.presentation.issuerCertUrl : null;
+    if (inspect) anyWallet = true;
+    const level = p.rail === "instant-demo" ? "instant demo" : escapeHtml(p.trust_level);
+    const links = [inspect && link(inspect, "Inspect ›"), cert && link(cert, "Issuer certificate ›")].filter(Boolean).join(" · ");
+    return `<div class="small" style="margin:4px 0;">✓ <b>${escapeHtml(p.gate)}</b> · ${level}${links ? ` · ${links}` : ""}</div>`;
+  });
+  if (!rows.length && !record) return "";
+  const tools = [anyWallet && link(VERIFIER_URL, "Check the signatures ›"), record && link(record, "Order record ›")].filter(Boolean).join(" · ");
+  const note = anyWallet
+    ? `<div class="small" style="margin-top:6px;">The links open Multipaz Tools, which decodes the credential in your browser. This gate checks what was disclosed and that it answers this request; it does not check the issuer signature (presence-only-demo).</div>`
+    : "";
+  return `<div class="proofs" style="margin-top:12px;padding:10px 12px;border:1px solid var(--hairline);border-radius:10px;">${rows.length ? `<div style="font-weight:600;">What was proven</div>${rows.join("")}` : ""}${tools ? `<div class="small" style="margin-top:6px;">${tools}</div>` : ""}${note}</div>`;
 }
 
 // ── Trust footer ────────────────────────────────────────────────────────────

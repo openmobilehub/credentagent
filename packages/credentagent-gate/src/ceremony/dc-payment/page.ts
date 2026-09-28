@@ -16,7 +16,7 @@
 // control. Self-contained: takes the re-priced amount + lines, not a demo Order type.
 
 import type { Branding } from "../../types.js";
-import { pageHead, brandHeader, orderSummaryCard, trustFooter, settlingBar, completionHandoffBanner, railCompleteScript, completedViewScript, refusalNotices, inspectLinkScript } from "../theme.js";
+import { pageHead, brandHeader, orderSummaryCard, trustFooter, settlingBar, completionHandoffBanner, railCompleteScript, completedViewScript, refusalNotices, inspectLinkScript, recordLinkScript } from "../theme.js";
 
 export interface DcPaymentLine {
   name: string;
@@ -35,6 +35,9 @@ export interface DcPaymentPageArgs {
   /** Where to send the buyer after payment — the checkout hub, which then shows the
    *  paid confirmation. Defaults to this server's `/checkout?order=<id>`. */
   returnUrl?: string;
+  /** The store's order-status record for this order (from the host's `statusUrl` seam) — the
+   *  completed page links it as "Order record ›". Absent ⇒ no link. */
+  statusUrl?: string;
   /** statelessOrders: base64url cart mandate carried back to the store-less `/checkout`. */
   cart?: string;
   /** The order-derived progress rail HTML (from `checkoutRail`), built by the route which
@@ -117,6 +120,7 @@ ${pageHead(`Authorize payment (cross-device) · ${order}`, extraCss, args.brandi
     // the settlementError message): they're built server-side but never trusted raw.
     const esc = (s) => String(s).replace(/[&<>"']/g, (c) => "&#" + c.charCodeAt(0) + ";");
     ${inspectLinkScript()}
+    ${recordLinkScript(args.statusUrl)}
 
     // Pre-fetch the REAL signed OpenID4VP request so navigator.credentials.get() can be
     // called SYNCHRONOUSLY inside the tap. iOS WebKit drops the transient user
@@ -159,8 +163,9 @@ ${pageHead(`Authorize payment (cross-device) · ${order}`, extraCss, args.brandi
           if (!out.mandate) throw new Error(out.error || "authorization failed");
           step("✓ presentation verified · mandate built (" + out.mandate.trust_level + ")", "ok");
           renderReceipt(out);
-          // Into #receipt, not #log: the completed view hides the log.
-          showInspectLink(out.presentation, "receipt");
+          // Into #receipt, not #log: the completed view hides the log. A completed order shows the
+          // whole-order block instead (every credential, not only this payment's).
+          if (!out.proofsHtml) showInspectLink(out.presentation, "receipt");
           // Configured-but-failed settle: authorized, not settled — let the buyer retry.
           if (out.settlementError) { step("✗ settlement failed — authorized, not settled (retry below)", "err"); goDc.disabled = false; prefetch(); }
         })
@@ -235,6 +240,10 @@ ${pageHead(`Authorize payment (cross-device) · ${order}`, extraCss, args.brandi
         btn.textContent = "Authorized ✓";
         ${railCompleteScript()}
         ${completedViewScript()}
+        // "What was proven": every credential of the order with its Multipaz Tools links, then Check
+        // the signatures + Order record — server-rendered and escaped by the gate (proofLinksHtml).
+        if (typeof out.proofsHtml === "string" && out.proofsHtml) el.insertAdjacentHTML("beforeend", out.proofsHtml);
+        else showRecordLink();
       } else if (!out.settlementError) {
         // Recoverable by definition: the buyer proves what's missing (age, a credential)
         // and authorizes again. Leaving both buttons dead was the other half of the dead end.
