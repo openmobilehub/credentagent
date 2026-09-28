@@ -244,26 +244,36 @@
   padding: 10px 16px;
   font-size: 14px;
   font-weight: 600;
-  color: #ffffff;
-  background: #1a7f37;
+  color: var(--ca-on-primary);
+  background: var(--ca-primary);
   cursor: pointer;
+}
+
+.checkout:hover:not(:disabled) {
+  background: var(--ca-primary-hover);
+}
+
+/* Disabled reads as neutral, not as a faded brand colour: empty cart, order opening, or no host. */
+.checkout:disabled {
+  color: var(--ca-dim);
+  background: var(--ca-sunk);
+  cursor: not-allowed;
 }
 
 .showProducts {
   appearance: none;
-  border: 1px solid light-dark(#c9c9c9, #4a4a4a);
+  border: 1px solid color-mix(in srgb, var(--ca-link) 45%, transparent);
   border-radius: 8px;
   padding: 10px 16px;
   font-size: 14px;
   font-weight: 600;
-  color: inherit;
+  color: var(--ca-link);
   background: transparent;
   cursor: pointer;
 }
 
-.checkout:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
+.showProducts:hover {
+  background: color-mix(in srgb, var(--ca-link) 10%, transparent);
 }
 
 .ageBadge {
