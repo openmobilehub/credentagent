@@ -163,8 +163,9 @@ ${pageHead(`Authorize payment (cross-device) · ${order}`, extraCss, args.brandi
           if (!out.mandate) throw new Error(out.error || "authorization failed");
           step("✓ presentation verified · mandate built (" + out.mandate.trust_level + ")", "ok");
           renderReceipt(out);
-          // Into #receipt, not #log: the completed view hides the log.
-          showInspectLink(out.presentation, "receipt");
+          // Into #receipt, not #log: the completed view hides the log. A completed order shows the
+          // whole-order block instead (every credential, not only this payment's).
+          if (!out.proofsHtml) showInspectLink(out.presentation, "receipt");
           // Configured-but-failed settle: authorized, not settled — let the buyer retry.
           if (out.settlementError) { step("✗ settlement failed — authorized, not settled (retry below)", "err"); goDc.disabled = false; prefetch(); }
         })
@@ -239,7 +240,10 @@ ${pageHead(`Authorize payment (cross-device) · ${order}`, extraCss, args.brandi
         btn.textContent = "Authorized ✓";
         ${railCompleteScript()}
         ${completedViewScript()}
-        showRecordLink();
+        // "What was proven": every credential of the order with its Multipaz Tools links, then Check
+        // the signatures + Order record — server-rendered and escaped by the gate (proofLinksHtml).
+        if (typeof out.proofsHtml === "string" && out.proofsHtml) el.insertAdjacentHTML("beforeend", out.proofsHtml);
+        else showRecordLink();
       } else if (!out.settlementError) {
         // Recoverable by definition: the buyer proves what's missing (age, a credential)
         // and authorizes again. Leaving both buttons dead was the other half of the dead end.

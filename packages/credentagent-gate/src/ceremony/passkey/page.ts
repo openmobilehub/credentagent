@@ -170,7 +170,10 @@ ${pageHead(`Authorize payment · ${order.id}`, extraCss, args.branding)}
         btn.textContent = "Authorized ✓";
         ${railCompleteScript()}
         ${completedViewScript()}
-        showRecordLink();
+        // "What was proven": every credential of the order with its Multipaz Tools links, then Check
+        // the signatures + Order record — server-rendered and escaped by the gate (proofLinksHtml).
+        if (typeof out.proofsHtml === "string" && out.proofsHtml) el.insertAdjacentHTML("beforeend", out.proofsHtml);
+        else showRecordLink();
       }
     }
   </script>
