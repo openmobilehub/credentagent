@@ -17,6 +17,7 @@ import {
 import styles from "./app.module.css";
 import { updateQueue } from "./update-queue";
 import { CartFooter } from "./CartFooter";
+import { ProofRows, type WidgetProof } from "./ProofRows";
 import { ShowProducts } from "./ShowProducts";
 import { formatMoney } from "./money";
 import { GrantCard, GRANT_VIEW_KIND, type GrantViewData, type GrantActions } from "./grants";
@@ -147,6 +148,8 @@ type CompletedOrder = {
     amountTinybar?: number;
     settledInMs?: number;
   };
+  // What was proven for the order (the gate's order proof receipt), when the store keeps it.
+  proofs?: WidgetProof[];
 };
 
 // How the payment was authorized, for the in-widget confirmation panel.
@@ -659,6 +662,7 @@ function Picker({ products, cart, insets, setQuantity, checkout, openLink, confi
               <dt>Payment</dt>
               <dd>{methodLabel(confirmedOrder.method, !!confirmedOrder.settlement)}</dd>
             </div>
+            <ProofRows proofs={confirmedOrder.proofs} openLink={openLink} />
             {confirmedOrder.settlement && (
               <div className={styles.confirmRow}>
                 <dt>Settlement</dt>
