@@ -16,7 +16,7 @@ import * as jose from "jose";
 import { Encoder, Tag } from "cbor-x";
 import { mountCeremony, type CeremonySeams } from "./mount.js";
 import { MemoryVerificationStore } from "../store.js";
-import { firstDeviceResponse, inspectionResponse, presentationForInspection, INSPECTOR_URL } from "./inspect.js";
+import { firstDeviceResponse, inspectionResponse, presentationForInspection, INSPECTOR_URL, X509_URL, VERIFIER_URL } from "./inspect.js";
 import { renderCredentialPage } from "./credential-gate/page.js";
 import type { CeremonyCatalog, CeremonyOrder } from "./types.js";
 
@@ -178,6 +178,22 @@ describe("firstDeviceResponse — every vp_token shape the wallets send", () => 
     // The fragment never leaves the browser — the inspector decodes locally.
     expect(p.inspectUrl).toBe("https://tools.multipaz.org/mdocDeviceResponse#o2d2ZXJzaW9u");
   });
+
+  it("adds the issuer certificate (x5chain leaf from issuerAuth) as a Multipaz X.509 viewer link", () => {
+    const cert = Buffer.from("30820101-fake-der-leaf");
+    const issuerAuth = [cbor({ 1: -7 }), new Map([[33, cert]]), cbor({}), Buffer.alloc(64)]; // COSE_Sign1; header 33 = x5chain
+    const dr = Buffer.from(cbor({ version: "1.0", documents: [{ docType: "org.iso.18013.5.1.mDL", issuerSigned: { nameSpaces: {}, issuerAuth } }], status: 0 })).toString("base64url");
+    expect(presentationForInspection(dr).issuerCertUrl).toBe(`${X509_URL}#${cert.toString("base64url")}`);
+    // x5chain as an array (leaf + chain) → the leaf.
+    const chained = [issuerAuth[0], new Map([[33, [cert, Buffer.from("ca")]]]), issuerAuth[2], issuerAuth[3]];
+    const dr2 = Buffer.from(cbor({ version: "1.0", documents: [{ docType: "x", issuerSigned: { issuerAuth: chained } }], status: 0 })).toString("base64url");
+    expect(presentationForInspection(dr2).issuerCertUrl).toBe(`${X509_URL}#${cert.toString("base64url")}`);
+  });
+
+  it("no issuerAuth (a synthetic credential) or unparseable bytes → no issuer link, never a throw", () => {
+    expect(presentationForInspection(deviceResponseB64("ns", "age_over_21", true))).not.toHaveProperty("issuerCertUrl");
+    expect(presentationForInspection("not-cbor!!")).not.toHaveProperty("issuerCertUrl");
+  });
 });
 
 describe("inspect link on the consent page", () => {
@@ -185,6 +201,9 @@ describe("inspect link on the consent page", () => {
     const html = renderCredentialPage({ kind: "age", order: "ORD-1" });
     expect(html).toContain("showInspectLink(out.presentation)");
     expect(html).toContain("Inspect this presentation");
+    // The other Multipaz Tools: who signed it, and an independent signature check.
+    expect(html).toContain("Issuer certificate");
+    expect(html).toContain(VERIFIER_URL);
     expect(html).toContain("does not check the issuer signature");
   });
 });

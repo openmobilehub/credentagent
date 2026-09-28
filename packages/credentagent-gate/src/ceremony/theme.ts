@@ -20,7 +20,7 @@
 
 import type { Branding } from "../types.js";
 import type { CompletionRefusalReason } from "./types.js";
-import { INSPECTOR_URL } from "./inspect.js";
+import { INSPECTOR_URL, VERIFIER_URL, X509_URL } from "./inspect.js";
 
 function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -571,7 +571,10 @@ export function railCompleteScript(): string {
  * tools.multipaz.org link is ever rendered, and it is built with DOM APIs (no innerHTML).
  */
 export function inspectLinkScript(): string {
-  return `function showInspectLink(p,id){if(!p||typeof p.inspectUrl!=="string"||p.inspectUrl.indexOf("${INSPECTOR_URL}#")!==0)return;var c=document.getElementById(id||"log")||document.body;var d=document.createElement("div");d.className="inspect";d.style.cssText="margin-top:12px;padding:10px 12px;border:1px solid var(--hairline);border-radius:10px";var a=document.createElement("a");a.href=p.inspectUrl;a.target="_blank";a.rel="noopener noreferrer";a.style.fontWeight="600";a.textContent="Inspect this presentation ›";var n=document.createElement("div");n.className="small";n.textContent="The ISO mdoc credential your wallet sent, decoded in your browser by Multipaz Tools (nothing is uploaded). This gate checks what was disclosed and that it answers this request; it does not check the issuer signature (presence-only-demo).";d.appendChild(a);d.appendChild(n);c.appendChild(d);}`;
+  // Three Multipaz Tools links, each opening in a new tab: the credential itself (decoded), the
+  // certificate that signed it (only when the credential carries one), and the Multipaz verifier
+  // for an independent signature check. Only tools.multipaz.org links ever render.
+  return `function showInspectLink(p,id){if(!p||typeof p.inspectUrl!=="string"||p.inspectUrl.indexOf("${INSPECTOR_URL}#")!==0)return;var c=document.getElementById(id||"log")||document.body;var d=document.createElement("div");d.className="inspect";d.style.cssText="margin-top:12px;padding:10px 12px;border:1px solid var(--hairline);border-radius:10px";function link(href,label,note){var a=document.createElement("a");a.href=href;a.target="_blank";a.rel="noopener noreferrer";a.style.fontWeight="600";a.style.display="inline-block";a.style.marginTop="6px";a.textContent=label;var n=document.createElement("div");n.className="small";n.textContent=note;d.appendChild(a);d.appendChild(n);}link(p.inspectUrl,"Inspect this presentation ›","The ISO mdoc credential your wallet sent, decoded in your browser by Multipaz Tools (nothing is uploaded).");if(typeof p.issuerCertUrl==="string"&&p.issuerCertUrl.indexOf("${X509_URL}#")===0)link(p.issuerCertUrl,"Issuer certificate ›","Who signed this credential — the certificate it carries, in the Multipaz X.509 viewer.");link("${VERIFIER_URL}","Check the signatures ›","The Multipaz verifier asks your wallet directly and checks the issuer and device signatures itself.");var t=document.createElement("div");t.className="small";t.style.marginTop="8px";t.textContent="This gate checks what was disclosed and that it answers this request; it does not check the issuer signature (presence-only-demo).";d.appendChild(t);c.appendChild(d);}`;
 }
 
 /**
