@@ -16,6 +16,8 @@ import {
 } from "../index";
 import styles from "./app.module.css";
 import { updateQueue } from "./update-queue";
+import { CartFooter } from "./CartFooter";
+import { formatMoney } from "./money";
 import { GrantCard, GRANT_VIEW_KIND, type GrantViewData, type GrantActions } from "./grants";
 
 // A grant tool result (create/get/spend/revoke) carries the GrantViewData projection, discriminated
@@ -92,10 +94,6 @@ function parseJsonContent<T>(result: CallToolResult): T | null {
     }
   }
   return null;
-}
-
-function formatMoney(amount: number, currency: string): string {
-  return new Intl.NumberFormat("en-US", { style: "currency", currency }).format(amount);
 }
 
 // Deterministic muted color from a product id, for image fallbacks.
@@ -700,22 +698,12 @@ function Picker({ products, cart, insets, setQuantity, checkout, openLink, confi
         </div>
       )}
 
-      <div className={styles.footer}>
-        <span className={styles.summary}>
-          {cart.itemCount > 0
-            ? `🛒 ${cart.itemCount} in cart · ${formatMoney(cart.total, cart.currency)}`
-            : "🛒 Cart is empty"}
-        </span>
-        {checkout && cart.itemCount > 0 && !pendingCheckoutUrl && (
-          <button
-            className={styles.checkout}
-            disabled={checkingOut}
-            onClick={handleCheckout}
-          >
-            {checkingOut ? "Opening…" : "Checkout"}
-          </button>
-        )}
-      </div>
+      <CartFooter
+        cart={cart}
+        canCheckout={!!checkout}
+        checkingOut={checkingOut}
+        onCheckout={() => void handleCheckout()}
+      />
     </main>
   );
 }
