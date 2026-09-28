@@ -47,6 +47,70 @@ describe("proof helpers", () => {
   });
 });
 
+// ── An express store on ONE port (origin-bound gates agree across requests) + a simulated wallet.
+const enc = new Encoder({ useRecords: false, variableMapSize: true, useTag259ForMaps: false });
+function ageDeviceResponse(): string {
+  const isi = enc.encode({ digestID: 0, random: Buffer.alloc(16), elementIdentifier: "age_over_21", elementValue: true });
+  return Buffer.from(enc.encode({ version: "1.0", documents: [{ docType: "org.iso.18013.5.1.mDL", issuerSigned: { nameSpaces: { "org.iso.18013.5.1": [new Tag(isi, 24)] } } }], status: 0 })).toString("base64url");
+}
+const ageCatalog: CeremonyCatalog = {
+  createOrder(items, orderId) {
+    const lines = items.map((it) => ({ id: it.productId, name: it.productId, unitPrice: 124, currency: "USD", quantity: it.quantity, lineTotal: 124 * it.quantity, minimumAge: 21 }));
+    const total = lines.reduce((s, l) => s + l.lineTotal, 0);
+    return { id: orderId, lines, itemCount: lines.length, subtotal: total, discount: 0, total, currency: "USD" };
+  },
+};
+
+function storeHarness(inspectPresentations: boolean) {
+  const verificationStore = new MemoryVerificationStore();
+  const records = new Map<string, CompletedRecord>();
+  const orders = new Map(["W1", "W2"].map((id) => [id, ageCatalog.createOrder([{ productId: "whiskey", quantity: 1 }], id)]));
+  const app = express();
+  mountCeremony(app as never, {
+    verificationStore, catalog: ageCatalog, signingKey: "stable-test-secret", inspectPresentations,
+    orderStore: { read: async (id) => orders.get(id) ?? null },
+    completion: (input) => completeOrder(input, { catalog: ageCatalog, verificationStore, records: { read: (id) => records.get(id), write: (r) => void records.set(r.orderId, r) } }),
+  });
+  return { server: http.createServer(app), verificationStore, records };
+}
+
+async function proveAge(server: http.Server, order: string): Promise<string> {
+  const rd = (await request(server).get(`/credentagent/credential/request?order=${order}&cred=age`)).body;
+  const signed = rd.requests.find((r: { protocol: string }) => r.protocol === "openid4vp-v1-signed");
+  const jwk = (jose.decodeJwt(signed.data.request) as { client_metadata: { jwks: { keys: jose.JWK[] } } }).client_metadata.jwks.keys[0];
+  const dr = ageDeviceResponse();
+  const response = await new jose.CompactEncrypt(new TextEncoder().encode(JSON.stringify({ vp_token: { mdl: [dr] } })))
+    .setProtectedHeader({ alg: "ECDH-ES", enc: "A128GCM" }).encrypt(await jose.importJWK(jwk, "ECDH-ES"));
+  const res = await request(server).post("/credentagent/credential/verify").send({ order, cred: "age", readerContextToken: rd.readerContextToken, result: { protocol: "openid4vp-v1-signed", data: { response } } });
+  expect(res.body.verified).toBe(true);
+  return dr;
+}
+
+describe("the credential rail records its proof on the order", () => {
+  it("a wallet proof is kept with its presentation when inspectPresentations is on — and only on THAT order", async () => {
+    const h = storeHarness(true);
+    const dr = await proveAge(h.server, "W1");
+    const [p] = (await h.verificationStore.read("W1"))!.proofs!;
+    expect(p).toMatchObject({ gate: "Age 21+", rail: "credential", trust_level: "presence-only-demo", presentation: { deviceResponse: dr, inspectUrl: `${INSPECTOR_URL}#${dr}` } });
+    expect(p.checks[0]).toMatchObject({ pass: true });
+    expect(await h.verificationStore.read("W2")).toBeUndefined(); // invariant 4: no cross-order bleed
+  });
+
+  it("without the flag the proof is kept but carries no credential bytes", async () => {
+    const h = storeHarness(false);
+    await proveAge(h.server, "W1");
+    expect((await h.verificationStore.read("W1"))!.proofs![0]).not.toHaveProperty("presentation");
+  });
+
+  it("the instant demo is recorded as instant-demo, never as a wallet proof", async () => {
+    const h = storeHarness(true);
+    await request(h.server).post("/credentagent/credential/verify").send({ order: "W1", cred: "age", claims: { age_over_21: true } });
+    const [p] = (await h.verificationStore.read("W1"))!.proofs!;
+    expect(p.rail).toBe("instant-demo");
+    expect(p).not.toHaveProperty("presentation");
+  });
+});
+
 describe("completeOrder keeps the proofs", () => {
   it("copies the order's credential proofs + the payment proof into the completed record, then clears verification", async () => {
     const verificationStore = new MemoryVerificationStore();
