@@ -16,6 +16,9 @@ import {
 } from "../index";
 import styles from "./app.module.css";
 import { updateQueue } from "./update-queue";
+import { CartFooter } from "./CartFooter";
+import { ShowProducts } from "./ShowProducts";
+import { formatMoney } from "./money";
 import { GrantCard, GRANT_VIEW_KIND, type GrantViewData, type GrantActions } from "./grants";
 
 // A grant tool result (create/get/spend/revoke) carries the GrantViewData projection, discriminated
@@ -92,10 +95,6 @@ function parseJsonContent<T>(result: CallToolResult): T | null {
     }
   }
   return null;
-}
-
-function formatMoney(amount: number, currency: string): string {
-  return new Intl.NumberFormat("en-US", { style: "currency", currency }).format(amount);
 }
 
 // Deterministic muted color from a product id, for image fallbacks.
@@ -403,7 +402,14 @@ function HostApp() {
 
   if (error) return <div className={styles.status}><strong>Error:</strong> {error.message}</div>;
   if (!app) return <div className={styles.status}>Connecting…</div>;
-  if (grantView) return <GrantCard grant={grantView} actions={grantActions} />;
+  if (grantView) {
+    return (
+      <>
+        <GrantCard grant={grantView} actions={grantActions} />
+        <ShowProducts itemCount={cart.itemCount} onShow={() => setGrantView(null)} />
+      </>
+    );
+  }
 
   return <Picker products={products} cart={cart} insets={insets} setQuantity={setQuantity} checkout={checkout} openLink={openLink} confirmedOrder={confirmedOrder} pendingCheckoutUrl={pendingCheckoutUrl} />;
 }
@@ -494,7 +500,14 @@ function ChatGptApp() {
     },
   }), [oai]);
 
-  if (grantView) return <GrantCard grant={grantView} actions={grantActions} />;
+  if (grantView) {
+    return (
+      <>
+        <GrantCard grant={grantView} actions={grantActions} />
+        <ShowProducts itemCount={cart.itemCount} onShow={() => setGrantView(null)} />
+      </>
+    );
+  }
 
   return <Picker products={products} cart={cart} setQuantity={setQuantity} checkout={checkout} openLink={openLink} confirmedOrder={confirmedOrder} pendingCheckoutUrl={pendingCheckoutUrl} />;
 }
@@ -700,22 +713,12 @@ function Picker({ products, cart, insets, setQuantity, checkout, openLink, confi
         </div>
       )}
 
-      <div className={styles.footer}>
-        <span className={styles.summary}>
-          {cart.itemCount > 0
-            ? `🛒 ${cart.itemCount} in cart · ${formatMoney(cart.total, cart.currency)}`
-            : "🛒 Cart is empty"}
-        </span>
-        {checkout && cart.itemCount > 0 && !pendingCheckoutUrl && (
-          <button
-            className={styles.checkout}
-            disabled={checkingOut}
-            onClick={handleCheckout}
-          >
-            {checkingOut ? "Opening…" : "Checkout"}
-          </button>
-        )}
-      </div>
+      <CartFooter
+        cart={cart}
+        canCheckout={!!checkout}
+        checkingOut={checkingOut}
+        onCheckout={() => void handleCheckout()}
+      />
     </main>
   );
 }
