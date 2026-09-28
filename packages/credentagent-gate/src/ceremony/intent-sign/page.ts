@@ -31,6 +31,8 @@ export interface IntentSignPageArgs {
    *  present before signing. They belong above it because what they prove is part of what they
    *  sign: the proofs are inside `canonicalIntentBounds`, so the signature covers them. */
   steps?: string;
+  /** Browser-visible path prefix — the /sign/request + /sign/verify calls carry it. Absent ⇒ "". */
+  basePath?: string;
 }
 
 function escapeHtml(s: string): string {
@@ -94,7 +96,7 @@ ${pageHead(title, extraCss, args.branding)}
     let reqData = null;
     function prefetch() {
       reqData = null;
-      fetch("/credentagent/grants/" + encodeURIComponent(ID) + "/sign/request").then((r) => r.json()).then((d) => { reqData = d; }).catch(() => {});
+      fetch(${JSON.stringify(`${args.basePath ?? ""}/credentagent/grants/`)} + encodeURIComponent(ID) + "/sign/request").then((r) => r.json()).then((d) => { reqData = d; }).catch(() => {});
     }
     const DC_API = !!(navigator.credentials && navigator.credentials.get);
     if (!DC_API) {
@@ -114,7 +116,7 @@ ${pageHead(title, extraCss, args.branding)}
           let data = result && result.data != null ? result.data : null;
           if (typeof data === "string") { try { data = JSON.parse(data); } catch (e) {} }
           step("→ verify device signature…");
-          const out = await fetch("/credentagent/grants/" + encodeURIComponent(ID) + "/sign/verify", {
+          const out = await fetch(${JSON.stringify(`${args.basePath ?? ""}/credentagent/grants/`)} + encodeURIComponent(ID) + "/sign/verify", {
             method: "POST", headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ readerContextToken: rd.readerContextToken, result: { protocol: (result && result.protocol) || null, data } }),
           }).then((r) => r.json());

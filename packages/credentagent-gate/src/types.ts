@@ -253,6 +253,11 @@ export interface CredentAgentOptions {
    * Optional — defaults to `http://localhost:<PORT|3000>` so zero-config local
    * dev works. Warns (never throws) if it's not absolute, or if it resolves to
    * localhost in production. Set it to your public origin for any deployment.
+   *
+   * Behind a proxy that serves your app under a path (e.g. `https://shop.example/store/*`
+   * forwarded to your server's `/*`), include the path: `https://shop.example/store`. Every
+   * approve link, page fetch and redirect then carries `/store`. The wallet still binds to
+   * the origin alone (`https://shop.example`).
    */
   walletOrigin?: string;
   /**

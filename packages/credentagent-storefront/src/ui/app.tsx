@@ -154,9 +154,16 @@ type CompletedOrder = {
   recordUrl?: string;
 };
 
+// Where the store serves its pages: the checkout URL minus its `/checkout` — the origin, plus
+// the path when a proxy mounts the store under one (https://shop.example/store/checkout?…).
+function storeBase(checkoutUrl: string): string {
+  const u = new URL(checkoutUrl);
+  return u.origin + u.pathname.replace(/\/checkout\/?$/, "");
+}
+
 // The confirmed order plus the URL of the record the widget just read it from.
 function withRecordUrl(order: CompletedOrder, checkoutUrl: string, orderId: string): CompletedOrder {
-  return { ...order, recordUrl: `${new URL(checkoutUrl).origin}/checkout/order-status?orderId=${encodeURIComponent(orderId)}` };
+  return { ...order, recordUrl: `${storeBase(checkoutUrl)}/checkout/order-status?orderId=${encodeURIComponent(orderId)}` };
 }
 
 // How the payment was authorized, for the in-widget confirmation panel.
@@ -203,7 +210,7 @@ function tryOpenCheckout(url: string, bridgeOpen?: OpenLinkFn): void {
 // completion, or null on timeout/cancel. The signal lets the component cancel
 // the loop on unmount.
 async function pollOrderCompletion(
-  origin: string,
+  base: string,
   orderId: string,
   signal: { cancelled: boolean },
   opts: { intervalMs?: number; maxMs?: number } = {},
@@ -212,7 +219,7 @@ async function pollOrderCompletion(
   const deadline = Date.now() + (opts.maxMs ?? 5 * 60_000);
   while (!signal.cancelled && Date.now() < deadline) {
     try {
-      const res = await fetch(`${origin}/checkout/order-status?orderId=${encodeURIComponent(orderId)}`);
+      const res = await fetch(`${base}/checkout/order-status?orderId=${encodeURIComponent(orderId)}`);
       if (res.ok) {
         const data = (await res.json()) as { completed?: boolean; order?: CompletedOrder };
         if (data.completed && data.order) return data.order;
@@ -376,7 +383,7 @@ function HostApp() {
     const signal = { cancelled: false };
     pollRef.current = signal;
     void (async () => {
-      const order = await pollOrderCompletion(new URL(checkoutUrl).origin, orderId, signal);
+      const order = await pollOrderCompletion(storeBase(checkoutUrl), orderId, signal);
       if (!order || signal.cancelled) return;
       setPendingCheckoutUrl(null);
       setConfirmedOrder(withRecordUrl(order, checkoutUrl, orderId)); // read-only confirmation panel in the widget
@@ -488,7 +495,7 @@ function ChatGptApp() {
     const signal = { cancelled: false };
     pollRef.current = signal;
     void (async () => {
-      const order = await pollOrderCompletion(new URL(checkoutUrl).origin, orderId, signal);
+      const order = await pollOrderCompletion(storeBase(checkoutUrl), orderId, signal);
       if (!order || signal.cancelled) return;
       setPendingCheckoutUrl(null);
       setConfirmedOrder(withRecordUrl(order, checkoutUrl, orderId)); // read-only confirmation panel in the widget

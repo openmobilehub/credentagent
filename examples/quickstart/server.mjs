@@ -29,7 +29,9 @@ if (deployed && !(kv.url && kv.token) && process.env.ALLOW_MEMORY_STORAGE !== "1
       "Running deployed-mode semantics in ONE process (e.g. `npm run smoke`)? Set ALLOW_MEMORY_STORAGE=1.",
   );
 const origin = process.env.VERCEL_PROJECT_PRODUCTION_URL; // set by Vercel at runtime
-const deployedOrigin = origin && `https://${origin}`;
+// PUBLIC_URL wins when set: the address buyers reach this store at, path included when a proxy
+// serves it under one (https://credentagent.ai/marketplace → checkout at …/marketplace/checkout).
+const deployedOrigin = process.env.PUBLIC_URL?.replace(/\/+$/, "") || (origin && `https://${origin}`);
 const port = Number(process.env.PORT ?? 3005);
 // Grant approve links are minted from walletOrigin at creation time, so locally it MUST
 // carry the same port `store.listen` binds — the gate's default (localhost:3000) would 404.

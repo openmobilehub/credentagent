@@ -200,6 +200,7 @@ export const registerCredentialGate: RailRegistrar = (app: CeremonyApp, ctx: Cer
           cart,
           rail: checkoutRail(order, resolved.credential.id, { ageVerified, currentLabel: resolved.credential.ui.label }),
           branding: ctx.branding,
+          basePath: ctx.basePath,
         }),
       );
       return;
@@ -216,6 +217,7 @@ export const registerCredentialGate: RailRegistrar = (app: CeremonyApp, ctx: Cer
         cart,
         rail: checkoutRail(order, resolved.kind, { ageVerified }),
         branding: ctx.branding,
+        basePath: ctx.basePath,
       }),
     );
   });

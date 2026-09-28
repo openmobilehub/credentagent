@@ -40,7 +40,7 @@
 // decrypt, ISO-mdoc parse) but there is NO issuer trust anchor yet — trust_level stays
 // "presence-only-demo" and a self-crafted credential would pass. This is disclosure + binding,
 // never a real safety control, until issuer-verified trust lands (#14).
-import { deriveOrigin, type RequestLike } from "../origin.js";
+import { basePathOf, deriveOrigin, type RequestLike } from "../origin.js";
 import { buildCredentialRequest } from "../credential-gate/request.js";
 import { evaluateCredential, verifyCredentialPresentation, type PresentationResult } from "../credential-gate/verify.js";
 import { inspectionResponse } from "../inspect.js";
@@ -146,6 +146,8 @@ export function registerGrantCredentialGate(app: CredentialRailApp, grants: Gran
   const post = app.post?.bind(app) as ((path: string, ...handlers: RailHandler[]) => unknown) | undefined;
   if (!get || !post) return;
   const cfg = grants.railConfig;
+  // Browser-visible path prefix (a walletOrigin with a path) — the page's links and calls carry it.
+  const prefix = basePathOf(cfg.walletOrigin);
 
   for (const cred of GRANT_CREDENTIALS) {
     const base = `/credentagent/grants/:id/${cred}`;
@@ -155,7 +157,7 @@ export function registerGrantCredentialGate(app: CredentialRailApp, grants: Gran
     get(base, async (req, res) => {
       const r = await resolveGrantCred(grants, req.params.id, cred);
       if (!r) { res.status(404).type("html").send(`<!doctype html><h1>This grant has no ${cred} step</h1>`); return; }
-      const urls = `/credentagent/grants/${encodeURIComponent(r.grant.id)}/${cred}`;
+      const urls = `${prefix}/credentagent/grants/${encodeURIComponent(r.grant.id)}/${cred}`;
       res.status(200).type("html").send(
         renderCredentialPage({
           kind: cred,
@@ -165,9 +167,10 @@ export function registerGrantCredentialGate(app: CredentialRailApp, grants: Gran
           ...(r.minimumAge != null ? { minimumAge: r.minimumAge } : {}),
           ...(r.percent != null ? { percent: r.percent } : {}),
           lede: ledeFor(cred, r),
-          returnUrl: `/credentagent/grants/${encodeURIComponent(r.grant.id)}`,
+          returnUrl: `${prefix}/credentagent/grants/${encodeURIComponent(r.grant.id)}`,
           endpoints: { request: `${urls}/request`, verify: `${urls}/verify` },
           ...(cfg.branding ? { branding: cfg.branding } : {}),
+          basePath: prefix,
         }),
       );
     });

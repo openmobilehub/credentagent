@@ -45,6 +45,9 @@ export interface DcPaymentPageArgs {
   rail?: string;
   /** Host brand for this page (from `ctx.branding`). Absent ⇒ the built-in look. */
   branding?: Branding;
+  /** Browser-visible path prefix (from `ctx.basePath`) — every URL this page fetches or links
+   *  carries it. Absent ⇒ "" (served at the root). */
+  basePath?: string;
 }
 
 // The canonical disclosed instrument the instant-demo button presents — it goes
@@ -63,7 +66,8 @@ function money(amount: number, currency: string): string {
 
 export function renderDcPaymentPage(args: DcPaymentPageArgs): string {
   const { order, total, currency, lines } = args;
-  const returnUrl = args.returnUrl ?? `/checkout?order=${encodeURIComponent(order)}${args.cart ? `&cart=${args.cart}` : ""}`;
+  const base = args.basePath ?? "";
+  const returnUrl = args.returnUrl ?? `${base}/checkout?order=${encodeURIComponent(order)}${args.cart ? `&cart=${args.cart}` : ""}`;
   // The shared order summary card (line items + bold Total) — same chrome as the hub.
   const summary = orderSummaryCard({
     lines: lines.map((l) => ({ name: l.name, quantity: l.quantity, lineTotal: l.lineTotal, currency: l.currency })),
@@ -130,7 +134,7 @@ ${pageHead(`Authorize payment (cross-device) · ${order}`, extraCss, args.brandi
     let reqData = null;
     function prefetch() {
       reqData = null;
-      fetch("/credentagent/dc-payment/request" + location.search).then((r) => r.json()).then((d) => { reqData = d; }).catch(() => {});
+      fetch(${JSON.stringify(`${base}/credentagent/dc-payment/request`)} + location.search).then((r) => r.json()).then((d) => { reqData = d; }).catch(() => {});
     }
 
     if (!("credentials" in navigator) || !window.DigitalCredential) {
@@ -156,7 +160,7 @@ ${pageHead(`Authorize payment (cross-device) · ${order}`, extraCss, args.brandi
           if (typeof data === "string") { try { data = JSON.parse(data); } catch (e) {} }
           step("→ verify · Settling via x402 on Hedera testnet (if configured)… can take ~10s");
           settling.classList.add("on");
-          const out = await fetch("/credentagent/dc-payment/verify", {
+          const out = await fetch(${JSON.stringify(`${base}/credentagent/dc-payment/verify`)}, {
             method: "POST", headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ order: ORDER, cart: CART, readerContextToken: rd.readerContextToken, result: { protocol: (result && result.protocol) || null, data } }),
           }).then((r) => r.json()).finally(() => settling.classList.remove("on"));
@@ -181,7 +185,7 @@ ${pageHead(`Authorize payment (cross-device) · ${order}`, extraCss, args.brandi
       try {
         step("→ verify (presence-only, amount-bound) · Settling via x402 on Hedera testnet (if configured)… can take ~10s");
         settling.classList.add("on");
-        const out = await fetch("/credentagent/dc-payment/verify", {
+        const out = await fetch(${JSON.stringify(`${base}/credentagent/dc-payment/verify`)}, {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ order: ORDER, cart: CART, amount: AMOUNT, claims: DEMO_CLAIMS }),
         }).then((r) => r.json()).finally(() => settling.classList.remove("on"));

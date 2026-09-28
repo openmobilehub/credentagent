@@ -55,6 +55,9 @@ the widget shows the confirmation. Add the headphones instead and the age gate d
 > `.when((order) => …)` takes the **whole `GateOrder`** (id, total, currency, lines), so a
 > predicate keys off the cart's lines — e.g. `order.lines.some((l) => l.minimumAge != null)`.
 > For a deployment pass your public origin: `new CredentAgent({ walletOrigin: "https://shop.example" })`.
+> Behind a proxy that serves your app under a path (`https://shop.example/store/*` → your `/*`),
+> include the path — `walletOrigin: "https://shop.example/store"` — and every approve link, page
+> fetch and redirect carries `/store`. The wallet still binds to the page's origin.
 
 ### Branding the ceremony pages
 

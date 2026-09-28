@@ -129,7 +129,12 @@ export interface StorefrontOptions {
   catalog?: Product[] | CatalogSource;
   /** Reviews per product id, backing `get-product-reviews`. */
   reviews?: Record<string, Review[]>;
-  /** Origin the checkout links resolve from. Default `http://localhost:<port>`. */
+  /**
+   * Public URL the checkout links resolve from. Default: the first request's origin
+   * (`http://localhost:<port>` under `listen()`). Behind a proxy that serves this app under a
+   * path, include it (`https://shop.example/store`): checkout links, page links and fetches
+   * then carry `/store`. Pair it with the same value as the gate's `walletOrigin`.
+   */
   baseUrl?: string;
   /** Cart store; default in-memory. */
   cartStore?: CartStore;
@@ -329,6 +334,28 @@ export function originFromRequest(req: Request): string {
   return host ? `${proto}://${host}`.replace(/\/+$/, "") : "";
 }
 
+// The path a configured baseUrl carries, as the browser sees it: "https://shop.example/store"
+// → "/store"; a bare origin → "". A proxy that mounts this app under a path strips it before
+// the request lands here, so every URL a page hands the browser must put it back.
+function basePathOf(baseUrl: string | undefined): string {
+  if (!baseUrl) return "";
+  try {
+    return new URL(baseUrl).pathname.replace(/\/+$/, "");
+  } catch {
+    return "";
+  }
+}
+
+// A CSP source must be an origin: "https://shop.example/store" as a connect-src would match
+// that one path only, so the widget's fetches to /store/checkout/... would be blocked.
+function cspOrigin(baseUrl: string): string[] {
+  try {
+    return baseUrl ? [new URL(baseUrl).origin] : [];
+  } catch {
+    return [];
+  }
+}
+
 /**
  * A stable, opaque signature of an order's verification state (#73). The checkout page
  * bakes the current one (`statusRevision`) and `/checkout/order-status` returns it; when
@@ -350,7 +377,10 @@ export function verificationRevision(v: VerificationRecord | null | undefined): 
 function homeApproveUrl(approveUrl: string, base: string): string {
   try {
     const u = new URL(approveUrl, "http://re-home.invalid");
-    if (u.pathname.startsWith("/credentagent/")) return `${base}${u.pathname}${u.search}`;
+    // A gate whose walletOrigin carries the same path prefix already put it on the link.
+    const prefix = basePathOf(base);
+    const path = prefix && u.pathname.startsWith(`${prefix}/credentagent/`) ? u.pathname.slice(prefix.length) : u.pathname;
+    if (path.startsWith("/credentagent/")) return `${base}${path}${u.search}`;
   } catch {
     /* not URL-shaped — leave as-is */
   }
@@ -445,6 +475,8 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
     opts.verificationStore ?? opts.storage?.verificationStore ?? new MemoryVerificationStore();
   let resolveGate: GateResolver | undefined;
   let baseUrl = opts.baseUrl?.replace(/\/+$/, "") ?? "";
+  // Only a CONFIGURED baseUrl carries a path; one derived from a request is a bare origin.
+  const basePath = basePathOf(baseUrl);
 
   // statelessOrders (gate FR-007): the signed Cart Mandate is the created-order transport.
   // The storefront must OWN a concrete signing key (not the gate's ephemeral one) so the
@@ -571,7 +603,10 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
     completion,
     // The pay pages link the finished order's record ("Order record ›") — the same
     // /checkout/order-status the widget polls, proofs included. Same host as the pages.
-    statusUrl: (orderId: string) => `/checkout/order-status?orderId=${encodeURIComponent(orderId)}`,
+    statusUrl: (orderId: string) => `${basePath}/checkout/order-status?orderId=${encodeURIComponent(orderId)}`,
+    // Behind a path-mounting proxy (baseUrl https://shop.example/store), the rails' page URLs
+    // carry the path too. Absent for a bare-origin baseUrl — the rails serve at the root.
+    ...(basePath ? { basePath } : {}),
     // signingKey survives an instance split; default to an ephemeral per-process key
     // for a single-process dev server / tests when none is configured (but statelessOrders
     // forces a concrete, storefront-owned key so it can sign the mandate).
@@ -1326,7 +1361,7 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
       RESOURCE_URI,
       { mimeType: RESOURCE_MIME_TYPE },
       async (): Promise<ReadResourceResult> => ({
-        contents: [{ uri: RESOURCE_URI, mimeType: RESOURCE_MIME_TYPE, text: await loadBundle(), _meta: { ui: { csp: { resourceDomains: [...IMAGE_DOMAINS, "data:"], connectDomains: baseUrl ? [baseUrl] : [] } } } }],
+        contents: [{ uri: RESOURCE_URI, mimeType: RESOURCE_MIME_TYPE, text: await loadBundle(), _meta: { ui: { csp: { resourceDomains: [...IMAGE_DOMAINS, "data:"], connectDomains: cspOrigin(baseUrl) } } } }],
       }),
     );
     server.registerResource(
@@ -1334,7 +1369,7 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
       SKYBRIDGE_URI,
       { mimeType: SKYBRIDGE_MIME },
       async (): Promise<ReadResourceResult> => ({
-        contents: [{ uri: SKYBRIDGE_URI, mimeType: SKYBRIDGE_MIME, text: await loadBundle(), _meta: { "openai/widgetCSP": { connect_domains: baseUrl ? [baseUrl] : [], resource_domains: [...IMAGE_DOMAINS, "data:"] } } }],
+        contents: [{ uri: SKYBRIDGE_URI, mimeType: SKYBRIDGE_MIME, text: await loadBundle(), _meta: { "openai/widgetCSP": { connect_domains: cspOrigin(baseUrl), resource_domains: [...IMAGE_DOMAINS, "data:"] } } }],
       }),
     );
 
@@ -1472,7 +1507,7 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
           methods: [
             { value: "demo", name: `Complete purchase (demo) — ${order.total} ${order.currency}`, desc: "No real charge — records the order and clears the cart.", placeOrder: true },
           ],
-          placeOrderPath: "/checkout/place-order",
+          placeOrderPath: `${basePath}/checkout/place-order`,
           orderToken: order.id,
         }
       : opts.verifier
@@ -1481,7 +1516,7 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
         // built-in presence-only passkey/dc-payment rails — completes the payment.
         {
           methods: [
-            { value: "delegated", name: "Pay with your wallet", desc: "Authorize with a credential from your phone wallet — verification and settlement run through the configured external verifier.", href: withCart(`/credentagent/delegated?order=${orderQ}`, statelessOrders ? cartRaw : null), checked: true },
+            { value: "delegated", name: "Pay with your wallet", desc: "Authorize with a credential from your phone wallet — verification and settlement run through the configured external verifier.", href: withCart(`${basePath}/credentagent/delegated?order=${orderQ}`, statelessOrders ? cartRaw : null), checked: true },
           ],
         }
       : // A GATED order: offer the same payment methods the demo does — the headline
@@ -1491,15 +1526,15 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
         // to a single Pay CTA from the manifest and the x402/Hedera passkey option never shows.
         {
           methods: [
-            { value: "passkey", name: "Pay with x402 Hedera · Passkey", desc: "Authorize with this device's passkey — payment settles on-chain via the x402 protocol (test network).", href: withCart(`/credentagent/passkey?order=${orderQ}`, statelessOrders ? cartRaw : null), checked: true },
-            { value: "dc-payment", name: "Cross-device wallet", desc: "Scan a QR and approve with your phone's passkey or wallet — also x402 on Hedera.", href: withCart(`/credentagent/dc-payment?order=${orderQ}`, statelessOrders ? cartRaw : null) },
+            { value: "passkey", name: "Pay with x402 Hedera · Passkey", desc: "Authorize with this device's passkey — payment settles on-chain via the x402 protocol (test network).", href: withCart(`${basePath}/credentagent/passkey?order=${orderQ}`, statelessOrders ? cartRaw : null), checked: true },
+            { value: "dc-payment", name: "Cross-device wallet", desc: "Scan a QR and approve with your phone's passkey or wallet — also x402 on Hedera.", href: withCart(`${basePath}/credentagent/dc-payment?order=${orderQ}`, statelessOrders ? cartRaw : null) },
           ],
         };
 
     // #63: let a standing checkout tab reflect a completion made on another tab / device /
     // rail — the page polls this order's status endpoint and reloads on completion (the same
     // signal the widget polls). Route-agnostic: the gate renders whatever URL we pass.
-    const statusUrl = `/checkout/order-status?orderId=${encodeURIComponent(order.id)}`;
+    const statusUrl = `${basePath}/checkout/order-status?orderId=${encodeURIComponent(order.id)}`;
     // #73: bake THIS order's current verification signature so a standing tab reloads when a
     // step is made elsewhere (age verified, loyalty applied), not only on final completion.
     const statusRevision = verificationRevision(v);

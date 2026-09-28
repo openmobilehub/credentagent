@@ -93,7 +93,11 @@ jobs:
         # CREDENTAGENT_INSPECT_PRESENTATIONS=1 turns on inspectPresentations for the DEV demo only
         # (the website's demo runs here): consent pages + the order proof receipt link the wallet's
         # demo credential to Multipaz Tools. Prod stays off.
-        run: npx vercel@latest deploy --prod --yes --token "$VERCEL_TOKEN" --env CREDENTAGENT_BUILD="dev.${GITHUB_SHA::7}" --env CREDENTAGENT_INSPECT_PRESENTATIONS=1
+        # PUBLIC_URL is where buyers reach this store: the credentagent.ai router serves it under
+        # /marketplace-dev (deploy/router/vercel.json), so its checkout and consent pages open on
+        # credentagent.ai, not *.vercel.app (#226). Prod follows once a release carries the path
+        # support — the published 0.5.0 pages still use root paths.
+        run: npx vercel@latest deploy --prod --yes --token "$VERCEL_TOKEN" --env CREDENTAGENT_BUILD="dev.${GITHUB_SHA::7}" --env CREDENTAGENT_INSPECT_PRESENTATIONS=1 --env PUBLIC_URL=https://credentagent.ai/marketplace-dev
 
       - name: Smoke the live dev endpoint
         if: steps.gate.outputs.configured == 'true'

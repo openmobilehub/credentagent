@@ -99,6 +99,7 @@ export const registerDcPaymentGate: RailRegistrar = (app: CeremonyApp, ctx: Cere
         returnUrl: ctx.returnUrl?.(order.id),
         statusUrl: ctx.statusUrl?.(order.id),
         branding: ctx.branding,
+        basePath: ctx.basePath,
       }),
     );
   });

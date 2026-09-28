@@ -102,6 +102,11 @@ export interface CeremonySeams {
    *  "Inspect this presentation" link (see `CredentAgentOptions.inspectPresentations`).
    *  Absent/false ⇒ off. */
   inspectPresentations?: boolean;
+  /** The path the browser reaches these routes under when a proxy mounts the app below one
+   *  (e.g. `/marketplace` for https://shop.example/marketplace/* → this server's /*). Every
+   *  URL a rail page fetches, links or redirects to carries it. Normally derived from a
+   *  `walletOrigin` that includes the path. Absent ⇒ "" (served at the root). */
+  basePath?: string;
 }
 
 /** The resolved context each rail receives (every required seam present). */
@@ -136,6 +141,8 @@ export interface CeremonyContext {
   branding?: Branding;
   /** Hand the presented DeviceResponse back to the page for inspection (absent ⇒ off). */
   inspectPresentations?: boolean;
+  /** The browser-visible path prefix every page URL carries ("" at the root). */
+  basePath?: string;
 }
 
 /** A rail attaches its routes to the host app given the resolved context. */
@@ -174,6 +181,7 @@ export function mountCeremony(app: CeremonyApp, options: Partial<CeremonySeams> 
   const statusUrl = options.statusUrl ?? locals.statusUrl;
   const branding = options.branding ?? locals.branding;
   const inspectPresentations = options.inspectPresentations ?? locals.inspectPresentations ?? false;
+  const basePath = (options.basePath ?? locals.basePath ?? "").replace(/\/+$/, "");
   let signingKey = options.signingKey ?? locals.signingKey;
 
   // Fail fast (CT2) — a load-bearing seam must never silently default. (`origin`
@@ -236,6 +244,7 @@ export function mountCeremony(app: CeremonyApp, options: Partial<CeremonySeams> 
     ...(statusUrl ? { statusUrl } : {}),
     ...(branding ? { branding } : {}),
     ...(inspectPresentations ? { inspectPresentations } : {}),
+    ...(basePath ? { basePath } : {}),
   };
 
   // Re-expose the resolved seams on app.locals so the storefront's gate routes
