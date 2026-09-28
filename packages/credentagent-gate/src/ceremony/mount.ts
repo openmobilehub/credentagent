@@ -25,13 +25,6 @@ import { registerCredentialGate } from "./credential-gate/routes.js";
 import { registerPasskeyGate } from "./passkey/routes.js";
 import { registerDcPaymentGate } from "./dc-payment/routes.js";
 import { registerDelegatedPaymentGate } from "./delegated-payment/routes.js";
-import { registerProofRoute } from "./proof-route.js";
-import type { ProofEntry } from "./proofs.js";
-
-/** Read-only view of completed orders — just enough for the order proof receipt route. */
-export interface CompletedOrdersReader {
-  read(orderId: string): { proofs?: ProofEntry[] } | null | undefined | Promise<{ proofs?: ProofEntry[] } | null | undefined>;
-}
 
 /** Minimal Express-app shape mount() needs (no `express` dependency). */
 export interface CeremonyApp {
@@ -104,10 +97,6 @@ export interface CeremonySeams {
    *  "Inspect this presentation" link (see `CredentAgentOptions.inspectPresentations`).
    *  Absent/false ⇒ off. */
   inspectPresentations?: boolean;
-  /** Read completed orders, so `GET /credentagent/orders/:id/proof` can answer for a finished
-   *  order (the storefront and `orders.serve` pass their completed-order store). Absent ⇒ the
-   *  route answers only for unfinished orders, from the verification record. */
-  completedOrders?: CompletedOrdersReader;
 }
 
 /** The resolved context each rail receives (every required seam present). */
@@ -140,8 +129,6 @@ export interface CeremonyContext {
   branding?: Branding;
   /** Hand the presented DeviceResponse back to the page for inspection (absent ⇒ off). */
   inspectPresentations?: boolean;
-  /** Completed orders, for the order proof receipt route (absent ⇒ unfinished orders only). */
-  completedOrders?: CompletedOrdersReader;
 }
 
 /** A rail attaches its routes to the host app given the resolved context. */
@@ -154,7 +141,7 @@ export type RailRegistrar = (app: CeremonyApp, ctx: CeremonyContext) => void;
 // (which pass a `{ locals }`-only app) are unaffected.
 // `registerDelegatedPaymentGate` (008) self-skips unless a `verifier` seam is
 // configured, so adding it here changes nothing for a host that hasn't opted in.
-const RAILS: RailRegistrar[] = [registerCredentialGate, registerPasskeyGate, registerDcPaymentGate, registerDelegatedPaymentGate, registerProofRoute];
+const RAILS: RailRegistrar[] = [registerCredentialGate, registerPasskeyGate, registerDcPaymentGate, registerDelegatedPaymentGate];
 
 /**
  * Read + validate the injected seams, build the CeremonyContext, and register
@@ -179,7 +166,6 @@ export function mountCeremony(app: CeremonyApp, options: Partial<CeremonySeams> 
   const returnUrl = options.returnUrl ?? locals.returnUrl;
   const branding = options.branding ?? locals.branding;
   const inspectPresentations = options.inspectPresentations ?? locals.inspectPresentations ?? false;
-  const completedOrders = options.completedOrders ?? locals.completedOrders;
   let signingKey = options.signingKey ?? locals.signingKey;
 
   // Fail fast (CT2) — a load-bearing seam must never silently default. (`origin`
@@ -241,7 +227,6 @@ export function mountCeremony(app: CeremonyApp, options: Partial<CeremonySeams> 
     ...(returnUrl ? { returnUrl } : {}),
     ...(branding ? { branding } : {}),
     ...(inspectPresentations ? { inspectPresentations } : {}),
-    ...(completedOrders ? { completedOrders } : {}),
   };
 
   // Re-expose the resolved seams on app.locals so the storefront's gate routes

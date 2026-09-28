@@ -207,11 +207,11 @@ describe("orders.serve — checkout wiring", () => {
   });
 });
 
-// The order proof receipt (spec 2026-09-27): orders.serve keeps each proof on the completed
-// order, serves it at /credentagent/orders/:id/proof, and never lets credential bytes leave in
-// the order.settled webhook (it goes to ANOTHER service).
+// The order proof receipt: orders.serve keeps each proof on the completed order — so the
+// EXISTING status route and orders.retrieve() return it — and never lets credential bytes leave
+// in the order.settled webhook (it goes to ANOTHER service).
 describe("orders.serve — the order proof receipt", () => {
-  it("a payment's proof reaches orders.retrieve() and GET /credentagent/orders/:id/proof", async () => {
+  it("a payment's proof reaches orders.retrieve() and the existing /credentagent/orders/:id/status", async () => {
     const ca = new CredentAgent({ walletOrigin: "http://localhost:4000" });
     const app = fakeApp();
     ca.orders.serve(app);
@@ -227,9 +227,9 @@ describe("orders.serve — the order proof receipt", () => {
     const done = await ca.orders.retrieve(id);
     expect(done.ok && done.completion.proofs?.map((p) => [p.gate, p.rail])).toEqual([["Pay (USD)", "instant-demo"]]);
 
-    const proof = fakeRes();
-    await app._get.get("/credentagent/orders/:id/proof")!({ params: { id } }, proof);
-    expect(proof._json).toMatchObject({ orderId: id, status: "completed", proofs: [{ gate: "Pay (USD)" }] });
+    const status = fakeRes();
+    await app._get.get("/credentagent/orders/:id/status")!({ params: { id } }, status);
+    expect(status._json).toMatchObject({ completed: true, order: { orderId: id, proofs: [{ gate: "Pay (USD)" }] } });
   });
 
   it("the order.settled webhook carries the proofs WITHOUT credential bytes; the stored order keeps them", async () => {

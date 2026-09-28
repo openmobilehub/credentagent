@@ -1,11 +1,10 @@
-// The order proof receipt (spec docs/superpowers/specs/2026-09-27-order-proof-receipt-design.md):
-// each successful proof is kept WITH its order so it outlives completion and can be shown
-// afterwards. These pin:
+// The order proof receipt: each successful proof is kept WITH its order so it outlives
+// completion and shows up wherever the completed order is read (the order-status endpoints,
+// orders.retrieve, get-order-status). These pin:
 //   • re-proving a gate replaces its entry; webhooks get the proofs without credential bytes;
 //   • completeOrder copies the order's proofs (then the payment's) onto the completed record;
 //   • the credential rail records wallet proofs (bytes only with inspectPresentations) and
-//     labels the instant demo as instant-demo; a proof on one order never reaches another;
-//   • GET /credentagent/orders/:id/proof answers for completed + pending orders, 404 otherwise.
+//     labels the instant demo as instant-demo; a proof on one order never reaches another.
 import { describe, it, expect } from "vitest";
 import express from "express";
 import http from "node:http";
@@ -70,7 +69,6 @@ function storeHarness(inspectPresentations: boolean) {
     verificationStore, catalog: ageCatalog, signingKey: "stable-test-secret", inspectPresentations,
     orderStore: { read: async (id) => orders.get(id) ?? null },
     completion: (input) => completeOrder(input, { catalog: ageCatalog, verificationStore, records: { read: (id) => records.get(id), write: (r) => void records.set(r.orderId, r) } }),
-    completedOrders: { read: (id) => records.get(id) },
   });
   return { server: http.createServer(app), verificationStore, records };
 }
@@ -125,30 +123,6 @@ describe("payment rails add their proof", () => {
     expect(proofs[0].presentation).toBeDefined();
     expect(proofs[1]).not.toHaveProperty("presentation");
     expect(proofs[1].checks.length).toBeGreaterThan(0);
-  });
-});
-
-describe("GET /credentagent/orders/:id/proof", () => {
-  it("returns a completed order's proofs", async () => {
-    const h = storeHarness(true);
-    await proveAge(h.server, "W1");
-    await request(h.server).post("/credentagent/dc-payment/verify").send({ order: "W1", amount: 124, claims: DEMO_INSTRUMENT });
-    const res = await request(h.server).get("/credentagent/orders/W1/proof");
-    expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ orderId: "W1", status: "completed" });
-    expect(res.body.proofs.map((p: ProofEntry) => p.gate)).toEqual(["Age 21+", "Pay (USD)"]);
-  });
-
-  it("returns the proofs so far for an order that hasn't completed", async () => {
-    const h = storeHarness(false);
-    await proveAge(h.server, "W1");
-    const res = await request(h.server).get("/credentagent/orders/W1/proof");
-    expect(res.body).toMatchObject({ orderId: "W1", status: "pending", proofs: [{ gate: "Age 21+" }] });
-  });
-
-  it("404s an order it has never seen", async () => {
-    const res = await request(storeHarness(false).server).get("/credentagent/orders/NOPE/proof");
-    expect(res.status).toBe(404);
   });
 });
 

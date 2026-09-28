@@ -215,8 +215,6 @@ export function serveOrders(app: CeremonyApp, deps: ServeOrdersDeps): void {
     ...(deps.readerIdentity ? { readerIdentity: deps.readerIdentity } : {}),
     ...(deps.branding ? { branding: deps.branding } : {}),
     ...(deps.inspectPresentations ? { inspectPresentations: true } : {}),
-    // The order proof receipt route answers finished orders from the completed store.
-    completedOrders: { read: (id) => deps.completed.read(id) },
     ...(deps.signingKey ? { signingKey: deps.signingKey } : { allowEphemeralKey: true }),
   });
 
