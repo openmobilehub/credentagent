@@ -249,6 +249,18 @@
   cursor: pointer;
 }
 
+.showProducts {
+  appearance: none;
+  border: 1px solid light-dark(#c9c9c9, #4a4a4a);
+  border-radius: 8px;
+  padding: 10px 16px;
+  font-size: 14px;
+  font-weight: 600;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+}
+
 .checkout:disabled {
   opacity: 0.45;
   cursor: not-allowed;

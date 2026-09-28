@@ -17,6 +17,7 @@ import {
 import styles from "./app.module.css";
 import { updateQueue } from "./update-queue";
 import { CartFooter } from "./CartFooter";
+import { ShowProducts } from "./ShowProducts";
 import { formatMoney } from "./money";
 import { GrantCard, GRANT_VIEW_KIND, type GrantViewData, type GrantActions } from "./grants";
 
@@ -401,7 +402,14 @@ function HostApp() {
 
   if (error) return <div className={styles.status}><strong>Error:</strong> {error.message}</div>;
   if (!app) return <div className={styles.status}>Connecting…</div>;
-  if (grantView) return <GrantCard grant={grantView} actions={grantActions} />;
+  if (grantView) {
+    return (
+      <>
+        <GrantCard grant={grantView} actions={grantActions} />
+        <ShowProducts itemCount={cart.itemCount} onShow={() => setGrantView(null)} />
+      </>
+    );
+  }
 
   return <Picker products={products} cart={cart} insets={insets} setQuantity={setQuantity} checkout={checkout} openLink={openLink} confirmedOrder={confirmedOrder} pendingCheckoutUrl={pendingCheckoutUrl} />;
 }
@@ -492,7 +500,14 @@ function ChatGptApp() {
     },
   }), [oai]);
 
-  if (grantView) return <GrantCard grant={grantView} actions={grantActions} />;
+  if (grantView) {
+    return (
+      <>
+        <GrantCard grant={grantView} actions={grantActions} />
+        <ShowProducts itemCount={cart.itemCount} onShow={() => setGrantView(null)} />
+      </>
+    );
+  }
 
   return <Picker products={products} cart={cart} setQuantity={setQuantity} checkout={checkout} openLink={openLink} confirmedOrder={confirmedOrder} pendingCheckoutUrl={pendingCheckoutUrl} />;
 }
