@@ -10,11 +10,14 @@
 //
 // The phone is SIMULATED in-process here (devSimulateWalletSignature) so the whole flow runs
 // with no device — the way Stripe's test cards let you exercise a charge without a real card.
-// The signature the gate verifies is a REAL mdoc DeviceAuth ES256 signature; what stays demo is
-// the trust ANCHOR (the payment credential is self-minted — no issuer check yet, issue #14), so
-// the gate reports trust_level "device-signed", never "issuer-verified". The maintainer's
-// on-device test (import payment.mpzpass into Multipaz, sign on a Pixel) is what proves the real
-// wallet path — that step is still open.
+// The signature the gate verifies is REAL: the wallet returns an SD-JWT VC presentation whose
+// Key Binding JWT carries the AP2 Mandate Content, and the gate checks that key binding against
+// the key the credential names in `cnf`, checks the `sd_hash` binding it to the disclosures
+// presented, checks every revealed claim against the issuer-signed `_sd` digests, and rebuilds
+// the mandates from its own grant record to require the wallet signed those exact terms.
+//
+// What stays demo is the trust ANCHOR (the payment credential is self-minted — no issuer check
+// yet, issue #14), so the gate reports trust_level "device-signed", never "issuer-verified".
 import express from "express";
 import { CredentAgent, devSimulateWalletSignature } from "@openmobilehub/credentagent-gate";
 
@@ -70,7 +73,13 @@ try {
   // 3) The grant is now authorized — ONLY because the device signature verified.
   const signed = await credentagent.grants.retrieve(grant.id);
   step(`4. grant status=${signed.status} · trustLevel=${signed.trustLevel}`);
-  step(`   mandate: boundsHash=${signed.mandate.boundsHash.slice(0, 16)}… · doctype=${signed.mandate.credentialDoctype} · signedAt=${signed.mandate.signedAt}`);
+  step(`   mandate: boundsHash=${signed.mandate.boundsHash.slice(0, 16)}… · credentialType=${signed.mandate.credentialType} · signedAt=${signed.mandate.signedAt}`);
+  // The TERMS the wallet signed, not just their digest — what the human actually authorized.
+  const signedProducts = (signed.mandate.mandates ?? [])
+    .flatMap((m) => m.constraints ?? [])
+    .filter((c) => c.type === "checkout.line_items")
+    .flatMap((c) => (c.items ?? []).flatMap((r) => (r.acceptable_items ?? []).map((i) => i.id)));
+  step(`   the wallet signed a permission to buy: ${signedProducts.join(", ")}`);
 
   // 4) The agent spends within the signed bounds — and every spend traces to the signed mandate.
   const buy = await signed.spend({ idempotencyKey: "coffee-run-1", items: [{ sku: "coffee" }] });
