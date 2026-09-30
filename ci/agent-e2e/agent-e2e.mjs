@@ -8,7 +8,7 @@
 // figure out our tools" (a reworded description, a changed manifest shape, a confusing refusal).
 // This harness gives Claude ONE plain-language task and then asserts on FACTS IN THE TOOL TRACE
 // (via the shared, parse-based `runAssertions`) — never on prose, so agent nondeterminism can't
-// flake it. Its ChatGPT twin is agent-e2e-openai.mjs; both share ./assertions.mjs.
+// flake it. The assertions live in ./assertions.mjs.
 //
 // The Messages API's MCP connector executes the MCP tools server-side: one request, no client
 // plumbing. `pause_turn` is resumed per the API contract.

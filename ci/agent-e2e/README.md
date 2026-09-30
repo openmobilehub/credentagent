@@ -1,10 +1,8 @@
 # agent-e2e — agent-in-the-loop end-to-end
 
 A REAL agent drives the deployed MCP storefront unaided, and we assert on FACTS in the tool
-trace (never on prose). `agent-e2e.mjs` uses Claude (needs `ANTHROPIC_API_KEY`); its twin
-`agent-e2e-openai.mjs` uses ChatGPT (needs `OPENAI_API_KEY`). Both share `assertions.mjs`.
-The nightly workflow runs **Claude only**; the ChatGPT twin is kept for an on-demand
-cross-provider check you run locally.
+trace (never on prose). `agent-e2e.mjs` runs a Claude agent (needs `ANTHROPIC_API_KEY`; the
+nightly workflow skips cleanly without it); the checks live in `assertions.mjs`.
 
 **Target the deployed store with `E2E_MCP_URL`** — defaults to the prod demo
 (`https://credentagent.ai/marketplace/mcp`), so the nightly workflow needs no env. Set it to the
@@ -13,6 +11,6 @@ exercise unreleased changes. `MCP_URL` is still accepted as an alias for back-co
 
 ```sh
 npm ci
-ANTHROPIC_API_KEY=… node agent-e2e.mjs                                  # Claude vs the prod demo
-E2E_MCP_URL=https://credentagent.ai/marketplace-dev/mcp OPENAI_API_KEY=… node agent-e2e-openai.mjs  # ChatGPT vs the dev twin
+ANTHROPIC_API_KEY=… node agent-e2e.mjs                                                        # vs the prod demo
+E2E_MCP_URL=https://credentagent.ai/marketplace-dev/mcp ANTHROPIC_API_KEY=… node agent-e2e.mjs  # vs the dev twin
 ```

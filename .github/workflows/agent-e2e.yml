@@ -6,9 +6,7 @@ name: agent-e2e
 # order completed. Catches the failure class the deterministic smokes can't: "an agent can no longer
 # figure out our tools."
 #
-# Nightly runs Claude only (one key, one bill: ANTHROPIC_API_KEY). With no key the step SKIPS (green,
-# with a notice). The ChatGPT twin (ci/agent-e2e/agent-e2e-openai.mjs) stays in the repo for an
-# on-demand cross-provider check — run it locally with OPENAI_API_KEY.
+# Needs the ANTHROPIC_API_KEY secret. With no key the step SKIPS (green, with a notice).
 
 on:
   schedule:
