@@ -76,12 +76,30 @@ export function registerIntentSignRail(app: RailApp, grants: Grants): void {
     const g = await grants.retrieve(id);
     if (!g || g.signing !== "device") { res.status(404).json({ error: "unknown device grant" }); return; }
     if (g.status !== "pending") { res.status(409).json({ error: `grant is ${g.status}` }); return; }
-    const bounds = grants._boundsInputFor(id);
-    if (!bounds) { res.status(404).json({ error: "unknown grant" }); return; }
+    const inputs = grants._intentSignInputsFor(id);
+    if (!inputs) {
+      // NOT "unknown": two lines up we established the grant exists, is device-mode and is
+      // pending. The reachable cause is that it has nothing signable — `_allowedSkusFor`
+      // withholds every age-restricted product until the age is proved (#172), and a mandate
+      // naming no products would authorize nothing. Answering "unknown grant" sent whoever hit
+      // this looking for a missing record instead of the age step.
+      const signable = grants._allowedSkusFor(id);
+      res.status(409).json({
+        error:
+          signable && signable.length === 0
+            ? "grant has no signable products yet — every product it names needs an age proof first"
+            : "grant cannot be prepared for signing",
+      });
+      return;
+    }
+    const { bounds, delegate, mandateExp, allowedSkus } = inputs;
     try {
       const cfg = grants.railConfig;
       const oid = await buildIntentSignRequest({
         bounds,
+        delegate,
+        mandateExp,
+        allowedSkus,
         origin: originOf(req),
         secret: cfg.secret,
         ...(cfg.readerIdentity ? { readerIdentity: cfg.readerIdentity } : {}),
@@ -101,8 +119,9 @@ export function registerIntentSignRail(app: RailApp, grants: Grants): void {
     const id = req.params.id;
     const g = await grants.retrieve(id);
     if (!g || g.signing !== "device") { res.status(404).json({ ok: false, reason: "unknown device grant" }); return; }
-    const bounds = grants._boundsInputFor(id);
-    if (!bounds) { res.status(404).json({ ok: false, reason: "unknown grant" }); return; }
+    const inputs = grants._intentSignInputsFor(id);
+    if (!inputs) { res.status(404).json({ ok: false, reason: "unknown grant" }); return; }
+    const { bounds, delegate, mandateExp, allowedSkus } = inputs;
     const body = await readJsonBody(req);
     const result = body.result as { protocol?: string; data?: unknown } | undefined;
     const readerContextToken = body.readerContextToken;
@@ -113,6 +132,9 @@ export function registerIntentSignRail(app: RailApp, grants: Grants): void {
     try {
       const cfg = grants.railConfig;
       const out = await verifyIntentPresentation({
+        delegate,
+        mandateExp,
+        allowedSkus,
         result,
         readerContextToken,
         secret: cfg.secret,
@@ -126,9 +148,13 @@ export function registerIntentSignRail(app: RailApp, grants: Grants): void {
       const sealed = await grants._authorizeDevice(id, {
         boundsHash: out.boundsHash,
         signedAt: out.signedAt,
-        credentialDoctype: out.credentialDoctype,
+        credentialType: out.credentialType,
         verifiedBy: out.verifiedBy,
         trustLevel: out.trustLevel,
+        // The terms themselves, not only their digest. `/verify` rebuilt these from the server's
+        // own grant record and required the wallet's signature to cover them, so they are what
+        // the human agreed to — and dropping them here left the grant unable to say so.
+        ...(out.mandates ? { mandates: out.mandates } : {}),
       });
       if (!sealed) { res.status(409).json({ ok: false, reason: "grant is not pending" }); return; }
       res.json({ ok: true, status: "authorized", trustLevel: out.trustLevel, verifiedBy: out.verifiedBy, boundsHash: out.boundsHash });
