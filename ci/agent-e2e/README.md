@@ -2,8 +2,9 @@
 
 A REAL agent drives the deployed MCP storefront unaided, and we assert on FACTS in the tool
 trace (never on prose). `agent-e2e.mjs` uses Claude (needs `ANTHROPIC_API_KEY`); its twin
-`agent-e2e-openai.mjs` uses ChatGPT (needs `OPENAI_API_KEY`). Both share `assertions.mjs`;
-each harness skips cleanly when its key is absent.
+`agent-e2e-openai.mjs` uses ChatGPT (needs `OPENAI_API_KEY`). Both share `assertions.mjs`.
+The nightly workflow runs **Claude only**; the ChatGPT twin is kept for an on-demand
+cross-provider check you run locally.
 
 **Target the deployed store with `E2E_MCP_URL`** — defaults to the prod demo
 (`https://credentagent.ai/marketplace/mcp`), so the nightly workflow needs no env. Set it to the
