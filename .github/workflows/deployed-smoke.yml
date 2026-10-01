@@ -6,6 +6,10 @@ name: deployed-smoke
 # integration emits deployment_status when the deploy finishes, so this never races the
 # build and needs no Vercel credentials.
 #
+# NOTE: production deploys now come from the deploy-prod workflow (CLI, with VERCEL_TOKEN),
+# which smokes the live demo itself. With the Vercel Git integration turned off, Vercel emits
+# no deployment_status and this workflow stops firing; delete it then.
+#
 # Preview deploys are skipped: the Preview environment lacks the KV/GATE_SECRET config
 # and 500s (observed 2026-07-23), which would turn the check red for non-code reasons.
 # Drop the environment condition once preview env vars are configured.

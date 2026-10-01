@@ -43,8 +43,25 @@ if (!external) {
   const probe = spawnSync("node", ["server.mjs"], { env, timeout: 10_000, encoding: "utf8" });
   ok("boot refuses without GATE_SECRET (deployed mode)", probe.status !== 0 && /GATE_SECRET/.test(probe.stderr));
 
-  // Real run: deployed-mode semantics (statelessOrders) on localhost.
-  child = spawn("node", ["server.mjs"], { env: { ...env, GATE_SECRET: "quickstart-smoke-secret" }, stdio: ["ignore", "pipe", "inherit"] });
+  // Boot-refusal probe #2 (the same fail-fast rule, for the OTHER piece of shared state):
+  // deployed mode with a key but no shared storage. Serverless instances share no memory,
+  // so the in-memory fallback loses a buyer's age proof between two requests — the order
+  // then refuses "age" at random, and a completed order is invisible to order-status. That
+  // is precisely the failure this probe exists to make impossible: it must be a loud boot
+  // error, not a coin flip in production. (A genuinely single-instance host opts out with
+  // ALLOW_MEMORY_STORAGE=1 — explicit, never inferred.)
+  const noStore = spawnSync("node", ["server.mjs"], {
+    env: { ...env, GATE_SECRET: "quickstart-smoke-secret" }, timeout: 10_000, encoding: "utf8",
+  });
+  ok("boot refuses without shared storage (deployed mode)",
+    noStore.status !== 0 && /KV_REST_API_URL/.test(noStore.stderr), noStore.stderr?.slice(0, 120));
+
+  // Real run: deployed-mode semantics (statelessOrders) on localhost. ONE process, so the
+  // in-memory stores are genuinely shared — the opt-out the probe above demands.
+  child = spawn("node", ["server.mjs"], {
+    env: { ...env, GATE_SECRET: "quickstart-smoke-secret", ALLOW_MEMORY_STORAGE: "1" },
+    stdio: ["ignore", "pipe", "inherit"],
+  });
   for (let i = 0; ; i++) {
     try { await fetch(`${base}/checkout/order-status?orderId=probe`); break; }
     catch { if (i > 60) { console.error("server never came up"); process.exit(1); } await new Promise((r) => setTimeout(r, 250)); }

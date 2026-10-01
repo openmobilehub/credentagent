@@ -1,6 +1,14 @@
 :root {
   color-scheme: light dark;
   font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  /* CredentAgent brand (same values as the site's --primary / --link / --sunk / --dim tokens):
+     purple on paper in light, volt on ink in dark. */
+  --ca-primary: light-dark(#420a98, #c6f53c);
+  --ca-primary-hover: light-dark(#2e0770, #a8d62a);
+  --ca-on-primary: light-dark(#ffffff, #0e1220);
+  --ca-link: light-dark(#420a98, #c9a7ff);
+  --ca-sunk: light-dark(#e9ece5, #232a40);
+  --ca-dim: light-dark(#5c6478, #7c849a);
 }
 
 * {

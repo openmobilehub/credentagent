@@ -36,6 +36,7 @@ import type { Credential } from "../../types.js";
 import type { CredentialKind } from "./dcql.js";
 import { openReaderContext } from "../mdoc/readerContext.js";
 import { decodeVpToken, type DisclosedEntry } from "../mdoc/mdoc.js";
+import { firstDeviceResponse } from "../inspect.js";
 
 export type { CredentialKind } from "./dcql.js";
 
@@ -53,6 +54,10 @@ export interface CredGateResult {
   /** Honesty axis — stated in the receipt, not buried in prose. */
   trust_level: "presence-only-demo";
 }
+
+/** A wallet presentation's result: the policy outcome plus the DeviceResponse it was
+ *  decided on (base64url) — the route returns it only when `inspectPresentations` is on. */
+export type PresentationResult = CredGateResult & { deviceResponse?: string };
 
 export interface EvaluateOpts {
   /** The minimum age the order's products demand (age gate only; default 21). */
@@ -162,7 +167,7 @@ export async function verifyCredentialPresentation(args: {
   /** Custom credential (007): when present, its OWN `verify` runs instead of the
    *  built-in age/membership policy — same decrypt/nonce-binding path. */
   credential?: Credential;
-}): Promise<CredGateResult> {
+}): Promise<PresentationResult> {
   const { kind, result, readerContextToken, secret, minimumAge, percent, credential } = args;
   const ctx = await openReaderContext(readerContextToken, secret);
 
@@ -195,7 +200,9 @@ export async function verifyCredentialPresentation(args: {
   const vpToken = openid4vpResponse.vp_token;
   const disclosed = vpToken ? decodeVpToken(vpToken) : [];
   const flat = flattenDisclosed(disclosed);
-  return credential ? evaluateCustom(credential, flat) : evaluateCredential(kind, flat, { minimumAge, percent });
+  const out = credential ? evaluateCustom(credential, flat) : evaluateCredential(kind, flat, { minimumAge, percent });
+  const deviceResponse = firstDeviceResponse(vpToken);
+  return deviceResponse ? { ...out, deviceResponse } : out;
 }
 
 // Shared by mdoc-verify.ts: a decoded DeviceResponse → the evaluateCredential

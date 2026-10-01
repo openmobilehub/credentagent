@@ -1,6 +1,12 @@
-# Private keys never leave this machine. gen-pki.sh writes them here.
+# Private keys never leave this machine. gen-pki.sh and mint/mint-dpc-sdjwt.mjs write them here.
 keys/
 *.csr
+# Belt and braces: out/ IS tracked, so if anyone points a minting tool's --keys at it, the
+# private material still does not become a commit. `dpc.mpzpass` is listed because the
+# container embeds the holder's private key in the clear (see mint/README.md).
+out/*.jwk
+out/*.pem
+out/dpc.mpzpass
 # Staged site download artifacts + vendored QR encoder — all build outputs of
 # site/build_site.py (source lives in out/ and certs/; the QR lib in node_modules).
 site/credentials/

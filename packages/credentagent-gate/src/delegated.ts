@@ -13,19 +13,20 @@
 // The wallet-server increment swaps the internals (the key is minted in the user's
 // wallet during a live ceremony) WITHOUT changing this surface.
 
-import type { CeremonyCatalog, CeremonyOrder } from "./ceremony/types.js";
+import type { CeremonyCatalog, CeremonyOrder, RepriceOpts } from "./ceremony/types.js";
 import { MemoryVerificationStore } from "./store.js";
 import { MemoryRevocationStore, type RevocationStore } from "./ceremony/revocation.js";
-import { sealIntent, generateDelegate, signDraw, type IntentBounds } from "./ceremony/mandate.js";
+import { sealIntent, generateDelegate, signDraw, type DelegateJwk, type IntentBounds, type SealedAgeProof, type SealedMembershipProof } from "./ceremony/mandate.js";
 import { completeOrder, type CompletedRecord, type CompletionContext } from "./ceremony/completion.js";
 import type { RefusalCode, RefusalRetryable } from "./ceremony/refusals.js";
 
 /** The delegate private key type, without naming the DOM `CryptoKey` global. */
 type DelegateKey = Awaited<ReturnType<typeof generateDelegate>>["privateKey"];
 
-/** A catalog entry: a bare price, or a price plus an age restriction and/or a category
- *  (categories feed the grants `allow` bounds — what a delegated agent may buy). */
-export type CatalogEntry = number | { price: number; minAge?: number; category?: string };
+/** A catalog entry: a bare price, or a price plus an age restriction, a category and/or a
+ *  display name (categories feed the grants `allow` bounds — what a delegated agent may buy;
+ *  `name` is what the approve page calls the product instead of its bare sku id — #172). */
+export type CatalogEntry = number | { price: number; minAge?: number; category?: string; name?: string };
 
 export interface DelegatedGateOptions {
   /** Your priced catalog: item id → price, or → { price, minAge }. */
@@ -44,8 +45,25 @@ export interface PreApproveOptions {
   total: number;
   /** A human sentence describing the grant (shown in your UI). */
   description?: string;
+  /** The agent keypair this grant delegates to. Supply it when the human must sign over the
+   *  key BEFORE the grant is sealed (the device-signed path); omit it and one is minted here. */
+  delegateKeys?: Awaited<ReturnType<typeof generateDelegate>>;
   /** Who delegated — informational in v0.1 (an audit key; not yet an enforced identity). */
   subject?: string;
+  /** An age claim the HUMAN proved before authorizing, sealed into the grant's bounds (#172).
+   *  Absent ⇒ an age-restricted purchase steps up exactly as before. Present ⇒ purchases at or
+   *  below its proven threshold complete unattended; anything above still steps up. */
+  ageProof?: SealedAgeProof;
+  /** A loyalty membership the HUMAN proved before authorizing (#172). Present ⇒ every purchase
+   *  under this grant prices at its sealed rate, on BOTH the signing and the re-pricing side. */
+  membershipProof?: SealedMembershipProof;
+  /** Honesty override (spec 012): how consent happened / how strongly it is bound. Default
+   *  "delegated-demo" / "server-issued-demo" (the demo approve page). A device-signed grant
+   *  passes "delegated" / "device-signed" so the SEALED bounds carry the real trust level —
+   *  honesty lives in the content-addressed record, not just the handle. Additive: page-mode
+   *  callers pass neither and the sealed bounds are byte-identical to today. */
+  presence?: "delegated" | "delegated-demo";
+  trustLevel?: string;
 }
 
 export interface Purchase {
@@ -77,8 +95,23 @@ export interface SpendResult {
   delegationId?: string;
 }
 
-const priceOf = (e: CatalogEntry) => (typeof e === "number" ? e : e.price);
-const minAgeOf = (e: CatalogEntry) => (typeof e === "number" ? undefined : e.minAge);
+// The ONE set of catalog-entry accessors — exported so the grants `allow` bounds and the
+// approve-page age disclosure (grants-age.ts) read an entry exactly the way the priced
+// ceremony order does, rather than each re-narrowing the union.
+export const priceOf = (e: CatalogEntry) => (typeof e === "number" ? e : e.price);
+export const minAgeOf = (e: CatalogEntry | undefined) => (e === undefined || typeof e === "number" ? undefined : e.minAge);
+export const categoryOf = (e: CatalogEntry | undefined) => (e === undefined || typeof e === "number" ? undefined : e.category);
+export const nameOf = (e: CatalogEntry | undefined) => (e === undefined || typeof e === "number" ? undefined : e.name);
+
+/** The loyalty discount for a re-price, in the catalog's own units. Rounded to the smallest
+ *  representable unit so it is EXACT and deterministic — the draw signer and `completeOrder`
+ *  run this same line over the same sealed rate, so their totals cannot drift (invariant 3).
+ *  (Under `grants` the units are integer cents, so this rounds to the cent.) */
+function loyaltyDiscount(subtotal: number, opts?: RepriceOpts): number {
+  if (!opts?.loyaltyApplied) return 0;
+  const pct = opts.loyaltyDiscountPct ?? 0;
+  return pct > 0 ? Math.round((subtotal * pct) / 100) : 0;
+}
 
 function buildCatalog(items: Record<string, CatalogEntry>): CeremonyCatalog {
   return {
@@ -86,7 +119,7 @@ function buildCatalog(items: Record<string, CatalogEntry>): CeremonyCatalog {
     // idempotency is keyed by it, so a duplicate id would echo a prior completion instead
     // of running the per-draw checks. An unknown item is a programming error, not a gate
     // decision, so it throws (fail fast) rather than silently refusing.
-    createOrder(refs, orderId): CeremonyOrder {
+    createOrder(refs, orderId, opts): CeremonyOrder {
       const lines = refs.map(({ productId, quantity }) => {
         const entry = items[productId];
         if (entry === undefined) {
@@ -96,8 +129,12 @@ function buildCatalog(items: Record<string, CatalogEntry>): CeremonyCatalog {
         const minimumAge = minAgeOf(entry);
         return { id: productId, unitPrice, quantity, lineTotal: unitPrice * quantity, currency: "USD", ...(minimumAge ? { minimumAge } : {}) };
       });
-      const total = lines.reduce((sum, l) => sum + l.lineTotal, 0);
-      return { id: orderId, lines, itemCount: refs.length, subtotal: total, discount: 0, total, currency: "USD" };
+      const subtotal = lines.reduce((sum, l) => sum + l.lineTotal, 0);
+      // A loyalty discount applies ONLY when the caller opts in AND names the rate — for a grant,
+      // the rate sealed into the intent at approval time (#172). No opt-in ⇒ full price, byte-for-
+      // byte what this returned before.
+      const discount = loyaltyDiscount(subtotal, opts);
+      return { id: orderId, lines, itemCount: refs.length, subtotal, discount, total: subtotal - discount, currency: "USD" };
     },
   };
 }
@@ -126,7 +163,11 @@ export class DelegatedGate {
 
   /** Mint ONE grant and hand it back for your agent to hold. */
   async preApprove(opts: PreApproveOptions): Promise<DelegatedGrant> {
-    const { privateKey, delegate } = await generateDelegate();
+    // A caller may bring the delegate keypair. A device-signed grant MUST: AP2 binds an open
+    // mandate to the agent key in `cnf`, so the human signs over that key — which means it has
+    // to exist before they are asked, not be minted afterwards. Generating a fresh one here
+    // would leave the human's signature naming a key nothing ever uses.
+    const { privateKey, delegate } = opts.delegateKeys ?? (await generateDelegate());
     const grant = await sealIntent({
       type: "credentagent.IntentBounds/v0",
       naturalLanguageDescription: opts.description,
@@ -136,8 +177,12 @@ export class DelegatedGate {
       totalAmount: opts.total,
       subject: opts.subject,
       delegate,
-      presence: "delegated-demo",
-      trust_level: "server-issued-demo",
+      // Sealed WITH the bounds: `sealIntent` content-addresses the whole object, so a proof is
+      // part of this grant's identity and cannot be attached or raised afterwards (#172).
+      ...(opts.ageProof ? { ageProof: opts.ageProof } : {}),
+      ...(opts.membershipProof ? { membershipProof: opts.membershipProof } : {}),
+      presence: opts.presence ?? "delegated-demo",
+      trust_level: opts.trustLevel ?? "server-issued-demo",
     });
     return new DelegatedGrant(grant, privateKey, this.catalog, this.ctx);
   }
@@ -160,6 +205,18 @@ export class DelegatedGrant {
     return this.grant.intentId;
   }
 
+  /**
+   * The agent's PUBLIC key this grant delegates to — the sole key whose signature `spend()`
+   * produces, and the key a device-signed mandate names in `cnf`.
+   *
+   * Readable so the two can be compared. On a device-signed grant the human's signature covers
+   * this key, so "the key that was authorized" and "the key that can spend" being the same key
+   * is a property worth being able to check rather than assume.
+   */
+  get delegate(): DelegateJwk {
+    return this.grant.delegate;
+  }
+
   /** When consent happened — "delegated-demo" in v0.1 (constitution VII honesty axis). */
   get presence(): string {
     return this.grant.presence;
@@ -168,6 +225,16 @@ export class DelegatedGrant {
   /** How strongly the authorization is bound — "server-issued-demo" in v0.1 (demo-fenced). */
   get trustLevel(): string {
     return this.grant.trust_level;
+  }
+
+  /** The age claim sealed into these bounds at approval time, if the human proved one (#172). */
+  get ageProof(): SealedAgeProof | undefined {
+    return this.grant.ageProof;
+  }
+
+  /** The loyalty membership sealed into these bounds at approval time, if any (#172). */
+  get membershipProof(): SealedMembershipProof | undefined {
+    return this.grant.membershipProof;
   }
 
   /** The human sentence this grant was described with, if any. */
@@ -187,7 +254,15 @@ export class DelegatedGrant {
     // draw, charged once. The grant prefix keeps two grants on one gate from colliding
     // (grant B must never read grant A's completion — invariant 4).
     const orderId = `${this.grant.intentId}-${idempotencyKey}`;
-    const order = this.catalog.createOrder([{ productId: item, quantity }], orderId);
+    // Price with the grant's OWN sealed loyalty rate (#172), so the amount the delegate key signs
+    // below is the amount `completeOrder` re-derives — one number, both sides (invariant 3). The
+    // per-draw cap is then checked against what the human is actually charged, not the list price.
+    const loyalty = this.grant.membershipProof;
+    const order = this.catalog.createOrder(
+      [{ productId: item, quantity }],
+      orderId,
+      loyalty ? { loyaltyApplied: true, loyaltyDiscountPct: loyalty.discountPct } : undefined,
+    );
     const draw = await signDraw(
       {
         type: "credentagent.Draw/v0",
@@ -211,6 +286,16 @@ export class DelegatedGrant {
     if (res.completed) return { ok: true, amount: order.total, remaining, delegationId: res.delegationId };
     const refusal = res.refusals?.[0];
     return { ok: false, amount: order.total, remaining, reason: refusal?.code, retryable: refusal?.retryable };
+  }
+
+  /** Live money read for a projection/display: how much this grant has drawn down so far and
+   *  how much cumulative headroom is left. Reads the SAME committed-draws ledger `spend()`
+   *  returns `remaining` from, so a projection never re-derives money the engine owns. In the
+   *  engine's integer cents (the caller converts to its display units). */
+  async usage(): Promise<{ spent: number; remaining: number }> {
+    const committed = await this.ctx.revocation!.priorDraws(this.grant.intentId);
+    const spent = committed.reduce((sum, d) => sum + d.amount, 0);
+    return { spent, remaining: this.grant.totalAmount - spent };
   }
 
   /** Revoke the grant — the very next spend is refused, fail-closed. Async so a remote

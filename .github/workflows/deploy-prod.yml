@@ -1,0 +1,131 @@
+name: deploy-prod
+
+# Deploys the PUBLIC demo (credentagent-demo — https://credentagent.ai/marketplace) and the
+# credentagent.ai router (credentagent-router) from GitHub Actions, with the VERCEL_TOKEN
+# secret, then smokes the live demo.
+#
+# Why not Vercel's Git integration: it authorizes a deploy by the commit's author and
+# committer. A merge made on GitHub is written with the merger's default commit email, and
+# that email's Vercel account is only a Viewer on the team — so every automatic production
+# deploy was refused ("You don't have permission to create a Production Deployment",
+# 2026-09-27). A CLI deploy with the token is authorized as the token's owner instead, so it
+# doesn't matter who authored or merged the change. Turn the Git integration off for both
+# projects (Vercel → Project → Settings → Git) so they stop posting failed checks.
+#
+# The demo installs the PUBLISHED packages (examples/quickstart/package.json), so a push runs
+# this only when examples/quickstart, deploy/router or this workflow changes — typically the
+# catch-up PR after a release. Every such push deploys BOTH projects from its commit: with
+# `concurrency`, GitHub keeps only the NEWEST waiting run, so a run that deployed only "what its
+# own commit changed" could silently drop a change from a run it replaced. Deploying both from
+# the newest commit can't drop anything, and a redundant deploy is cheap. Run it by hand
+# (Actions → deploy-prod → Run workflow) to redeploy one or both.
+#
+# Both projects have a Root Directory set in Vercel (examples/quickstart, deploy/router), so
+# `vercel deploy` runs from the repository root and Vercel builds from that folder with the
+# project's own settings (framework preset, env vars) — exactly as a Git deploy would.
+#
+# Requires VERCEL_TOKEN (a token scoped to the cbg6 team, from an account allowed to create
+# Production deployments). Without it every step skips, like deploy-dev.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "examples/quickstart/**"
+      - "deploy/router/**"
+      - ".github/workflows/deploy-prod.yml"
+  workflow_dispatch:
+    inputs:
+      target:
+        description: What to deploy
+        type: choice
+        options: [both, demo, router]
+        default: both
+
+# Serialize runs, for the same reason as deploy-dev: an older run finishing last would move
+# production back to its commit.
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+env:
+  # Identifiers, not credentials: which Vercel team `vercel deploy` targets.
+  VERCEL_ORG_ID: team_tgMygXtl9Q43sdc78ummCtqL # cbg6 ("CBG")
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      demo: ${{ steps.plan.outputs.demo }}
+      router: ${{ steps.plan.outputs.router }}
+    steps:
+      - name: Decide what to deploy
+        id: plan
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          EVENT: ${{ github.event_name }}
+          TARGET: ${{ inputs.target }}
+        run: |
+          if [ -z "$VERCEL_TOKEN" ]; then
+            echo "::notice::VERCEL_TOKEN not configured — skipping the production deploy."
+            echo "demo=false" >> "$GITHUB_OUTPUT"; echo "router=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          demo=true; router=true # a push deploys both (see the header)
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            [ "$TARGET" = both ] || [ "$TARGET" = demo ] || demo=false
+            [ "$TARGET" = both ] || [ "$TARGET" = router ] || router=false
+          fi
+          echo "demo=$demo" >> "$GITHUB_OUTPUT"; echo "router=$router" >> "$GITHUB_OUTPUT"
+          echo "Deploying — demo: $demo, router: $router"
+
+  demo:
+    needs: plan
+    if: needs.plan.outputs.demo == 'true'
+    runs-on: ubuntu-latest
+    env:
+      VERCEL_PROJECT_ID: prj_yKV0o6WY29mUoS87Ax7IOe06mt06 # credentagent-demo
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: examples/quickstart/package-lock.json
+      - name: Deploy credentagent-demo (production)
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        # CREDENTAGENT_BUILD labels this deployment at GET /version (prod + commit). The demo runs
+        # the PUBLISHED storefront, so the label (and /version itself) only takes effect once a
+        # release that includes them is published and the quickstart is bumped to it.
+        run: npx vercel@latest deploy --prod --yes --token "$VERCEL_TOKEN" --env CREDENTAGENT_BUILD="prod.${GITHUB_SHA::7}"
+      # The same security-bearing assertions ci.yml runs against a local server, pointed at
+      # the live demo.
+      - name: Smoke the live demo
+        working-directory: examples/quickstart
+        env:
+          SMOKE_URL: https://credentagent-demo.vercel.app
+        run: |
+          npm ci
+          npm run smoke
+
+  router:
+    needs: plan
+    if: needs.plan.outputs.router == 'true'
+    runs-on: ubuntu-latest
+    env:
+      VERCEL_PROJECT_ID: prj_FkiYRVzrmimaOFQGOR83LB4ebaY0 # credentagent-router
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy credentagent-router (production)
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: npx vercel@latest deploy --prod --yes --token "$VERCEL_TOKEN"
+      - name: Check both demo routes answer through credentagent.ai
+        run: |
+          for path in marketplace marketplace-dev; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "https://credentagent.ai/$path/mcp" \
+              -H 'content-type: application/json' -H 'accept: application/json, text/event-stream' \
+              -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"deploy-prod","version":"0"}}}')
+            echo "/$path/mcp → $code"
+            [ "$code" = 200 ]
+          done

@@ -55,6 +55,9 @@ the widget shows the confirmation. Add the headphones instead and the age gate d
 > `.when((order) => …)` takes the **whole `GateOrder`** (id, total, currency, lines), so a
 > predicate keys off the cart's lines — e.g. `order.lines.some((l) => l.minimumAge != null)`.
 > For a deployment pass your public origin: `new CredentAgent({ walletOrigin: "https://shop.example" })`.
+> Behind a proxy that serves your app under a path (`https://shop.example/store/*` → your `/*`),
+> include the path — `walletOrigin: "https://shop.example/store"` — and every approve link, page
+> fetch and redirect carries `/store`. The wallet still binds to the page's origin.
 
 ### Branding the ceremony pages
 
@@ -84,6 +87,68 @@ credentagent.mount(store.app); // every /credentagent/* page now carries ACME's 
   `teal` — is ignored, keeping the built-in teal), and `logo` accepts only a `data:image/…` URI, an
   `https:`/`http:` URL, or a root-relative `/path`. A host-supplied string can't inject markup or CSS
   onto a consent screen.
+
+### Inspecting what the wallet sent (`inspectPresentations`)
+
+Want to see the actual verifiable credential behind a proof — while you develop, or to show a
+buyer? Turn on `inspectPresentations` and the consent page adds an **Inspect this presentation**
+link after the wallet answers:
+
+```ts
+const credentagent = new CredentAgent({ walletOrigin, inspectPresentations: true });
+```
+
+The link opens the wallet's decrypted ISO 18013-5 `DeviceResponse` in
+[Multipaz Tools](https://tools.multipaz.org/mdocDeviceResponse) (from the OpenWallet Foundation
+Multipaz project), which decodes it in your browser: document type, every issuer-signed claim,
+the Mobile Security Object's validity dates and digests, the device key. The same data rides on
+the verify response for your own tooling:
+
+```jsonc
+// POST /credentagent/credential/verify  (and /credentagent/dc-payment/verify)
+{ "verified": true, "trust_level": "presence-only-demo", "gates": [ … ],
+  "presentation": {
+    "format": "mso_mdoc",
+    "deviceResponse": "o2d2ZXJzaW9u…",   // base64url CBOR, exactly what the wallet sent
+    "inspectUrl": "https://tools.multipaz.org/mdocDeviceResponse#o2d2ZXJzaW9u…" } }
+```
+
+- **Off by default.** A DeviceResponse from a real ID can carry personal data (the disclosed claims,
+  the issuer's certificate chain, a device public key). With the option on, it goes back only to the
+  browser that just presented it — it is never stored, logged, or put in a webhook. The payload
+  rides in the link's `#fragment`, which the browser never sends to the inspector's server. (One
+  pre-existing exception: the dc-payment verify response has always carried the same bytes inside
+  `mandate.userAuthorization.vpToken`; the option adds only the `presentation` block and the link.)
+- **A refused proof is returned too** — the moment you most want to look at what came back.
+- **It verifies nothing new.** `trust_level` is unchanged, and the page says so: the gate checks what
+  was disclosed and that it answers this request, not the issuer signature (see
+  [Honest status](#honest-status)).
+- **Covers** the credential rail (age, membership, `defineCredential()`; Android OpenID4VP and iOS
+  `org-iso-mdoc`) and the dc-payment rail. The grant rails don't expose it yet.
+
+#### The order's proof receipt
+
+Every successful proof is kept **with its order**, so what the buyer proved is still there after the
+order completes — whether or not `inspectPresentations` is on. It rides on the completed order you
+already read (`orders.retrieve()`, `GET /credentagent/orders/:id/status`, and the storefront's
+`get-order-status` / `/checkout/order-status`):
+
+```jsonc
+// the completed order's `proofs`
+"proofs": [
+  { "gate": "Age 21+", "rail": "credential", "trust_level": "presence-only-demo",
+    "checks": [{ "gate": "Age over 21", "pass": true, "detail": "age_over_21 disclosed true" }],
+    "presentedAt": "2026-09-27T18:52:10.000Z",
+    "presentation": { "format": "mso_mdoc", "deviceResponse": "o2d2…", "inspectUrl": "https://tools.multipaz.org/mdocDeviceResponse#o2d2…" } },
+  { "gate": "Pay (USD)", "rail": "instant-demo", "trust_level": "presence-only-demo", "checks": [ … ], "presentedAt": "…" } ]
+```
+
+- The storefront widget lists each proof on the confirmed order, with an **Inspect ↗** link when
+  `presentation` is there.
+- `presentation` appears only when the store set `inspectPresentations`; without it nothing is stored
+  but the gate, the checks, and the trust level.
+- The **`order.settled` webhook never carries `presentation`** — it goes to another service.
+- `rail: "instant-demo"` marks a demo tap, never a wallet proof. Each proof states its own `trust_level`.
 
 ## Orders — a checkout without a storefront
 
@@ -324,6 +389,15 @@ Honesty is carried in the **types**, not prose (Principle VII):
   issuer / device signatures). A self-crafted mdoc would pass. **This is a flow demo, not a real
   safety control** — never present it as one. Issuer-trust verification (Multipaz / `@auth0/mdl`,
   `trust_level: "issuer-verified"`) is roadmap.
+- **`trust_level: "device-signed"`** — used by device-signed spending grants (`grants.create({
+  signing: "device" })`, below). Here the gate **does** verify the wallet's signature over the
+  grant's exact bounds — an SD-JWT VC Key Binding JWT carrying the AP2 Mandate Content, checked
+  against the key the credential names in `cnf`, with every revealed claim checked against the
+  issuer-signed `_sd` digests — a real holder-of-key binding, one step past presence-only. What is still demo is only the trust **anchor**: the payment credential is a
+  self-minted demo credential with no issuer/VICAL check (that is the roadmap `issuer-verified`
+  line, issue #14), so a self-crafted device key would still pass. The signature is real; the
+  anchor is not — the page and the type both say exactly that, and the gate never claims
+  `issuer-verified` for the in-gate check.
 
 The three rails `mount()` serves differ in how much crypto is real today:
 
@@ -470,10 +544,180 @@ if (g.status === "authorized") {
 
 The refusal `code` is a **typed union** (`GrantDoorCode`) — a typo fails to compile. A retried
 `idempotencyKey` replays the ORIGINAL outcome, refusal included, so a key can never be repurposed.
-The sealed bounds are **immutable** after create. **Age is non-delegable** — an age-restricted item
-refuses `step-up` no matter the budget: buying wine always needs a live human. Try all of it
-clickable in [`examples/demo-hub/`](https://github.com/openmobilehub/credentagent/tree/main/examples/demo-hub)
+The sealed bounds are **immutable** after create. Try all of it clickable in
+[`examples/demo-hub/`](https://github.com/openmobilehub/credentagent/tree/main/examples/demo-hub)
 (Section 3) or the two-pane [`examples/grants-proto/`](https://github.com/openmobilehub/credentagent/tree/main/examples/grants-proto).
+
+### Asking for what's missing first — MRTR (multi round-trip)
+
+A grant for *"sneakers"* is not yet a grant for a **particular pair**. `MultiRoundTrip` implements
+MCP's [multi round-trip request](https://modelcontextprotocol.io/specification/draft/basic/patterns/mrtr)
+pattern so a tool can answer *"which size?"* instead of a link, and finish the job on the next call —
+with **no server-side session** between the two:
+
+```ts
+import { MultiRoundTrip } from "@openmobilehub/credentagent-gate";
+
+const rounds = new MultiRoundTrip({ secret: process.env.GATE_SECRET });  // configure once
+
+// inside your tool handler — the same code runs on every round:
+const round = rounds.open({
+  request: "create-spending-grant",     // what this state may be presented on
+  params: { budget, perSpend, item },   // the money bounds it was minted for
+  principal: sessionId,                 // whose session it belongs to
+  state: requestState,                  // the opaque blob the client echoed back
+  responses: inputResponses,            // the human's answers to the last round
+});
+if (!round.ok) return refuse(round.code);          // "tampered" | "expired" | "wrong-request" | "wrong-principal"
+
+if (!round.answers.size) {
+  return round.ask({                               // → { resultType: "input_required", inputRequests, requestState }
+    size: { message: "Which size?", fields: { size: { type: "string", enum: ["US 9", "US 10"] } } },
+  });
+}
+mintTheGrant(round.answers);                       // enough information — do the thing
+```
+
+Everything gathered so far rides in `requestState`, which travels **through the client** — so the
+spec (and repo invariants 2 + 4) treat it as attacker-controlled. `open()` refuses a blob that fails
+its **HMAC**, that has **expired**, or that was minted for a **different call, different money
+bounds, or different session**; and it merges **only** answers to questions this flow actually asked.
+Anything else is dropped.
+
+A flow can also seal facts of its **own** into the blob: `round.ask(questions, { carry: { grantId } })`
+comes back as `round.carried` on the next call. Carried facts are **server-attested** — the client
+transports them but can neither set nor edit them (the seal covers them), and they ride forward
+untouched when a later `ask()` omits `carry`. That is what lets a flow park a record id across a
+*wait* round — "the grant is minted; call again once the human has tapped Approve" — and treat the
+client's reply as a **doorbell only**, re-reading the record server-side instead of believing the
+answer.
+
+> **Honesty.** The seal proves *this server* minted the blob and nobody edited it in transit. It does
+> not prove a human gave the answers inside: on a host still speaking the 2025 protocol, the
+> **agent** answers on the human's behalf (`answers`, the flat fallback channel), and even an MCP
+> 2026-07-28 client may answer by itself. That is why the resolved purchase is still spelled out on
+> the approve page — the human's tap is what counts.
+> The gate stays free of the MCP SDK: it builds the `input_required` wire shape itself, and an MCP
+> server hands it to the SDK (`inputRequired(...)` in `@modelcontextprotocol/server` v2) — see
+> `@openmobilehub/credentagent-storefront`'s `create-spending-grant`.
+### Device-signed grants — the wallet signs the grant first (spec 012)
+
+**Approving a grant is a signature.** A grant's `approveUrl` serves a signing ceremony, and the
+grant only reaches `"authorized"` once a wallet on the phone **signs its exact bounds** — the wallet
+returns an SD-JWT VC presentation whose Key Binding JWT carries the AP2 Mandate Content for the
+budget, the per-purchase cap and the allowed items (spec 014). Nothing can be spent against a grant
+no device signed, and a device-signed grant can only ever buy the products its mandate names — the
+`allow` bounds follow the live catalog, the signature does not.
+
+Pass **`signing: "page"`** to opt into the older **click-to-approve** stand-in, where the server
+takes the human's word for it (`trustLevel: "server-issued-demo"`). It exists for demos, examples
+and CI — anywhere no phone is in the loop. The weaker door is still there; it just has to be asked
+for by name.
+
+> **What the signature does and does not prove.** It proves **holder-of-key** and **binding**: the
+> device key signed over *these* bounds, so a spend always traces to what the human authorized. It
+> does **not** yet prove **trust** — there is no issuer anchor, so a self-minted credential passes
+> ([#14](https://github.com/openmobilehub/credentagent/issues/14)). `trustLevel` says
+> `"device-signed"`, never `"issuer-verified"`.
+
+```ts
+const grant = await credentagent.grants.create({
+  merchant: "utopia", budget: 200, perSpend: 130,
+  allow: { categories: ["Beverages"] },
+  // signing defaults to "device" — pass signing: "page" for the click-to-approve stand-in
+});
+sendToUser(grant.approveUrl);                         // → the signing ceremony (not click-to-approve)
+// …the human signs on their phone…
+const g = await credentagent.grants.retrieve(grant.id);
+g.status;      // "authorized" — ONLY after the gate verified the device signature over these bounds
+g.trustLevel;  // "device-signed"
+g.mandate;     // { boundsHash, signedAt, credentialType, verifiedBy, mandates } — the evidence, plain data
+const s = await g.spend({ idempotencyKey: "order-1", items: [{ sku: "coffee" }] });
+// s.mandate → { id, boundsHash } — every spend traces to the signed Intent Mandate (FR-5)
+```
+
+**The invariant:** signed by the device **first**, spent by the agent **second**. A device-mode grant
+that was never device-signed can never spend; a spend always traces to the exact signed bounds.
+
+> **Breaking, since the AP2 delegated-intent rail (spec 014):** `grant.mandate.credentialDoctype`
+> is now **`credentialType`**. It holds an SD-JWT VC type (`vct`) rather than an ISO-mdoc doctype,
+> and a field named "doctype" would be untrue. `mandate.mandates` is new and optional — the AP2
+> Mandate Content the wallet signed, so a grant can answer "what did I authorize?" without
+> rebuilding it.
+
+**Honesty (`trust_level: "device-signed"`, not `"issuer-verified"`):** the device signature is
+**real** — the gate verifies the holder's Key Binding JWT against the key the credential names in
+`cnf`, checks the `sd_hash` that binds it to the disclosures presented, and rebuilds the Mandate
+Content from its own grant record to require the wallet signed those exact terms. What is **still
+demo** is the trust **anchor**: the payment credential is self-minted with **no issuer check** (that
+hardening is issue #14), so a self-crafted credential would pass. The
+verify runs through a **seam** — the in-gate backend attests `device-signed` / `verifiedBy: "gate"`;
+wiring an external verifier (the `DelegatedVerifier` seam) that reports a stronger, issuer-backed level
+is the fast-follow, and the gate **relays** that level verbatim with the attestor recorded in
+`verifiedBy`.
+
+Test the whole flow **with no phone** using the exported simulated wallet — see
+[`examples/device-signed-grants.mjs`](https://github.com/openmobilehub/credentagent/blob/main/examples/device-signed-grants.mjs)
+(`devSimulateWalletSignature` produces a real device signature the way Stripe's test cards stand in
+for a real card). The **on-device** path — import `payment.mpzpass` into Multipaz and sign on a
+phone — is verified separately.
+
+### Credentials on a grant — presented before you authorize, or not at all
+
+The storefront pins the exact product before the link exists (above), so a grant can be *for* a
+bottle of whiskey. That used to be a grant that could spend **$0.00**: every purchase refused
+`step-up`, and nothing told the human before they authorized it. Two things fix that, on the page
+they were already opening.
+
+**It tells you.** `grant.ageScope` reads the products the grant NAMES against your catalog — the
+agent is never asked — and the page names them back:
+
+```ts
+grant.ageScope  // → { minimumAge: 21, items: [{ sku: "oak-whiskey", name: "Oak Reserve Whiskey", price: 124, minAge: 21 }] }
+```
+
+It does **not** guess. A grant bounded by category alone names no product, so it gets no age step:
+a page that warned "this category MIGHT contain something 21+" would be warning about an item
+nobody chose, and would be wrong the moment the catalog changed.
+
+**It lets you unlock them.** The page grows a *"Verify 21+ with your wallet"* step — the same
+OpenID4VP ceremony as the checkout age gate, run at the one moment the human is holding their
+phone. What they prove is sealed into the grant, and their agent can then buy those items while
+they're away. Decline, and *"Approve without them"* gives you exactly today's grant.
+
+**The same moment can carry your loyalty card.** Set `loyaltyDiscountPct` and the page grows a
+second, optional step — present your membership, and every purchase the agent makes under that
+grant is discounted:
+
+```ts
+const credentagent = new CredentAgent({ catalog, loyaltyDiscountPct: 10 });
+const s = await g.spend({ idempotencyKey: "o-1", items: [{ sku: "coffee" }] });
+//  → { ok: true, amount: 16.2, remaining: 83.8, … }     // $18 − 10%
+```
+
+The rate is **sealed into the grant** when it authorizes, not read from config at spend time — so
+changing your programme never re-prices a grant somebody already agreed to. And it is the *same*
+sealed number on both sides of the money: the delegate key signs the discounted amount, and
+`completeOrder` re-derives it independently and refuses the draw unless they match to the cent. The
+per-purchase cap is measured on what the human is actually **charged**, not the shelf price.
+
+Nothing about identity is delegated to the agent: the credential is the **human's**, presented by
+**their** wallet while they are **present**. Without an age proof, an age-restricted item still
+refuses `step-up` — and a proof only ever opens items at or below what it proved, so an 18+ proof
+never opens a 21+ item.
+
+On a **device-signed** grant these steps sit above the signature, and the claims are inside
+`canonicalIntentBounds` — so the wallet's signature covers the exact terms the page showed,
+credentials included. A claim recorded after the request was sealed changes the hash and the
+signature stops verifying, rather than riding a signature given for different terms.
+
+> **Honesty:** the wire crypto is real (signed OpenID4VP request, sealed nonce, JWE/HPKE decrypt,
+> ISO-mdoc parse) but there is **no issuer trust anchor** yet — `trust_level` is
+> `"presence-only-demo"` and a self-crafted credential would pass. This is disclosure and binding,
+> **not** a real age-safety control, until issuer-verified trust lands.
+
+See it in every state: [`examples/grants-approve/`](https://github.com/openmobilehub/credentagent/tree/main/examples/grants-approve).
+
 
 ### Under the hood — the delegated-draw seams (005)
 
@@ -492,7 +736,9 @@ Under that facade are **signer-agnostic seams** for redeeming a user-sealed
 (pure, total, typed refusals), a `RevocationStore` (per-intent + subject kill-switch, atomic
 single-use consume), and an additive, fail-closed **draw branch** in `completeOrder` that re-runs
 every bounds + revocation check server-side, writes a `delegationId`, and **suppresses settlement**.
-Age is **non-delegable** — an age-restricted cart always steps up to a live ceremony.
+An age-restricted cart completes on that branch **only** against an age claim the human sealed into
+the intent at approval time, tested at the order's re-derived threshold — absent, too low, or past
+its stated validity, it steps up to a live ceremony (`ageProofCovers` is the one predicate).
 
 Honesty (Principle VII, constitution v1.1.0): draws carry a **`presence`** axis (`"delegated"` /
 `"delegated-demo"`) — *when* consent happened — separate from `trust_level` — *how strongly it's
@@ -507,7 +753,7 @@ provide those are later increments.
 ```ts
 // Client (configure once, then declarative calls)
 class CredentAgent {
-  constructor(opts?: { walletOrigin?: string; store?: VerificationStore; credentials?: Credential[]; branding?: Branding });
+  constructor(opts?: { walletOrigin?: string; store?: VerificationStore; credentials?: Credential[]; branding?: Branding; inspectPresentations?: boolean });
   requirements(order: GateOrder, policy: Step[]): VerificationManifestEntry[];   // Context 1
   mount(app: ExpressApp, ceremony?: MountCeremony): void;                        // Context 2
   doctor(opts?: { print?: boolean }): DoctorReport;                              // config preflight (#25)
