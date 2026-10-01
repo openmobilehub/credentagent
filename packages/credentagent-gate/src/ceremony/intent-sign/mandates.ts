@@ -20,7 +20,9 @@
 // mandates. It proves nothing about whether the credential came from a real card issuer —
 // that is #14, and `trust_level` still says so.
 import { createHash, createHmac } from "node:crypto";
-import { canonical } from "../mandate.js";
+// `payment.reference` names the open checkout by this digest. ONE definition, shared with the
+// chain verifier that checks it — two copies is two places for the encoding to drift.
+import { mandateContentDigest } from "../../ap2/chain/constraints.js";
 import { checkoutConstraintsFromGrant, paymentConstraintsFromGrant } from "../../ap2/from-gate.js";
 import { VCT } from "../../ap2/types.js";
 import type { IntentBoundsInput } from "./bounds.js";
@@ -73,19 +75,6 @@ export const DEFAULT_HASH_ALG: DelegateHashAlg = "sha-256";
 /** Is `alg` one this rail can actually compute? A wallet asked for anything else cannot answer. */
 export function isDelegateHashAlg(alg: string): alg is DelegateHashAlg {
   return alg in HASH_ALGS;
-}
-
-/**
- * Digest of a Mandate Content object, over its canonical encoding.
- *
- * Used for `payment.reference`, which is how AP2 ties the two halves of a grant together: the
- * payment authority is only valid for the checkout authority whose digest it names. Both
- * halves travel inside ONE key binding here, so they are already bound by that signature —
- * but naming the digest keeps the pair readable on its own, and keeps the constraint AP2
- * requires present rather than omitted for convenience.
- */
-function contentDigest(content: MandateContent): string {
-  return createHash("sha256").update(canonical(content)).digest("base64url");
 }
 
 /**
@@ -144,7 +133,7 @@ export function openMandatesForGrant(args: {
 
   const payment: MandateContent = {
     vct: VCT.openPayment,
-    constraints: paymentConstraintsFromGrant(grantBounds, origin, contentDigest(checkout)),
+    constraints: paymentConstraintsFromGrant(grantBounds, origin, mandateContentDigest(checkout)),
     cnf: { jwk: delegate },
     exp,
   };

@@ -6,15 +6,16 @@ grants module (spec 009), the demo-PKI credential set
 **Feeds:** #12 (HNP delegation), #14 (issuer trust), #154 (multi-store epic)
 
 > **What is built, and what is designed.** This is a design document. Of the requirements
-> below, only **FR-1** has shipped — the minting tool at `tools/demo-pki/mint/`. Everything
-> else is planned work, and so is every gate source file this document names.
+> below, **FR-1** (the minting tool at `tools/demo-pki/mint/`) and **FR-2** (#189 — the delegation
+> request on the rail) have shipped. The rest is planned or in review, as the table says.
 >
 > | Named here | Where it actually lives | On `main`? |
 > | --- | --- | --- |
-> | `src/ap2/types.ts`, `ap2/money.ts` | #187 — spec 013 increment 1 | no |
+> | `src/ap2/types.ts`, `ap2/money.ts` | #187 — spec 013 increment 1 | yes |
 > | `ap2/jwt.ts`, `ap2/issue.ts`, `ap2/verify.ts` | #195 — spec 013 increment 2 | no |
-> | `preApprove({ delegateKeys })`, `grants.ts` passing `cnf` | #189 — FR-2 | no |
-> | `specs/013-ap2-v2-wire-format/spec.md` | #187 | no |
+> | `preApprove({ delegateKeys })`, `grants.ts` passing `cnf` | #189 — FR-2 | yes |
+> | `specs/013-ap2-v2-wire-format/spec.md` | #187 | yes |
+> | `ap2/chain/` — the chain, built and verified (FR-3, FR-4) | #234 — plan in `plan-increment-3.md` | no |
 >
 > Read a reference to one of those files as "the increment that adds it does X", never as
 > "`main` does X today". If this document merges before those pull requests, the table is how

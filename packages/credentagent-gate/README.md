@@ -299,6 +299,53 @@ does **not** mean the amount is right (re-price against your catalog; that is se
 from a real issuer — that last one is
 [#14](https://github.com/openmobilehub/credentagent/issues/14) and still open.
 
+### Delegated purchases — an agent spends a permission the person signed
+
+A person signs one permission on their phone — "this assistant may buy coffee or tea, up to $50 a
+purchase, $200 in total, until December". The assistant keeps it, and at each purchase adds a signed
+note saying exactly what it bought. The merchant checks the note against the permission. The person is
+not there, and the merchant never holds their keys.
+
+On the wire this is an AP2 delegation chain (Delegate SD-JWT, `draft-gco-oauth-delegate-sd-jwt-00`): the
+wallet's credential, the wallet's signature over the open mandates, and the agent's signature over the
+closed ones.
+
+```ts
+import { DelegatedIntent, verifyDelegatedPurchase } from "@openmobilehub/credentagent-gate";
+
+// Agent — keep the permission once (it is plain JSON), spend it per purchase:
+const intent = DelegatedIntent.fromWalletPresentation({ presentation, disclosures });
+const proof = await intent.spend({
+  agentKey,                                    // the agent's private key — never the merchant's
+  checkoutJwt,                                 // the cart, as the merchant signed it
+  payment: { payee, amount: { amount: 450, currency: "USD" }, instrument },
+  audience: "https://shop.example",            // the merchant, and the nonce it issued
+  nonce,
+});
+
+// Merchant — one call:
+const quote = credentagent.ap2.signCheckout(ucpCheckout);   // what you hand the agent as checkoutJwt
+const verdict = await verifyDelegatedPurchase(proof, {
+  audience: "https://shop.example",
+  nonce,
+  checkoutKey: credentagent.ap2.publicJwk,     // the key that signed the cart
+  spent: { amount: 0, uses: 0 },               // already spent under this permission
+  price: (cart) => catalogTotal(cart),         // YOUR catalog, in minor units — it decides
+});
+if (!verdict.ok) console.error(verdict.code, verdict.violations);   // "constraint" | "price" | "splice" | …
+```
+
+**What a verified purchase means:** every link of both chains verifies against the key the link before it
+names, both chains rest on the same wallet signature, the cart is the one you signed, the payment pays
+exactly its total, every limit the person set holds — and **a limit this verifier does not recognise
+fails** — and your catalog agrees with the price. It does **not** mean the credential came from a real
+issuer ([#14](https://github.com/openmobilehub/credentagent/issues/14)), so `trust_level` is
+`"presence-only-demo"`.
+
+Two things stay yours: **`spent`** — a budget or a use count can only be checked against what was spent
+before, so leaving it out refuses any permission that has one — and **consuming the nonce**, which
+`verifyDelegatedPurchase` checks but does not remember.
+
 ### Webhooks — tell a *different* service when an order settles
 
 `on("order.settled", …)` only fires in the process that settled the order. When fulfillment runs
