@@ -6,7 +6,9 @@ name: agent-e2e
 # order completed. Catches the failure class the deterministic smokes can't: "an agent can no longer
 # figure out our tools."
 #
-# Needs the ANTHROPIC_API_KEY secret. With no key the step SKIPS (green, with a notice).
+# Runs on the Claude Agent SDK and signs in with the CLAUDE_CODE_OAUTH_TOKEN secret (the same one the
+# automated PR review uses) — no separate API key or bill. With no token the step SKIPS (green, with a
+# notice).
 
 on:
   schedule:
@@ -29,10 +31,10 @@ jobs:
 
       - name: Claude agent E2E
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: |
-          if [ -z "$ANTHROPIC_API_KEY" ]; then
-            echo "::notice::ANTHROPIC_API_KEY not configured — skipping the Claude agent run."
+          if [ -z "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
+            echo "::notice::CLAUDE_CODE_OAUTH_TOKEN not configured — skipping the Claude agent run."
             exit 0
           fi
           node agent-e2e.mjs
