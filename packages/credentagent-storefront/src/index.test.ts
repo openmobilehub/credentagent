@@ -3,6 +3,8 @@ import {
   priceCart,
   createOrder,
   requiredAgeForLines,
+  listProducts,
+  projectProduct,
   SAMPLE_CATALOG,
   LOYALTY_DISCOUNT_PCT,
   type Product,
@@ -95,6 +97,73 @@ describe("createOrder", () => {
     expect(o.total).toBe(124);
     expect(o.lines[0].id).toBe("oak-whiskey");
     expect(typeof o.createdAt).toBe("string");
+  });
+});
+
+describe("listProducts — the one catalog read list-products and browse-products share", () => {
+  const ids = (products: Product[]) => products.map((p) => p.id);
+
+  it("with no query, returns the whole catalog in catalog order", () => {
+    const page = listProducts(catalog);
+    expect(page.products).toEqual(catalog);
+    expect(page.totalCount).toBe(catalog.length);
+    expect(page.nextCursor).toBeNull();
+  });
+
+  it("filters by category — an exact match, so a different case is a different category", () => {
+    expect(ids(listProducts(catalog, { category: "Beverages" }).products)).toEqual(["oak-whiskey", "celebration-champagne"]);
+    expect(listProducts(catalog, { category: "beverages" }).products).toEqual([]);
+  });
+
+  it("matches query case-insensitively against name and description only", () => {
+    // "WIRELESS" hits a name (Aurora Wireless Headphones) and a name + description (Drift Wireless Mouse).
+    expect(ids(listProducts(catalog, { query: "WIRELESS" }).products)).toEqual(["aurora-headphones", "drift-mouse"]);
+    // "hiking" appears only in the backpack's description.
+    expect(ids(listProducts(catalog, { query: "hiking" }).products)).toEqual(["summit-backpack"]);
+    // "Outdoors" is the backpack's category, not its name or description — no match.
+    expect(listProducts(catalog, { query: "Outdoors" }).products).toEqual([]);
+  });
+
+  it("combines category and query (both must hold), and counts matches before paging", () => {
+    const page = listProducts(catalog, { category: "Beverages", query: "duo", limit: 1 });
+    expect(ids(page.products)).toEqual(["celebration-champagne"]);
+    expect(page.totalCount).toBe(1);
+  });
+
+  it("pages with limit + cursor, visiting every match exactly once, in order", () => {
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    let pages = 0;
+    do {
+      const page = listProducts(catalog, { limit: 3, cursor });
+      expect(page.products.length).toBeLessThanOrEqual(3);
+      expect(page.totalCount).toBe(catalog.length);
+      seen.push(...ids(page.products));
+      cursor = page.nextCursor ?? undefined;
+      pages++;
+    } while (cursor);
+    expect(pages).toBe(Math.ceil(catalog.length / 3));
+    expect(seen).toEqual(ids(catalog));
+  });
+
+  it("refuses a malformed cursor instead of silently restarting from the top", () => {
+    expect(() => listProducts(catalog, { cursor: "not-a-cursor" })).toThrow(RangeError);
+  });
+});
+
+describe("projectProduct", () => {
+  const whiskey = catalog.find((p) => p.id === "oak-whiskey")!;
+  const headphones = catalog.find((p) => p.id === "aurora-headphones")!;
+
+  it("keeps only the requested fields — and always the id, the handle every other tool takes", () => {
+    expect(projectProduct(whiskey, ["name", "price", "minimumAge"])).toEqual({ id: "oak-whiskey", name: whiskey.name, price: 124, minimumAge: 21 });
+    expect(projectProduct(whiskey, [])).toEqual({ id: "oak-whiskey" });
+  });
+
+  it("omits a requested field the product doesn't carry — it never invents one", () => {
+    const projected = projectProduct(headphones, ["minimumAge", "price"]);
+    expect(projected).toEqual({ id: "aurora-headphones", price: 199 });
+    expect("minimumAge" in projected).toBe(false);
   });
 });
 

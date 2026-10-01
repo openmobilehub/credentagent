@@ -10,7 +10,7 @@ This repo is two npm packages:
 | Package | What it is | Public surface |
 | :-- | :-- | :-- |
 | [`@openmobilehub/credentagent-gate`](../../packages/credentagent-gate) | The Gate — the policy DSL, the `requirements()` resolver, and the `mount()` ceremony that serves the `/credentagent/*` verification rails. | `new CredentAgent()`, `credentagent.requirements(order, policy)`, `credentagent.mount(app)` |
-| [`@openmobilehub/credentagent-storefront`](../../packages/credentagent-storefront) | The agentic storefront core — a runnable MCP shopping server (cart → priced cart → order, nine tools, a widget, a checkout page), catalog-injected. | `createStorefront()` |
+| [`@openmobilehub/credentagent-storefront`](../../packages/credentagent-storefront) | The agentic storefront core — a runnable MCP shopping server (cart → priced cart → order, ten tools, a widget, a checkout page), catalog-injected. | `createStorefront()` |
 
 The reference DEMO that runs both packages on every surface (Claude, ChatGPT, Goose,
 Claude Code) lives in the separate

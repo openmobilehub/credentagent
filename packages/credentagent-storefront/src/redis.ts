@@ -1,6 +1,6 @@
 // redisStorage() — first-class persistence for createStorefront().
 //
-// Builds all four stores (cart, created-order, completed-order, verification) over an
+// Builds every store (cart, created-order, completed-order, verification, order→cart) over an
 // Upstash-compatible Redis, so a production/serverless deployment gets shared,
 // cross-instance state with ONE option instead of hand-written adapters:
 //
@@ -44,6 +44,21 @@ export interface RedisStorageOptions {
   _load?: UpstashLoader;
 }
 
+export interface RedisStorageFromEnvOptions {
+  /** Key prefix isolating tenants on a shared backend. Default `"credentagent-storefront"`. */
+  namespace?: string;
+  /**
+   * Demand Redis: when `true` and no standard env pair is present, THROW an actionable error
+   * naming the vars, instead of returning `undefined`. Use it when a deployment MUST persist
+   * (e.g. a serverless target) and silently running in-memory would be a bug. Default `false`.
+   */
+  required?: boolean;
+  /** @internal Override the env source (for tests). Defaults to `process.env`. */
+  _env?: Record<string, string | undefined>;
+  /** @internal Override how `@upstash/redis` is loaded (for tests). */
+  _load?: UpstashLoader;
+}
+
 const DEFAULT_NAMESPACE = "credentagent-storefront";
 
 function joinKey(...parts: string[]): string {
@@ -69,10 +84,10 @@ class RedisCartStore implements CartStore {
   }
 }
 
-type OrderKind = "created" | "completed";
+type OrderKind = "created" | "completed" | "cart";
 
 class RedisOrderStore<T> implements OrderStore<T> {
-  // The `kind` distinguishes the two order slots (created vs completed) so their keys
+  // The `kind` distinguishes the order slots (created, completed, order→cart) so their keys
   // never collide under one namespace (U1).
   constructor(
     private readonly redis: RedisLike,
@@ -171,5 +186,62 @@ export function redisStorage(options: RedisStorageOptions): StorageProvider {
     createdOrderStore: new RedisOrderStore<Order>(redis, namespace, "created"),
     orderStore: new RedisOrderStore<CompletedOrderRecord>(redis, namespace, "completed"),
     verificationStore: new RedisVerificationStore(redis, namespace),
+    orderCartStore: new RedisOrderStore<string>(redis, namespace, "cart"),
   };
+}
+
+// The standard connection-env pairs a deployment already sets, in precedence order: Vercel KV
+// first, then Upstash. A pair is selected ATOMICALLY — the url AND token must come from the
+// SAME provider — so a stale/partial higher-precedence var can never be mixed with a complete
+// lower-precedence pair (e.g. a Vercel url with an Upstash token, which would send the
+// credential to the wrong endpoint). Pick the first COMPLETE pair, or none.
+const ENV_PAIRS = [
+  { url: "KV_REST_API_URL", token: "KV_REST_API_TOKEN" }, // Vercel KV
+  { url: "UPSTASH_REDIS_REST_URL", token: "UPSTASH_REDIS_REST_TOKEN" }, // Upstash
+] as const;
+
+function firstCompletePair(env: Record<string, string | undefined>): { url: string; token: string } | undefined {
+  for (const pair of ENV_PAIRS) {
+    const url = env[pair.url];
+    const token = env[pair.token];
+    if (url && token) return { url, token };
+  }
+  return undefined;
+}
+
+export namespace redisStorage {
+  /**
+   * Build a {@link StorageProvider} from the standard Redis connection env a deployment already
+   * sets — **Vercel KV** (`KV_REST_API_URL` + `KV_REST_API_TOKEN`) or **Upstash**
+   * (`UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN`), in that precedence — so the example
+   * loses the `redisStorage({ url, token })` env-reading plumbing:
+   *
+   *   const store = createStorefront({ storage: redisStorage.fromEnv() });
+   *
+   * Returns `undefined` when no pair is set, which is exactly `storage: undefined` — the in-memory
+   * zero-config default (so a local `npm start` with no env just runs). Pass `{ required: true }`
+   * to instead THROW when the env is absent, for a deployment that must not silently fall back to
+   * in-memory. No env is read until you call this — the origin of every value stays visible.
+   */
+  export function fromEnv(options: RedisStorageFromEnvOptions = {}): StorageProvider | undefined {
+    const env = options._env ?? process.env;
+    const pair = firstCompletePair(env);
+    if (!pair) {
+      if (options.required) {
+        throw new Error(
+          "redisStorage.fromEnv({ required: true }): no COMPLETE Redis connection pair found in the " +
+            "environment. Set BOTH KV_REST_API_URL + KV_REST_API_TOKEN (Vercel KV) or BOTH " +
+            "UPSTASH_REDIS_REST_URL + UPSTASH_REDIS_REST_TOKEN (Upstash), or drop `required` to fall " +
+            "back to in-memory. (A url from one provider + a token from the other is ignored, never mixed.)",
+        );
+      }
+      return undefined;
+    }
+    return redisStorage({
+      url: pair.url,
+      token: pair.token,
+      ...(options.namespace ? { namespace: options.namespace } : {}),
+      ...(options._load ? { _load: options._load } : {}),
+    });
+  }
 }

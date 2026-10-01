@@ -54,8 +54,11 @@ what happened with v0.3.1 (published manually 2026-07-26; the release then fired
    `npm view @openmobilehub/credentagent-gate version` shows the new version, then
    open the **quickstart catch-up PR** (bump `examples/quickstart` to the new
    versions): that PR's `quickstart-smoke` job is the real post-publish check — it
-   clean-installs the PUBLISHED packages — and `deployed-smoke` re-runs the same
-   assertions against the live demo once the merge deploys. Nothing else to
+   clean-installs the PUBLISHED packages — and merging it runs `deploy-prod`, which
+   deploys the live demo and re-runs the same assertions against it. Merge it with
+   **rebase** from a branch whose commits are authored and committed by the Vercel
+   team's owner account, or (after a squash) run `deploy-prod` by hand — see that
+   workflow's header for why. Nothing else to
    hand-update: the **release + merged PRs are the record** (there is no status
    file). Close any issue the release resolves.
 

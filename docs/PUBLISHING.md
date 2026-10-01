@@ -49,8 +49,8 @@ path also skips the record: 0.3.0/0.3.1 shipped tagless and had to be backfilled
 3. **Verify** — watch the `publish` run go green and `npm view` show the new versions, then open
    the **quickstart catch-up PR** (bump `examples/quickstart` to the new versions): that PR's
    `quickstart-smoke` is the real post-publish check — a clean install of the PUBLISHED
-   packages — and `deployed-smoke` re-runs the same assertions against the live demo once the
-   merge deploys.
+   packages — and merging it runs the `deploy-prod` workflow, which deploys the live demo with
+   the `VERCEL_TOKEN` secret and re-runs the same assertions against it.
 
 Release notes are **public copy, written for someone who didn't follow development**: plain
 language, each feature stated by what it does for the integrator, and the honesty gate (below)
@@ -100,7 +100,7 @@ All three must read the new version. (Hit while cutting 0.4.0 — PR #162.)
 
 ## Optional polish (non-blocking, deferred)
 
-- `@modelcontextprotocol/sdk`, `zod`, `express` are regular `dependencies` of the storefront. They are
+- The MCP SDK v2 packages (`@modelcontextprotocol/server` / `node` / `express` / `ext-apps`), `zod`, and `express` are regular `dependencies` of the storefront. They are
   correct as-is (the storefront *is* the MCP server), but if hosts are expected to instantiate their own
   MCP SDK / zod, consider moving those to `peerDependencies` to avoid duplicate instances. Decide before
   a `1.0`.

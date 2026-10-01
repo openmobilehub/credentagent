@@ -20,12 +20,16 @@ const PORT = Number(process.env.PORT ?? 3005);
 const PUBLIC_URL = (process.env.PUBLIC_URL ?? `http://localhost:${PORT}`).replace(/\/$/, "");
 
 // ── the gate's priced catalog (dollars), derived from the storefront's — ONE price source.
-// minAge rides through so age-restricted items are non-delegable; category feeds allow-bounds.
+// `minAge` rides through so the grant page can name what needs an age proof; `category` feeds the
+// allow-bounds; `name` is what that page calls a product instead of its bare sku id.
 const gateCatalog = Object.fromEntries(
-  SAMPLE_CATALOG.map((p) => [p.id, { price: p.price, category: p.category, ...(p.minimumAge ? { minAge: p.minimumAge } : {}) }]),
+  SAMPLE_CATALOG.map((p) => [p.id, { price: p.price, category: p.category, name: p.name, ...(p.minimumAge ? { minAge: p.minimumAge } : {}) }]),
 );
 
-const credentagent = new CredentAgent({ walletOrigin: PUBLIC_URL, catalog: gateCatalog });
+// `loyaltyDiscountPct` opts the grant page in to the membership step (#172): present your loyalty
+// card once, and every purchase the agent makes under that grant is discounted. Omit it and the
+// step doesn't exist.
+const credentagent = new CredentAgent({ walletOrigin: PUBLIC_URL, catalog: gateCatalog, loyaltyDiscountPct: 10 });
 
 // ── once, at startup ──────────────────────────────────────────────────────────
 const store = createStorefront({ baseUrl: PUBLIC_URL, grants: credentagent.grants, merchant: "utopia" }); // storefront + the 4 grant tools

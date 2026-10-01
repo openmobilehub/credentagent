@@ -1,10 +1,15 @@
 import { describe, it, expect } from "vitest";
 import request from "supertest";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { createStorefront, type Storefront } from "@openmobilehub/credentagent-storefront/server";
 import { CredentAgent, age, membership, payment, required, optional } from "@openmobilehub/credentagent-gate";
 
+// LOCATION MATTERS: this file lives at the REPO ROOT on purpose, because it belongs to
+// neither workspace — it checks that the two PUBLISHED packages compose. The consequence is
+// that neither workspace's vitest picks it up: the root run includes exactly one more file
+// than the per-package runs — this one. Verify with the root `npm test`;
+// `npm run test:workspaces` skips this file.
+//
 // Guards the quickstart showcase (examples/storefront.mjs): the two packages
 // compose with ZERO glue — a priced storefront Order feeds credentagent.requirements()
 // directly (the line carries minimumAge), and the checkout tool surfaces the
@@ -153,5 +158,63 @@ describe("end-to-end ceremony over the mounted /credentagent/* routes", () => {
     const done = await request(store.app).get(`/checkout/order-status?orderId=${orderId}`);
     expect(done.body.completed).toBe(true);
     expect(done.body.order.amount).toBeCloseTo(124);
+  });
+});
+
+// Behind a proxy that serves the store under a path (https://shop.example/store/* → this
+// server's /*): configure BOTH packages with the public URL, path included, and every link the
+// buyer follows carries /store. The server still sees /checkout and /credentagent/* — the
+// proxy strips the prefix — so the requests below hit the unprefixed routes, as the proxy would.
+describe("served under a path — storefront baseUrl + gate walletOrigin carry /store", () => {
+  const PUBLIC = "https://shop.example/store";
+  // A root-relative checkout/gate URL that did NOT get the prefix ("/store/…" never matches).
+  const UNPREFIXED = /["'`(=]\/(credentagent|checkout)[/?"'`]/;
+
+  function pathStore(walletOrigin?: string): Storefront {
+    const store = createStorefront({ baseUrl: PUBLIC });
+    const credentagent = new CredentAgent(walletOrigin ? { walletOrigin } : {});
+    credentagent.mount(store.app);
+    store.gate((order) => credentagent.requirements(order, [required(age.over(21).when(hasAlcohol)), required(payment.in("usd"))]));
+    return store;
+  }
+
+  it("the checkout link, each approve link (prefixed once), the hub and the rail pages", async () => {
+    const store = pathStore(PUBLIC);
+    const sc = (await checkout(await connect(store), "oak-whiskey")).structuredContent as Sc & { checkoutUrl: string };
+    expect(sc.checkoutUrl.startsWith(`${PUBLIC}/checkout?order=${sc.orderId}`)).toBe(true);
+    for (const e of sc.requires) {
+      expect(e.approveUrl.startsWith(`${PUBLIC}/credentagent/`), e.approveUrl).toBe(true);
+    }
+
+    const hub = await request(store.app).get(new URL(sc.checkoutUrl).pathname.replace(/^\/store/, "") + new URL(sc.checkoutUrl).search);
+    expect(hub.status).toBe(200);
+    expect(hub.text).toContain(`/store/checkout/order-status?orderId=${sc.orderId}`);
+    expect(hub.text).not.toMatch(UNPREFIXED);
+
+    for (const e of sc.requires) {
+      const u = new URL(e.approveUrl);
+      const page = await request(store.app).get(u.pathname.replace(/^\/store/, "") + u.search);
+      expect(page.status, e.approveUrl).toBe(200);
+      expect(page.text, e.approveUrl).toContain(`/store/checkout?order=${sc.orderId}`); // the way back
+      expect(page.text, e.approveUrl).not.toMatch(UNPREFIXED);
+    }
+  });
+
+  it("the storefront's baseUrl alone is enough for the rail pages (gate walletOrigin left default)", async () => {
+    const store = pathStore();
+    const sc = (await checkout(await connect(store), "oak-whiskey")).structuredContent as Sc;
+    const page = await request(store.app).get(`/credentagent/passkey?order=${sc.orderId}`);
+    expect(page.status).toBe(200);
+    expect(page.text).toContain(`from "/store/credentagent/lib/sw/index.js"`);
+    expect(page.text).not.toMatch(UNPREFIXED);
+  });
+
+  it("the widget's CSP allows the store's ORIGIN (a CSP source with a path matches that path only)", async () => {
+    const client = await connect(pathStore(PUBLIC));
+    const { resources } = await client.listResources();
+    const read = await client.readResource({ uri: resources[0]!.uri });
+    const meta = read.contents[0]!._meta as { ui?: { csp?: { connectDomains?: string[] } }; "openai/widgetCSP"?: { connect_domains?: string[] } };
+    const domains = meta.ui?.csp?.connectDomains ?? meta["openai/widgetCSP"]?.connect_domains;
+    expect(domains).toEqual(["https://shop.example"]);
   });
 });

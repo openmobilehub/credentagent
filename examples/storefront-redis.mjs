@@ -20,12 +20,9 @@ import { createStorefront } from "@openmobilehub/credentagent-storefront/server"
 import { redisStorage } from "@openmobilehub/credentagent-storefront/redis";
 import { CredentAgent, age, membership, payment, required, optional } from "@openmobilehub/credentagent-gate";
 
-const redisUrl = process.env.KV_REST_API_URL ?? process.env.UPSTASH_REDIS_REST_URL;
-const redisToken = process.env.KV_REST_API_TOKEN ?? process.env.UPSTASH_REDIS_REST_TOKEN;
 const namespace = process.env.REDIS_NAMESPACE ?? "phone-demo";
-
-const storage =
-  redisUrl && redisToken ? redisStorage({ url: redisUrl, token: redisToken, namespace }) : undefined;
+// Reads the standard Vercel KV / Upstash env pair; `undefined` when unset ⇒ in-memory.
+const storage = redisStorage.fromEnv({ namespace });
 
 const walletOrigin = process.env.WALLET_ORIGIN; // the PUBLIC https origin the phone opens
 

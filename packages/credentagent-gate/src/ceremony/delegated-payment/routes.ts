@@ -99,6 +99,7 @@ export const registerDelegatedPaymentGate: RailRegistrar = (app: CeremonyApp, ct
         lines: order.lines.map((l) => ({ name: l.name ?? l.id, quantity: l.quantity, lineTotal: l.lineTotal, currency: l.currency ?? order.currency })),
         cart: queryString(req.query.cart),
         rail,
+        basePath: ctx.basePath,
       }),
     );
   });

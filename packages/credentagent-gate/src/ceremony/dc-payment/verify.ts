@@ -22,12 +22,17 @@ import * as jose from "jose";
 import { buildBindingFields, DEFAULT_LOYALTY_DISCOUNT_PCT } from "../mandate.js";
 import type { CeremonyOrder } from "../types.js";
 import type { Origin } from "../origin.js";
-import { buildTransactionData, decodeTransactionData, encodeTransactionData, hashTransactionData } from "./txData.js";
+import { buildTransactionData, decodeTransactionData, encodeTransactionData, hashTransactionData, txHashNameFromCose } from "./txData.js";
 import { openReaderContext } from "../mdoc/readerContext.js";
-import { decodeVpToken, extractTransactionDataHash, inspectAuthBlocks } from "../mdoc/mdoc.js";
+import { decodeVpToken, extractTransactionDataHash, extractTransactionDataHashAlg, inspectAuthBlocks } from "../mdoc/mdoc.js";
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
+}
+
+/** First bytes of a base64url digest — enough to compare two hashes by eye. */
+function abbrev(hash: string | null): string {
+  return hash ? hash.slice(0, 12) + "…" : "∅";
 }
 
 function claimText(v: unknown): string | null {
@@ -67,6 +72,12 @@ export interface DcMandate {
      * the wallet actually authorized THIS amount/payee.
      */
     transactionDataHash: string | null;
+    /**
+     * The COSE hash-algorithm id the wallet reported in `transaction_data_hash_alg`
+     * (e.g. -16 SHA-256, -43 SHA-384). Null ⇒ the wallet used Multipaz's SHA-256
+     * default and omitted the element. Gate 1 recomputes the hash with this algorithm.
+     */
+    transactionDataHashAlg?: number | null;
     /** Presence-only: the instrument was disclosed but not cryptographically verified. */
     presented: boolean;
     /**
@@ -148,8 +159,26 @@ export function runDcGates(mandate: DcMandate, origin: Origin, opts: { loyaltyDi
   const discount = cart.discount ?? 0;
   const discountOk = discount === 0 || discount === round2(lineSum * (pct / 100));
   const payable = round2(lineSum - discount);
-  const recomputed = hashTransactionData(ua.transactionData);
-  const hashOk = ua.transactionDataHash === recomputed;
+  // Honor the wallet's declared hash algorithm before comparing. A null/absent id ⇒
+  // Multipaz's SHA-256 default; a known COSE id ⇒ that hash; an UNKNOWN id ⇒ `nodeAlg`
+  // is null so we do NOT recompute and hashOk stays false (fail closed rather than
+  // silently assume SHA-256). The wallet's device-signed hash must equal our recompute
+  // over the exact transaction_data we sent, with the same algorithm.
+  const nodeAlg = txHashNameFromCose(ua.transactionDataHashAlg);
+  const recomputed = nodeAlg ? hashTransactionData(ua.transactionData, nodeAlg) : null;
+  const hashOk = nodeAlg !== null && ua.transactionDataHash === recomputed;
+  // WHY it failed, in the detail itself, so one screenshot is enough evidence (#180).
+  // "No hash at all" and "a hash over other bytes" are different problems: a wallet
+  // whose build predates the mdoc transaction binding accepts the request, returns a
+  // valid credential, and silently signs nothing — that buyer needs a wallet update,
+  // not a debugging session. Either way the gate still refuses (no fallback).
+  const hashDetail = hashOk
+    ? `hash ✓ (${nodeAlg})`
+    : ua.transactionDataHash == null
+      ? "hash ✗ — this wallet signed no transaction_data_hash: it does not bind the amount (update the wallet app)"
+      : nodeAlg === null
+        ? `hash ✗ — the wallet used an unsupported hash algorithm (COSE ${ua.transactionDataHashAlg})`
+        : `hash ✗ — mismatch (${nodeAlg}: wallet ${abbrev(ua.transactionDataHash)} vs ours ${abbrev(recomputed)})`;
   const txd = decodeTransactionData(ua.transactionData);
   const amountOk = discountOk && payable === cart.total && payable === mandate.payment.amount && Number(txd.payload.amount) === payable;
   const currencyOk = txd.payload.currency === cart.currency;
@@ -160,7 +189,7 @@ export function runDcGates(mandate: DcMandate, origin: Origin, opts: { loyaltyDi
   results.push({
     gate: "Amount binding",
     pass: hashOk && amountOk && currencyOk && payeeOk,
-    detail: `hash ${hashOk ? "✓" : "✗"} · amount ${amountOk ? "✓" : "✗"} (${txd.payload.amount}/${mandate.payment.amount} vs ${payable}) · currency ${currencyOk ? "✓" : "✗"} · payee ${payeeOk ? "✓" : "✗"} (${txd.payload.payee?.id} vs ${expectedPayee})`,
+    detail: `${hashDetail} · amount ${amountOk ? "✓" : "✗"} (${txd.payload.amount}/${mandate.payment.amount} vs ${payable}) · currency ${currencyOk ? "✓" : "✗"} · payee ${payeeOk ? "✓" : "✗"} (${txd.payload.payee?.id} vs ${expectedPayee})`,
   });
 
   // Gate 2 — authorization present. On the REAL path, the wallet's mdoc carries
@@ -240,6 +269,8 @@ export function buildDcMandateFromPresentation(args: {
       transactionData: transactionDataB64,
       // The wallet's signed hash — re-checked in Gate 1 against our recomputed hash.
       transactionDataHash: extractTransactionDataHash(vpStr),
+      // The algorithm the wallet used, so Gate 1 recomputes with it (null ⇒ SHA-256).
+      transactionDataHashAlg: extractTransactionDataHashAlg(vpStr),
       presented: true,
       vpToken: vpStr,
       authBlocks: { hasIssuerAuth: blocks.hasIssuerAuth, hasDeviceAuth: blocks.hasDeviceAuth },
