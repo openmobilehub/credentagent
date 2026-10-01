@@ -20,8 +20,8 @@ import { SDJwtInstance } from "@sd-jwt/core";
 import { es256Signer } from "../../ap2/sdjwt.js";
 import { dcApiAudience, hasher } from "./presentation.js";
 import { PAYMENT_CREDENTIAL_VCTS, PAYMENT_INSTRUMENT_CLAIM } from "./dcql.js";
+import { HOP_TYP } from "../../ap2/chain/hop.js";
 import {
-  DELEGATE_KB_TYP,
   DELEGATE_PAYLOAD_CLAIM,
   arrayDisclosure,
   disclosureDigest,
@@ -237,7 +237,10 @@ export async function devSimulateWalletSignature(
     // here would let the two drift, and a drift in `sd_hash` reads as a bad signature.
     const sdHash = (input: string) => Buffer.from(hasher(input, "sha-256")).toString("base64url");
     const sdHashValue = opts.breakSdHash ? sdHash(`${disclosed}tampered`) : sdHash(disclosed);
-    const kbHeader = { alg: "ES256", typ: opts.overrideKbTyp ?? DELEGATE_KB_TYP[0] };
+    // `kb+sd-jwt+kb`: the payload names the agent's key in `cnf`, so this hop is one the agent
+    // extends — and a chain verifier (ours, and the AP2 Python SDK's) refuses it typed terminal.
+    // The rail itself still accepts either, because what a released wallet emits is unverified.
+    const kbHeader = { alg: "ES256", typ: opts.overrideKbTyp ?? HOP_TYP.delegable };
     const kbPayload = {
       iat: Math.floor(Date.now() / 1000),
       // The DC API form, per OpenID4VP §B.3.6 — what a real wallet sends.

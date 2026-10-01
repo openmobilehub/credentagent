@@ -110,10 +110,18 @@ export class Ap2Issuer {
     return { token, digest: digestToken(token, SD_HASH_ALG) };
   }
 
+  /**
+   * The merchant-signed UCP Checkout — what a merchant quotes to an agent, and what the agent's
+   * closed checkout mandate then names by `checkout_jwt` and its hash.
+   */
+  signCheckout(checkout: UcpCheckout): string {
+    return signCompactJwt(checkout, this.#key.privateKey, this.#key.kid);
+  }
+
   /** `mandate.checkout.1` — "I authorize THIS checkout." */
   async checkout(args: IssueCheckoutArgs): Promise<IssuedCheckout> {
     const iat = nowSeconds();
-    const checkoutJwt = signCompactJwt(args.checkout, this.#key.privateKey, this.#key.kid);
+    const checkoutJwt = this.signCheckout(args.checkout);
     const checkoutHash = digestToken(checkoutJwt, SD_HASH_ALG);
     // `checkout_jwt` is selectively disclosable per the AP2 schema: the digest alone proves
     // WHICH cart was authorized, so a downstream party can be told the binding without

@@ -152,6 +152,14 @@ export type {
   CheckoutMandate, PaymentMandate, OpenCheckoutMandate, OpenPaymentMandate, AnyMandate,
   Cnf, CheckoutConstraint, PaymentConstraint,
 } from "./ap2/types.js";
+// ── AP2 delegation chains (spec 014, FR-3/FR-4) — spend a permission, verify a purchase ───
+// The agent holds a `DelegatedIntent` (what the person signed on their phone) and spends it per
+// purchase; the merchant checks the result with `verifyDelegatedPurchase`. Chain format:
+// `draft-gco-oauth-delegate-sd-jwt-00`, pinned in DELEGATE_SD_JWT_REVISION. Presence-only (#14).
+export { DelegatedIntent, verifyDelegatedPurchase } from "./ap2/chain/purchase.js";
+export type { DelegatedPurchaseProof, PurchaseVerdict, PurchaseRefusal, PurchaseRefusalCode, VerifyPurchaseOptions } from "./ap2/chain/purchase.js";
+export type { Spent, Violation } from "./ap2/chain/constraints.js";
+export { DELEGATE_SD_JWT_REVISION } from "./ap2/chain/serialize.js";
 export { amountFrom, amountOfMinor, amountsEqual, formatAmount, sumAmounts, toMajorUnits, toMinorUnits, exponentFor } from "./ap2/money.js";
 
 // ── Ceremony presentation (the ONE shared three-gate checkout page) ─────────
