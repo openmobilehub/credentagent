@@ -51,6 +51,8 @@ export interface DoctorInput {
    *  from seams doctor only partially sees: the order-store check is skipped (the host owns order
    *  persistence) and a residual secret/store finding is annotated rather than asserted hard. */
   composedWithHost?: boolean;
+  /** Was the AP2 mandate-signing key generated at boot (no `mandateSigningKey` supplied)? */
+  ephemeralMandateKey?: boolean;
   /** Environment to read deployment signals from. Defaults to `process.env`; injected in tests. */
   env?: Record<string, string | undefined>;
 }
@@ -160,6 +162,22 @@ export function runDoctor(input: DoctorInput): DoctorReport {
         `The created / completed order stores use the in-memory default, so an order created on one instance is ` +
         `invisible to another — orders.serve() checkout and orders.retrieve() break across an instance split.`,
       fix: "Inject shared { orderStore, completedOrderStore } (OrderStore backed by Redis/Upstash) for multi-instance deploys.",
+    });
+  }
+
+  // The AP2 mandate-signing key. Error-level on ANY deployment — serverless or a single
+  // production box alike — because the failure is not "might not work across instances" but
+  // "every mandate already issued stops verifying at the next restart", and a mandate handed
+  // to a wallet cannot be recalled. Dormant in local dev like every other check: a dev box
+  // restarts on every save, its mandates are throwaway, and a preflight that fails the
+  // zero-config quickstart (`if (!report.ok) process.exit(1)`) breaks "a default that runs".
+  if (env.deployment && input.ephemeralMandateKey) {
+    findings.push({
+      level: "error",
+      code: "ephemeral-mandate-key",
+      message:
+        "The AP2 mandate-signing key was generated at boot. Every mandate this process signs becomes unverifiable when it restarts — including ones already handed to a wallet.",
+      fix: "Pass `new CredentAgent({ mandateSigningKey })` with a stable private P-256 JWK from your secret manager.",
     });
   }
 
