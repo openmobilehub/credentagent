@@ -28,7 +28,8 @@ import type { CompletionInput } from "../types.js";
 import { buildDcPaymentRequest } from "./request.js";
 import { buildDcMandate, runDcGates, verifyDcPresentation, type DcMandate, type GateResult } from "./verify.js";
 import { renderDcPaymentPage } from "./page.js";
-import { checkoutRail } from "../theme.js";
+import { checkoutRail, proofLinksHtml } from "../theme.js";
+import { presentationForInspection } from "../inspect.js";
 
 // Minimal structural request/response shapes — the real Express req/res satisfy
 // them, so the package never imports express.
@@ -96,7 +97,9 @@ export const registerDcPaymentGate: RailRegistrar = (app: CeremonyApp, ctx: Cere
         cart: typeof req.query.cart === "string" ? req.query.cart : undefined,
         rail,
         returnUrl: ctx.returnUrl?.(order.id),
+        statusUrl: ctx.statusUrl?.(order.id),
         branding: ctx.branding,
+        basePath: ctx.basePath,
       }),
     );
   });
@@ -155,6 +158,11 @@ export const registerDcPaymentGate: RailRegistrar = (app: CeremonyApp, ctx: Cere
       return;
     }
 
+    // inspectPresentations: the wallet's DeviceResponse (the mandate carries it as vpToken ONLY
+    // on the real path) + the inspector link, so the page can offer "Inspect".
+    const vpToken = mandate.userAuthorization.vpToken;
+    const presentation = ctx.inspectPresentations === true && vpToken ? { presentation: presentationForInspection(vpToken) } : {};
+
     // Complete through the SHARED seam (idempotent record + re-price + age gate +
     // optional settle + clear cart & per-order verification). No second path.
     const input: CompletionInput = {
@@ -165,12 +173,28 @@ export const registerDcPaymentGate: RailRegistrar = (app: CeremonyApp, ctx: Cere
       method: "dc-payment",
       instrument: mandate.payment.instrument,
       gates,
+      // The order proof receipt: this payment's proof, kept on the completed record.
+      proof: {
+        gate: `Pay (${mandate.payment.currency})`,
+        rail: vpToken ? "dc-payment" : "instant-demo",
+        trust_level: mandate.trust_level,
+        checks: gates,
+        presentedAt: new Date().toISOString(),
+        ...presentation,
+      },
       ...(cartMandate !== undefined ? { cartMandate: cartMandate as CompletionInput["cartMandate"] } : {}),
     };
+    // The order's earlier proofs (age, membership, …) — read BEFORE completion clears the
+    // verification record, so the finished page can list every credential, not just this one.
+    const priorProofs = ((await ctx.verificationStore.read(order.id))?.proofs ?? []);
     const result = await ctx.completion(input);
+    // Once complete: ONE "What was proven" block for the whole order — each proof with its
+    // Multipaz Tools links, then Check the signatures + Order record (the same helper as the
+    // checkout page's paid view).
+    const proofsHtml = result.completed ? proofLinksHtml([...priorProofs, input.proof!], ctx.statusUrl?.(order.id)) : "";
     // Forward the on-chain settlement (when configured + succeeded) AND the
     // settlementError (a configured-but-failed settle → authorized-but-not-settled,
     // FR-013) so the page can render the x402 receipt or the calm refusal line.
-    res.json({ mandate, gates, completed: result.completed, ...(result.reason ? { reason: result.reason } : {}), ...(result.settlement ? { settlement: result.settlement } : {}), ...(result.settlementError ? { settlementError: result.settlementError } : {}) });
+    res.json({ mandate, gates, completed: result.completed, ...(result.reason ? { reason: result.reason } : {}), ...(result.settlement ? { settlement: result.settlement } : {}), ...(result.settlementError ? { settlementError: result.settlementError } : {}), ...presentation, ...(proofsHtml ? { proofsHtml } : {}) });
   });
 };

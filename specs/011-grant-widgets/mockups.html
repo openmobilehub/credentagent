@@ -1,0 +1,613 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Grant Widgets — mockup gallery (011)</title>
+<style>
+  /* ============================================================
+     Grant Widgets — static mockup gallery for spec 011-grant-widgets.
+     Self-contained: no external requests, no build step. The gallery is
+     rendered TWICE — a color-scheme:light column and a color-scheme:dark
+     column — so the SAME markup + the SAME light-dark() tokens prove the
+     light/dark story literally (this is exactly how the widget resolves
+     color in global.css). Companion to design.md in this folder.
+     ============================================================ */
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: #eceef1;
+    color: #0f172a;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* -- Page chrome (not part of the widget; just the review harness) -- */
+  .harness { padding: 20px 20px 60px; max-width: 1200px; margin: 0 auto; }
+  .harness h1 { font-size: 1.35rem; margin: 0 0 4px; }
+  .harness .sub { color: #52514e; font-size: .9rem; margin: 0 0 16px; max-width: 70ch; line-height: 1.5; }
+  .toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 18px; flex-wrap: wrap; }
+  .toolbar .seg { display: inline-flex; border: 1px solid #cbd0d6; border-radius: 999px; overflow: hidden; background: #fff; }
+  .toolbar .seg button {
+    appearance: none; border: 0; background: transparent; padding: 7px 16px;
+    font: inherit; font-size: .85rem; font-weight: 600; color: #52514e; cursor: pointer;
+  }
+  .toolbar .seg button[aria-pressed="true"] { background: #0d9488; color: #fff; }
+  .toolbar .hint { font-size: .8rem; color: #6b7280; }
+
+  /* -- The two scheme columns -- */
+  .cols { display: flex; gap: 20px; align-items: flex-start; }
+  .cols.mode-light .col-dark,
+  .cols.mode-dark  .col-light { display: none; }
+  .cols.mode-light .col-light,
+  .cols.mode-dark  .col-dark { flex: 1 1 100%; }
+  .col { flex: 1 1 0; min-width: 0; border-radius: 16px; padding: 16px; }
+  .col-light { color-scheme: light; background: #f4f5f7; border: 1px solid #e2e8f0; }
+  .col-dark  { color-scheme: dark;  background: #0d0d0d; border: 1px solid #262626; }
+  .col-tag {
+    font-size: .72rem; letter-spacing: .14em; text-transform: uppercase; font-weight: 700;
+    color: light-dark(#64748b, #94a3b8); margin: 2px 4px 14px;
+  }
+
+  /* ============================================================
+     THE GRANT WIDGET DESIGN SYSTEM
+     Tokens resolve per column via light-dark() keyed on color-scheme.
+     --grant-accent is host-brandable (branding.accent, #132); the
+     status colors below it are FIXED — never themed.
+     ============================================================ */
+  .gallery {
+    --grant-accent:       light-dark(#0d9488, #2dd4bf);
+    --grant-accent-hover: light-dark(#0f766e, #5eead4);
+    --grant-accent-tint:  light-dark(#effcfa, #12312e);
+    --grant-ink:          light-dark(#0f172a, #f1f5f9);
+    --grant-muted:        light-dark(#64748b, #94a3b8);
+    --grant-hairline:     light-dark(#e2e8f0, #334155);
+    --grant-surface:      light-dark(#ffffff, #1f1f1f);
+    --grant-sunken:       light-dark(#f1f5f9, #161616);
+    --grant-warn:         #fab219;   /* FIXED status — never themed */
+    --grant-warn-ink:     light-dark(#7a4d00, #f6c453);
+    --grant-crit:         light-dark(#d03b3b, #e05252); /* FIXED status */
+    --grant-radius: 12px;
+    color: var(--grant-ink);
+  }
+  .section-label {
+    font-size: .74rem; letter-spacing: .1em; text-transform: uppercase; font-weight: 700;
+    color: var(--grant-muted); margin: 22px 2px 4px;
+  }
+  .section-note { font-size: .78rem; color: var(--grant-muted); margin: 0 2px 12px; line-height: 1.45; }
+  .row { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
+  .row.single { grid-template-columns: minmax(0, 420px); }
+
+  /* -- The frame (owned by defineGrantView; trust line is non-omittable) -- */
+  .gcard {
+    background: var(--grant-surface);
+    border: 1px solid var(--grant-hairline);
+    border-radius: var(--grant-radius);
+    padding: 16px;
+    display: flex; flex-direction: column; gap: 12px;
+  }
+  .gcard.showcase { box-shadow: 0 1px 3px rgba(15,23,42,.10), 0 8px 24px rgba(15,23,42,.06); }
+  .gcard.terminal { opacity: .96; }
+
+  .gcard-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .kicker { font-size: .68rem; letter-spacing: .1em; text-transform: uppercase; font-weight: 700; color: var(--grant-muted); }
+  .wordmark { font-size: .78rem; letter-spacing: .22em; font-weight: 700; color: var(--grant-muted); }
+
+  .pill { display: inline-flex; align-items: center; gap: 5px; font-size: .72rem; font-weight: 700; padding: 3px 9px; border-radius: 999px; white-space: nowrap; }
+  .pill .dot { width: 7px; height: 7px; border-radius: 999px; background: currentColor; }
+  .pill.accent  { color: var(--grant-accent); background: var(--grant-accent-tint); }
+  .pill.warn    { color: var(--grant-warn-ink); background: light-dark(#fdf4e2, #2c2410); }
+  .pill.muted   { color: var(--grant-muted); background: var(--grant-sunken); }
+
+  /* -- Product tile -- */
+  .ptile { display: flex; gap: 12px; align-items: center; }
+  .thumb { width: 56px; height: 56px; border-radius: 10px; flex: none; display: flex; align-items: center; justify-content: center; font-size: 26px; }
+  .thumb.coffee { background: light-dark(#e7d8c9, #3a2f26); }
+  .thumb.wine   { background: light-dark(#ecd9e2, #33232b); }
+  .ptile .pt-name { font-size: .95rem; font-weight: 600; }
+  .ptile .pt-meta { font-size: .8rem; color: var(--grant-muted); }
+  .ptile .pt-qty  { font-size: .8rem; color: var(--grant-ink); margin-top: 2px; }
+  .ptile .pt-qty b { color: var(--grant-accent); }
+
+  /* -- Scope framing (category / open) -- */
+  .scope-lede { font-size: .9rem; font-weight: 600; }
+  .scope-sub  { font-size: .8rem; color: var(--grant-muted); }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { font-size: .78rem; font-weight: 600; padding: 4px 10px; border-radius: 6px; }
+  .chip.cat  { color: var(--grant-accent); background: var(--grant-accent-tint); border: 1px solid light-dark(#c7ede8, #1c4a45); }
+  .chip.sku  { color: var(--grant-muted); background: var(--grant-sunken); }
+  .chips-label { font-size: .78rem; color: var(--grant-muted); margin-right: 2px; align-self: center; }
+
+  /* -- Budget meter -- */
+  .budget-head { font-size: 1.25rem; font-weight: 700; letter-spacing: -.01em; }
+  .budget-head .of { color: var(--grant-muted); font-weight: 600; font-size: .92rem; }
+  .meter { margin-top: 2px; }
+  .meter-track {
+    position: relative; height: 10px; border-radius: 999px;
+    background: var(--grant-sunken); overflow: hidden;
+  }
+  .meter-fill { height: 100%; border-radius: 999px; background: var(--grant-accent); transition: width .4s ease; }
+  .meter-fill.low  { background: var(--grant-warn); }
+  .meter-fill.crit { background: var(--grant-crit); }
+  .meter-fill.frozen { background: light-dark(#cbd5e1, #475569); }
+  .capwrap { position: relative; height: 16px; margin-top: 5px; }
+  .cap { position: absolute; left: 0; top: 0; height: 8px; border-left: 1.5px solid var(--grant-muted); border-right: 1.5px solid var(--grant-muted); border-bottom: 1.5px solid var(--grant-muted); border-radius: 0 0 3px 3px; }
+  .cap-label { position: absolute; top: 8px; left: 0; font-size: .72rem; color: var(--grant-muted); white-space: nowrap; }
+  .cap-label.over { color: var(--grant-warn-ink); font-weight: 600; }
+
+  /* -- Agency + revoke -- */
+  .agency { font-size: .82rem; color: var(--grant-muted); display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .revoke { color: var(--grant-accent); font-weight: 600; text-decoration: none; font-size: .82rem; padding: 6px 2px; }
+  .revoke:hover { text-decoration: underline; }
+
+  /* -- Approval card -- */
+  .appr-h1 { font-size: 1.2rem; font-weight: 700; margin: 2px 0 0; }
+  .appr-lede { font-size: .88rem; color: var(--grant-muted); line-height: 1.45; margin: 0; }
+  .scope-block { border: 1px solid var(--grant-hairline); border-radius: 10px; padding: 10px 12px; }
+  .scope-block .sb-label { font-size: .64rem; letter-spacing: .12em; text-transform: uppercase; font-weight: 800; color: var(--grant-muted); margin-bottom: 6px; }
+  .money-row { display: flex; align-items: baseline; gap: 10px; }
+  .money-row .amt { font-size: 1.15rem; font-weight: 800; }
+  .money-row .lbl { font-size: .74rem; color: var(--grant-muted); }
+  .money-row .divider { color: var(--grant-hairline); font-weight: 700; }
+  .who-text { font-size: .88rem; line-height: 1.4; }
+  .btn-row { display: flex; gap: 10px; }
+  .btn { flex: 1 1 0; height: 46px; border-radius: 10px; font: inherit; font-size: .92rem; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+  .btn.approve { background: var(--grant-accent); color: #fff; border: 1px solid var(--grant-accent); }
+  .btn.approve:hover { background: var(--grant-accent-hover); }
+  .btn.decline { background: transparent; color: var(--grant-ink); border: 1px solid var(--grant-hairline); }
+  .btn.decline:hover { border-color: var(--grant-muted); }
+  .deeplink { font-size: .76rem; color: var(--grant-muted); text-align: center; }
+
+  /* -- Terminal / banners -- */
+  .terminal-line { font-size: .9rem; font-weight: 600; }
+  .terminal-sub { font-size: .8rem; color: var(--grant-muted); }
+  .banner { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: .8rem; padding: 8px 10px; border-radius: 8px; background: light-dark(#fef2f2, #2a1616); color: var(--grant-crit); border: 1px solid light-dark(#f6cccc, #522); }
+  .banner .retry { color: var(--grant-crit); font-weight: 700; text-decoration: underline; cursor: pointer; }
+  .stale-cap { font-size: .76rem; color: var(--grant-muted); font-style: italic; }
+  .dim { opacity: .55; }
+
+  /* -- Skeleton (loading) -- */
+  .sk { background: var(--grant-sunken); border-radius: 6px; }
+  .sk.line { height: 12px; } .sk.line.short { width: 40%; } .sk.line.mid { width: 65%; }
+  .sk.bar { height: 10px; border-radius: 999px; }
+  .sk.tile { width: 56px; height: 56px; border-radius: 10px; }
+
+  /* -- Compact budgetMeter (dense list) -- */
+  .meter-list { border: 1px solid var(--grant-hairline); border-radius: var(--grant-radius); background: var(--grant-surface); overflow: hidden; }
+  .mrow { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; align-items: center; padding: 11px 14px; border-bottom: 1px solid var(--grant-hairline); }
+  .mrow .m-name { font-size: .86rem; font-weight: 600; }
+  .mrow .m-vals { font-size: .82rem; color: var(--grant-muted); font-variant-numeric: tabular-nums; }
+  .mrow .m-bar { grid-column: 1 / -1; }
+  .mrow .m-lock { font-size: .68rem; color: var(--grant-muted); justify-self: end; }
+  .list-trust { padding: 9px 14px; font-size: .74rem; color: var(--grant-muted); background: var(--grant-sunken); }
+
+  /* -- Trust line (frame footer — always last, non-omittable) -- */
+  .trust { border-top: 1px solid var(--grant-hairline); margin: 0 -16px -16px; padding: 11px 16px 13px; }
+  .trust .line { font-size: .74rem; color: var(--grant-muted); line-height: 1.4; }
+
+  @media (max-width: 720px) {
+    .cols { flex-direction: column; }
+    .col { flex: 1 1 100%; width: 100%; }
+  }
+</style>
+</head>
+<body>
+  <div class="harness">
+    <h1>Grant Widgets — mockup gallery</h1>
+    <p class="sub">
+      Every gallery view in every state, for spec <b>011-grant-widgets</b>. Rendered twice —
+      a light and a dark column — from the same markup and the same <code>light-dark()</code>
+      tokens (the way the widget resolves color today). Static mockups: the only live control is
+      the scheme toggle. Every card carries the non-omittable trust line. See <b>design.md</b> for
+      the reasoning.
+    </p>
+    <div class="toolbar">
+      <div class="seg" role="group" aria-label="Color scheme">
+        <button data-mode="split" aria-pressed="true">Split</button>
+        <button data-mode="light" aria-pressed="false">Light</button>
+        <button data-mode="dark" aria-pressed="false">Dark</button>
+      </div>
+      <span class="hint">Split shows both schemes side by side.</span>
+    </div>
+
+    <div class="cols mode-split" id="cols">
+      <div class="col col-light"><div class="col-tag">Light</div><div class="gallery" data-gallery></div></div>
+      <div class="col col-dark"><div class="col-tag">Dark</div><div class="gallery" data-gallery></div></div>
+    </div>
+  </div>
+
+<script>
+(function () {
+  "use strict";
+
+  const fmt = (n) => "$" + Number(n).toLocaleString("en-US");
+  const pct = (part, whole) => Math.max(0, Math.min(100, (part / whole) * 100));
+
+  // ---- primitives -------------------------------------------------------
+  function el(tag, cls, html) {
+    const n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (html != null) n.innerHTML = html;
+    return n;
+  }
+
+  // The trust line — data-driven from presence/trustLevel, non-omittable.
+  // Honest on both axes: the LIMITS are really enforced server-side; the
+  // CONSENT is dev-sealed, not wallet-signed (mirrors trustFooter()).
+  function trustLine(g) {
+    const presence = g.presence || "delegated-demo";
+    const t = el("div", "trust");
+    t.appendChild(el("div", "line",
+      "🔒 " + presence + " · limits enforced server-side · consent is dev-sealed, not wallet-signed"));
+    return t;
+  }
+
+  const PILLS = {
+    pending:   ["accent", "⧗", "Needs approval"],
+    active:    ["accent", "●", "Active"],
+    low:       ["warn",   "⚠", "Running low"],
+    exhausted: ["muted",  "✓", "Budget spent"],
+    revoked:   ["muted",  "⊘", "Revoked"],
+    denied:    ["muted",  "✕", "Declined"],
+  };
+  function statusPill(lifecycle) {
+    const [cls, icon, label] = PILLS[lifecycle] || PILLS.active;
+    return el("span", "pill " + cls, (cls === "active" ? '<span class="dot"></span>' : icon + " ") + label);
+  }
+
+  // The budget meter: fill = remaining, anchored left, depletes; severity by
+  // threshold; cap = fixed reference bracket beneath the track, left-anchored.
+  function meter(g, opts) {
+    opts = opts || {};
+    const remainingPct = pct(g.remaining, g.budget);
+    const capPct = pct(g.perSpend, g.budget);
+    const low = g.remaining <= 0.2 * g.budget && g.remaining > 0;
+    const crit = g.remaining <= 0;
+    // A live grant whose remaining < cap: the budget now binds the next purchase.
+    // On a frozen/terminal card there is no "next purchase", so show the nominal cap
+    // as a record instead of the "budget caps next purchase" language.
+    const overshoot = !opts.frozen && g.remaining < g.perSpend;
+
+    const wrap = el("div", "meter");
+    // headline
+    const head = el("div", "budget-head");
+    if (crit) head.innerHTML = fmt(g.budget) + " <span class='of'>of " + fmt(g.budget) + " used</span>";
+    else head.innerHTML = fmt(g.remaining) + " <span class='of'>of " + fmt(g.budget) + " remaining</span>";
+    wrap.appendChild(head);
+
+    // track + fill, with screen-reader meter semantics
+    const track = el("div", "meter-track");
+    track.setAttribute("role", "meter");
+    track.setAttribute("aria-valuemin", "0");
+    track.setAttribute("aria-valuemax", String(g.budget));
+    track.setAttribute("aria-valuenow", String(Math.max(0, g.remaining)));
+    track.setAttribute("aria-valuetext",
+      fmt(Math.max(0, g.remaining)) + " of " + fmt(g.budget) + " remaining · up to " + fmt(g.perSpend) + " per purchase");
+    const fillCls = opts.frozen ? "frozen" : crit ? "crit" : low ? "low" : "";
+    const fill = el("div", "meter-fill " + fillCls);
+    fill.style.width = (crit ? 0 : remainingPct) + "%";
+    fill.setAttribute("aria-hidden", "true");
+    track.appendChild(fill);
+    wrap.appendChild(track);
+
+    // cap bracket (fixed reference, under the track)
+    const capwrap = el("div", "capwrap");
+    const cap = el("div", "cap");
+    cap.style.width = capPct + "%";
+    capwrap.appendChild(cap);
+    const capLabel = el("div", "cap-label" + (overshoot ? " over" : ""), null);
+    capLabel.textContent = overshoot
+      ? "budget caps next purchase at " + fmt(Math.max(0, g.remaining))
+      : "up to " + fmt(g.perSpend) + " per purchase";
+    capwrap.appendChild(capLabel);
+    wrap.appendChild(capwrap);
+    return wrap;
+  }
+
+  // The frame every view composes into: head (kicker/wordmark + status pill),
+  // the view body, then the trust line — always last, never skippable.
+  function frame(opts) {
+    const card = el("div", "gcard" + (opts.extraClass ? " " + opts.extraClass : ""));
+    if (opts.accent) card.style.setProperty("--grant-accent", opts.accent);
+    if (opts.accentTint) card.style.setProperty("--grant-accent-tint", opts.accentTint);
+
+    const head = el("div", "gcard-head");
+    head.appendChild(el("span", opts.wordmark ? "wordmark" : "kicker", opts.wordmark || opts.kicker || "SPENDING GRANT"));
+    if (opts.lifecycle) head.appendChild(statusPill(opts.lifecycle));
+    card.appendChild(head);
+
+    (opts.body || []).forEach((n) => n && card.appendChild(n));
+    card.appendChild(trustLine(opts.grant || {}));
+    return card;
+  }
+
+  function productTile(p, perSpend) {
+    const t = el("div", "ptile");
+    t.appendChild(el("div", "thumb " + (p.kind || "coffee"), p.emoji || "☕"));
+    const txt = el("div");
+    txt.appendChild(el("div", "pt-name", p.name));
+    txt.appendChild(el("div", "pt-meta", p.category + " · " + fmt(p.price) + " each"));
+    const units = Math.floor(perSpend / p.price);
+    txt.appendChild(el("div", "pt-qty", "up to <b>" + units + "</b> per purchase · " + fmt(units * p.price) + " max"));
+    t.appendChild(txt);
+    return t;
+  }
+
+  function agencyLine(text, revoke) {
+    const a = el("div", "agency");
+    a.appendChild(el("span", null, text));
+    if (revoke) { const r = el("a", "revoke", "Revoke"); r.href = "#"; r.onclick = (e) => e.preventDefault(); a.appendChild(r); }
+    return a;
+  }
+
+  // ---- realistic data ---------------------------------------------------
+  const coffee = { name: "Utopia Coffee Beans", category: "Beverages", price: 18, kind: "coffee", emoji: "☕" };
+  const wine   = { name: "Utopia Reserve Red",  category: "Wine",      price: 24, kind: "wine",   emoji: "🍷" };
+  const P = { presence: "delegated-demo", trustLevel: "server-issued-demo" };
+
+  // ---- view builders ----------------------------------------------------
+  function productGrantCard(g, opts) {
+    opts = opts || {};
+    const body = [
+      productTile(g.product, g.perSpend),
+      opts.frozen ? null : meter(g, opts),
+    ];
+    if (opts.banner) body.push(opts.banner);
+    if (opts.stale) body.push(el("div", "stale-cap", "Reconnecting… showing last known state"));
+    if (!opts.frozen && opts.lifecycle !== "exhausted")
+      body.push(agencyLine("Spends at Utopia while you're away", opts.revoke !== false && !opts.stale));
+    if (opts.frozen) body.push(meterFrozenNote(g, opts.lifecycle));
+    return frame({ grant: g, lifecycle: opts.lifecycle, body, extraClass: opts.extraClass });
+  }
+
+  function meterFrozenNote(g, lifecycle) {
+    const wrap = el("div");
+    wrap.appendChild(el("div", "terminal-line",
+      lifecycle === "exhausted" ? "Budget spent — " + fmt(g.budget) + " of " + fmt(g.budget) + " used"
+      : lifecycle === "revoked" ? "Revoked on Jul 28"
+      : "Declined"));
+    wrap.appendChild(el("div", "terminal-sub",
+      lifecycle === "exhausted" ? "This grant is closed."
+      : lifecycle === "revoked" ? "No further purchases will be made."
+      : "This grant was never activated."));
+    return wrap;
+  }
+
+  function categoryGrantCard(g, opts) {
+    opts = opts || {};
+    const body = [];
+    body.push(el("div", "scope-lede", "Anything in these categories at Utopia"));
+    const chips = el("div", "chips");
+    g.categories.forEach((c) => chips.appendChild(el("span", "chip cat", c)));
+    body.push(chips);
+    if (g.skus && g.skus.length) {
+      const sk = el("div", "chips");
+      sk.appendChild(el("span", "chips-label", "plus:"));
+      g.skus.forEach((s) => sk.appendChild(el("span", "chip sku", s)));
+      body.push(sk);
+    }
+    body.push(meter(g, opts));
+    if (opts.lifecycle === "revoked") { body.length = 0; body.push(el("div","scope-lede","Beverages + Electronics at Utopia"), meter(g,{frozen:true}), meterFrozenNote(g,"revoked")); }
+    else if (opts.lifecycle !== "exhausted") body.push(agencyLine("Spends at Utopia while you're away", true));
+    return frame({ grant: g, lifecycle: opts.lifecycle, body });
+  }
+
+  function openGrantCard(g, opts) {
+    opts = opts || {};
+    const body = [];
+    body.push(el("div", "scope-lede", "🏬 Anything at Utopia"));
+    body.push(el("div", "scope-sub", "No product limits on this grant — the budget and per-purchase cap carry all the limits."));
+    body.push(meter(g, opts));
+    body.push(agencyLine("Spends at Utopia while you're away", true));
+    return frame({ grant: g, lifecycle: opts.lifecycle || "active", body });
+  }
+
+  function approvalCard(g) {
+    const body = [];
+    body.push(el("h2", "appr-h1", "Approve a spending grant"));
+    body.push(el("p", "appr-lede", "Your agent will spend at " + g.merchant + " while you're away. Here's exactly what you're allowing:"));
+
+    // WHAT
+    const what = el("div", "scope-block");
+    what.appendChild(el("div", "sb-label", "What"));
+    if (g.product) {
+      const w = el("div");
+      const units = Math.floor(g.perSpend / g.product.price);
+      w.innerHTML = g.product.emoji + " <b>" + g.product.name + "</b> — " + fmt(g.product.price) +
+        "<div class='pt-meta'>" + g.product.category + " · up to " + units + " per purchase</div>";
+      what.appendChild(w);
+    } else if (g.categories) {
+      const chips = el("div", "chips");
+      g.categories.forEach((c) => chips.appendChild(el("span", "chip cat", c)));
+      what.appendChild(chips);
+    } else {
+      what.appendChild(el("div", null, "Anything at " + g.merchant + " — <b>no product limits</b>"));
+    }
+    body.push(what);
+
+    // HOW MUCH
+    const how = el("div", "scope-block");
+    how.appendChild(el("div", "sb-label", "How much"));
+    const mr = el("div", "money-row");
+    mr.innerHTML = "<span class='amt'>" + fmt(g.budget) + "</span><span class='lbl'>total</span>" +
+      "<span class='divider'>·</span><span class='amt'>" + fmt(g.perSpend) + "</span><span class='lbl'>per purchase</span>";
+    how.appendChild(mr);
+    body.push(how);
+
+    // WHO
+    const who = el("div", "scope-block");
+    who.appendChild(el("div", "sb-label", "Who"));
+    who.appendChild(el("div", "who-text", "Your agent spends <b>unattended</b> until the budget runs out — or you revoke it."));
+    body.push(who);
+
+    // decision — equal weight
+    const btns = el("div", "btn-row");
+    const approve = el("button", "btn approve", "Approve");
+    const decline = el("button", "btn decline", "Decline");
+    [approve, decline].forEach((b) => (b.onclick = (e) => e.preventDefault()));
+    btns.appendChild(approve); btns.appendChild(decline);
+    body.push(btns);
+    body.push(el("div", "deeplink", "Opens the CredentAgent approval page ↗"));
+
+    return frame({ grant: g, wordmark: "CREDENTAGENT", lifecycle: "pending", body, extraClass: "showcase" });
+  }
+
+  // Compact budgetMeter row (for the dense list)
+  function meterRow(g) {
+    const remainingPct = pct(g.remaining, g.budget);
+    const low = g.remaining <= 0.2 * g.budget && g.remaining > 0;
+    const crit = g.remaining <= 0;
+    const row = el("div", "mrow");
+    row.appendChild(el("div", "m-name", g.merchant + (g.tag ? " · " + g.tag : "")));
+    row.appendChild(el("div", "m-vals", (crit ? fmt(g.budget) + " of " + fmt(g.budget) + " used" : fmt(g.remaining) + " of " + fmt(g.budget)) + " · ≤" + fmt(g.perSpend) + "/purchase"));
+    const bar = el("div", "m-bar");
+    const track = el("div", "meter-track");
+    track.setAttribute("role", "meter");
+    track.setAttribute("aria-valuetext", fmt(Math.max(0, g.remaining)) + " of " + fmt(g.budget) + " remaining");
+    const fill = el("div", "meter-fill " + (crit ? "crit" : low ? "low" : ""));
+    fill.style.width = (crit ? 0 : remainingPct) + "%";
+    track.appendChild(fill); bar.appendChild(track);
+    row.appendChild(bar);
+    row.appendChild(el("div", "m-lock", "🔒 delegated-demo")); // literal token stays per row
+    return row;
+  }
+
+  // Custom branded view: a "wine club row" body around the shared meter,
+  // themed with a non-default accent to prove branding flows through tokens.
+  function wineClubRow(g, opts) {
+    opts = opts || {};
+    const body = [];
+    const hdr = el("div", "ptile");
+    hdr.appendChild(el("div", "thumb wine", "🍷"));
+    const txt = el("div");
+    txt.appendChild(el("div", "pt-name", "Utopia Wine Club"));
+    txt.appendChild(el("div", "pt-meta", "Custom view · defineGrantView({ id: 'wine-club-row' })"));
+    hdr.appendChild(txt);
+    body.push(hdr);
+    body.push(meter(g, opts));
+    body.push(agencyLine("Restocks the club while you're away", true));
+    return frame({
+      grant: g, kicker: "WINE CLUB GRANT", lifecycle: opts.lifecycle || "active", body,
+      extraClass: "showcase",
+      accent: "#7c3aed", accentTint: "light-dark(#f3ecff, #241a3a)",
+    });
+  }
+
+  // ---- section helper ---------------------------------------------------
+  function section(gallery, label, note, cards, opts) {
+    gallery.appendChild(el("div", "section-label", label));
+    if (note) gallery.appendChild(el("div", "section-note", note));
+    const row = el("div", "row" + (opts && opts.single ? " single" : ""));
+    cards.forEach((c) => row.appendChild(c));
+    gallery.appendChild(row);
+    return row;
+  }
+
+  // ---- build the whole gallery into a container -------------------------
+  function build(gallery) {
+    // productGrantCard — the flagship — across states
+    section(gallery, "productGrantCard — the flagship (single SKU)",
+      "Product tile reads first (\"buy me this one thing\"), then the budget meter, then the agency line.",
+      [
+        productGrantCard({ ...P, merchant: "Utopia", budget: 90, remaining: 54, perSpend: 54, product: coffee }, { lifecycle: "active", revoke: true }),
+        productGrantCard({ ...P, merchant: "Utopia", budget: 90, remaining: 16, perSpend: 54, product: coffee }, { lifecycle: "low", revoke: true }),
+      ]);
+
+    // approvalCard — the consent moment (given the most room)
+    section(gallery, "approvalCard — the consent moment (status: pending)",
+      "WHAT → HOW MUCH → WHO, then equal-weight Approve/Decline. The agency caveat sits right above the buttons on purpose.",
+      [
+        approvalCard({ ...P, merchant: "Utopia", budget: 90, perSpend: 54, product: coffee }),
+        approvalCard({ ...P, merchant: "Utopia", budget: 200, perSpend: 130, categories: ["Beverages", "Electronics"] }),
+      ]);
+
+    // categoryGrantCard — the spec's canonical $200 / $130 Bev+Elec, $146 left
+    section(gallery, "categoryGrantCard — categories (± SKUs)",
+      "The $200 / $130 Beverages + Electronics grant at the spec's $146-remaining depletion state. Scope chips lead; the cap line is the only per-item ceiling.",
+      [
+        categoryGrantCard({ ...P, merchant: "Utopia", budget: 200, remaining: 146, perSpend: 130, categories: ["Beverages", "Electronics"], skus: ["Utopia Coffee", "USB-C Cable"] }, { lifecycle: "active" }),
+      ], { single: true });
+
+    // openGrantCard — money is the scope (inverted hierarchy)
+    section(gallery, "openGrantCard — no product bounds",
+      "No product scope, so the money IS the scope — the card says so plainly and leans all weight onto budget + cap.",
+      [
+        openGrantCard({ ...P, merchant: "Utopia", budget: 200, remaining: 146, perSpend: 130 }, { lifecycle: "active" }),
+      ], { single: true });
+
+    // budgetMeter — dense list (>=3 grants). One full trust line for the group.
+    section(gallery, "budgetMeter — dense multi-grant layout (≥ 3 grants)",
+      "Compact rows to scan budgets across grants. Each row keeps the literal delegated-demo token; the full trust sentence de-duplicates to the list footer (amendment A7).",
+      [(function () {
+        const list = el("div", "meter-list");
+        list.appendChild(meterRow({ ...P, merchant: "Utopia", tag: "Bev + Electronics", budget: 200, remaining: 146, perSpend: 130 }));
+        list.appendChild(meterRow({ ...P, merchant: "Utopia", tag: "Coffee", budget: 90, remaining: 16, perSpend: 54 }));
+        list.appendChild(meterRow({ ...P, merchant: "Utopia", tag: "Electronics restock", budget: 150, remaining: 0, perSpend: 150 }));
+        list.appendChild(el("div", "list-trust", "🔒 delegated-demo · limits enforced server-side · consent is dev-sealed, not wallet-signed"));
+        return list;
+      })()], { single: true });
+
+    // terminal states
+    section(gallery, "terminal states — closed objects, no live affordances",
+      "Exhausted is a completion (muted, not red-alarm); revoked and denied are stated plainly, without blame.",
+      [
+        productGrantCard({ ...P, merchant: "Utopia", budget: 90, remaining: 0, perSpend: 54, product: coffee }, { lifecycle: "exhausted", frozen: true }),
+        categoryGrantCard({ ...P, merchant: "Utopia", budget: 200, remaining: 62, perSpend: 130, categories: ["Beverages", "Electronics"] }, { lifecycle: "revoked" }),
+        productGrantCard({ ...P, merchant: "Utopia", budget: 90, remaining: 90, perSpend: 54, product: coffee }, { lifecycle: "denied", frozen: true }),
+      ]);
+
+    // loading / stale / error
+    section(gallery, "loading · stale · error — the honesty states (FR-5)",
+      "A stale card can never unlock anything: Approve is disabled offline; Revoke stays enabled (stopping is always fail-safe).",
+      [
+        skeletonCard(),
+        productGrantCard({ ...P, merchant: "Utopia", budget: 90, remaining: 54, perSpend: 54, product: coffee }, { lifecycle: "active", stale: true, revoke: false, extraClass: "dim" }),
+        productGrantCard({ ...P, merchant: "Utopia", budget: 90, remaining: 54, perSpend: 54, product: coffee }, {
+          lifecycle: "active", revoke: false,
+          banner: (function () { const b = el("div", "banner"); b.appendChild(el("span", null, "Couldn't refresh — showing last known state")); const r = el("span", "retry", "Retry"); r.onclick = (e) => e.preventDefault(); b.appendChild(r); return b; })(),
+        }),
+      ]);
+
+    // custom branded view
+    section(gallery, "custom view + host branding (non-default accent)",
+      "A defineGrantView body around the shared meter, themed with a violet brand accent. Healthy fill is violet; the low-budget fill stays amber — status colors are FIXED, never themed.",
+      [
+        wineClubRow({ ...P, merchant: "Utopia", budget: 300, remaining: 210, perSpend: 75 }, { lifecycle: "active" }),
+        wineClubRow({ ...P, merchant: "Utopia", budget: 300, remaining: 48, perSpend: 75 }, { lifecycle: "low" }),
+      ]);
+  }
+
+  function skeletonCard() {
+    const card = el("div", "gcard");
+    const head = el("div", "gcard-head");
+    head.appendChild(el("span", "kicker", "SPENDING GRANT"));
+    head.appendChild(el("span", "sk line short", "&nbsp;"));
+    card.appendChild(head);
+    const tile = el("div", "ptile");
+    tile.appendChild(el("div", "sk tile"));
+    const t = el("div"); t.style.flex = "1";
+    t.appendChild(el("div", "sk line mid", "&nbsp;")); t.appendChild(el("div", "sk line short", "&nbsp;"));
+    t.lastChild.style.marginTop = "8px";
+    tile.appendChild(t); card.appendChild(tile);
+    card.appendChild(el("div", "sk line mid", "&nbsp;"));
+    card.appendChild(el("div", "sk bar", "&nbsp;"));
+    card.appendChild(trustLine({}));
+    return card;
+  }
+
+  document.querySelectorAll("[data-gallery]").forEach(build);
+
+  // ---- scheme toggle ----------------------------------------------------
+  const cols = document.getElementById("cols");
+  document.querySelectorAll(".seg button").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const mode = btn.getAttribute("data-mode");
+      cols.className = "cols mode-" + mode;
+      document.querySelectorAll(".seg button").forEach((b) => b.setAttribute("aria-pressed", String(b === btn)));
+    });
+  });
+})();
+</script>
+</body>
+</html>

@@ -22,8 +22,11 @@ This repo (`openmobilehub/credentagent`) is the **library**: two npm workspaces 
   catalog-injected MCP shopping server + the pure pricing/order model. Reference
   consumer of the gate.
 
-Tests run with `npm run test` (vitest) **per workspace**; `npm run build` typechecks +
-builds each package. The end-to-end reference DEMO lives in a **separate** repo,
+Tests run with **`npm test` from the repo root** (vitest) — that is the authoritative run,
+and the only one that includes the cross-package integration suite (see *Testing
+expectations*). `npm run test:workspaces` is the faster inner loop and skips it.
+`npm run build` typechecks + builds each package. The end-to-end reference DEMO lives in a
+**separate** repo,
 [`openmobilehub/mcp-apps-shopping-demo`](https://github.com/openmobilehub/mcp-apps-shopping-demo),
 which consumes these packages — link to it, don't describe it as part of this repo.
 
@@ -150,6 +153,13 @@ Quick gate for any new/changed public API (full list in the rubric):
   and assert amount binding passes; assert global-state bleed cannot occur.
 - **A test that would still pass with the security control removed is not a useful test.**
   Every bypass test must fail when its control is deleted.
+- **Verify with the ROOT `npm test`, not a per-workspace run.** `storefront-gate.test.ts`
+  lives at the repo root — it checks that the two published packages compose with zero
+  glue, so it belongs to neither workspace and neither workspace's vitest picks it up. The
+  root run therefore includes exactly one more file than the per-package runs: that one. A
+  per-workspace run is a legitimate fast inner loop; it is **not** a verification. Claiming
+  green off one is how issue #184 happened — a contributor ran every test CLAUDE.md told
+  them to run, saw it all pass, and CI failed on the cross-package file they never ran.
 
 ## Conventions
 
@@ -184,12 +194,12 @@ anticipate it when authoring:
   on every non-draft PR opened from a branch in this repo, grounded in this file's
   invariants **and the DX rubric** (`docs/reference/architecture-principles.md`) — it checks
   Stripe-grade ergonomics (the example-is-the-test rule, above) alongside the security invariants.
-  `claude-review` is **opt-in and currently OFF**: the job only runs when the repo variable
-  `ENABLE_CLAUDE_REVIEW` is `"true"`. Otherwise it is **skipped**, and a skipped job counts as
-  passing for a required check — so it does not block merges, and **human review is the gate**.
-  (It's off because the account can't use the `CLAUDE_CODE_OAUTH_TOKEN`, so the action errored on
-  every PR.) Turn it on with `gh variable set ENABLE_CLAUDE_REVIEW --body true` — the token must
-  also be usable.
+  `claude-review` is **opt-in and currently ON** (re-enabled 2026-09-29): the job only runs when
+  the repo variable `ENABLE_CLAUDE_REVIEW` is `"true"`, and it posts its findings to the PR
+  (`--comment`). It is not a required check, so **human review is still the gate**. To pause it,
+  `gh variable set ENABLE_CLAUDE_REVIEW --body false` — the job is then **skipped**. The
+  `CLAUDE_CODE_OAUTH_TOKEN` secret must come from an account that can use Claude Code
+  (`claude setup-token`); an unusable token errors on every PR.
 - **Fork / external-contributor PRs** — the automated job is **skipped** (fork runs can't
   read the `CLAUDE_CODE_OAUTH_TOKEN` secret), so it never blocks you. A skipped required
   check counts as passing. Those PRs are reviewed by one of:

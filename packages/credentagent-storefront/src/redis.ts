@@ -1,6 +1,6 @@
 // redisStorage() — first-class persistence for createStorefront().
 //
-// Builds all four stores (cart, created-order, completed-order, verification) over an
+// Builds every store (cart, created-order, completed-order, verification, order→cart) over an
 // Upstash-compatible Redis, so a production/serverless deployment gets shared,
 // cross-instance state with ONE option instead of hand-written adapters:
 //
@@ -84,10 +84,10 @@ class RedisCartStore implements CartStore {
   }
 }
 
-type OrderKind = "created" | "completed";
+type OrderKind = "created" | "completed" | "cart";
 
 class RedisOrderStore<T> implements OrderStore<T> {
-  // The `kind` distinguishes the two order slots (created vs completed) so their keys
+  // The `kind` distinguishes the order slots (created, completed, order→cart) so their keys
   // never collide under one namespace (U1).
   constructor(
     private readonly redis: RedisLike,
@@ -186,6 +186,7 @@ export function redisStorage(options: RedisStorageOptions): StorageProvider {
     createdOrderStore: new RedisOrderStore<Order>(redis, namespace, "created"),
     orderStore: new RedisOrderStore<CompletedOrderRecord>(redis, namespace, "completed"),
     verificationStore: new RedisVerificationStore(redis, namespace),
+    orderCartStore: new RedisOrderStore<string>(redis, namespace, "cart"),
   };
 }
 

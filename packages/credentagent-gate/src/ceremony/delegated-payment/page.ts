@@ -33,6 +33,9 @@ export interface DelegatedPageOptions {
   /** The order-derived progress rail HTML (from `checkoutRail`), built by the route which
    *  holds the full re-priced order. Absent ⇒ no rail (never a hardcoded one). */
   rail?: string;
+  /** Browser-visible path prefix (from `ctx.basePath`) — every URL this page fetches or links
+   *  carries it. Absent ⇒ "" (served at the root). */
+  basePath?: string;
 }
 
 export function renderDelegatedPage(opts: DelegatedPageOptions): string {
@@ -42,7 +45,8 @@ export function renderDelegatedPage(opts: DelegatedPageOptions): string {
   // percent-encoded here exactly as `qs` above does. Unencoded, a crafted
   // `?cart="><img src=x onerror=…>` would survive into the page as raw markup.
   // (A legitimate mandate is base64url, which encodeURIComponent leaves byte-identical.)
-  const returnUrl = opts.returnUrl ?? `/checkout?order=${encodeURIComponent(order)}${cart ? `&cart=${encodeURIComponent(cart)}` : ""}`;
+  const base = opts.basePath ?? "";
+  const returnUrl = opts.returnUrl ?? `${base}/checkout?order=${encodeURIComponent(order)}${cart ? `&cart=${encodeURIComponent(cart)}` : ""}`;
   // The shared order summary card (line items + bold Total) — same chrome as the hub.
   const summary = orderSummaryCard({
     lines: lines.map((l) => ({ name: l.name, quantity: l.quantity, lineTotal: l.lineTotal, currency: l.currency })),
@@ -97,7 +101,7 @@ ${pageHead(`Authorize payment · ${order}`)}
     go.disabled = true;
     out.textContent = "Preparing request\\u2026";
     try {
-      var res = await fetch("/credentagent/delegated/request?${qs}");
+      var res = await fetch(${JSON.stringify(`${base}/credentagent/delegated/request?${qs}`)});
       if (!res.ok) throw new Error("request failed (" + res.status + ")");
       var data = await res.json();
       var handoff = data.handoff || {};
@@ -131,7 +135,7 @@ ${pageHead(`Authorize payment · ${order}`)}
       // Complete: the browser sends back ONLY the sealed reference — never an approval.
       // The gate re-fetches the verified presentment, re-checks the amount + policy, and
       // settles server-side.
-      var res2 = await fetch("/credentagent/delegated/verify", {
+      var res2 = await fetch(${JSON.stringify(`${base}/credentagent/delegated/verify`)}, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ order: ORDER, cart: CART, referenceToken: data.referenceToken }),

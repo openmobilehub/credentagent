@@ -11,7 +11,7 @@ name: deploy-dev
 # tarballs into a copy of the quickstart, deploy THAT. `file:` links are deliberately
 # not used — the tarball path exercises the `files` allowlist and `exports` map.
 #
-# Requires the VERCEL_TOKEN secret (a token for the Vercel account that owns the
+# Requires the VERCEL_TOKEN secret (a token scoped to the Vercel team that owns the
 # credentagent-demo-dev project). Without it every step SKIPS (green, with a notice) —
 # the same pattern as agent-e2e — so this merges before the secret exists. The dev
 # project has its own GATE_SECRET and NO shared state with the prod demo.
@@ -31,7 +31,7 @@ concurrency:
 
 env:
   # Identifiers, not credentials: which Vercel team/project `vercel deploy` targets.
-  VERCEL_ORG_ID: team_hJvCfLus8Jc0Q77qB5bOi6gP # dfzuluagas-projects
+  VERCEL_ORG_ID: team_tgMygXtl9Q43sdc78ummCtqL # cbg6 ("CBG") — moved from dfzuluagas-projects 2026-09
   VERCEL_PROJECT_ID: prj_69vlbxYYn2NYwLFvcf1AiS0Lu7AD # credentagent-demo-dev
 
 jobs:
@@ -88,7 +88,16 @@ jobs:
         working-directory: ${{ runner.temp }}/dev-deploy
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-        run: npx vercel@latest deploy --prod --yes --token "$VERCEL_TOKEN"
+        # CREDENTAGENT_BUILD labels this deployment at GET /version (dev + commit), since the
+        # dev twin runs main's code under the last released version number.
+        # CREDENTAGENT_INSPECT_PRESENTATIONS=1 turns on inspectPresentations for the DEV demo only
+        # (the website's demo runs here): consent pages + the order proof receipt link the wallet's
+        # demo credential to Multipaz Tools. Prod stays off.
+        # PUBLIC_URL is where buyers reach this store: the credentagent.ai router serves it under
+        # /marketplace-dev (deploy/router/vercel.json), so its checkout and consent pages open on
+        # credentagent.ai, not *.vercel.app (#226). Prod follows once a release carries the path
+        # support — the published 0.5.0 pages still use root paths.
+        run: npx vercel@latest deploy --prod --yes --token "$VERCEL_TOKEN" --env CREDENTAGENT_BUILD="dev.${GITHUB_SHA::7}" --env CREDENTAGENT_INSPECT_PRESENTATIONS=1 --env PUBLIC_URL=https://credentagent.ai/marketplace-dev
 
       - name: Smoke the live dev endpoint
         if: steps.gate.outputs.configured == 'true'

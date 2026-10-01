@@ -31,10 +31,9 @@ const BASE = `http://localhost:${PORT}`;
 // as untrusted. The trust setup is an upgrade, never a prerequisite.
 const keyPath = join(HERE, "keys/reader-key.pem");
 const certPath = join(HERE, "certs/reader-cert.pem");
-const readerIdentity =
-  existsSync(keyPath) && existsSync(certPath)
-    ? { key: readFileSync(keyPath, "utf8"), cert: readFileSync(certPath, "utf8") }
-    : undefined;
+const hasKey = existsSync(keyPath);
+const hasCert = existsSync(certPath);
+const readerIdentity = hasKey && hasCert ? { key: readFileSync(keyPath, "utf8"), cert: readFileSync(certPath, "utf8") } : undefined;
 
 // The REAL storefront — catalog, cart/order stores, checkout page, place-order, cart
 // mandate, completion, MCP tools. We inject an in-memory created-order store so we can
@@ -82,7 +81,9 @@ console.log(`\nCredentAgent demo gate (real storefront) → ${BASE}`);
 console.log(
   readerIdentity
     ? `  reader identity : certs/reader-cert.pem  (SAN=localhost, on utopia.rical → verifier shows TRUSTED)`
-    : `  reader identity : none — self-signed per request. Ceremony still works; wallet shows the\n                    verifier as UNTRUSTED (red). Run ./gen-pki.sh + import utopia.rical to fix.`,
+    : hasCert
+      ? `  reader identity : none — certs/reader-cert.pem is here, but keys/reader-key.pem is NOT.\n                    A cert can't sign without its key, so the gate self-signs per request and the\n                    wallet shows the verifier as UNTRUSTED (red). The committed cert + utopia.rical\n                    are a reference pair; the key is gitignored and never shipped.\n                    To fix: ./gen-pki.sh, then re-mint the credentials and rebuild BOTH trust lists\n                    (gen-pki mints new roots, orphaning the shipped ones) and re-import on the phone.`
+      : `  reader identity : none — no demo PKI here. Self-signed per request; ceremony still works,\n                    wallet shows the verifier as UNTRUSTED (red). Run ./gen-pki.sh to mint one.`,
 );
 console.log(`  seeded order    : ORD-DEMO  (1× ${restricted.name}, age ${restricted.minimumAge ?? "n/a"}+)\n`);
 console.log(`Full checkout flow (age → pay → done) — one link:`);
