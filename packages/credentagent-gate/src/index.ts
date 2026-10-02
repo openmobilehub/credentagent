@@ -19,6 +19,10 @@ export type { ExpressApp } from "./client.js";
 // ── Config preflight (#25) — `credentagent.doctor()` validates a deployment's config in
 // one place and returns typed plain data `{ ok, findings: [{ level, code, message, fix }] }`.
 export type { DoctorReport, DoctorFinding, DoctorLevel } from "./doctor.js";
+// ── `inspectPresentations` — the `presentation` block a verify response carries when on.
+export type { InspectablePresentation } from "./ceremony/inspect.js";
+// ── The order proof receipt — what was proven for an order (`proofs` on the completed order).
+export type { ProofEntry, ProofRail } from "./ceremony/proofs.js";
 
 // ── Policy builders + extensibility ────────────────────────────────────────
 export { age, membership, payment, required, optional, defineCredential, dcql, gate, discount, authorize } from "./credentials.js";
@@ -45,9 +49,9 @@ export type { GrantAgeScope, AgeRestrictedItem } from "./grants-age.js";
 
 // ── Device-signed grants (spec 012, #144) — the wallet SIGNS the Intent Mandate first ──
 // Opt a grant into wallet signing with `grants.create({ …, signing: "device" })`: its
-// approveUrl serves the signing ceremony, and it only authorizes on a REAL mdoc DeviceAuth
-// signature over its exact bounds (trust_level "device-signed" — the signature is real; the
-// trust anchor is still a demo credential, #14). These exports are the building blocks + a
+// approveUrl serves the signing ceremony, and it only authorizes on a REAL holder signature
+// over its exact bounds — an SD-JWT VC Key Binding JWT carrying the AP2 terms (trust_level
+// "device-signed" — the signature is real; the trust anchor is still a demo credential, #14). These exports are the building blocks + a
 // SIMULATED wallet for testing the flow in-process (no phone), the way Stripe ships test cards.
 export { canonicalIntentBounds, boundsHash, deriveNonce } from "./ceremony/intent-sign/bounds.js";
 export type { IntentBoundsInput } from "./ceremony/intent-sign/bounds.js";

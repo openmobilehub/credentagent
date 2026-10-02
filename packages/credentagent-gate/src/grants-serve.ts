@@ -27,6 +27,7 @@ import { registerIntentSignRail } from "./ceremony/intent-sign/routes.js";
 import { renderIntentSignPage } from "./ceremony/intent-sign/page.js";
 import { registerGrantCredentialGate } from "./ceremony/grant-credential/routes.js";
 import { pageHead, brandHeader, progressRail, type RailStep } from "./ceremony/theme.js";
+import { basePathOf } from "./ceremony/origin.js";
 
 /** Structural Express app — the package stays dependency-free (mirrors orders-serve). */
 export interface GrantsApp {
@@ -112,7 +113,7 @@ const ageProved = (g: Grant, scope: GrantAgeScope) =>
  * against each purchase's OWN product at spend time, so an incomplete forecast can only fail to
  * offer this step — never let something through that wasn't proved for.
  */
-function ageCard(g: Grant, scope: GrantAgeScope, n: number): string {
+function ageCard(g: Grant, scope: GrantAgeScope, n: number, base: string): string {
   const minimumAge = scope.minimumAge;
   if (minimumAge == null) return "";
   const no = `<span class="step-no">${n}.</span>`;
@@ -140,7 +141,7 @@ function ageCard(g: Grant, scope: GrantAgeScope, n: number): string {
     <table style="margin-top:10px">
       ${rows}
     </table>${caveat}
-    <div style="margin-top:12px;"><a class="btn btn-primary" href="/credentagent/grants/${encodeURIComponent(g.id)}/age">Verify ${minimumAge}+ with your wallet</a></div>
+    <div style="margin-top:12px;"><a class="btn btn-primary" href="${base}/credentagent/grants/${encodeURIComponent(g.id)}/age">Verify ${minimumAge}+ with your wallet</a></div>
   </div>`;
 }
 
@@ -149,7 +150,7 @@ function ageCard(g: Grant, scope: GrantAgeScope, n: number): string {
  * age UNLOCKS items, this LOWERS the price of every purchase. Renders only when the host
  * configured a loyalty rate: no programme, no step.
  */
-function membershipCard(g: Grant, pct: number | undefined, n: number): string {
+function membershipCard(g: Grant, pct: number | undefined, n: number, base: string): string {
   if (pct == null) return "";
   const no = `<span class="step-no">${n}.</span>`;
   const proof = g.membershipProof;
@@ -161,7 +162,7 @@ function membershipCard(g: Grant, pct: number | undefined, n: number): string {
   }
   return `<div class="card">
     <div class="row-pending">${no} Take ${pct}% off every purchase your agent makes under this grant by presenting your membership. Optional — the grant works without it.</div>
-    <div style="margin-top:12px;"><a class="btn btn-secondary" href="/credentagent/grants/${encodeURIComponent(g.id)}/membership">Apply loyalty discount (${pct}% off)</a></div>
+    <div style="margin-top:12px;"><a class="btn btn-secondary" href="${base}/credentagent/grants/${encodeURIComponent(g.id)}/membership">Apply loyalty discount (${pct}% off)</a></div>
   </div>`;
 }
 
@@ -170,7 +171,7 @@ function membershipCard(g: Grant, pct: number | undefined, n: number): string {
  * `final` is what the last step is called — "Approve" for a page-mode tap, "Sign" for a
  * device-mode signature. A grant with a single step gets no rail: a one-dot stepper says nothing.
  */
-function stepsFor(g: Grant, loyaltyPct: number | undefined, final: string): { rail: string; cards: string; nextNo: number } {
+function stepsFor(g: Grant, loyaltyPct: number | undefined, final: string, base: string): { rail: string; cards: string; nextNo: number } {
   const scope = g.ageScope;
   const hasAge = scope.minimumAge != null;
   const steps: RailStep[] = [
@@ -182,13 +183,13 @@ function stepsFor(g: Grant, loyaltyPct: number | undefined, final: string): { ra
   const memberNo = loyaltyPct != null ? ageNo + 1 : ageNo;
   return {
     rail: steps.length > 1 ? progressRail(steps, steps.findIndex((s) => !s.done)) : "",
-    cards: `${ageCard(g, scope, ageNo)}\n  ${membershipCard(g, loyaltyPct, memberNo)}`,
+    cards: `${ageCard(g, scope, ageNo, base)}\n  ${membershipCard(g, loyaltyPct, memberNo, base)}`,
     nextNo: memberNo + 1,
   };
 }
 
 /** The page-mode decision card — always last, the way payment is last on the checkout hub. */
-function decisionCard(g: Grant, n: number): string {
+function decisionCard(g: Grant, n: number, base: string): string {
   const withheld = g.ageScope.minimumAge != null && !ageProved(g, g.ageScope);
   // Once age is on the table, "Approve" alone is ambiguous: the human is choosing between
   // approving WITH the restricted items and approving without them. Say which one this is.
@@ -196,7 +197,7 @@ function decisionCard(g: Grant, n: number): string {
   const lede = withheld
     ? `Your agent will be able to spend within these limits, but will be refused on the ${g.ageScope.minimumAge}+ items above.`
     : "Your agent can spend within these limits until the budget runs out, or until you revoke it.";
-  const action = (verb: string) => `/credentagent/grants/${encodeURIComponent(g.id)}/${verb}`;
+  const action = (verb: string) => `${base}/credentagent/grants/${encodeURIComponent(g.id)}/${verb}`;
   return `<div class="card">
     <p class="card-title"><span class="step-no">${n}.</span> Your decision</p>
     <p class="row-pending" style="margin:0 0 14px">${lede}</p>
@@ -224,6 +225,9 @@ export function serveGrants(app: GrantsApp, grants: Grants): void {
   registerGrantCredentialGate(app, grants);
 
   const branding = grants.railConfig.branding;
+  // Browser-visible path prefix: a walletOrigin with a path (https://shop.example/store) means a
+  // proxy mounts these routes under it, so every link, form action and redirect below carries it.
+  const base = basePathOf(grants.railConfig.walletOrigin);
   const notFound = () => shell("Spending grant", `${brandHeader({ h1: "Spending grant", tagline: "This link doesn't match a grant." }, branding)}
   <div class="card"><div class="row-pending">We don't recognise this grant. It may have been created by a different server, or the link may be incomplete.</div></div>
   ${trustLine()}`, branding);
@@ -249,16 +253,30 @@ export function serveGrants(app: GrantsApp, grants: Grants): void {
     // page, ABOVE the signature, because what the human proves there is part of what they sign
     // (the proofs are inside `canonicalIntentBounds` — #172).
     if (g.signing === "device") {
-      const { rail, cards } = stepsFor(g, loyaltyPct, "Sign");
+      const { rail, cards } = stepsFor(g, loyaltyPct, "Sign", base);
+      // What the signature will NOT cover, said before it is given (#172). The mandate omits any
+      // age-restricted product the sealed proof doesn't reach (`_allowedSkusFor`), so this page
+      // owes the human the same sentence the page-mode decision card gives them. When NOTHING is
+      // left to authorize, there is no mandate to mint at all and the age step stops being
+      // optional — signing is offered only once it can mean something.
+      const minimumAge = g.ageScope.minimumAge;
+      const proved = ageProved(g, g.ageScope);
+      const signable = grants._allowedSkusFor(g.id);
+      const withheld =
+        minimumAge != null && !proved
+          ? { minimumAge, blocking: signable !== null && signable.length === 0 }
+          : undefined;
       return res.status(200).type("html").send(
         renderIntentSignPage({
+          ...(withheld ? { withheld } : {}),
           grantId: g.id,
           merchant: g.merchant,
           budget: g.budget,
           perSpend: g.perSpend,
           ...(g.allow ? { allow: g.allow } : {}),
           ...(g.description ? { description: g.description } : {}),
-          returnUrl: `/credentagent/grants/${encodeURIComponent(g.id)}`,
+          returnUrl: `${base}/credentagent/grants/${encodeURIComponent(g.id)}`,
+          basePath: base,
           ...(rail ? { rail } : {}),
           ...(cards.trim() ? { steps: cards } : {}),
           ...(branding ? { branding } : {}),
@@ -266,7 +284,7 @@ export function serveGrants(app: GrantsApp, grants: Grants): void {
       );
     }
 
-    const { rail, cards, nextNo } = stepsFor(g, loyaltyPct, "Approve");
+    const { rail, cards, nextNo } = stepsFor(g, loyaltyPct, "Approve", base);
     res.status(200).type("html").send(
       shell(`Approve spending grant · ${g.id}`, `${brandHeader(
         // The page-mode heading is the one main's device-grant suite pins ("a page-mode grant's
@@ -278,7 +296,7 @@ export function serveGrants(app: GrantsApp, grants: Grants): void {
   ${limitsCard(g)}
   ${rail}
   ${cards}
-  ${decisionCard(g, nextNo)}
+  ${decisionCard(g, nextNo, base)}
   ${trustLine(g)}`, branding),
     );
   });
@@ -287,7 +305,7 @@ export function serveGrants(app: GrantsApp, grants: Grants): void {
     const known = await grants.retrieve(req.params.id);
     if (!known) return res.status(404).type("html").send(notFound());
     await fn(req.params.id); // a non-pending grant is a no-op (terminal states stay terminal)
-    res.redirect(303, `/credentagent/grants/${encodeURIComponent(req.params.id)}`);
+    res.redirect(303, `${base}/credentagent/grants/${encodeURIComponent(req.params.id)}`);
   };
   post("/credentagent/grants/:id/approve", act((id) => grants._authorize(id)));
   post("/credentagent/grants/:id/deny", act((id) => grants._deny(id)));

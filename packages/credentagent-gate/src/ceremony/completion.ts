@@ -15,6 +15,7 @@ import { refusal } from "./refusals.js";
 import { KeyedMutex } from "./keyed-mutex.js";
 import { preserveLineAttributes } from "./order-attributes.js";
 import { RESERVED_CREDENTIAL_IDS } from "../credentials.js";
+import type { ProofEntry } from "./proofs.js";
 
 // Per-order in-process serializer for completion (#103). The idempotency read at the top and
 // the settle + record write near the bottom are not atomic, so two CONCURRENT verifies for one
@@ -57,6 +58,9 @@ export interface CompletedRecord {
    *  omit this (their honesty level is the manifest's `presence-only-demo`). Never synthesized
    *  here — the gate only records a level it received. */
   trustLevel?: TrustLevel;
+  /** What was proven for this order — the credential proofs, then the payment's — each with
+   *  its own trust_level (the order proof receipt). Absent on records written before it. */
+  proofs?: ProofEntry[];
 }
 
 export interface CompletedOrderStore {
@@ -199,6 +203,10 @@ async function completeOrderLocked(input: CompletionInput, ctx: CompletionContex
   // says it was applied; a token merely claiming the discounted total reprices
   // higher and is refused.
   const verification = await ctx.verificationStore.read(input.order.id);
+  // The order proof receipt: every proof made for this order, carried onto the completed record
+  // (the verification record is cleared below). The payment rail's own proof goes last.
+  const proofs = [...(verification?.proofs ?? []), ...(input.proof ? [input.proof] : [])];
+  const proofField = proofs.length ? { proofs } : {};
   // A DELEGATED draw carries its own loyalty claim: the membership the human proved at approval
   // time, sealed into the intent (#172). It is read from the intent — never from a verification
   // record (a grant has none) and never from the caller — and the SEALED rate is what re-prices,
@@ -346,6 +354,7 @@ async function completeOrderLocked(input: CompletionInput, ctx: CompletionContex
       gates: input.gates,
       completedAt: new Date().toISOString(),
       delegationId: intent.intentId,
+      ...proofField,
     } as Parameters<typeof ctx.records.write>[0]);
     if (ctx.cart) await ctx.cart.clear();
     await ctx.verificationStore.clear(input.order.id);
@@ -392,6 +401,7 @@ async function completeOrderLocked(input: CompletionInput, ctx: CompletionContex
     completedAt: new Date().toISOString(),
     ...(settlement ? { settlement } : {}),
     ...(input.trustLevel ? { trustLevel: input.trustLevel } : {}),
+    ...proofField,
   });
   if (ctx.cart) await ctx.cart.clear();
   // Completed purchase: clear this order's age/loyalty verification.

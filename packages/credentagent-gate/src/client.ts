@@ -7,6 +7,7 @@ import type { Branding, Credential, CredentAgentOptions, GateOrder, ReaderIdenti
 import { resolveRequirements } from "./manifest.js";
 import { MemoryVerificationStore } from "./store.js";
 import { mountCeremony, type CeremonyApp, type CeremonySeams } from "./ceremony/mount.js";
+import { basePathOf } from "./ceremony/origin.js";
 import { Orders, MemoryOrderStore, type CreatedOrder, type CompletedOrder } from "./orders.js";
 import { serveOrders } from "./orders-serve.js";
 import { Webhooks } from "./webhooks.js";
@@ -44,6 +45,9 @@ export class CredentAgent {
   /** Host brand for the ceremony pages, threaded into every rail + the checkout page
    *  (undefined ⇒ the built-in look). Set once here; never brands the honesty footer. */
   readonly branding?: Branding;
+  /** Whether verify responses + consent pages expose the presented DeviceResponse for
+   *  inspection (`inspectPresentations`; default false). Threaded into every rail mount. */
+  readonly inspectPresentations: boolean;
   private readonly listeners = new Map<string, Set<(payload: { id: string }) => void>>();
   // True once the ceremony rails are wired onto a host app (so `/credentagent/*` routes
   // exist on this server). `requirements()` then emits approve links that resolve
@@ -120,6 +124,7 @@ export class CredentAgent {
     // Host brand for the ceremony pages — threaded into every mount path below. Kept raw;
     // theme.ts sanitizes each field at the one point it is interpolated into a page.
     if (opts.branding) this.branding = opts.branding;
+    this.inspectPresentations = opts.inspectPresentations === true;
     // Honesty / fail-fast: a reader cert whose SAN doesn't cover the origin host is
     // silently rejected by the wallet (origin binding, invariant 6). Warn now, at
     // construction, rather than let it surface as an opaque ceremony failure.
@@ -176,6 +181,7 @@ export class CredentAgent {
           credentialRegistry: this.registry,
           ...(this.readerIdentity ? { readerIdentity: this.readerIdentity } : {}),
           ...(this.branding ? { branding: this.branding } : {}),
+          ...(this.inspectPresentations ? { inspectPresentations: true } : {}),
           ...(opts.gateSecret ? { signingKey: opts.gateSecret } : {}),
         });
         this.ordersServed = true;
@@ -281,6 +287,14 @@ export class CredentAgent {
     return report;
   }
 
+  // A walletOrigin with a path (https://shop.example/store) means a proxy mounts the rails under
+  // it: hand the rails that prefix so their page URLs route back here. A bare origin passes
+  // nothing, so a host's own `basePath` seam (e.g. the storefront's, from its baseUrl) stands.
+  private basePathSeam(): { basePath?: string } {
+    const basePath = basePathOf(this.walletOrigin);
+    return basePath ? { basePath } : {};
+  }
+
   /**
    * Context 2 — wire the verification ceremony onto your Express app.
    *
@@ -297,7 +311,7 @@ export class CredentAgent {
    */
   mount(app: ExpressApp, ceremony?: MountCeremony): void {
     if (ceremony) {
-      mountCeremony(app as CeremonyApp, { ...ceremony, verificationStore: this.store, readerIdentity: this.readerIdentity, credentialRegistry: this.registry, orderPolicies: this.orderPolicies, ...(this.branding ? { branding: this.branding } : {}) });
+      mountCeremony(app as CeremonyApp, { ...this.basePathSeam(), ...ceremony, verificationStore: this.store, readerIdentity: this.readerIdentity, credentialRegistry: this.registry, orderPolicies: this.orderPolicies, ...(this.branding ? { branding: this.branding } : {}), ...(this.inspectPresentations ? { inspectPresentations: true } : {}) });
       this.mountedRoutes = true;
       if (ceremony.verifier) this.delegated = true;
       // #25 doctor(): a host owns the serving surface here; capture the signing key it supplied via
@@ -313,7 +327,7 @@ export class CredentAgent {
     // rails write (invariant 4). Falls back to CredentAgent's own store otherwise.
     const locals = (app.locals.credentagent ?? {}) as Partial<CeremonySeams>;
     if (locals.orderStore && locals.catalog && locals.completion) {
-      mountCeremony(app as CeremonyApp, { readerIdentity: this.readerIdentity, credentialRegistry: this.registry, orderPolicies: this.orderPolicies, ...(this.branding ? { branding: this.branding } : {}), ...(locals.verificationStore ? {} : { verificationStore: this.store }) });
+      mountCeremony(app as CeremonyApp, { ...this.basePathSeam(), readerIdentity: this.readerIdentity, credentialRegistry: this.registry, orderPolicies: this.orderPolicies, ...(this.branding ? { branding: this.branding } : {}), ...(this.inspectPresentations ? { inspectPresentations: true } : {}), ...(locals.verificationStore ? {} : { verificationStore: this.store }) });
       this.mountedRoutes = true;
       // The host published a verifier on app.locals (createStorefront({ verifier })): route the
       // manifest's gate/authorize links to the delegated ceremony (008).

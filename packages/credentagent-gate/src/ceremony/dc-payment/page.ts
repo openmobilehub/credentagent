@@ -16,7 +16,7 @@
 // control. Self-contained: takes the re-priced amount + lines, not a demo Order type.
 
 import type { Branding } from "../../types.js";
-import { pageHead, brandHeader, orderSummaryCard, trustFooter, settlingBar, completionHandoffBanner, railCompleteScript, refusalNotices } from "../theme.js";
+import { pageHead, brandHeader, orderSummaryCard, trustFooter, settlingBar, completionHandoffBanner, railCompleteScript, completedViewScript, refusalNotices, inspectLinkScript, recordLinkScript } from "../theme.js";
 
 export interface DcPaymentLine {
   name: string;
@@ -35,6 +35,9 @@ export interface DcPaymentPageArgs {
   /** Where to send the buyer after payment — the checkout hub, which then shows the
    *  paid confirmation. Defaults to this server's `/checkout?order=<id>`. */
   returnUrl?: string;
+  /** The store's order-status record for this order (from the host's `statusUrl` seam) — the
+   *  completed page links it as "Order record ›". Absent ⇒ no link. */
+  statusUrl?: string;
   /** statelessOrders: base64url cart mandate carried back to the store-less `/checkout`. */
   cart?: string;
   /** The order-derived progress rail HTML (from `checkoutRail`), built by the route which
@@ -42,6 +45,9 @@ export interface DcPaymentPageArgs {
   rail?: string;
   /** Host brand for this page (from `ctx.branding`). Absent ⇒ the built-in look. */
   branding?: Branding;
+  /** Browser-visible path prefix (from `ctx.basePath`) — every URL this page fetches or links
+   *  carries it. Absent ⇒ "" (served at the root). */
+  basePath?: string;
 }
 
 // The canonical disclosed instrument the instant-demo button presents — it goes
@@ -60,7 +66,8 @@ function money(amount: number, currency: string): string {
 
 export function renderDcPaymentPage(args: DcPaymentPageArgs): string {
   const { order, total, currency, lines } = args;
-  const returnUrl = args.returnUrl ?? `/checkout?order=${encodeURIComponent(order)}${args.cart ? `&cart=${args.cart}` : ""}`;
+  const base = args.basePath ?? "";
+  const returnUrl = args.returnUrl ?? `${base}/checkout?order=${encodeURIComponent(order)}${args.cart ? `&cart=${args.cart}` : ""}`;
   // The shared order summary card (line items + bold Total) — same chrome as the hub.
   const summary = orderSummaryCard({
     lines: lines.map((l) => ({ name: l.name, quantity: l.quantity, lineTotal: l.lineTotal, currency: l.currency })),
@@ -116,6 +123,8 @@ ${pageHead(`Authorize payment (cross-device) · ${order}`, extraCss, args.brandi
     // Escape any server-returned value before it goes into innerHTML (txId, accountId,
     // the settlementError message): they're built server-side but never trusted raw.
     const esc = (s) => String(s).replace(/[&<>"']/g, (c) => "&#" + c.charCodeAt(0) + ";");
+    ${inspectLinkScript()}
+    ${recordLinkScript(args.statusUrl)}
 
     // Pre-fetch the REAL signed OpenID4VP request so navigator.credentials.get() can be
     // called SYNCHRONOUSLY inside the tap. iOS WebKit drops the transient user
@@ -125,7 +134,7 @@ ${pageHead(`Authorize payment (cross-device) · ${order}`, extraCss, args.brandi
     let reqData = null;
     function prefetch() {
       reqData = null;
-      fetch("/credentagent/dc-payment/request" + location.search).then((r) => r.json()).then((d) => { reqData = d; }).catch(() => {});
+      fetch(${JSON.stringify(`${base}/credentagent/dc-payment/request`)} + location.search).then((r) => r.json()).then((d) => { reqData = d; }).catch(() => {});
     }
 
     if (!("credentials" in navigator) || !window.DigitalCredential) {
@@ -151,13 +160,16 @@ ${pageHead(`Authorize payment (cross-device) · ${order}`, extraCss, args.brandi
           if (typeof data === "string") { try { data = JSON.parse(data); } catch (e) {} }
           step("→ verify · Settling via x402 on Hedera testnet (if configured)… can take ~10s");
           settling.classList.add("on");
-          const out = await fetch("/credentagent/dc-payment/verify", {
+          const out = await fetch(${JSON.stringify(`${base}/credentagent/dc-payment/verify`)}, {
             method: "POST", headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ order: ORDER, cart: CART, readerContextToken: rd.readerContextToken, result: { protocol: (result && result.protocol) || null, data } }),
           }).then((r) => r.json()).finally(() => settling.classList.remove("on"));
           if (!out.mandate) throw new Error(out.error || "authorization failed");
           step("✓ presentation verified · mandate built (" + out.mandate.trust_level + ")", "ok");
           renderReceipt(out);
+          // Into #receipt, not #log: the completed view hides the log. A completed order shows the
+          // whole-order block instead (every credential, not only this payment's).
+          if (!out.proofsHtml) showInspectLink(out.presentation, "receipt");
           // Configured-but-failed settle: authorized, not settled — let the buyer retry.
           if (out.settlementError) { step("✗ settlement failed — authorized, not settled (retry below)", "err"); goDc.disabled = false; prefetch(); }
         })
@@ -173,7 +185,7 @@ ${pageHead(`Authorize payment (cross-device) · ${order}`, extraCss, args.brandi
       try {
         step("→ verify (presence-only, amount-bound) · Settling via x402 on Hedera testnet (if configured)… can take ~10s");
         settling.classList.add("on");
-        const out = await fetch("/credentagent/dc-payment/verify", {
+        const out = await fetch(${JSON.stringify(`${base}/credentagent/dc-payment/verify`)}, {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ order: ORDER, cart: CART, amount: AMOUNT, claims: DEMO_CLAIMS }),
         }).then((r) => r.json()).finally(() => settling.classList.remove("on"));
@@ -231,6 +243,11 @@ ${pageHead(`Authorize payment (cross-device) · ${order}`, extraCss, args.brandi
         goDc.disabled = true;
         btn.textContent = "Authorized ✓";
         ${railCompleteScript()}
+        ${completedViewScript()}
+        // "What was proven": every credential of the order with its Multipaz Tools links, then Check
+        // the signatures + Order record — server-rendered and escaped by the gate (proofLinksHtml).
+        if (typeof out.proofsHtml === "string" && out.proofsHtml) el.insertAdjacentHTML("beforeend", out.proofsHtml);
+        else showRecordLink();
       } else if (!out.settlementError) {
         // Recoverable by definition: the buyer proves what's missing (age, a credential)
         // and authorizes again. Leaving both buttons dead was the other half of the dead end.

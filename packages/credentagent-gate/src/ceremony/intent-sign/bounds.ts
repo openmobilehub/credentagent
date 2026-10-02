@@ -91,11 +91,10 @@ export function boundsHash(input: IntentBoundsInput): string {
 
 /**
  * The OpenID4VP nonce, bound to the bounds: sha256( challenge ‖ boundsHash ),
- * base64url. The wallet's mdoc DeviceAuth signature covers the session transcript
- * that carries this nonce (deviceAuth.ts), so the device signature cryptographically
- * covers the exact bounds — the same trick the dc-payment rail uses for amounts.
- * Deterministic in its two inputs, so /request (which knows the challenge) and
- * /verify (which re-opens it) derive the identical nonce.
+ * base64url. The wallet's Key Binding JWT names this nonce, so the holder's signature
+ * covers the exact bounds it was derived from. Deterministic in its two inputs, so
+ * /request (which knows the challenge) and /verify (which re-opens it) derive the
+ * identical nonce.
  */
 export function deriveNonce(challengeB64url: string, boundsHashB64url: string): string {
   const challenge = Buffer.from(challengeB64url, "base64url");

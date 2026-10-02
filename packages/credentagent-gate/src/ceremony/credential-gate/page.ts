@@ -13,7 +13,7 @@
 // states trust_level "presence-only-demo" (CT11 / Principle VII / FR-011): the wire
 // crypto is real; the issuer trust anchor is not — never a real safety control.
 import type { Branding } from "../../types.js";
-import { pageHead, brandHeader, trustFooter } from "../theme.js";
+import { pageHead, brandHeader, trustFooter, inspectLinkScript } from "../theme.js";
 
 export interface CredentialPageArgs {
   /** `"age"` / `"membership"` (built-ins) OR a custom credential id (007). */
@@ -56,6 +56,9 @@ export interface CredentialPageArgs {
   rail?: string;
   /** Host brand for this page (from `ctx.branding`). Absent ⇒ the built-in look. */
   branding?: Branding;
+  /** Browser-visible path prefix (from `ctx.basePath`) — every URL this page fetches or links
+   *  carries it. Absent ⇒ "" (served at the root). */
+  basePath?: string;
   /**
    * Where this page's two buttons POST/GET. Defaults to the order-scoped credential rail
    * (`/credentagent/credential/{request,verify}`). The grant-age rail (#172) points them at its
@@ -105,7 +108,8 @@ export function renderCredentialPage(args: CredentialPageArgs): string {
       ? { membership_number: "DEMO-MEMBER-0001" }
       : (args.demoClaims ?? {});
   const totalLine = args.total != null ? `<p class="small amount">Order ${escapeHtml(args.order)} · ${escapeHtml(args.currency ?? "USD")} ${args.total}</p>` : "";
-  const returnUrl = args.returnUrl ?? `/checkout?order=${encodeURIComponent(args.order)}${args.cart ? `&cart=${args.cart}` : ""}`;
+  const base = args.basePath ?? "";
+  const returnUrl = args.returnUrl ?? `${base}/checkout?order=${encodeURIComponent(args.order)}${args.cart ? `&cart=${args.cart}` : ""}`;
   // Identity-first tagline + the order-derived progress rail (built by the route via
   // checkoutRail) with THIS gate marked current. It lists only the gates the order
   // actually has — never a hardcoded Age · Membership · Pay. Absent ⇒ no rail.
@@ -147,17 +151,21 @@ ${pageHead(title, extraCss, args.branding)}
     // the coherent unsupported-browser guidance below so we never point at a disabled button (#131).
     const DEMO_AVAILABLE = ${demoAvailable};
     const RETURN_URL = ${JSON.stringify(returnUrl)};
-    const REQUEST_URL = ${JSON.stringify(args.endpoints?.request ?? "/credentagent/credential/request")};
-    const VERIFY_URL = ${JSON.stringify(args.endpoints?.verify ?? "/credentagent/credential/verify")};
+    const REQUEST_URL = ${JSON.stringify(args.endpoints?.request ?? `${base}/credentagent/credential/request`)};
+    const VERIFY_URL = ${JSON.stringify(args.endpoints?.verify ?? `${base}/credentagent/credential/verify`)};
     const log = document.getElementById("log");
     const goDc = document.getElementById("go-dc");
     const go = document.getElementById("go");
     const doneEl = document.getElementById("done");
     const step = (t, c = "") => { const d = document.createElement("div"); d.className = "step " + c; d.textContent = t; log.appendChild(d); };
     function notice(html) { const d = document.createElement("div"); d.className = "notice"; d.innerHTML = html; log.appendChild(d); }
-    function done() {
+    ${inspectLinkScript()}
+    function done(stay) {
       goDc.disabled = true; go.disabled = true;
       doneEl.style.display = "block";
+      // An "Inspect this presentation" link is showing (inspectPresentations): stay so the
+      // buyer can open it — the banner's "continue now ›" link is the way on.
+      if (stay) { doneEl.firstChild.textContent = "✓ Done — "; return; }
       // Return to the checkout hub so the next gate is one tap away (no manual
       // browser-back). The hub re-reads verification state and shows this gate ✓.
       setTimeout(() => { window.location.assign(RETURN_URL); }, 650);
@@ -213,9 +221,11 @@ ${pageHead(title, extraCss, args.branding)}
             method: "POST", headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ order: ORDER, cart: CART, cred: CRED, readerContextToken: rd.readerContextToken, mdocContextToken: rd.mdocContextToken, result: { protocol: (result && result.protocol) || null, data } }),
           }).then((r) => r.json());
+          // Shown for a refused proof too — that's when it's most worth a look.
+          showInspectLink(out.presentation);
           if (!out.verified) throw new Error(out.error || "not verified");
           step("✓ verified (" + out.trust_level + ")", "ok");
-          done();
+          done(!!out.presentation);
         })
         .catch((err) => {
           step("✗ " + ((err && err.message) || String(err)), "err");

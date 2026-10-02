@@ -20,6 +20,7 @@
 
 import type { Branding } from "../types.js";
 import type { CompletionRefusalReason } from "./types.js";
+import { INSPECTOR_URL, VERIFIER_URL, X509_URL } from "./inspect.js";
 
 function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -213,12 +214,44 @@ const DESIGN_CSS = `
   .complete-banner {
     background: var(--accent); color: #fff; border-radius: 14px; padding: 22px 18px 20px;
     text-align: center; margin-bottom: 14px; box-shadow: var(--shadow);
+    position: relative; overflow: hidden;
+  }
+  /* The light streak that sweeps left → right as the banner arrives (completedViewScript). */
+  .complete-banner .whoosh {
+    position: absolute; top: 0; left: 0; width: 35%; height: 100%; pointer-events: none;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,.45), transparent);
   }
   .complete-banner .big { font-size: 1.35rem; font-weight: 800; line-height: 1.2; }
   .complete-banner .sub { font-weight: 500; font-size: .92rem; opacity: .97; margin-top: 8px; line-height: 1.5; }
   .complete-banner .sub strong { font-weight: 800; }
   .complete-banner .ret { display: inline-block; margin-top: 12px; font-size: .82rem; opacity: .92; }
   .complete-banner a { color: #fff; text-decoration: underline; }
+  /* A real, high-contrast button (white on the accent banner) — the one action left. */
+  .complete-banner .close-btn {
+    display: block; width: 100%; margin-top: 16px; padding: 14px 18px; border: 0; border-radius: 12px;
+    background: #fff; color: var(--accent); font: inherit; font-weight: 800; font-size: 1.05rem;
+    cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,.15);
+  }
+  /* Fallback (the browser refused window.close()): no longer an action, just an
+     instruction — an outlined note, so it stops inviting another tap. */
+  .complete-banner .close-btn:disabled {
+    cursor: default; box-shadow: none; background: transparent; color: #fff;
+    outline: 2px solid rgba(255,255,255,.85); outline-offset: -2px;
+  }
+
+  /* The finished page (body.completed, set by completedViewScript): the handoff banner
+     leads at the top, the now-pointless pay controls go away, and the technical receipt
+     folds into "Payment details" — so "you're done, close this window" is the first and
+     loudest thing on screen instead of a banner below the fold. */
+  body.completed .wrap > .head,
+  body.completed .card .lede,
+  body.completed .card .btn,
+  body.completed .card .toggle,
+  body.completed #log,
+  body.completed .settling-bar { display: none !important; }
+  body.completed #receipt { margin-top: 0 !important; }
+  body.completed .receipt-details summary { cursor: pointer; font-size: .85rem; font-weight: 600; color: var(--muted); }
+  body.completed .receipt-details[open] summary { margin-bottom: 8px; }
 
   /* Indeterminate settling bar — shown while x402 settles on-chain (~10s). A teal
      sliver slides across a hairline track so the buyer sees the wait is live work,
@@ -321,7 +354,50 @@ export function completionHandoffBanner(returnUrl?: string): string {
   const ret = returnUrl
     ? `<a class="ret" href="${escapeHtml(returnUrl)}">Staying in the browser? Return to checkout ›</a>`
     : "";
-  return `<div class="complete-banner"><div class="big">✓ Order complete</div><div class="sub">You can <strong>close this window</strong> and continue in your agent — it has your order and will pick up from here.</div>${ret}</div>`;
+  return `<div class="complete-banner"><div class="big">✓ Order complete</div><div class="sub">Your agent has your order and will pick up from here. You can close this window and continue in your agent.</div>${closeWindowButton()}${ret ? `<div>${ret}</div>` : ""}</div>`;
+}
+
+/**
+ * The "Close this window" button on the completion banners. It tries `window.close()`;
+ * browsers only honour that for windows a script opened, so if the page is still here a
+ * moment later the button turns into a plain instruction instead of silently doing nothing.
+ */
+export function closeWindowButton(): string {
+  return `<button type="button" class="close-btn" onclick="var b=this;window.close();setTimeout(function(){b.textContent='Close this tab to return to your agent';b.disabled=true;},300)">Close this window</button>`;
+}
+
+/**
+ * Client-side statement (embed inside a pay rail's completion handler, after the receipt
+ * is rendered into `#receipt`): turn the page into a finished screen. It lifts the
+ * `.complete-banner` to the top of the page (right under the brand header), hides the pay
+ * controls via `body.completed`, folds the rest of the receipt (mandate id, gates,
+ * settlement proof) into a collapsed "Payment details", and scrolls to the top — so on a
+ * phone the buyer sees "close this window" first, not a disabled button above the fold.
+ */
+export function completedViewScript(): string {
+  return `(function(){document.body.classList.add("completed");var b=document.querySelector("#receipt .complete-banner");var w=document.querySelector(".wrap");if(b&&w){var h=w.querySelector(".head")||w.querySelector(".brand");if(h)h.insertAdjacentElement("afterend",b);else w.prepend(b);}var r=document.getElementById("receipt");if(r&&r.firstChild){var d=document.createElement("details");d.className="receipt-details";var s=document.createElement("summary");s.textContent="Payment details";d.appendChild(s);while(r.firstChild)d.appendChild(r.firstChild);r.appendChild(d);}window.scrollTo(0,0);if(b)requestAnimationFrame(function(){${entranceScript()}});})();`;
+}
+
+/**
+ * Client-side statement: the banner's entrance (the variable `b` in `completedViewScript`).
+ * A light streak whooshes across the banner left → right, "✓ Order complete" is revealed
+ * left → right right behind it, the sub-text and Close button fade up just after, and the
+ * confetti fires as the headline lands — all in under a second. Skipped entirely under
+ * `prefers-reduced-motion` (the banner then simply appears).
+ */
+function entranceScript(): string {
+  return `if(!b.animate||matchMedia("(prefers-reduced-motion: reduce)").matches)return;var big=b.querySelector(".big");var s=document.createElement("span");s.className="whoosh";b.appendChild(s);s.animate([{transform:"translateX(-120%) skewX(-20deg)",opacity:0},{opacity:1,offset:0.2},{transform:"translateX(320%) skewX(-20deg)",opacity:0}],{duration:650,easing:"cubic-bezier(.3,.7,.3,1)",fill:"forwards"}).onfinish=function(){s.remove();};if(big)big.animate([{clipPath:"inset(0 100% 0 0)",transform:"translateX(-14px)",opacity:0.4},{clipPath:"inset(0 0 0 0)",transform:"translateX(0)",opacity:1}],{duration:520,delay:60,easing:"cubic-bezier(.2,.8,.2,1)",fill:"backwards"});[].forEach.call(b.querySelectorAll(".sub,.close-btn,.ret"),function(el,i){el.animate([{opacity:0,transform:"translateY(6px)"},{opacity:1,transform:"none"}],{duration:320,delay:420+i*70,easing:"ease-out",fill:"backwards"});});setTimeout(function(){${confettiScript()}},380);`;
+}
+
+/**
+ * Client-side statement: a short, subtle confetti burst from the `.complete-banner` (the
+ * variable `b` in `completedViewScript`) — ~40 small pieces that pop up, drift down and
+ * fade out in under two seconds, then remove themselves. It only runs at the live moment
+ * of completion (never when revisiting a paid order), is skipped under
+ * `prefers-reduced-motion`, and uses the Web Animations API — no library, no CSS keyframes.
+ */
+function confettiScript(): string {
+  return `if(!b.animate||matchMedia("(prefers-reduced-motion: reduce)").matches)return;var R=b.getBoundingClientRect();var acc=getComputedStyle(document.documentElement).getPropertyValue("--accent").trim()||"#0f8a7e";var C=[acc,"#f5c451","#ff8fa3","#7dd3fc","#a7f3d0"];for(var i=0;i<40;i++){var p=document.createElement("i");var w=4+Math.random()*4;p.style.cssText="position:fixed;z-index:9999;pointer-events:none;border-radius:1px;width:"+w+"px;height:"+(w*1.6)+"px;left:"+(R.left+R.width*(0.15+Math.random()*0.7))+"px;top:"+(R.top+24)+"px;background:"+C[i%C.length];document.body.appendChild(p);var dx=(Math.random()-0.5)*180,up=-(50+Math.random()*70),down=160+Math.random()*160,rot=(Math.random()-0.5)*720;p.animate([{transform:"translate(0,0) rotate(0)",opacity:0.95},{transform:"translate("+dx*0.6+"px,"+up+"px) rotate("+rot*0.4+"deg)",opacity:0.95,offset:0.3},{transform:"translate("+dx+"px,"+down+"px) rotate("+rot+"deg)",opacity:0}],{duration:1400+Math.random()*700,delay:Math.random()*150,easing:"cubic-bezier(.2,.6,.4,1)",fill:"forwards"}).onfinish=(function(el){return function(){el.remove();};})(p);}`;
 }
 
 /**
@@ -484,6 +560,64 @@ export function checkoutRail(
  */
 export function railCompleteScript(): string {
   return `(function(){var s=document.querySelector(".rail .rail-step.current");if(s){s.classList.remove("current");s.classList.add("done");var d=s.querySelector(".rail-dot");if(d)d.textContent="✓";}})();`;
+}
+
+/**
+ * Client-side declaration: `showInspectLink(presentation, containerId = "log")` — when a
+ * verify response carries `presentation` (the host set `inspectPresentations`), append an
+ * "Inspect this presentation" link that opens the wallet's DeviceResponse in Multipaz
+ * Tools, with the honest note that this gate does not check the issuer signature. A no-op
+ * when `presentation` is absent (the default), so pages call it unconditionally. Only a
+ * tools.multipaz.org link is ever rendered, and it is built with DOM APIs (no innerHTML).
+ */
+export function inspectLinkScript(): string {
+  // Three Multipaz Tools links, each opening in a new tab: the credential itself (decoded), the
+  // certificate that signed it (only when the credential carries one), and the Multipaz verifier
+  // for an independent signature check. Only tools.multipaz.org links ever render.
+  return `function showInspectLink(p,id){if(!p||typeof p.inspectUrl!=="string"||p.inspectUrl.indexOf("${INSPECTOR_URL}#")!==0)return;var c=document.getElementById(id||"log")||document.body;var d=document.createElement("div");d.className="inspect";d.style.cssText="margin-top:12px;padding:10px 12px;border:1px solid var(--hairline);border-radius:10px";function link(href,label,note){var a=document.createElement("a");a.href=href;a.target="_blank";a.rel="noopener noreferrer";a.style.fontWeight="600";a.style.display="inline-block";a.style.marginTop="6px";a.textContent=label;var n=document.createElement("div");n.className="small";n.textContent=note;d.appendChild(a);d.appendChild(n);}link(p.inspectUrl,"Inspect this presentation ›","The ISO mdoc credential your wallet sent, decoded in your browser by Multipaz Tools (nothing is uploaded).");if(typeof p.issuerCertUrl==="string"&&p.issuerCertUrl.indexOf("${X509_URL}#")===0)link(p.issuerCertUrl,"Issuer certificate ›","Who signed this credential — the certificate it carries, in the Multipaz X.509 viewer.");link("${VERIFIER_URL}","Check the signatures ›","The Multipaz verifier asks your wallet directly and checks the issuer and device signatures itself.");var t=document.createElement("div");t.className="small";t.style.marginTop="8px";t.textContent="This gate checks what was disclosed and that it answers this request; it does not check the issuer signature (presence-only-demo).";d.appendChild(t);c.appendChild(d);}`;
+}
+
+/**
+ * Client-side declaration: `showRecordLink()` — once the order completes, append an "Order record ›"
+ * link to `#receipt` that opens the store's own order-status JSON (the completed order, with what was
+ * proven for it). `statusUrl` comes from the host's `statusUrl` seam; only a root-relative path or an
+ * https URL is linked, anything else (or absent) makes this a no-op. Built with DOM APIs (no innerHTML).
+ */
+export function recordLinkScript(statusUrl: string | undefined): string {
+  const safe = typeof statusUrl === "string" && (/^\/(?!\/)/.test(statusUrl) || /^https:\/\//i.test(statusUrl));
+  if (!safe) return "function showRecordLink(){}";
+  return `function showRecordLink(){if(document.getElementById("record-link"))return;var c=document.getElementById("receipt")||document.body;var d=document.createElement("div");d.id="record-link";d.className="inspect";d.style.cssText="margin-top:12px;padding:10px 12px;border:1px solid var(--hairline);border-radius:10px";var a=document.createElement("a");a.href=${JSON.stringify(statusUrl).replace(/</g, "\\u003c")};a.target="_blank";a.rel="noopener noreferrer";a.style.fontWeight="600";a.textContent="Order record ›";var n=document.createElement("div");n.className="small";n.textContent="The store's order-status record (JSON): the completed order and what was proven for it, each with its trust level.";d.appendChild(a);d.appendChild(n);c.appendChild(d);}`;
+}
+
+/**
+ * Server-rendered "What was proven" block for a finished order: one line per proof (gate · trust
+ * level, or "instant demo"), with the Multipaz Tools links a wallet proof carries (Inspect this
+ * presentation, Issuer certificate), one "Check the signatures" link to the Multipaz verifier when
+ * any wallet proof is shown, and "Order record ›" to the store's order-status record. Only
+ * tools.multipaz.org URLs and a root-relative / https record URL are ever linked; labels are
+ * escaped. Empty when there is nothing to show.
+ */
+export function proofLinksHtml(
+  proofs: readonly { gate: string; rail: string; trust_level: string; presentation?: { inspectUrl?: string; issuerCertUrl?: string } }[] | undefined,
+  statusUrl: string | undefined,
+): string {
+  const link = (href: string, label: string) => `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${label}</a>`;
+  const record = typeof statusUrl === "string" && (/^\/(?!\/)/.test(statusUrl) || /^https:\/\//i.test(statusUrl)) ? statusUrl : null;
+  let anyWallet = false;
+  const rows = (proofs ?? []).map((p) => {
+    const inspect = p.presentation?.inspectUrl?.startsWith(`${INSPECTOR_URL}#`) ? p.presentation.inspectUrl : null;
+    const cert = p.presentation?.issuerCertUrl?.startsWith(`${X509_URL}#`) ? p.presentation.issuerCertUrl : null;
+    if (inspect) anyWallet = true;
+    const level = p.rail === "instant-demo" ? "instant demo" : escapeHtml(p.trust_level);
+    const links = [inspect && link(inspect, "Inspect ›"), cert && link(cert, "Issuer certificate ›")].filter(Boolean).join(" · ");
+    return `<div class="small" style="margin:4px 0;">✓ <b>${escapeHtml(p.gate)}</b> · ${level}${links ? ` · ${links}` : ""}</div>`;
+  });
+  if (!rows.length && !record) return "";
+  const tools = [anyWallet && link(VERIFIER_URL, "Check the signatures ›"), record && link(record, "Order record ›")].filter(Boolean).join(" · ");
+  const note = anyWallet
+    ? `<div class="small" style="margin-top:6px;">The links open Multipaz Tools, which decodes the credential in your browser. This gate checks what was disclosed and that it answers this request; it does not check the issuer signature (presence-only-demo).</div>`
+    : "";
+  return `<div class="proofs" style="margin-top:12px;padding:10px 12px;border:1px solid var(--hairline);border-radius:10px;">${rows.length ? `<div style="font-weight:600;">What was proven</div>${rows.join("")}` : ""}${tools ? `<div class="small" style="margin-top:6px;">${tools}</div>` : ""}${note}</div>`;
 }
 
 // ── Trust footer ────────────────────────────────────────────────────────────

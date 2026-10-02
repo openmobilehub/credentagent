@@ -46,12 +46,16 @@ export interface DcqlQuery {
  * manifest and the envelope both carry this so the limitation is stated in the
  * type, not buried in prose: it's a flow demo, not a real safety control yet.
  *
- * `"device-signed"` (spec 012) sits BETWEEN the two: the wallet's mdoc DeviceAuth
- * signature IS verified (real holder-of-key binding over the exact grant bounds),
- * but the device key rides in a self-minted demo credential with no issuer/VICAL
- * anchor (that is #14). So it is stronger than presence-only (the signature is real)
- * yet still short of `"issuer-verified"` (the anchor is not) — a self-crafted device
- * key would pass. The gate reports it for in-gate verification and NEVER claims
+ * `"device-signed"` sits BETWEEN the two: the HOLDER's signature IS verified. The
+ * wallet returns an SD-JWT VC presentation whose Key Binding JWT carries the terms,
+ * and the gate checks that key binding against the key the credential commits to in
+ * `cnf`, checks the `sd_hash` that binds it to the disclosures presented, checks each
+ * revealed claim against the issuer-signed `_sd` digests, and rebuilds the terms from
+ * its own record to require the wallet signed those exact bytes. What is NOT checked
+ * is the anchor: the credential is self-minted with no issuer trust (that is #14). So
+ * it is stronger than presence-only (the signature is real) yet still short of
+ * `"issuer-verified"` (the anchor is not) — a self-crafted credential would pass.
+ * The gate reports it for in-gate verification and NEVER claims
  * `"issuer-verified"` itself; only an external verifier may report that (relayed
  * verbatim through the delegated seam).
  */
@@ -182,6 +186,9 @@ export interface VerificationRecord {
    * reads `verifiedGates` — a silent un-enforcement. One representation wins.)
    */
   verifiedGates?: Record<string, true>;
+  /** What was proven for THIS order so far (the credential rail) — copied onto the completed
+   *  record by `completeOrder`, so each proof outlives this record (the order proof receipt). */
+  proofs?: import("./ceremony/proofs.js").ProofEntry[];
 }
 
 export interface VerificationStore {
@@ -250,6 +257,11 @@ export interface CredentAgentOptions {
    * Optional — defaults to `http://localhost:<PORT|3000>` so zero-config local
    * dev works. Warns (never throws) if it's not absolute, or if it resolves to
    * localhost in production. Set it to your public origin for any deployment.
+   *
+   * Behind a proxy that serves your app under a path (e.g. `https://shop.example/store/*`
+   * forwarded to your server's `/*`), include the path: `https://shop.example/store`. Every
+   * approve link, page fetch and redirect then carries `/store`. The wallet still binds to
+   * the origin alone (`https://shop.example`).
    */
   walletOrigin?: string;
   /**
@@ -258,6 +270,21 @@ export interface CredentAgentOptions {
    * {@link Branding}). Omit for the built-in look. Never overrides the honesty trust footer.
    */
   branding?: Branding;
+  /**
+   * Let the buyer (or you, while developing) inspect the credential their wallet actually
+   * presented. When `true`, a credential / dc-payment verify response also carries
+   * `presentation: { format: "mso_mdoc", deviceResponse, inspectUrl }` — the decrypted
+   * ISO 18013-5 DeviceResponse (base64url) and a link that opens it in Multipaz Tools'
+   * viewer (tools.multipaz.org, which decodes it in the browser; the payload rides in the
+   * URL #fragment, which is never sent to a server) — and the consent page shows an
+   * "Inspect this presentation" link. A refused proof is returned too.
+   *
+   * Default `false`: a DeviceResponse from a real ID can hold personal data (the disclosed
+   * claims, the issuer chain, a device public key). It only ever goes back to the browser
+   * that presented it — it is never stored. This verifies nothing new: `trust_level` is
+   * unchanged, and the page says the gate does not check the issuer signature.
+   */
+  inspectPresentations?: boolean;
   /** Per-order verification state; default in-memory, pluggable (Redis). */
   store?: VerificationStore;
   /**

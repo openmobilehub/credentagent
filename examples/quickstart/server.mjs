@@ -29,7 +29,9 @@ if (deployed && !(kv.url && kv.token) && process.env.ALLOW_MEMORY_STORAGE !== "1
       "Running deployed-mode semantics in ONE process (e.g. `npm run smoke`)? Set ALLOW_MEMORY_STORAGE=1.",
   );
 const origin = process.env.VERCEL_PROJECT_PRODUCTION_URL; // set by Vercel at runtime
-const deployedOrigin = origin && `https://${origin}`;
+// PUBLIC_URL wins when set: the address buyers reach this store at, path included when a proxy
+// serves it under one (https://credentagent.ai/marketplace → checkout at …/marketplace/checkout).
+const deployedOrigin = process.env.PUBLIC_URL?.replace(/\/+$/, "") || (origin && `https://${origin}`);
 const port = Number(process.env.PORT ?? 3005);
 // Grant approve links are minted from walletOrigin at creation time, so locally it MUST
 // carry the same port `store.listen` binds — the gate's default (localhost:3000) would 404.
@@ -52,7 +54,15 @@ const readerIdentity =
   process.env.CREDENTAGENT_READER_KEY && process.env.CREDENTAGENT_READER_CERT
     ? { key: process.env.CREDENTAGENT_READER_KEY, cert: process.env.CREDENTAGENT_READER_CERT }
     : undefined;
-const credentagent = new CredentAgent({ walletOrigin, catalog: grantCatalog, ...(readerIdentity ? { readerIdentity } : {}) });
+const credentagent = new CredentAgent({
+  walletOrigin,
+  catalog: grantCatalog,
+  ...(readerIdentity ? { readerIdentity } : {}),
+  // Demo/dev only: hand the wallet's credential back for inspection ("Inspect this presentation"
+  // + the order proof receipt). A real ID's credential can hold personal data — never enable it
+  // for real users. The dev demo (deploy-dev.yml) sets CREDENTAGENT_INSPECT_PRESENTATIONS=1.
+  inspectPresentations: process.env.CREDENTAGENT_INSPECT_PRESENTATIONS === "1",
+});
 
 const store = createStorefront({
   signingKey: process.env.GATE_SECRET,

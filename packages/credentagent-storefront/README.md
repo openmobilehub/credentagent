@@ -66,8 +66,8 @@ false. Without `store.gate(...)` the storefront is ungated: a plain checkout lin
 `createStorefront()` defaults to **in-memory** stores — perfect for local dev and the quickstart
 above. A real deployment runs on **multiple instances** (serverless / Vercel), where a cart added on
 one instance is invisible to the checkout that lands on another, so production needs **shared
-persistence**. Pass a `storage` provider and all four stores (cart, created-order, completed-order,
-verification) are backed by it — no hand-written adapters:
+persistence**. Pass a `storage` provider and every store (cart, created-order, completed-order,
+verification, and which cart each order came from) is backed by it — no hand-written adapters:
 
 ```ts
 import { createStorefront } from "@openmobilehub/credentagent-storefront/server";
@@ -363,7 +363,10 @@ the catalog; unknown ids are collected (`unknownIds`), not thrown.
 
 `createStorefront()` accepts `{ catalog, reviews, baseUrl, cartStore, orderStore, createdOrderStore,
 verificationStore, storage, signingKey, allowEphemeralKey, settle, verifier }`. `catalog` is a
-`Product[]` (static) or a `CatalogSource` (dynamic, e.g. `firestoreCatalog(...)`). The optional
+`Product[]` (static) or a `CatalogSource` (dynamic, e.g. `firestoreCatalog(...)`). `baseUrl` is the
+public URL checkout links start from (default: the first request's origin); behind a proxy that serves
+the store under a path, include it (`https://shop.example/store`) and give the gate the same
+`walletOrigin`, so the checkout and consent pages link and fetch under `/store`. The optional
 `settle` seam (e.g. on-chain) **gates** completion: a configured-but-failed settle records nothing and
 leaves the cart intact.
 

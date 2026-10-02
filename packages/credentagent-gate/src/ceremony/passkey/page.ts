@@ -14,19 +14,21 @@
 // order id/token (invariant 2).
 import type { CeremonyOrder } from "../types.js";
 import type { Branding } from "../../types.js";
-import { pageHead, brandHeader, orderSummaryCard, trustFooter, settlingBar, completionHandoffBanner, railCompleteScript, refusalNotices } from "../theme.js";
+import { pageHead, brandHeader, orderSummaryCard, trustFooter, settlingBar, completionHandoffBanner, railCompleteScript, completedViewScript, refusalNotices, recordLinkScript } from "../theme.js";
 
 function money(amount: number, currency: string): string {
   return new Intl.NumberFormat("en-US", { style: "currency", currency }).format(amount);
 }
 
-export function renderPasskeyPage(args: { order: CeremonyOrder; crossDevice?: boolean; returnUrl?: string; cart?: string; rail?: string; branding?: Branding }): string {
+export function renderPasskeyPage(args: { order: CeremonyOrder; crossDevice?: boolean; returnUrl?: string; statusUrl?: string; cart?: string; rail?: string; branding?: Branding; basePath?: string }): string {
   const { order, crossDevice = false } = args;
   // Where the completed receipt links back to — the checkout hub, which then renders
   // the paid state (a forward, fresh GET — so the buyer never browser-backs onto a
   // stale, re-payable checkout). Defaults to this server's `/checkout?order=<id>`.
   // statelessOrders: carry the cart mandate back so the store-less hub can re-resolve.
-  const returnUrl = args.returnUrl ?? `/checkout?order=${encodeURIComponent(order.id)}${args.cart ? `&cart=${args.cart}` : ""}`;
+  // Browser-visible path prefix (ctx.basePath) — every URL below carries it; "" at the root.
+  const base = args.basePath ?? "";
+  const returnUrl = args.returnUrl ?? `${base}/checkout?order=${encodeURIComponent(order.id)}${args.cart ? `&cart=${args.cart}` : ""}`;
   const total = money(order.total, order.currency);
 
   // The shared order summary card (line items + bold Total) — same chrome as the hub.
@@ -45,11 +47,11 @@ export function renderPasskeyPage(args: { order: CeremonyOrder; crossDevice?: bo
   // crossDevice pins the registration to a roaming authenticator, so the browser
   // skips local Touch ID and shows the QR for a phone (caBLE). The toggle link flips
   // the mode by adding/removing the xdev param on the same gate URL.
-  const optionsUrl = crossDevice ? "/credentagent/passkey/options?xdev=1" : "/credentagent/passkey/options";
+  const optionsUrl = `${base}/credentagent/passkey/options${crossDevice ? "?xdev=1" : ""}`;
   // statelessOrders: keep the cart mandate on the same-device ⇄ cross-device toggle so the
   // store-less server can still resolve THIS order after switching.
   const cartQ = args.cart ? `&cart=${args.cart}` : "";
-  const toggleHref = crossDevice ? `/credentagent/passkey?order=${encodeURIComponent(order.id)}${cartQ}` : `/credentagent/passkey?order=${encodeURIComponent(order.id)}&xdev=1${cartQ}`;
+  const toggleHref = crossDevice ? `${base}/credentagent/passkey?order=${encodeURIComponent(order.id)}${cartQ}` : `${base}/credentagent/passkey?order=${encodeURIComponent(order.id)}&xdev=1${cartQ}`;
   const toggleText = crossDevice ? "← Use this device instead" : "Use my phone instead (scan a QR) →";
 
   // Page-local chrome over the shared design system: the verify-progress rows reuse
@@ -79,7 +81,7 @@ ${pageHead(`Authorize payment · ${order.id}`, extraCss, args.branding)}
   </div>
   ${trustFooter()}
   <script type="module">
-    import { startRegistration } from "/credentagent/lib/sw/index.js";
+    import { startRegistration } from ${JSON.stringify(`${base}/credentagent/lib/sw/index.js`)};
     const ORDER_ID = ${JSON.stringify(order.id)};
     // statelessOrders: forward the signed cart mandate (?cart=… in this page's URL) so a
     // store-less server can reconstruct THIS order on verify.
@@ -91,6 +93,7 @@ ${pageHead(`Authorize payment · ${order.id}`, extraCss, args.branding)}
     // server-side (escaped there) and picked by reason at runtime. Without this a refused
     // order painted the authorized mandate + green gates and then nothing at all.
     const REFUSALS = ${JSON.stringify(refusalNotices({ returnUrl }))};
+    ${recordLinkScript(args.statusUrl)}
     const log = document.getElementById("log");
     const btn = document.getElementById("go");
     const settling = document.getElementById("settling");
@@ -105,7 +108,7 @@ ${pageHead(`Authorize payment · ${order.id}`, extraCss, args.branding)}
         const response = await startRegistration({ optionsJSON: options });
         step("→ verify · Settling via x402 on Hedera testnet (if configured)… can take ~10s");
         settling.classList.add("on");
-        const out = await fetch("/credentagent/passkey/verify", {
+        const out = await fetch(${JSON.stringify(`${base}/credentagent/passkey/verify`)}, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ response, challengeToken, order: ORDER_ID, cart: CART }),
@@ -168,6 +171,11 @@ ${pageHead(`Authorize payment · ${order.id}`, extraCss, args.branding)}
         btn.disabled = true;
         btn.textContent = "Authorized ✓";
         ${railCompleteScript()}
+        ${completedViewScript()}
+        // "What was proven": every credential of the order with its Multipaz Tools links, then Check
+        // the signatures + Order record — server-rendered and escaped by the gate (proofLinksHtml).
+        if (typeof out.proofsHtml === "string" && out.proofsHtml) el.insertAdjacentHTML("beforeend", out.proofsHtml);
+        else showRecordLink();
       }
     }
   </script>

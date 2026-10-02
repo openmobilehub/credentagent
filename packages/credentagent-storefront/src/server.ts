@@ -91,6 +91,7 @@ import {
   type CompletionInput,
   type CompletionResult,
   type DelegatedVerifier,
+  type ProofEntry,
   type RepriceOpts,
   type RenderPaid,
   type RenderVerification,
@@ -104,7 +105,7 @@ import {
 export type GateResolver = (order: Order) => unknown[] | undefined;
 
 /**
- * A persistence provider that supplies all four stores at once (e.g. `redisStorage(...)`
+ * A persistence provider that supplies every store at once (e.g. `redisStorage(...)`
  * from `@openmobilehub/credentagent-storefront/redis`). Passed as `StorefrontOptions.storage`
  * so a production deployment gets shared, cross-instance state with one option instead of
  * hand-written adapters. An explicit per-slot store (`cartStore`, `orderStore`, …) still
@@ -115,6 +116,8 @@ export interface StorageProvider {
   createdOrderStore: OrderStore<Order>;
   orderStore: OrderStore<CompletedOrderRecord>;
   verificationStore: VerificationStore;
+  /** Which cart each order was checked out from. Optional so an older custom provider still fits. */
+  orderCartStore?: OrderStore<string>;
 }
 
 export interface StorefrontOptions {
@@ -128,7 +131,12 @@ export interface StorefrontOptions {
   catalog?: Product[] | CatalogSource;
   /** Reviews per product id, backing `get-product-reviews`. */
   reviews?: Record<string, Review[]>;
-  /** Origin the checkout links resolve from. Default `http://localhost:<port>`. */
+  /**
+   * Public URL the checkout links resolve from. Default: the first request's origin
+   * (`http://localhost:<port>` under `listen()`). Behind a proxy that serves this app under a
+   * path, include it (`https://shop.example/store`): checkout links, page links and fetches
+   * then carry `/store`. Pair it with the same value as the gate's `walletOrigin`.
+   */
   baseUrl?: string;
   /** Cart store; default in-memory. */
   cartStore?: CartStore;
@@ -150,9 +158,16 @@ export interface StorefrontOptions {
    */
   verificationStore?: VerificationStore;
   /**
+   * Order id → the cart key it was checked out from (a session id, or a session-less
+   * conversation's `cartId`), recorded at checkout so completion empties THAT cart. Default
+   * in-memory; inject a shared store on a multi-instance deployment, or a completion that lands
+   * on another instance leaves the bought items in the cart.
+   */
+  orderCartStore?: OrderStore<string>;
+  /**
    * A persistence provider (e.g. `redisStorage({ url, token, namespace })`) that supplies
-   * all four stores at once. Optional — omit for the in-memory default. An explicit store
-   * above (`cartStore` / `orderStore` / `createdOrderStore` / `verificationStore`) takes
+   * every store at once. Optional — omit for the in-memory default. An explicit store
+   * above (`cartStore` / `orderStore` / `createdOrderStore` / `verificationStore` / `orderCartStore`) takes
    * precedence over the provider's store for that slot.
    */
   storage?: StorageProvider;
@@ -252,6 +267,8 @@ export interface CompletedOrderRecord {
   instrument?: unknown;
   gates?: { gate: string; pass: boolean; detail: string }[];
   settlement?: unknown;
+  /** What was proven for this order (the gate's order proof receipt) — shown by the widget. */
+  proofs?: ProofEntry[];
 }
 
 export interface Storefront {
@@ -326,6 +343,28 @@ export function originFromRequest(req: Request): string {
   return host ? `${proto}://${host}`.replace(/\/+$/, "") : "";
 }
 
+// The path a configured baseUrl carries, as the browser sees it: "https://shop.example/store"
+// → "/store"; a bare origin → "". A proxy that mounts this app under a path strips it before
+// the request lands here, so every URL a page hands the browser must put it back.
+function basePathOf(baseUrl: string | undefined): string {
+  if (!baseUrl) return "";
+  try {
+    return new URL(baseUrl).pathname.replace(/\/+$/, "");
+  } catch {
+    return "";
+  }
+}
+
+// A CSP source must be an origin: "https://shop.example/store" as a connect-src would match
+// that one path only, so the widget's fetches to /store/checkout/... would be blocked.
+function cspOrigin(baseUrl: string): string[] {
+  try {
+    return baseUrl ? [new URL(baseUrl).origin] : [];
+  } catch {
+    return [];
+  }
+}
+
 /**
  * A stable, opaque signature of an order's verification state (#73). The checkout page
  * bakes the current one (`statusRevision`) and `/checkout/order-status` returns it; when
@@ -347,7 +386,10 @@ export function verificationRevision(v: VerificationRecord | null | undefined): 
 function homeApproveUrl(approveUrl: string, base: string): string {
   try {
     const u = new URL(approveUrl, "http://re-home.invalid");
-    if (u.pathname.startsWith("/credentagent/")) return `${base}${u.pathname}${u.search}`;
+    // A gate whose walletOrigin carries the same path prefix already put it on the link.
+    const prefix = basePathOf(base);
+    const path = prefix && u.pathname.startsWith(`${prefix}/credentagent/`) ? u.pathname.slice(prefix.length) : u.pathname;
+    if (path.startsWith("/credentagent/")) return `${base}${path}${u.search}`;
   } catch {
     /* not URL-shaped — leave as-is */
   }
@@ -425,11 +467,17 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
   // store for that slot (e.g. `redisStorage(...)`), else the in-memory default. Keeping
   // the in-memory fallback last means zero-config stays unchanged (no `storage` → memory).
   const cartStore: CartStore = opts.cartStore ?? opts.storage?.cartStore ?? new MemoryCartStore();
-  // orderId → sessionId, recorded at checkout so the completion path (browser / place-order,
-  // which has no MCP session) can clear the RIGHT session's cart. In-memory, so on
-  // multi-instance serverless it shares the stateful-session limitation (needs sticky
-  // sessions); elsewhere it's best-effort and the cart simply isn't cleared.
-  const orderSessions = new Map<string, string>();
+  // orderId → cart key, recorded at checkout so the completion path (browser / place-order,
+  // which has no MCP session) can clear the RIGHT cart. A store, not a process Map: on
+  // multi-instance serverless the completion usually lands on another instance.
+  const orderCarts: OrderStore<string> =
+    opts.orderCartStore ?? opts.storage?.orderCartStore ?? new MemoryOrderStore<string>();
+  const clearOrderCart = async (orderId: string): Promise<void> => {
+    const key = await orderCarts.read(orderId);
+    if (key === null) return;
+    await cartStore.write(key, new Map());
+    await orderCarts.clear(orderId);
+  };
   const orderStore: OrderStore<CompletedOrderRecord> =
     opts.orderStore ?? opts.storage?.orderStore ?? new MemoryOrderStore<CompletedOrderRecord>();
   // Created-but-not-completed orders, for the checkout page + place-order. A store
@@ -442,6 +490,8 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
     opts.verificationStore ?? opts.storage?.verificationStore ?? new MemoryVerificationStore();
   let resolveGate: GateResolver | undefined;
   let baseUrl = opts.baseUrl?.replace(/\/+$/, "") ?? "";
+  // Only a CONFIGURED baseUrl carries a path; one derived from a request is a bare origin.
+  const basePath = basePathOf(baseUrl);
 
   // statelessOrders (gate FR-007): the signed Cart Mandate is the created-order transport.
   // The storefront must OWN a concrete signing key (not the gate's ephemeral one) so the
@@ -553,7 +603,7 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
         read: async (orderId: string) => ((await orderStore.read(orderId)) ?? undefined) as CompletedRecord | undefined,
         write: async (record: CompletedRecord) => { await orderStore.write(record.orderId, record); },
       },
-      cart: { clear: async () => { const sid = orderSessions.get(input.order.id); if (sid) await cartStore.write(sid, new Map()); } },
+      cart: { clear: () => clearOrderCart(input.order.id) },
       // Custom-gate enforcement (007): hand `completeOrder` the credential registry
       // `credentagent.mount(store.app)` published on app.locals — read LAZILY at completion
       // time (mount runs after this closure is defined) so an applicable custom gate() is
@@ -566,6 +616,12 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
     verificationStore,
     catalog: ceremonyCatalog,
     completion,
+    // The pay pages link the finished order's record ("Order record ›") — the same
+    // /checkout/order-status the widget polls, proofs included. Same host as the pages.
+    statusUrl: (orderId: string) => `${basePath}/checkout/order-status?orderId=${encodeURIComponent(orderId)}`,
+    // Behind a path-mounting proxy (baseUrl https://shop.example/store), the rails' page URLs
+    // carry the path too. Absent for a bare-origin baseUrl — the rails serve at the root.
+    ...(basePath ? { basePath } : {}),
     // signingKey survives an instance split; default to an ephemeral per-process key
     // for a single-process dev server / tests when none is configured (but statelessOrders
     // forces a concrete, storefront-owned key so it can sign the mandate).
@@ -763,7 +819,7 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
         // a store write — the checkout page + gate rails reconstruct + verify it (FR-007).
         const cart = statelessOrders ? cartParamFor(order) : null;
         if (!statelessOrders) await createdOrderStore.write(order.id, order);
-        orderSessions.set(order.id, ref.key); // so completion clears THIS session's (or cart id's) cart
+        await orderCarts.write(order.id, ref.key); // so completion clears THIS session's (or cart id's) cart
         const checkoutUrl = withCart(`${baseUrl}/checkout?order=${order.id}`, cart);
         // ← where CredentAgent mounts on. Re-home any /credentagent/* approve link onto this
         // server's origin (and propagate the cart param), so the gate links share the base.
@@ -1320,7 +1376,7 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
       RESOURCE_URI,
       { mimeType: RESOURCE_MIME_TYPE },
       async (): Promise<ReadResourceResult> => ({
-        contents: [{ uri: RESOURCE_URI, mimeType: RESOURCE_MIME_TYPE, text: await loadBundle(), _meta: { ui: { csp: { resourceDomains: [...IMAGE_DOMAINS, "data:"], connectDomains: baseUrl ? [baseUrl] : [] } } } }],
+        contents: [{ uri: RESOURCE_URI, mimeType: RESOURCE_MIME_TYPE, text: await loadBundle(), _meta: { ui: { csp: { resourceDomains: [...IMAGE_DOMAINS, "data:"], connectDomains: cspOrigin(baseUrl) } } } }],
       }),
     );
     server.registerResource(
@@ -1328,7 +1384,7 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
       SKYBRIDGE_URI,
       { mimeType: SKYBRIDGE_MIME },
       async (): Promise<ReadResourceResult> => ({
-        contents: [{ uri: SKYBRIDGE_URI, mimeType: SKYBRIDGE_MIME, text: await loadBundle(), _meta: { "openai/widgetCSP": { connect_domains: baseUrl ? [baseUrl] : [], resource_domains: [...IMAGE_DOMAINS, "data:"] } } }],
+        contents: [{ uri: SKYBRIDGE_URI, mimeType: SKYBRIDGE_MIME, text: await loadBundle(), _meta: { "openai/widgetCSP": { connect_domains: cspOrigin(baseUrl), resource_domains: [...IMAGE_DOMAINS, "data:"] } } }],
       }),
     );
 
@@ -1344,7 +1400,11 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
   // MCP 2026-07-28 is per request by design — no session, no initialize — so the SDK's entry
   // serves it with a fresh server per request. The 2025-era routes below stay as they were;
   // `isLegacyRequest` is the SDK's own routing decision, so the two legs never disagree.
-  const serveModern = toNodeHandler(createMcpHandler(() => buildServer(), { legacy: "reject" }));
+  // `maxSubscriptions: 0` refuses every `subscriptions/listen` up front. This store never
+  // publishes a list-changed event, so a held listen stream carries only keepalives — on
+  // serverless it pins a function until the host's timeout (60 s on Vercel), then the client
+  // opens the next one, all billed as provisioned memory.
+  const serveModern = toNodeHandler(createMcpHandler(() => buildServer(), { legacy: "reject", maxSubscriptions: 0 }));
   app.all("/mcp", async (req: Request, res: Response) => {
     // Self-derive the public origin from the first request so checkout URLs are
     // absolute behind any proxy (Vercel, a tunnel) with zero config — without it,
@@ -1447,7 +1507,7 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
     // (#107). Dropping it here made EVERY completed order — even a real x402 or processor
     // settlement — render "no settlement", the receipt-honesty bug this fixes.
     const paid = done
-      ? { amount: done.amount, currency: done.currency, method: done.method, ...(done.settlement ? { settlement: done.settlement as RenderPaid["settlement"] } : {}) }
+      ? { amount: done.amount, currency: done.currency, method: done.method, ...(done.settlement ? { settlement: done.settlement as RenderPaid["settlement"] } : {}), ...(done.proofs?.length ? { proofs: done.proofs } : {}) }
       : null;
 
     // An UNGATED storefront has no payment gate, so the manifest carries no
@@ -1462,7 +1522,7 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
           methods: [
             { value: "demo", name: `Complete purchase (demo) — ${order.total} ${order.currency}`, desc: "No real charge — records the order and clears the cart.", placeOrder: true },
           ],
-          placeOrderPath: "/checkout/place-order",
+          placeOrderPath: `${basePath}/checkout/place-order`,
           orderToken: order.id,
         }
       : opts.verifier
@@ -1471,7 +1531,7 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
         // built-in presence-only passkey/dc-payment rails — completes the payment.
         {
           methods: [
-            { value: "delegated", name: "Pay with your wallet", desc: "Authorize with a credential from your phone wallet — verification and settlement run through the configured external verifier.", href: withCart(`/credentagent/delegated?order=${orderQ}`, statelessOrders ? cartRaw : null), checked: true },
+            { value: "delegated", name: "Pay with your wallet", desc: "Authorize with a credential from your phone wallet — verification and settlement run through the configured external verifier.", href: withCart(`${basePath}/credentagent/delegated?order=${orderQ}`, statelessOrders ? cartRaw : null), checked: true },
           ],
         }
       : // A GATED order: offer the same payment methods the demo does — the headline
@@ -1481,15 +1541,15 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
         // to a single Pay CTA from the manifest and the x402/Hedera passkey option never shows.
         {
           methods: [
-            { value: "passkey", name: "Pay with x402 Hedera · Passkey", desc: "Authorize with this device's passkey — payment settles on-chain via the x402 protocol (test network).", href: withCart(`/credentagent/passkey?order=${orderQ}`, statelessOrders ? cartRaw : null), checked: true },
-            { value: "dc-payment", name: "Cross-device wallet", desc: "Scan a QR and approve with your phone's passkey or wallet — also x402 on Hedera.", href: withCart(`/credentagent/dc-payment?order=${orderQ}`, statelessOrders ? cartRaw : null) },
+            { value: "passkey", name: "Pay with x402 Hedera · Passkey", desc: "Authorize with this device's passkey — payment settles on-chain via the x402 protocol (test network).", href: withCart(`${basePath}/credentagent/passkey?order=${orderQ}`, statelessOrders ? cartRaw : null), checked: true },
+            { value: "dc-payment", name: "Cross-device wallet", desc: "Scan a QR and approve with your phone's passkey or wallet — also x402 on Hedera.", href: withCart(`${basePath}/credentagent/dc-payment?order=${orderQ}`, statelessOrders ? cartRaw : null) },
           ],
         };
 
     // #63: let a standing checkout tab reflect a completion made on another tab / device /
     // rail — the page polls this order's status endpoint and reloads on completion (the same
     // signal the widget polls). Route-agnostic: the gate renders whatever URL we pass.
-    const statusUrl = `/checkout/order-status?orderId=${encodeURIComponent(order.id)}`;
+    const statusUrl = `${basePath}/checkout/order-status?orderId=${encodeURIComponent(order.id)}`;
     // #73: bake THIS order's current verification signature so a standing tab reloads when a
     // step is made elsewhere (age verified, loyalty applied), not only on final completion.
     const statusRevision = verificationRevision(v);
@@ -1525,8 +1585,7 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
         return;
       }
       await orderStore.write(order.id, { orderId: order.id, amount: order.total, currency: order.currency, method: "demo", completedAt: new Date().toISOString() });
-      const sid = orderSessions.get(order.id); // completion empties THIS session's cart
-      if (sid) await cartStore.write(sid, new Map());
+      await clearOrderCart(order.id); // completion empties THIS order's cart
     }
     res.type("html").send(`<!doctype html><meta charset="utf-8"><body style="font-family:system-ui;max-width:32rem;margin:3rem auto"><h1>✓ Order placed (demo)</h1><p>You can close this tab — the storefront will update.</p></body>`);
   });

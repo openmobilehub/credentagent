@@ -325,7 +325,7 @@ nobody has seen still displays, and a mandate with nothing displayable is refuse
 rather than signed.
 
 **Where it lives, stated plainly.** In a personal fork:
-`TheBlackBit/multipaz @ feat/ap2-delegate-transaction`. The upstream proposal,
+`TheBlackBit/multipaz @ feat/ap2-delegate-transaction-utopia`. The upstream proposal,
 openwallet-foundation/multipaz#2011, was opened as a draft and **closed on 2026-09-18 without
 being merged**. Nothing about this has landed in Multipaz. Every device result in this
 document was obtained on a locally built wallet carrying that fork.
@@ -364,7 +364,7 @@ something unrelated. They are written down here because the next person will hit
 `DocumentTypeRepository.parseJsonTransactions` throws `Unknown transaction type 'delegate'`,
 and `OpenID4VP.kt` lets that kill the whole request. Multipaz registers exactly two types
 (`urn:eudi:sca:payment:1` and a ping type); AP2's `delegate` is not among them. Fixed **in a
-personal fork, not upstream** — `TheBlackBit/multipaz @ feat/ap2-delegate-transaction` adds
+personal fork, not upstream** — `TheBlackBit/multipaz @ feat/ap2-delegate-transaction-utopia` adds
 the type, plus a `nestSdJwtResponseClaims` flag so a type can put `_delegate_payload` at the
 KB-JWT top level as an array (the previous code wrapped every type's claims in an object,
 which no verifier written against Delegate SD-JWT can read). The upstream proposal
@@ -466,6 +466,6 @@ Verified 2026-09-08:
   `specs/013-ap2-v2-wire-format/spec.md`, `packages/credentagent-gate/src/ceremony/intent-sign/`,
   and `packages/credentagent-gate/src/ap2/types.ts` — the last of which is proposed in #187 and
   is not on `main`.
-- `TheBlackBit/multipaz @ feat/ap2-delegate-transaction` — a personal fork of Multipaz, the
+- `TheBlackBit/multipaz @ feat/ap2-delegate-transaction-utopia` — a personal fork of Multipaz, the
   build every on-device result here was obtained on. The upstream proposal,
   openwallet-foundation/multipaz#2011, was closed unmerged on 2026-09-18.

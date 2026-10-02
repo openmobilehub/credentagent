@@ -55,6 +55,9 @@ the widget shows the confirmation. Add the headphones instead and the age gate d
 > `.when((order) => …)` takes the **whole `GateOrder`** (id, total, currency, lines), so a
 > predicate keys off the cart's lines — e.g. `order.lines.some((l) => l.minimumAge != null)`.
 > For a deployment pass your public origin: `new CredentAgent({ walletOrigin: "https://shop.example" })`.
+> Behind a proxy that serves your app under a path (`https://shop.example/store/*` → your `/*`),
+> include the path — `walletOrigin: "https://shop.example/store"` — and every approve link, page
+> fetch and redirect carries `/store`. The wallet still binds to the page's origin.
 
 ### Branding the ceremony pages
 
@@ -84,6 +87,68 @@ credentagent.mount(store.app); // every /credentagent/* page now carries ACME's 
   `teal` — is ignored, keeping the built-in teal), and `logo` accepts only a `data:image/…` URI, an
   `https:`/`http:` URL, or a root-relative `/path`. A host-supplied string can't inject markup or CSS
   onto a consent screen.
+
+### Inspecting what the wallet sent (`inspectPresentations`)
+
+Want to see the actual verifiable credential behind a proof — while you develop, or to show a
+buyer? Turn on `inspectPresentations` and the consent page adds an **Inspect this presentation**
+link after the wallet answers:
+
+```ts
+const credentagent = new CredentAgent({ walletOrigin, inspectPresentations: true });
+```
+
+The link opens the wallet's decrypted ISO 18013-5 `DeviceResponse` in
+[Multipaz Tools](https://tools.multipaz.org/mdocDeviceResponse) (from the OpenWallet Foundation
+Multipaz project), which decodes it in your browser: document type, every issuer-signed claim,
+the Mobile Security Object's validity dates and digests, the device key. The same data rides on
+the verify response for your own tooling:
+
+```jsonc
+// POST /credentagent/credential/verify  (and /credentagent/dc-payment/verify)
+{ "verified": true, "trust_level": "presence-only-demo", "gates": [ … ],
+  "presentation": {
+    "format": "mso_mdoc",
+    "deviceResponse": "o2d2ZXJzaW9u…",   // base64url CBOR, exactly what the wallet sent
+    "inspectUrl": "https://tools.multipaz.org/mdocDeviceResponse#o2d2ZXJzaW9u…" } }
+```
+
+- **Off by default.** A DeviceResponse from a real ID can carry personal data (the disclosed claims,
+  the issuer's certificate chain, a device public key). With the option on, it goes back only to the
+  browser that just presented it — it is never stored, logged, or put in a webhook. The payload
+  rides in the link's `#fragment`, which the browser never sends to the inspector's server. (One
+  pre-existing exception: the dc-payment verify response has always carried the same bytes inside
+  `mandate.userAuthorization.vpToken`; the option adds only the `presentation` block and the link.)
+- **A refused proof is returned too** — the moment you most want to look at what came back.
+- **It verifies nothing new.** `trust_level` is unchanged, and the page says so: the gate checks what
+  was disclosed and that it answers this request, not the issuer signature (see
+  [Honest status](#honest-status)).
+- **Covers** the credential rail (age, membership, `defineCredential()`; Android OpenID4VP and iOS
+  `org-iso-mdoc`) and the dc-payment rail. The grant rails don't expose it yet.
+
+#### The order's proof receipt
+
+Every successful proof is kept **with its order**, so what the buyer proved is still there after the
+order completes — whether or not `inspectPresentations` is on. It rides on the completed order you
+already read (`orders.retrieve()`, `GET /credentagent/orders/:id/status`, and the storefront's
+`get-order-status` / `/checkout/order-status`):
+
+```jsonc
+// the completed order's `proofs`
+"proofs": [
+  { "gate": "Age 21+", "rail": "credential", "trust_level": "presence-only-demo",
+    "checks": [{ "gate": "Age over 21", "pass": true, "detail": "age_over_21 disclosed true" }],
+    "presentedAt": "2026-09-27T18:52:10.000Z",
+    "presentation": { "format": "mso_mdoc", "deviceResponse": "o2d2…", "inspectUrl": "https://tools.multipaz.org/mdocDeviceResponse#o2d2…" } },
+  { "gate": "Pay (USD)", "rail": "instant-demo", "trust_level": "presence-only-demo", "checks": [ … ], "presentedAt": "…" } ]
+```
+
+- The storefront widget lists each proof on the confirmed order, with an **Inspect ↗** link when
+  `presentation` is there.
+- `presentation` appears only when the store set `inspectPresentations`; without it nothing is stored
+  but the gate, the checks, and the trust level.
+- The **`order.settled` webhook never carries `presentation`** — it goes to another service.
+- `rail: "instant-demo"` marks a demo tap, never a wallet proof. Each proof states its own `trust_level`.
 
 ## Orders — a checkout without a storefront
 
@@ -325,9 +390,10 @@ Honesty is carried in the **types**, not prose (Principle VII):
   safety control** — never present it as one. Issuer-trust verification (Multipaz / `@auth0/mdl`,
   `trust_level: "issuer-verified"`) is roadmap.
 - **`trust_level: "device-signed"`** — used by device-signed spending grants (`grants.create({
-  signing: "device" })`, below). Here the gate **does** verify the wallet's mdoc DeviceAuth
-  signature over the grant's exact bounds — a real holder-of-key binding, one step past
-  presence-only. What is still demo is only the trust **anchor**: the payment credential is a
+  signing: "device" })`, below). Here the gate **does** verify the wallet's signature over the
+  grant's exact bounds — an SD-JWT VC Key Binding JWT carrying the AP2 Mandate Content, checked
+  against the key the credential names in `cnf`, with every revealed claim checked against the
+  issuer-signed `_sd` digests — a real holder-of-key binding, one step past presence-only. What is still demo is only the trust **anchor**: the payment credential is a
   self-minted demo credential with no issuer/VICAL check (that is the roadmap `issuer-verified`
   line, issue #14), so a self-crafted device key would still pass. The signature is real; the
   anchor is not — the page and the type both say exactly that, and the gate never claims
@@ -537,9 +603,11 @@ answer.
 ### Device-signed grants — the wallet signs the grant first (spec 012)
 
 **Approving a grant is a signature.** A grant's `approveUrl` serves a signing ceremony, and the
-grant only reaches `"authorized"` once a wallet on the phone **signs its exact bounds** (an ISO mdoc
-DeviceAuth signature over the budget / per-purchase cap / allowed items). Nothing can be spent
-against a grant no device signed.
+grant only reaches `"authorized"` once a wallet on the phone **signs its exact bounds** — the wallet
+returns an SD-JWT VC presentation whose Key Binding JWT carries the AP2 Mandate Content for the
+budget, the per-purchase cap and the allowed items (spec 014). Nothing can be spent against a grant
+no device signed, and a device-signed grant can only ever buy the products its mandate names — the
+`allow` bounds follow the live catalog, the signature does not.
 
 Pass **`signing: "page"`** to opt into the older **click-to-approve** stand-in, where the server
 takes the human's word for it (`trustLevel: "server-issued-demo"`). It exists for demos, examples
@@ -563,7 +631,7 @@ sendToUser(grant.approveUrl);                         // → the signing ceremon
 const g = await credentagent.grants.retrieve(grant.id);
 g.status;      // "authorized" — ONLY after the gate verified the device signature over these bounds
 g.trustLevel;  // "device-signed"
-g.mandate;     // { boundsHash, signedAt, credentialDoctype, verifiedBy } — the evidence, plain data
+g.mandate;     // { boundsHash, signedAt, credentialType, verifiedBy, mandates } — the evidence, plain data
 const s = await g.spend({ idempotencyKey: "order-1", items: [{ sku: "coffee" }] });
 // s.mandate → { id, boundsHash } — every spend traces to the signed Intent Mandate (FR-5)
 ```
@@ -571,11 +639,18 @@ const s = await g.spend({ idempotencyKey: "order-1", items: [{ sku: "coffee" }] 
 **The invariant:** signed by the device **first**, spent by the agent **second**. A device-mode grant
 that was never device-signed can never spend; a spend always traces to the exact signed bounds.
 
+> **Breaking, since the AP2 delegated-intent rail (spec 014):** `grant.mandate.credentialDoctype`
+> is now **`credentialType`**. It holds an SD-JWT VC type (`vct`) rather than an ISO-mdoc doctype,
+> and a field named "doctype" would be untrue. `mandate.mandates` is new and optional — the AP2
+> Mandate Content the wallet signed, so a grant can answer "what did I authorize?" without
+> rebuilding it.
+
 **Honesty (`trust_level: "device-signed"`, not `"issuer-verified"`):** the device signature is
-**real** — the gate verifies the wallet's mdoc DeviceAuth COSE signature over the bounds-bound session
-transcript. What is **still demo** is the trust **anchor**: the payment credential
-(`org.openwallet.payment.1`, importable via the demo-PKI `payment.mpzpass`) is self-minted with **no
-issuer/VICAL check** (that hardening is issue #14), so a self-crafted device key would pass. The
+**real** — the gate verifies the holder's Key Binding JWT against the key the credential names in
+`cnf`, checks the `sd_hash` that binds it to the disclosures presented, and rebuilds the Mandate
+Content from its own grant record to require the wallet signed those exact terms. What is **still
+demo** is the trust **anchor**: the payment credential is self-minted with **no issuer check** (that
+hardening is issue #14), so a self-crafted credential would pass. The
 verify runs through a **seam** — the in-gate backend attests `device-signed` / `verifiedBy: "gate"`;
 wiring an external verifier (the `DelegatedVerifier` seam) that reports a stronger, issuer-backed level
 is the fast-follow, and the gate **relays** that level verbatim with the attestor recorded in
@@ -678,7 +753,7 @@ provide those are later increments.
 ```ts
 // Client (configure once, then declarative calls)
 class CredentAgent {
-  constructor(opts?: { walletOrigin?: string; store?: VerificationStore; credentials?: Credential[]; branding?: Branding });
+  constructor(opts?: { walletOrigin?: string; store?: VerificationStore; credentials?: Credential[]; branding?: Branding; inspectPresentations?: boolean });
   requirements(order: GateOrder, policy: Step[]): VerificationManifestEntry[];   // Context 1
   mount(app: ExpressApp, ceremony?: MountCeremony): void;                        // Context 2
   doctor(opts?: { print?: boolean }): DoctorReport;                              // config preflight (#25)

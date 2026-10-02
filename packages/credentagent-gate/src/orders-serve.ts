@@ -17,6 +17,7 @@
 // threshold from the STORED lines, never from the token.
 
 import { mountCeremony, type CeremonyApp } from "./ceremony/mount.js";
+import { basePathOf } from "./ceremony/origin.js";
 import { completeOrder, type CompletedRecord, type CompletedOrderStore } from "./ceremony/completion.js";
 import { renderRequirements, type RenderOrder } from "./ceremony/checkout-page.js";
 import type { CartItemRef, CeremonyCatalog, CeremonyOrder, CeremonyOrderStore, RepriceOpts } from "./ceremony/types.js";
@@ -51,6 +52,8 @@ export interface ServeOrdersDeps {
   readerIdentity?: ReaderIdentity;
   /** Host brand for the checkout page + rails (omit ⇒ the built-in look). Never brands the footer. */
   branding?: Branding;
+  /** Return the presented DeviceResponse to the rail page for inspection (omit ⇒ off). */
+  inspectPresentations?: boolean;
   /** Stable HMAC key for the challenge (survives an instance split). Omit ⇒ ephemeral dev key. */
   signingKey?: string;
 }
@@ -175,7 +178,7 @@ export function serveOrders(app: CeremonyApp, deps: ServeOrdersDeps): void {
       const done = await deps.completed.read(orderId);
       if (!done) return undefined;
       // Enough for `completeOrder`'s idempotency echo (it checks truthiness + settlement).
-      return { orderId, mandateId: done.txId ?? "", amount: done.amount ?? 0, currency: done.currency ?? "", method: done.method ?? "", gates: [], completedAt: done.completedAt ?? "" };
+      return { orderId, mandateId: done.txId ?? "", amount: done.amount ?? 0, currency: done.currency ?? "", method: done.method ?? "", gates: [], completedAt: done.completedAt ?? "", ...(done.proofs ? { proofs: done.proofs } : {}) };
     },
     write: async (record: CompletedRecord): Promise<void> => {
       await deps.complete({
@@ -186,6 +189,8 @@ export function serveOrders(app: CeremonyApp, deps: ServeOrdersDeps): void {
         ...(record.settlement?.txId ? { txId: record.settlement.txId } : {}),
         ...(record.settlement?.network ? { network: record.settlement.network } : {}),
         completedAt: record.completedAt,
+        // The order proof receipt rides onto the completed order (orders.retrieve + the proof route).
+        ...(record.proofs?.length ? { proofs: record.proofs } : {}),
       });
     },
   };
@@ -208,9 +213,13 @@ export function serveOrders(app: CeremonyApp, deps: ServeOrdersDeps): void {
     // After a rail proves / pays, return the buyer to THIS order's checkout page — not the
     // storefront's `/checkout` default (which the orders interface doesn't serve).
     returnUrl: (id) => `${deps.walletOrigin}/credentagent/orders/${encodeURIComponent(id)}`,
+    // The pay pages link this order's status record ("Order record ›") — same host as the pages.
+    statusUrl: (id) => `${basePathOf(deps.walletOrigin)}/credentagent/orders/${encodeURIComponent(id)}/status`,
     ...(deps.readerIdentity ? { readerIdentity: deps.readerIdentity } : {}),
     ...(deps.branding ? { branding: deps.branding } : {}),
+    ...(deps.inspectPresentations ? { inspectPresentations: true } : {}),
     ...(deps.signingKey ? { signingKey: deps.signingKey } : { allowEphemeralKey: true }),
+    basePath: basePathOf(deps.walletOrigin),
   });
 
   const get = app.get?.bind(app);
@@ -236,7 +245,7 @@ export function serveOrders(app: CeremonyApp, deps: ServeOrdersDeps): void {
     const done = await deps.completed.read(id);
     const gated = isGated(manifest);
     const verification = { ageVerified, loyaltyApplied, ...(v.verifiedGates ? { verifiedGates: v.verifiedGates } : {}) };
-    const paid = done ? { amount: done.amount ?? order.total, currency: done.currency ?? order.currency, ...(done.method ? { method: done.method } : {}) } : null;
+    const paid = done ? { amount: done.amount ?? order.total, currency: done.currency ?? order.currency, ...(done.method ? { method: done.method } : {}), ...(done.proofs?.length ? { proofs: done.proofs } : {}) } : null;
 
     const orderQ = encodeURIComponent(id);
     const payment = gated
@@ -250,10 +259,10 @@ export function serveOrders(app: CeremonyApp, deps: ServeOrdersDeps): void {
           methods: [
             { value: "demo", name: `Complete purchase (demo) — ${order.total} ${order.currency}`, desc: "No real charge — records the order.", placeOrder: true },
           ],
-          placeOrderPath: `/credentagent/orders/${orderQ}/place`,
+          placeOrderPath: `${basePathOf(deps.walletOrigin)}/credentagent/orders/${orderQ}/place`,
           orderToken: id,
         };
-    const statusUrl = `/credentagent/orders/${orderQ}/status`;
+    const statusUrl = `${basePathOf(deps.walletOrigin)}/credentagent/orders/${orderQ}/status`;
     res.type("html").send(renderRequirements(toRenderOrder(order), manifest, verification, { payment, paid, statusUrl, ...(deps.branding ? { branding: deps.branding } : {}) }));
   };
 

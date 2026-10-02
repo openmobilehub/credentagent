@@ -16,6 +16,10 @@ import {
 } from "../index";
 import styles from "./app.module.css";
 import { updateQueue } from "./update-queue";
+import { CartFooter } from "./CartFooter";
+import { ProofRows, type WidgetProof } from "./ProofRows";
+import { ShowProducts } from "./ShowProducts";
+import { formatMoney } from "./money";
 import { GrantCard, GRANT_VIEW_KIND, type GrantViewData, type GrantActions } from "./grants";
 
 // A grant tool result (create/get/spend/revoke) carries the GrantViewData projection, discriminated
@@ -94,10 +98,6 @@ function parseJsonContent<T>(result: CallToolResult): T | null {
   return null;
 }
 
-function formatMoney(amount: number, currency: string): string {
-  return new Intl.NumberFormat("en-US", { style: "currency", currency }).format(amount);
-}
-
 // Deterministic muted color from a product id, for image fallbacks.
 function colorFor(id: string): string {
   let hash = 0;
@@ -148,7 +148,23 @@ type CompletedOrder = {
     amountTinybar?: number;
     settledInMs?: number;
   };
+  // What was proven for the order (the gate's order proof receipt), when the store keeps it.
+  proofs?: WidgetProof[];
+  // The store's order-status record this widget polled — linked as "Order record ↗".
+  recordUrl?: string;
 };
+
+// Where the store serves its pages: the checkout URL minus its `/checkout` — the origin, plus
+// the path when a proxy mounts the store under one (https://shop.example/store/checkout?…).
+function storeBase(checkoutUrl: string): string {
+  const u = new URL(checkoutUrl);
+  return u.origin + u.pathname.replace(/\/checkout\/?$/, "");
+}
+
+// The confirmed order plus the URL of the record the widget just read it from.
+function withRecordUrl(order: CompletedOrder, checkoutUrl: string, orderId: string): CompletedOrder {
+  return { ...order, recordUrl: `${storeBase(checkoutUrl)}/checkout/order-status?orderId=${encodeURIComponent(orderId)}` };
+}
 
 // How the payment was authorized, for the in-widget confirmation panel.
 function methodLabel(method: string | undefined, settled: boolean): string {
@@ -194,7 +210,7 @@ function tryOpenCheckout(url: string, bridgeOpen?: OpenLinkFn): void {
 // completion, or null on timeout/cancel. The signal lets the component cancel
 // the loop on unmount.
 async function pollOrderCompletion(
-  origin: string,
+  base: string,
   orderId: string,
   signal: { cancelled: boolean },
   opts: { intervalMs?: number; maxMs?: number } = {},
@@ -203,7 +219,7 @@ async function pollOrderCompletion(
   const deadline = Date.now() + (opts.maxMs ?? 5 * 60_000);
   while (!signal.cancelled && Date.now() < deadline) {
     try {
-      const res = await fetch(`${origin}/checkout/order-status?orderId=${encodeURIComponent(orderId)}`);
+      const res = await fetch(`${base}/checkout/order-status?orderId=${encodeURIComponent(orderId)}`);
       if (res.ok) {
         const data = (await res.json()) as { completed?: boolean; order?: CompletedOrder };
         if (data.completed && data.order) return data.order;
@@ -367,10 +383,10 @@ function HostApp() {
     const signal = { cancelled: false };
     pollRef.current = signal;
     void (async () => {
-      const order = await pollOrderCompletion(new URL(checkoutUrl).origin, orderId, signal);
+      const order = await pollOrderCompletion(storeBase(checkoutUrl), orderId, signal);
       if (!order || signal.cancelled) return;
       setPendingCheckoutUrl(null);
-      setConfirmedOrder(order); // read-only confirmation panel in the widget
+      setConfirmedOrder(withRecordUrl(order, checkoutUrl, orderId)); // read-only confirmation panel in the widget
       // The gate clears the cart server-side (the session's, or this conversation's cart id's);
       // refresh the badge to match.
       const doneCartId = cartIdRef.current;
@@ -403,7 +419,14 @@ function HostApp() {
 
   if (error) return <div className={styles.status}><strong>Error:</strong> {error.message}</div>;
   if (!app) return <div className={styles.status}>Connecting…</div>;
-  if (grantView) return <GrantCard grant={grantView} actions={grantActions} />;
+  if (grantView) {
+    return (
+      <>
+        <GrantCard grant={grantView} actions={grantActions} />
+        <ShowProducts itemCount={cart.itemCount} onShow={() => setGrantView(null)} />
+      </>
+    );
+  }
 
   return <Picker products={products} cart={cart} insets={insets} setQuantity={setQuantity} checkout={checkout} openLink={openLink} confirmedOrder={confirmedOrder} pendingCheckoutUrl={pendingCheckoutUrl} />;
 }
@@ -472,10 +495,10 @@ function ChatGptApp() {
     const signal = { cancelled: false };
     pollRef.current = signal;
     void (async () => {
-      const order = await pollOrderCompletion(new URL(checkoutUrl).origin, orderId, signal);
+      const order = await pollOrderCompletion(storeBase(checkoutUrl), orderId, signal);
       if (!order || signal.cancelled) return;
       setPendingCheckoutUrl(null);
-      setConfirmedOrder(order); // read-only confirmation panel in the widget
+      setConfirmedOrder(withRecordUrl(order, checkoutUrl, orderId)); // read-only confirmation panel in the widget
       const refreshed = await oai.callTool?.("get-cart", {});
       applyToolOutput(structuredOf(refreshed));
     })();
@@ -494,7 +517,14 @@ function ChatGptApp() {
     },
   }), [oai]);
 
-  if (grantView) return <GrantCard grant={grantView} actions={grantActions} />;
+  if (grantView) {
+    return (
+      <>
+        <GrantCard grant={grantView} actions={grantActions} />
+        <ShowProducts itemCount={cart.itemCount} onShow={() => setGrantView(null)} />
+      </>
+    );
+  }
 
   return <Picker products={products} cart={cart} setQuantity={setQuantity} checkout={checkout} openLink={openLink} confirmedOrder={confirmedOrder} pendingCheckoutUrl={pendingCheckoutUrl} />;
 }
@@ -646,6 +676,7 @@ function Picker({ products, cart, insets, setQuantity, checkout, openLink, confi
               <dt>Payment</dt>
               <dd>{methodLabel(confirmedOrder.method, !!confirmedOrder.settlement)}</dd>
             </div>
+            <ProofRows proofs={confirmedOrder.proofs} recordUrl={confirmedOrder.recordUrl} openLink={openLink} />
             {confirmedOrder.settlement && (
               <div className={styles.confirmRow}>
                 <dt>Settlement</dt>
@@ -700,22 +731,12 @@ function Picker({ products, cart, insets, setQuantity, checkout, openLink, confi
         </div>
       )}
 
-      <div className={styles.footer}>
-        <span className={styles.summary}>
-          {cart.itemCount > 0
-            ? `🛒 ${cart.itemCount} in cart · ${formatMoney(cart.total, cart.currency)}`
-            : "🛒 Cart is empty"}
-        </span>
-        {checkout && cart.itemCount > 0 && !pendingCheckoutUrl && (
-          <button
-            className={styles.checkout}
-            disabled={checkingOut}
-            onClick={handleCheckout}
-          >
-            {checkingOut ? "Opening…" : "Checkout"}
-          </button>
-        )}
-      </div>
+      <CartFooter
+        cart={cart}
+        canCheckout={!!checkout}
+        checkingOut={checkingOut}
+        onCheckout={() => void handleCheckout()}
+      />
     </main>
   );
 }

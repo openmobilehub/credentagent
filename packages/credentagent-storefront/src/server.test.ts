@@ -314,7 +314,9 @@ describe("GET /checkout — the shared three-gate page (renderRequirements)", ()
     await request(store.app).post("/checkout/place-order").type("form").send({ order: orderId }).expect(200);
     const res = await request(store.app).get(`/checkout?order=${orderId}`);
     expect(res.text).toContain("Order paid");
-    expect(res.text).not.toContain("/checkout/order-status");
+    // No poll script — the record URL appears only as the paid view's "Order record ›" link.
+    expect(res.text).not.toContain("setInterval");
+    expect(res.text).toContain(`href="/checkout/order-status?orderId=${orderId}"`);
   });
 
   // #107 — the receipt settlement honesty bug (Cause 1). completeOrder DOES persist the

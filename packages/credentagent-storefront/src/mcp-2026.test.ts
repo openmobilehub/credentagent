@@ -13,8 +13,9 @@ import request from "supertest";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { CredentAgent } from "@openmobilehub/credentagent-gate";
 import { createStorefront } from "./server.js";
-import type { Storefront } from "./server.js";
-import { MemoryCartStore } from "./state.js";
+import type { Storefront, CompletedOrderRecord } from "./server.js";
+import { MemoryCartStore, MemoryOrderStore } from "./state.js";
+import type { Order } from "./index.js";
 import { readFileSync } from "node:fs";
 
 const MODERN = "2026-07-28";
@@ -71,6 +72,39 @@ describe("one /mcp endpoint, both protocol eras", () => {
   });
 });
 
+// 2026-07-28 replaces the 2025 GET stream with `subscriptions/listen`: a POST the server holds
+// open to push list-changed notifications. This store never publishes one, so a held stream
+// only burns a serverless function until the host's timeout kills it (60 s on Vercel), and the
+// client opens the next — the dev demo's whole compute bill. It is refused up front instead.
+describe("subscriptions/listen on 2026-07-28 — refused, never held open", () => {
+  it("answers a listen at once with an in-band error, not a stream left open", async () => {
+    const store = createStorefront();
+    const res = await request(store.app)
+      .post("/mcp")
+      .timeout(3_000)
+      .set("content-type", "application/json")
+      .set("accept", "application/json, text/event-stream")
+      .set("mcp-protocol-version", MODERN)
+      .set("mcp-method", "subscriptions/listen")
+      .send({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "subscriptions/listen",
+        params: {
+          notifications: { toolsListChanged: true, resourcesListChanged: true },
+          _meta: {
+            "io.modelcontextprotocol/protocolVersion": MODERN,
+            "io.modelcontextprotocol/clientInfo": { name: "probe", version: "0" },
+            "io.modelcontextprotocol/clientCapabilities": {},
+          },
+        },
+      });
+    expect(res.status).toBe(200);
+    expect(res.text).not.toContain("notifications/subscriptions/acknowledged");
+    expect(res.text).toContain("Subscription limit reached");
+  });
+});
+
 describe("the cart a 2026-07-28 conversation keys by its cart id (no sessions, so no shared cart — Security invariant 4)", () => {
   const call = async (c: Client, name: string, args: Record<string, unknown>) => sc(await c.callTool({ name, arguments: args }));
 
@@ -93,6 +127,22 @@ describe("the cart a 2026-07-28 conversation keys by its cart id (no sessions, s
     expect(order.cartId).toBe(cartId);
     const fromMeta = (await c.callTool({ name: "checkout", arguments: { cartId } }))._meta as Record<string, unknown>;
     expect(fromMeta["product-picker/cart-id"]).toBe(cartId);
+  });
+
+  it("empties the cart when the order completes on ANOTHER instance (serverless, no affinity)", async () => {
+    // Two instances sharing their stores (what Redis gives a Vercel deploy). The checkout runs on A,
+    // the buyer's completion lands on B — B must still know which cart this order came from.
+    const shared = { cartStore: new MemoryCartStore(), createdOrderStore: new MemoryOrderStore<Order>(), orderStore: new MemoryOrderStore<CompletedOrderRecord>(), orderCartStore: new MemoryOrderStore<string>() };
+    const a = createStorefront({ ...shared, signingKey: "k" });
+    const b = createStorefront({ ...shared, signingKey: "k" });
+    const c = await modernClient(await serve(a));
+    const { cartId } = await call(c, "browse-products", {});
+    await call(c, "add-to-cart", { cartId, items: [{ productId: "drift-mouse", quantity: 1 }] });
+    const { orderId } = await call(c, "checkout", { cartId });
+
+    await request(b.app).post("/checkout/place-order").type("form").send({ order: orderId }).expect(200);
+
+    expect((await call(c, "get-cart", { cartId })).cart.lines).toEqual([]);
   });
 
   it("shows the agent what the user picked in the widget — both hold the same cart id", async () => {

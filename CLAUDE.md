@@ -194,12 +194,12 @@ anticipate it when authoring:
   on every non-draft PR opened from a branch in this repo, grounded in this file's
   invariants **and the DX rubric** (`docs/reference/architecture-principles.md`) — it checks
   Stripe-grade ergonomics (the example-is-the-test rule, above) alongside the security invariants.
-  `claude-review` is **opt-in and currently OFF**: the job only runs when the repo variable
-  `ENABLE_CLAUDE_REVIEW` is `"true"`. Otherwise it is **skipped**, and a skipped job counts as
-  passing for a required check — so it does not block merges, and **human review is the gate**.
-  (It's off because the account can't use the `CLAUDE_CODE_OAUTH_TOKEN`, so the action errored on
-  every PR.) Turn it on with `gh variable set ENABLE_CLAUDE_REVIEW --body true` — the token must
-  also be usable.
+  `claude-review` is **opt-in and currently ON** (re-enabled 2026-09-29): the job only runs when
+  the repo variable `ENABLE_CLAUDE_REVIEW` is `"true"`, and it posts its findings to the PR
+  (`--comment`). It is not a required check, so **human review is still the gate**. To pause it,
+  `gh variable set ENABLE_CLAUDE_REVIEW --body false` — the job is then **skipped**. The
+  `CLAUDE_CODE_OAUTH_TOKEN` secret must come from an account that can use Claude Code
+  (`claude setup-token`); an unusable token errors on every PR.
 - **Fork / external-contributor PRs** — the automated job is **skipped** (fork runs can't
   read the `CLAUDE_CODE_OAUTH_TOKEN` secret), so it never blocks you. A skipped required
   check counts as passing. Those PRs are reviewed by one of:
