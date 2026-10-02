@@ -79,6 +79,8 @@ export interface SdJwtOptions {
   privateKey?: KeyObject;
   /** Present ⇒ this instance can verify an issuer signature. */
   publicJwk?: PublicJwkP256;
+  /** The same, for a key that did not arrive as a JWK — a certificate's, or a chain link's. */
+  publicKey?: KeyObject;
   /** Present ⇒ this instance can append a key-bound delegation hop. */
   holderKey?: KeyObject;
 }
@@ -93,6 +95,7 @@ export function sdJwtInstance(opts: SdJwtOptions): SDJwtInstance<SdJwtPayload> {
     kbSignAlg: "ES256",
     ...(opts.privateKey ? { signer: es256Signer(opts.privateKey) } : {}),
     ...(opts.publicJwk ? { verifier: es256Verifier(opts.publicJwk) } : {}),
+    ...(opts.publicKey ? { verifier: (data: string, sig: string) => es256Verify(opts.publicKey!, data, sig) } : {}),
     ...(opts.holderKey ? { kbSigner: es256Signer(opts.holderKey) } : {}),
     kbVerifier: cnfKbVerifier,
   });

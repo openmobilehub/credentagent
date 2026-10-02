@@ -7,7 +7,9 @@ import { describe, expect, it } from "vitest";
 import { generateKeyPairSync } from "node:crypto";
 import express from "express";
 import request from "supertest";
-import { CredentAgent, publicJwkFromDidDocument, verifyMandate, VCT, type UcpCheckout } from "../index.js";
+import { CredentAgent, DelegatedIntent, publicJwkFromDidDocument, verifyDelegatedPurchase, verifyMandate, VCT, type UcpCheckout } from "../index.js";
+import { merchantFor } from "./from-gate.js";
+import { testGrant } from "./chain/test-wallet.js";
 
 const ucpCheckout: UcpCheckout = {
   id: "ord_1",
@@ -46,5 +48,37 @@ describe("README — AP2 mandates", () => {
     const doc = (await request(app).get("/.well-known/did.json")).body;
     const theirs = await verifyMandate(mandate.token, { publicJwk: publicJwkFromDidDocument(doc) });
     expect(theirs.ok).toBe(true);
+  });
+
+  it("delegated purchases: the agent spends, the merchant verifies", async () => {
+    const g = await testGrant();
+    const credentagent = new CredentAgent({ walletOrigin: "https://shop.example", mandateSigningKey: generateKeyPairSync("ec", { namedCurve: "P-256" }).privateKey.export({ format: "jwk" }) as never });
+    const { presentation, disclosures } = g;
+    const agentKey = g.agent.privateKey;
+    const nonce = "merchant-nonce";
+    const shopCheckout: UcpCheckout = { ...ucpCheckout, merchant: merchantFor("https://shop.example"), line_items: [{ id: "li_1", item: { id: "coffee", title: "Coffee", price: 450 }, quantity: 1, totals: [{ type: "total", amount: 450 }] }], totals: [{ type: "total", amount: 450 }] };
+    const checkoutJwt = credentagent.ap2.signCheckout(shopCheckout);
+    const payee = merchantFor("https://shop.example");
+    const instrument = { id: "pi_1", type: "card" };
+    const catalogTotal = (cart: UcpCheckout) => cart.line_items.reduce((s, l) => s + l.item.price * l.quantity, 0);
+
+    // ── README block: delegated purchases ──
+    const intent = DelegatedIntent.fromWalletPresentation({ presentation, disclosures });
+    const proof = await intent.spend({
+      agentKey,
+      checkoutJwt,
+      payment: { payee, amount: { amount: 450, currency: "USD" }, instrument },
+      audience: "https://shop.example",
+      nonce,
+    });
+
+    const verdict = await verifyDelegatedPurchase(proof, {
+      audience: "https://shop.example",
+      nonce,
+      checkoutKey: credentagent.ap2.publicJwk,
+      spent: { amount: 0, uses: 0 },
+      price: (cart) => catalogTotal(cart),
+    });
+    expect(verdict.ok).toBe(true);
   });
 });
