@@ -326,8 +326,8 @@ export interface CredentAgentOptions {
    * under one name is how a configuration mistake becomes silent, which is why they are named
    * apart rather than sharing a `signingKey`.
    *
-   * Omit for local dev and the gate generates one at boot — `doctor()` reports that as an ERROR,
-   * because every mandate this process signed stops verifying the moment it restarts.
+   * Omit for local dev and the gate generates one at boot. On a deployment `doctor()` reports that
+   * as an ERROR, because every mandate the process signed stops verifying the moment it restarts.
    */
   mandateSigningKey?: PrivateJwkP256;
   /**

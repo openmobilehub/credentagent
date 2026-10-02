@@ -17,21 +17,17 @@
 //
 // It also does not decide whether the mandates are the RIGHT ones. That comparison is
 // `mandates.ts`, against the server's own grant record, and the caller must do it.
-import { createHash, createPublicKey, X509Certificate } from "node:crypto";
-// The ONE ES256 check in the package. This rail had a private copy of it; two copies is two
-// places for the `ieee-p1363` detail to be got wrong, and only one of them was round-tripped
-// against a real signer.
-import { es256Verify } from "../../ap2/sdjwt.js";
+import { createPublicKey, X509Certificate } from "node:crypto";
+// The shared ES256 check and SD-JWT hasher. This rail keeps its own presentation check (a
+// Delegate KB-JWT is typed `kb+sd-jwt`, which the library's key-binding path refuses), but its
+// primitives are the package's: one copy of each, so the `ieee-p1363` detail and the hash names
+// cannot drift between them.
+import { es256Verify, hasher } from "../../ap2/sdjwt.js";
 import { decodeSdJwt, getClaims, splitSdJwt } from "@sd-jwt/core";
 import { DELEGATE_KB_TYP, DELEGATE_PAYLOAD_CLAIM, type MandateContent } from "./mandates.js";
 
-/** The SD-JWT hasher for this rail. `@sd-jwt` passes IANA names ("sha-256"); node wants
- *  "sha256". Exported so the in-process wallet hashes the way the verifier does — two copies
- *  is two places for this to drift, and a drift here reads as a bad signature. */
-export const hasher = (data: string | ArrayBuffer, alg: string): Uint8Array => {
-  const input = typeof data === "string" ? Buffer.from(data, "utf-8") : Buffer.from(data);
-  return new Uint8Array(createHash(alg.replace(/-/g, "")).update(input).digest());
-};
+/** Re-exported for the in-process wallet, which must hash the way this verifier does. */
+export { hasher };
 
 /** Decode a JWS segment without verifying. Only ever used to READ a key or a claim name. */
 function segment<T>(token: string, index: 0 | 1): T | undefined {

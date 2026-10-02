@@ -277,9 +277,15 @@ const doc = await (await fetch("https://shop.example/.well-known/did.json")).jso
 const verdict = await verifyMandate(token, { publicJwk: publicJwkFromDidDocument(doc) });
 ```
 
-A key-bound presentation also needs `{ audience, nonce }`. `verifyMandate` checks that the nonce
-**matches** the one you issued; it does not remember it. Consuming a nonce on first use is yours to do
-(security invariant 6) — the same presentation with the same nonce verifies twice.
+A mandate that names its holder's key (`cnf`, as the open mandates do) must be presented **with** a key
+binding, checked against `{ audience, nonce }`. Without one it would be a bearer token — anyone holding a
+copy passes — so `verifyMandate` refuses it with `"key-binding"` unless you opt out by name with
+`{ allowUnbound: true }`. It checks that the nonce **matches** the one you issued; it does not remember it.
+Consuming a nonce on first use is yours to do (security invariant 6) — the same presentation with the same
+nonce verifies twice.
+
+A refusal is `{ ok: false, code, detail }` rather than the `{ ok: false, reason }` the ceremony checks
+return: `code` is a closed union you can `switch` on, and `detail` is for logs, never for a decision.
 
 Money is an **integer in ISO-4217 minor units**, never a float — `toMinorUnits(124, "USD") === 12400`.
 Once both sides of an amount comparison are integers they either match or they do not, which is what

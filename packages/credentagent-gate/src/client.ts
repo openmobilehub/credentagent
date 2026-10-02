@@ -125,7 +125,7 @@ export class CredentAgent {
     // The AP2 mandate-signing key. Resolved SYNCHRONOUSLY on purpose: mount() is synchronous, and
     // a key that arrived on a promise would reach app.locals some ticks after the routes did — a
     // race in the middle of a security check. Absent ⇒ an ephemeral key, which doctor() reports as
-    // an error rather than accepting silently.
+    // an error on a deployment rather than accepting silently.
     this.mandateKey = resolveSigningKey(this.walletOrigin, opts.mandateSigningKey);
     this.ap2 = new Ap2Issuer(this.mandateKey);
     this.store = opts.store ?? new MemoryVerificationStore();

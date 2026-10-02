@@ -1,9 +1,10 @@
-// THE verification door for AP2 mandates. One function, one refusal vocabulary.
+// The verification door for AP2 mandates. One function, one refusal vocabulary.
 //
-// Why one door: the old code had three verification paths — a mock digest comparison, an
-// HMAC check, and an ES256 draw check — each with its own idea of what "valid" meant. Three
-// paths are three chances to fail open, and the one that failed open would be the one
-// nobody re-read. Everything now arrives here.
+// Why one door: the package has three older mandate checks — a mock digest comparison
+// (`ceremony/mandate.ts`), an HMAC check (`cartMandate.ts`), and the intent-sign rail's own
+// presentation check — each with its own idea of what "valid" means. Three paths are three
+// chances to fail open. They WILL move here: today no checkout path calls this file yet, and
+// migrating them is the next increment (expand → migrate → contract; this is the expand).
 //
 // What a PASS from this file means, exactly: the bytes were signed by the key named, the
 // mandate's `iss` / `kid` name that same key, it carries an `exp` that has not passed, and — when key-bound — the holder proved possession of the key
@@ -73,6 +74,13 @@ export interface VerifyOptions {
    * store on first success) is the caller's job, per security invariant 6.
    */
   nonce?: string;
+  /**
+   * Read a holder-bound mandate (one whose payload names a `cnf` key) WITHOUT a key binding —
+   * i.e. as a bearer token. Off by default: such a mandate means something only when its holder
+   * proves possession, so verifying it unbound would let anyone holding a copy pass. Opt in by
+   * name for the cases that genuinely need it, such as the issuer inspecting what it minted.
+   */
+  allowUnbound?: boolean;
   /** Epoch ms. Injectable so expiry is testable without faking the global clock. */
   nowMs?: number;
 }
@@ -124,10 +132,9 @@ export async function verifyMandate<T extends AnyMandate = AnyMandate>(
   }
 
   // Whether a token is key-bound is a property of the TOKEN, read structurally — never of
-  // what the verifier remembered to ask for. Deriving it from the verify result instead let
-  // a key-bound presentation pass as an ordinary mandate whenever the caller forgot to
-  // supply an audience: a stolen presentation would replay anywhere. Read it first, and make
-  // the presence of a KB-JWT itself the thing that demands checking.
+  // what the verifier remembered to ask for. A key-bound presentation checked as an ordinary
+  // mandate, because the caller supplied no audience, would replay anywhere. So the presence of
+  // a KB-JWT is itself what demands checking.
   let hasKeyBinding: boolean;
   try {
     hasKeyBinding = Boolean(splitSdJwt(token).kbJwt);
@@ -166,6 +173,16 @@ export async function verifyMandate<T extends AnyMandate = AnyMandate>(
     return issuerRefusal(err instanceof Error ? err.message : String(err));
   }
 
+  // The other half of the structural rule above. A payload that commits to a holder key is a
+  // promise that the holder will prove possession; presented without that proof it is a bearer
+  // token, and "fail closed" has to cover the caller who forgot to ask, not only the one who asked.
+  if (!hasKeyBinding && payload.cnf !== undefined && !opts.allowUnbound) {
+    return refuse(
+      "key-binding",
+      "the mandate names a holder key (cnf) but carries no key binding — pass { audience, nonce } to check one, or { allowUnbound: true } to read it as a bearer token",
+    );
+  }
+
   let kb: { payload: { aud: string; nonce: string } } | undefined;
   if (hasKeyBinding) {
     try {
@@ -174,8 +191,8 @@ export async function verifyMandate<T extends AnyMandate = AnyMandate>(
     } catch (err) {
       return keyBindingRefusal(err instanceof Error ? err.message : String(err));
     }
-    // Belt and braces: the library verified the hop, and we re-read the claims it verified so
-    // a future config change cannot silently stop checking them.
+    // BACKUP DEFENCE, unreachable today: the library has already refused a wrong aud / nonce.
+    // Re-reading the claims it verified keeps them checked if its options are ever changed.
     if (!kb) return refuse("key-binding", "the KB-JWT was not returned by the verifier");
     if (kb.payload.aud !== opts.audience) return refuse("audience", `aud=${kb.payload.aud}`);
     if (kb.payload.nonce !== opts.nonce) return refuse("nonce", "key-binding nonce does not match the one issued");
@@ -197,6 +214,7 @@ export async function verifyMandate<T extends AnyMandate = AnyMandate>(
   if (typeof payload.exp !== "number") return refuse("malformed", "mandate carries no numeric `exp`");
   if (nowSec >= payload.exp) return refuse("expired", `exp=${payload.exp} now=${nowSec}`);
 
+  // BACKUP DEFENCE, unreachable today: the library refuses `iat` beyond the same skew first.
   const iat = typeof payload.iat === "number" ? payload.iat : undefined;
   if (iat !== undefined && iat > nowSec + IAT_SKEW_SECONDS) return refuse("not-yet-valid", `iat=${iat} now=${nowSec}`);
 

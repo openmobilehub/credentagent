@@ -147,7 +147,13 @@ export class Ap2Issuer {
     });
   }
 
-  /** `mandate.checkout.open.1` — "I authorize FUTURE checkouts within these constraints." */
+  /**
+   * `mandate.checkout.open.1` — "I authorize FUTURE checkouts within these constraints."
+   *
+   * SIGNED BY THE GATE. Use it when the gate itself is the party granting the authority. When the
+   * PERSON grants it on their phone, the wallet signs the open mandates instead — the intent-sign
+   * rail builds that content with `openMandatesForGrant` and never signs it with this key.
+   */
   async openCheckout(args: IssueOpenArgs<CheckoutConstraint>): Promise<IssuedMandate> {
     assertContains(args.constraints, "checkout.line_items", "Open Checkout Mandate");
     return this.#mint({ vct: VCT.openCheckout, constraints: args.constraints, cnf: args.cnf, iat: nowSeconds(), exp: args.exp });

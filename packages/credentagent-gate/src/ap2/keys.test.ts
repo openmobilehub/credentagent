@@ -120,5 +120,9 @@ describe("checking a mandate from the published DID document alone", () => {
       publicJwkFromDidDocument({ ...doc, verificationMethod: [{ ...methods[0], controller: "did:web:evil.example" }] }),
     ).toThrow(/not controlled by/);
     expect(() => publicJwkFromDidDocument({ id: "nope" })).toThrow(/not a DID document/);
+    // Named explicitly by `kid`, a method that is NOT an assertion method is still refused: it was
+    // published for something other than signing mandates.
+    const kid = methods[0].id as string;
+    expect(() => publicJwkFromDidDocument({ ...doc, assertionMethod: [] }, kid)).toThrow(/is not an assertionMethod/);
   });
 });

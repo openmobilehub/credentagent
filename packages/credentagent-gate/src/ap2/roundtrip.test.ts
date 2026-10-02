@@ -211,12 +211,9 @@ describe("open mandates and key binding", () => {
   // A key-bound token handed to a verifier that forgot to ask for binding must NOT quietly
   // pass as an ordinary mandate — that is how a stolen presentation gets reused.
   //
-  // Two controls refuse this, and the assertion on `detail` is what keeps them BOTH honest.
-  // The early structural guard refuses before the library is ever called; the `!kb` check
-  // after it refuses because the library returns no KB-JWT when no nonce was requested.
-  // Asserting only `code` let either one be deleted with every test still green, since the
-  // survivor produced the same code — which is exactly the shape of test this repository
-  // says is not a useful test. Pin which control spoke.
+  // The assertion on `detail` pins WHICH control refused: the structural guard, before the
+  // library is called. Another check further down returns the same code, so asserting only the
+  // code would stay green with this guard deleted.
   it("refuses a key-bound token when no audience/nonce was supplied (bypass)", async () => {
     const { key, ap2 } = await issuer();
     const h = holder();

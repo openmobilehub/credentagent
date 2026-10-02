@@ -129,8 +129,9 @@ export type { PaymentBinding, ReconcileRefusal, ReconcileVerdict } from "./cerem
 
 // ── AP2 mandates (spec 013) — mint one, verify one ─────────────────────────
 // SD-JWT (RFC 9901), ES256, discriminated by the AP2 `vct` claim. `Ap2Issuer` mints;
-// `verifyMandate` is the ONE door that says whether a mandate is signed, unexpired and — when
-// key-bound — presented by the key its own `cnf` commits to.
+// `verifyMandate` says whether a mandate is signed, unexpired and — when it names a holder key —
+// presented by that key. It is meant to become the ONE door: the older mandate checks
+// (`ceremony/mandate.ts`, `cartMandate.ts`) are still what checkouts use today.
 //
 // The crypto layer under them (`sdjwt.ts`, `jwt.ts`) is deliberately NOT exported. A caller
 // reaching past issue/verify is a caller building a second verification door, which is the

@@ -242,3 +242,34 @@ describe("one real token per library message (a reworded message must turn this 
     });
   });
 });
+
+// A mandate that names its holder's key in `cnf` is only meaningful when the holder proves they
+// have it. Verified WITHOUT that proof, it is a bearer token: anyone holding a copy passes. The
+// caller who forgets to ask for binding must be refused, not quietly handed `ok: true`.
+describe("a holder-bound mandate", () => {
+  async function openMandate() {
+    const key = resolveSigningKey(ORIGIN);
+    const h = holder();
+    const open = await new Ap2Issuer(key).openPayment({
+      constraints: [{ type: "payment.reference", conditional_transaction_id: "oc" }],
+      cnf: h.cnf,
+      exp: nowSec() + 3600,
+    });
+    return { key, token: open.token };
+  }
+
+  it("is refused when presented with no key binding (bypass)", async () => {
+    const { key, token } = await openMandate();
+    const v = await verifyMandate(token, { publicJwk: key.publicJwk });
+    expect(v).toMatchObject({ ok: false, code: "key-binding", detail: expect.stringMatching(/names a holder key/) });
+  });
+
+  // The explicit way to read one — say, the issuer inspecting what it minted — is to opt out by name.
+  it("can be read unbound only by opting out explicitly", async () => {
+    const { key, token } = await openMandate();
+    const v = await verifyMandate(token, { publicJwk: key.publicJwk, allowUnbound: true });
+    expect(v.ok).toBe(true);
+    if (v.ok) expect(v.keyBound).toBeUndefined();
+  });
+});
+

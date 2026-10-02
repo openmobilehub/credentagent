@@ -12,7 +12,9 @@ const utf8 = new TextEncoder();
 /** The hash algorithm we emit. `_sd_alg` records it; verification follows the token's. */
 export const SD_HASH_ALG = "sha-256";
 
-const hasher = (data: string | ArrayBuffer, alg: string): Uint8Array => {
+/** The package's SD-JWT hasher — one copy, shared with the intent-sign rail and its simulated
+ *  wallet, so every side hashes identically (a drift here reads as a bad signature). */
+export const hasher = (data: string | ArrayBuffer, alg: string): Uint8Array => {
   // @sd-jwt uses IANA names ("sha-256"); node wants "sha256".
   const nodeAlg = alg.replace(/-/g, "");
   const input = typeof data === "string" ? Buffer.from(data, "utf-8") : Buffer.from(data);
@@ -30,8 +32,8 @@ export function es256Signer(privateKey: KeyObject): Signer {
 }
 
 /**
- * THE ES256 check in this package. Every JWS signature the gate verifies — a mandate, a key
- * binding, a wallet's credential — goes through this one function.
+ * The package's one ES256 JWS check: the AP2 mandates, and the intent-sign rail's credential and
+ * key binding, all verify through this function.
  *
  * It takes a `KeyObject` rather than a JWK so a caller holding a key that came from somewhere
  * other than a JWK (an X.509 certificate in a credential's `x5c`, say) can share it without a

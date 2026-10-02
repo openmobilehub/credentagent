@@ -2,19 +2,18 @@
 //
 // DECISION (spec 013 #1): a host MAY inject a stable key; when it does not, the gate
 // generates an ephemeral P-256 key so a zero-config install still runs — and `doctor.ts`
-// reports that as an ERROR, because an ephemeral key means every mandate this process
-// signed becomes unverifiable the moment it restarts.
+// reports that as an ERROR ON A DEPLOYMENT, because an ephemeral key means every mandate the
+// process signed becomes unverifiable the moment it restarts.
 //
 // DECISION (spec 013 #2): `mount()` serves `/.well-known/did.json`. Without a published
 // key the signature is checkable only by us, which would make "real signatures" a hollow
-// claim — the whole point of leaving `MOCK-DEV-SIGNER` behind.
+// claim. (The older `MOCK-DEV-SIGNER` path in `ceremony/mandate.ts` is still live; it will be
+// retired once checkouts move onto `Ap2Issuer`.)
 //
-// SYNCHRONOUS on purpose. `mount()` is synchronous, and resolving the key on a promise
-// meant the public key reached `app.locals` some ticks after the routes did — a race in
-// the middle of a security check, where the loser is "no key, refuse everything" or, one
-// refactor later, "no key, verify nothing". node's `crypto.sign` with `dsaEncoding:
-// "ieee-p1363"` also emits the raw r‖s that JWS wants, so nothing is lost by not using
-// WebCrypto's async subtle here.
+// SYNCHRONOUS on purpose. `mount()` is synchronous; a key resolved on a promise would reach
+// `app.locals` some ticks after the routes do — a race in the middle of a security check.
+// node's `crypto.sign` with `dsaEncoding: "ieee-p1363"` emits the raw r‖s that JWS wants, so
+// nothing is lost by not using WebCrypto's async subtle here.
 import { createECDH, createPrivateKey, createPublicKey, generateKeyPairSync, type KeyObject } from "node:crypto";
 
 /** The signing suite. AP2 mandates in this package are ES256 over P-256, always. */
