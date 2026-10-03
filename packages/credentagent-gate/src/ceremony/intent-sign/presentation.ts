@@ -17,19 +17,17 @@
 //
 // It also does not decide whether the mandates are the RIGHT ones. That comparison is
 // `mandates.ts`, against the server's own grant record, and the caller must do it.
-import { createHash, createPublicKey, verify as nodeVerify, X509Certificate } from "node:crypto";
+import { createPublicKey, X509Certificate } from "node:crypto";
+// The shared ES256 check and SD-JWT hasher. This rail keeps its own presentation check (a
+// Delegate KB-JWT is typed `kb+sd-jwt`, which the library's key-binding path refuses), but its
+// primitives are the package's: one copy of each, so the `ieee-p1363` detail and the hash names
+// cannot drift between them.
+import { es256Verify, hasher } from "../../ap2/sdjwt.js";
 import { decodeSdJwt, getClaims, splitSdJwt } from "@sd-jwt/core";
 import { DELEGATE_KB_TYP, DELEGATE_PAYLOAD_CLAIM, type MandateContent } from "./mandates.js";
 
-const utf8 = new TextEncoder();
-
-/** The SD-JWT hasher for this rail. `@sd-jwt` passes IANA names ("sha-256"); node wants
- *  "sha256". Exported so the in-process wallet hashes the way the verifier does — two copies
- *  is two places for this to drift, and a drift here reads as a bad signature. */
-export const hasher = (data: string | ArrayBuffer, alg: string): Uint8Array => {
-  const input = typeof data === "string" ? Buffer.from(data, "utf-8") : Buffer.from(data);
-  return new Uint8Array(createHash(alg.replace(/-/g, "")).update(input).digest());
-};
+/** Re-exported for the in-process wallet, which must hash the way this verifier does. */
+export { hasher };
 
 /** Decode a JWS segment without verifying. Only ever used to READ a key or a claim name. */
 function segment<T>(token: string, index: 0 | 1): T | undefined {
@@ -37,19 +35,6 @@ function segment<T>(token: string, index: 0 | 1): T | undefined {
     return JSON.parse(Buffer.from(token.split(".")[index], "base64url").toString("utf-8")) as T;
   } catch {
     return undefined;
-  }
-}
-
-/**
- * ES256 verify. `ieee-p1363` is the raw r‖s encoding JWS uses — node's EC default is DER,
- * which would reject every valid signature. Any malformed input verifies as FALSE rather than
- * throwing, so a caller cannot mistake "could not check" for "inconclusive, carry on".
- */
-function es256(publicKey: ReturnType<typeof createPublicKey>, data: string, sig: string): boolean {
-  try {
-    return nodeVerify("sha256", utf8.encode(data), { key: publicKey, dsaEncoding: "ieee-p1363" }, Buffer.from(sig, "base64url"));
-  } catch {
-    return false;
   }
 }
 
@@ -128,7 +113,7 @@ export async function verifyDelegatedPresentation(args: {
   }
 
   const [issuerHeader, issuerBody, issuerSig] = parts.jwt.split(".");
-  if (!es256(issuerKey, `${issuerHeader}.${issuerBody}`, issuerSig ?? "")) {
+  if (!es256Verify(issuerKey, `${issuerHeader}.${issuerBody}`, issuerSig ?? "")) {
     return { ok: false, reason: "credential signature does not verify against its own certificate" };
   }
 
@@ -157,7 +142,7 @@ export async function verifyDelegatedPresentation(args: {
   }
 
   const [kbHeader, kbBody, kbSig] = parts.kbJwt.split(".");
-  if (!es256(holderKey, `${kbHeader}.${kbBody}`, kbSig ?? "")) {
+  if (!es256Verify(holderKey, `${kbHeader}.${kbBody}`, kbSig ?? "")) {
     return { ok: false, reason: "key-binding signature does not verify against the credential's cnf key" };
   }
 

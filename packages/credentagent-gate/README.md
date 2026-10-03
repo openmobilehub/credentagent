@@ -224,9 +224,80 @@ Each finding is `{ level: "error" | "warn", code, message, fix }`. It checks the
 | `localhost-wallet-origin` | `walletOrigin` is localhost on a deployment | pass your public `https` origin |
 | `in-memory-verification-store` | the default in-memory `store` on a deployment | inject a shared `{ store }` (Redis/Upstash) |
 | `in-memory-order-store` | the default in-memory order stores on a deployment | inject `{ orderStore, completedOrderStore }` |
+| `ephemeral-mandate-key` | no `mandateSigningKey` on a deployment — the AP2 key was generated at boot (**error** on any deployment) | pass a stable private P-256 JWK as `{ mandateSigningKey }` |
 
-In plain local dev — no deployment env signals (`VERCEL`, `AWS_LAMBDA_*`, `NODE_ENV=production`, …) — it
-reports nothing, so the zero-config quickstart stays quiet.
+In plain local dev — no deployment env signals (`VERCEL`, `AWS_LAMBDA_*`, `NODE_ENV=production`, …) — every
+check stays quiet, so the zero-config quickstart is undisturbed. `ephemeral-mandate-key` is an error even on
+a single production box (not just serverless), because the damage is not "might not work across instances"
+but "every mandate already signed stops verifying at the next restart".
+
+### AP2 mandates — signing them, and letting anyone check
+
+The gate records what a buyer authorized as an [AP2](https://github.com/google-agentic-commerce/AP2)
+mandate: an SD-JWT (RFC 9901) signed ES256, typed by AP2's `vct` claim. Pass the key and `mount()`
+publishes its public half, so a mandate this gate signed is verifiable by someone who does not have
+your source:
+
+```ts
+const credentagent = new CredentAgent({
+  walletOrigin: "https://shop.example",
+  mandateSigningKey: JSON.parse(process.env.MANDATE_SIGNING_KEY),   // a PRIVATE P-256 JWK
+});
+credentagent.mount(app);        // serves GET /.well-known/did.json
+```
+
+`mandateSigningKey` is **not** `gateSecret`. `gateSecret` is a symmetric HMAC secret for challenge
+tokens; this is an asymmetric key whose public half goes to the world. Omit it and the gate generates
+one at boot — fine for a dev server, an error on anything else.
+
+Mint and check:
+
+```ts
+import { verifyMandate, VCT } from "@openmobilehub/credentagent-gate";
+
+// `ucpCheckout` is the cart as a UCP Checkout (`UcpCheckout`): line items and totals in minor units.
+const checkout = await credentagent.ap2.checkout({ checkout: ucpCheckout });   // "I authorize THIS cart"
+const mandate = await credentagent.ap2.payment({                               // "…and THIS payment for it"
+  transactionId: checkout.checkoutHash,
+  payee: { id: "shop-1", name: "Shop" },
+  amount: { amount: 12400, currency: "USD" },      // integer MINOR units — $124.00
+  instrument: { id: "pi_1", type: "card", description: "Visa ••4242" },
+});
+
+const verdict = await verifyMandate(mandate.token, { publicJwk: credentagent.ap2.publicJwk, expect: VCT.payment });
+if (!verdict.ok) console.error(verdict.code);       // "signature" | "expired" | "issuer" | "key-binding" | …
+```
+
+Anyone else checks it from the published document alone — a fetch and two calls:
+
+```ts
+import { publicJwkFromDidDocument, verifyMandate } from "@openmobilehub/credentagent-gate";
+
+const doc = await (await fetch("https://shop.example/.well-known/did.json")).json();
+const verdict = await verifyMandate(token, { publicJwk: publicJwkFromDidDocument(doc) });
+```
+
+A mandate that names its holder's key (`cnf`, as the open mandates do) must be presented **with** a key
+binding, checked against `{ audience, nonce }`. Without one it would be a bearer token — anyone holding a
+copy passes — so `verifyMandate` refuses it with `"key-binding"` unless you opt out by name with
+`{ allowUnbound: true }`. It checks that the nonce **matches** the one you issued; it does not remember it.
+Consuming a nonce on first use is yours to do (security invariant 6) — the same presentation with the same
+nonce verifies twice.
+
+A refusal is `{ ok: false, code, detail }` rather than the `{ ok: false, reason }` the ceremony checks
+return: `code` is a closed union you can `switch` on, and `detail` is for logs, never for a decision.
+
+Money is an **integer in ISO-4217 minor units**, never a float — `toMinorUnits(124, "USD") === 12400`.
+Once both sides of an amount comparison are integers they either match or they do not, which is what
+security invariant 3 needs.
+
+**What a verified mandate means, exactly:** the bytes were signed by the key named, its `iss` / `kid` name
+that same key, it carries an `exp` that has not passed (one minute of clock skew on `iat`, none on `exp`),
+and — when key-bound — the holder proved possession of the key the mandate's own `cnf` commits to. It
+does **not** mean the amount is right (re-price against your catalog; that is security invariant 2 and
+`verifyMandate` will never do it for you), that a human agreed, or that the credential behind it came
+from a real issuer — that last one is
+[#14](https://github.com/openmobilehub/credentagent/issues/14) and still open.
 
 ### Webhooks — tell a *different* service when an order settles
 

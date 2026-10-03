@@ -28,15 +28,10 @@
 //      `money.ts` owns the only conversion in the package.
 //
 // HONESTY: a correct wire format is not a trust anchor. These types say only what a record
-// CLAIMS. Whether the claim is SIGNED is the verifier's answer (the next increment of spec
-// 013); how strongly the signature binds is what `trust_level` reports. Neither proves the
-// credential behind the record came from a real issuer — that is #14 and is still open.
-//
-// SCOPE: payloads and arithmetic only — no crypto and no wiring (spec 013). `money.ts` is
-// live: `grants.ts` converts through it, so the package has exactly one money converter.
-// These TYPES have no caller yet and are not exported from `index.ts`, on purpose: a public
-// API that offers a mandate type nobody can produce or check is worse than no public API.
-// Export them in the same change that adds the issuer and the verifier.
+// CLAIMS. Whether the claim is SIGNED is the verifier's answer (`verify.ts`, the next
+// increment of spec 013); how strongly the signature binds is what `trust_level` reports.
+// Neither proves the credential behind the record came from a real issuer — that is #14
+// (issuer-verified trust) and is still open.
 
 /** Verifiable Credential Type — the AP2 mandate discriminator (SD-JWT `vct`). */
 export const VCT = {
