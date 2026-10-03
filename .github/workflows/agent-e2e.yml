@@ -4,11 +4,11 @@ name: agent-e2e
 # checkout) and the harness asserts on the tool trace — that an agent could use our tools unaided,
 # that the age gate + honesty labels reached the agent-facing wire, and that nothing claimed a gated
 # order completed. Catches the failure class the deterministic smokes can't: "an agent can no longer
-# figure out our tools." Runs BOTH providers so it doubles as a cross-provider compatibility guarantee.
+# figure out our tools."
 #
-# Each provider step needs its own key secret (ANTHROPIC_API_KEY / OPENAI_API_KEY). A step with no
-# key SKIPS (green, with a notice) — so this merges before either secret exists, and you can enable
-# one or both providers independently.
+# Runs on the Claude Agent SDK and signs in with the CLAUDE_CODE_OAUTH_TOKEN secret (the same one the
+# automated PR review uses) — no separate API key or bill. With no token the step SKIPS (green, with a
+# notice).
 
 on:
   schedule:
@@ -31,21 +31,10 @@ jobs:
 
       - name: Claude agent E2E
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: |
-          if [ -z "$ANTHROPIC_API_KEY" ]; then
-            echo "::notice::ANTHROPIC_API_KEY not configured — skipping the Claude agent run."
+          if [ -z "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
+            echo "::notice::CLAUDE_CODE_OAUTH_TOKEN not configured — skipping the Claude agent run."
             exit 0
           fi
           node agent-e2e.mjs
-
-      - name: ChatGPT agent E2E (cross-provider)
-        if: ${{ always() }} # run even if the Claude step failed — they're independent signals
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: |
-          if [ -z "$OPENAI_API_KEY" ]; then
-            echo "::notice::OPENAI_API_KEY not configured — skipping the ChatGPT agent run."
-            exit 0
-          fi
-          node agent-e2e-openai.mjs
