@@ -34,14 +34,14 @@ function merchant(origin: string, lines: Array<[string, number]> = [["coffee", 1
   return { origin, ap2, ucp, checkoutJwt: ap2.signCheckout(ucp), price: catalog };
 }
 
-async function purchase(opts: { grant?: Parameters<typeof testGrant>[0]; at?: string; amount?: number; lines?: Array<[string, number]>; mutate?: (c: UcpCheckout) => UcpCheckout } = {}) {
+async function purchase(opts: { grant?: Parameters<typeof testGrant>[0]; at?: string; amount?: number; lines?: Array<[string, number]>; mutate?: (c: UcpCheckout) => UcpCheckout; payee?: string } = {}) {
   const g = await testGrant(opts.grant);
   const m = merchant(opts.at ?? GATE_ORIGIN, opts.lines, opts.mutate);
   const intent = DelegatedIntent.fromWalletPresentation({ presentation: g.presentation, disclosures: g.disclosures });
   const proof = await intent.spend({
     agentKey: g.agent.privateKey,
     checkoutJwt: m.checkoutJwt,
-    payment: { payee: merchantFor(m.origin), amount: { amount: opts.amount ?? m.ucp.totals[0].amount, currency: "USD" }, instrument: { id: "pi_1", type: "card" } },
+    payment: { payee: merchantFor(opts.payee ?? m.origin), amount: { amount: opts.amount ?? m.ucp.totals[0].amount, currency: "USD" }, instrument: { id: "pi_1", type: "card" } },
     audience: m.origin,
     nonce: "purchase-nonce",
   });
@@ -87,6 +87,13 @@ describe("a delegated purchase, end to end", () => {
     expect(v).toMatchObject({ ok: false, code: "constraint" });
     if (v.ok) return;
     expect(v.violations?.map((x) => x.constraint)).toEqual(expect.arrayContaining(["checkout.allowed_merchants", "payment.allowed_payees"]));
+  });
+
+  // A permission naming two stores lets each be paid — for its own cart. Every signature is
+  // genuine and SECOND passes allowed_payees; only the payee ↔ checkout binding refuses it.
+  it("REFUSES paying another allowed store for this store's cart (bypass, #236)", async () => {
+    const { verify } = await purchase({ grant: { alsoAllowed: [merchantFor(SECOND)] }, payee: SECOND });
+    expect(await verify()).toMatchObject({ ok: false, code: "payee" });
   });
 });
 

@@ -163,6 +163,19 @@ describe("payment constraints", () => {
     expect(evaluatePayment(openPayment([window]), closed({ execution_date: "2026-10-15" }), ctx())).toEqual([]);
   });
 
+  it("REFUSES a payment that omits its date to escape the window — no date means now (bypass, #236)", () => {
+    const window = { type: "payment.execution_date" as const, not_before: "2026-11-01", not_after: "2026-11-30" };
+    const before = Date.parse("2026-10-10T12:00:00Z");
+    const after = Date.parse("2026-12-05T12:00:00Z");
+    expect(evaluatePayment(openPayment([window]), closed(), ctx({ nowMs: before }))).toEqual([
+      expect.objectContaining({ constraint: "payment.execution_date", detail: expect.stringMatching(/before 2026-11-01/) }),
+    ]);
+    expect(evaluatePayment(openPayment([window]), closed(), ctx({ nowMs: after }))).toEqual([
+      expect.objectContaining({ constraint: "payment.execution_date", detail: expect.stringMatching(/after 2026-11-30/) }),
+    ]);
+    expect(evaluatePayment(openPayment([window]), closed(), ctx({ nowMs: Date.parse("2026-11-15T12:00:00Z") }))).toEqual([]);
+  });
+
   it("refuses once agent_recurrence's max_occurrences is used up, and demands its companions (bypass)", () => {
     const recur = { type: "payment.agent_recurrence" as const, frequency: "MONTHLY" as const, max_occurrences: 3 };
     expect(evaluatePayment(openPayment([recur, range, budget]), closed(), ctx({ spent: { amount: 0, uses: 3 } }))).toEqual([

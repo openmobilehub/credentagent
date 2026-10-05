@@ -55,7 +55,7 @@ const violation = (code: Violation["code"], detail: string, constraint?: string)
 });
 
 /** AP2's merchant match: by `id` when both carry one, else by `name` and `website` together. */
-function merchantMatches(candidate: Merchant | undefined, target: Merchant | undefined): boolean {
+export function merchantMatches(candidate: Merchant | undefined, target: Merchant | undefined): boolean {
   if (!candidate || !target) return false;
   if (candidate.id && target.id) return candidate.id === target.id;
   return Boolean(candidate.name && candidate.website) && candidate.name === target.name && candidate.website === target.website;
@@ -142,6 +142,8 @@ export interface PaymentContext {
   openCheckout: OpenCheckoutMandate;
   /** Usage so far. Required by `payment.budget` and `payment.agent_recurrence`; absent ⇒ refused. */
   spent?: Spent;
+  /** Epoch ms — the moment a payment that names no `execution_date` executes. Defaults to now. */
+  nowMs?: number;
 }
 
 /** The claims an open payment mandate may fix, which the closed one must then carry unchanged. */
@@ -203,13 +205,13 @@ export function evaluatePayment(open: OpenPaymentMandate, closed: PaymentMandate
         if (!closed.pisp || !c.allowed.some((p) => sameJson(p, closed.pisp))) out.push(violation("constraint", "the payment names no allowed PISP", c.type));
         break;
       case "payment.execution_date": {
-        const when = closed.execution_date;
-        if (when !== undefined) {
-          const t = Date.parse(when);
-          if (Number.isNaN(t)) out.push(violation("constraint", `execution_date ${when} is not a date`, c.type));
-          else if (c.not_before && t < Date.parse(c.not_before)) out.push(violation("constraint", `${when} is before ${c.not_before}`, c.type));
-          else if (c.not_after && t > Date.parse(c.not_after)) out.push(violation("constraint", `${when} is after ${c.not_after}`, c.type));
-        }
+        // A payment that names no date executes NOW — and now must sit inside the window too.
+        // Skipping the check would let an agent leave the window simply by omitting the date (#236).
+        const when = closed.execution_date ?? new Date(ctx.nowMs ?? Date.now()).toISOString();
+        const t = Date.parse(when);
+        if (Number.isNaN(t)) out.push(violation("constraint", `execution_date ${when} is not a date`, c.type));
+        else if (c.not_before && t < Date.parse(c.not_before)) out.push(violation("constraint", `${when} is before ${c.not_before}`, c.type));
+        else if (c.not_after && t > Date.parse(c.not_after)) out.push(violation("constraint", `${when} is after ${c.not_after}`, c.type));
         break;
       }
       default:

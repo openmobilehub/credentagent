@@ -30,7 +30,7 @@ import {
 } from "../types.js";
 import { appendAgentHop } from "./hop.js";
 import { walletChain } from "./serialize.js";
-import { evaluateCheckout, evaluatePayment, type Spent, type Violation } from "./constraints.js";
+import { evaluateCheckout, evaluatePayment, merchantMatches, type Spent, type Violation } from "./constraints.js";
 import { verifyChain, type ChainRefusalCode } from "./verify.js";
 
 /** What the agent hands the merchant: one chain per mandate type. */
@@ -137,6 +137,7 @@ export type PurchaseRefusalCode =
   | "unexpected-type" // a chain carries the other mandate type
   | "checkout-unbound" // the checkout is not this merchant's, or its hash does not match
   | "unbound" // the payment pays for a different checkout
+  | "payee" // the payment pays someone other than the merchant whose checkout it is
   | "constraint" // the purchase leaves the permission's limits (see `violations`)
   | "amount" // the payment does not pay the checkout's total, or the total does not add up
   | "price"; // the catalog prices the cart differently (invariant 2)
@@ -212,10 +213,15 @@ export async function verifyDelegatedPurchase(proof: DelegatedPurchaseProof, opt
   const checkout = verifyCompactJwt<UcpCheckout>(closedCheckout.checkout_jwt, opts.checkoutKey);
   if (!checkout) return refuse("checkout-unbound", "the checkout is not signed by this merchant's key");
   if (payment.transaction_id !== closedCheckout.checkout_hash) return refuse("unbound", "the payment's transaction_id names a different checkout");
+  // The payee is the merchant that signed the cart. A permission naming several stores lets each
+  // be paid — but only for its OWN checkout, never for another's (#236).
+  if (!merchantMatches(payment.payee, checkout.merchant)) {
+    return refuse("payee", `the payment pays ${payment.payee?.id ?? "∅"}, not ${checkout.merchant?.id ?? "∅"} whose checkout it is`);
+  }
 
   const violations = [
     ...evaluateCheckout(openCheckout, checkout),
-    ...evaluatePayment(openPayment, payment, { openCheckout, ...(opts.spent ? { spent: opts.spent } : {}) }),
+    ...evaluatePayment(openPayment, payment, { openCheckout, ...(opts.spent ? { spent: opts.spent } : {}), ...(opts.nowMs !== undefined ? { nowMs: opts.nowMs } : {}) }),
   ];
   if (violations.length) return refuse("constraint", violations.map((v) => `${v.constraint ?? v.code}: ${v.detail}`).join("; "), violations);
 
