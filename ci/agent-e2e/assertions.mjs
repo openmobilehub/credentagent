@@ -1,7 +1,7 @@
-// Shared, provider-agnostic assertions for the agent-in-the-loop E2E. Both harnesses (Claude via
-// the Anthropic SDK, ChatGPT via the OpenAI Responses API) normalize their provider's tool trace
-// into { toolNames, rawOutputs, finalText } and call runAssertions — ONE source of truth for what
-// "an agent could actually use these tools" means, so the two stay in lockstep.
+// Assertions for the agent-in-the-loop E2E. The harness (agent-e2e.mjs) normalizes the agent's
+// tool trace into { toolNames, rawOutputs, finalText } and calls runAssertions — ONE source of truth
+// for what "an agent could actually use these tools" means, kept provider-agnostic so another
+// agent's harness can reuse it.
 //
 // The manifest checks match a WHITESPACE-NORMALIZED concatenation of the raw tool outputs, not
 // parsed JSON. Two provider quirks make parsing fragile: (1) providers re-serialize tool results
@@ -18,13 +18,7 @@
 // the honesty label — DOES hard-fail. When #120 lands and the agent reliably reaches checkout, the
 // full checkout-path checks apply automatically.
 
-// `strictManifest`: whether to COUNT the manifest-content checks (age gate, honesty label) as
-// regressions. True for a provider whose tool trace is returned in full (Anthropic). False for one
-// that truncates long tool outputs in the returned trace (OpenAI's hosted MCP caps them, so the
-// checkout manifest — bloated by base64 approve-URLs — is often cut off). For a lossy-trace
-// provider the manifest checks are reported for visibility but not counted; the COUNTED guarantee is
-// tool-drivability + no fabricated completion, which is what that harness can prove reliably.
-export function runAssertions({ toolNames, rawOutputs, finalText, mcpUrl, model, strictManifest = true }) {
+export function runAssertions({ toolNames, rawOutputs, finalText, mcpUrl, model }) {
   // Whitespace-normalized blob of every tool output → compact-token substring matching.
   const blob = (rawOutputs ?? []).map((s) => String(s ?? "").replace(/\s+/g, "")).join("\n");
   const has = (token) => blob.includes(token);
@@ -67,19 +61,11 @@ export function runAssertions({ toolNames, rawOutputs, finalText, mcpUrl, model,
     check("the honesty label survived to the agent-facing wire (presence-only-demo)", honestyLabelIntact, { regression: false });
     check("the agent told the human about the 21+ requirement", toldHumanAboutAge, { regression: false });
   } else {
-    // The agent got at least to the cart — checkout itself must succeed (always counted). The
-    // manifest-content checks are counted only when the provider returns the tool trace in full.
+    // The agent got at least to the cart — checkout and the manifest-content checks must hold.
     check("the agent reached checkout unaided", reachedCheckout);
-    if (!strictManifest) {
-      console.log(
-        "  (this provider truncates long tool outputs in the returned trace, so the manifest checks\n" +
-          "   below are reported for visibility but NOT counted — the age gate is asserted end-to-end\n" +
-          "   by the full-trace provider's harness.)",
-      );
-    }
-    check("the age gate reached the agent (credential=age, minAge=21)", ageGateReached, { regression: strictManifest });
-    check("the honesty label survived to the agent-facing wire (presence-only-demo)", honestyLabelIntact, { regression: strictManifest });
-    check("the agent told the human about the 21+ requirement", toldHumanAboutAge, { regression: strictManifest, detail: "final message never mentioned the age requirement" });
+    check("the age gate reached the agent (credential=age, minAge=21)", ageGateReached);
+    check("the honesty label survived to the agent-facing wire (presence-only-demo)", honestyLabelIntact);
+    check("the agent told the human about the 21+ requirement", toldHumanAboutAge, { detail: "final message never mentioned the age requirement" });
   }
 
   console.log(`\n[dx] tool calls: ${toolNames.length}`);

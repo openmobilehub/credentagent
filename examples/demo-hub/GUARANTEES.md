@@ -100,7 +100,7 @@ tools, if the age gate or honesty labels stop reaching the agent, or if anything
 order completed. This catches what no scripted test can: drift in the *agent-facing* contract.
 
 ```bash
-ANTHROPIC_API_KEY=... node ci/agent-e2e/agent-e2e.mjs
+cd ci/agent-e2e && npm install && node agent-e2e.mjs   # uses your Claude Code login
 ```
 **You should see:** `ALL AGENT-E2E CHECKS PASSED`, with the agent's tool-call chain printed
 (browse → add → checkout) and the assertions on the trace. Runs automatically via the
