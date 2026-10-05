@@ -39,7 +39,7 @@ async function purchase(opts: { grant?: Parameters<typeof testGrant>[0]; at?: st
   const m = merchant(opts.at ?? GATE_ORIGIN, opts.lines, opts.mutate);
   const intent = DelegatedIntent.fromWalletPresentation({ presentation: g.presentation, disclosures: g.disclosures });
   const proof = await intent.spend({
-    agentKey: g.agent.privateKey,
+    agentKey: g.agentKey,
     checkoutJwt: m.checkoutJwt,
     payment: { payee: merchantFor(opts.payee ?? m.origin), amount: { amount: opts.amount ?? m.ucp.totals[0].amount, currency: "USD" }, instrument: { id: "pi_1", type: "card" } },
     audience: m.origin,
@@ -65,7 +65,7 @@ describe("a delegated purchase, end to end", () => {
     const { g, m } = await purchase();
     const intent = DelegatedIntent.fromWalletPresentation({ presentation: g.presentation.replace(/[^~]*$/, ""), disclosures: g.disclosures });
     await expect(
-      intent.spend({ agentKey: g.agent.privateKey, checkoutJwt: m.checkoutJwt, payment: { payee: merchantFor(GATE_ORIGIN), amount: { amount: 450, currency: "USD" }, instrument: { id: "pi_1", type: "card" } }, audience: GATE_ORIGIN, nonce: "n" }),
+      intent.spend({ agentKey: g.agentKey, checkoutJwt: m.checkoutJwt, payment: { payee: merchantFor(GATE_ORIGIN), amount: { amount: 450, currency: "USD" }, instrument: { id: "pi_1", type: "card" } }, audience: GATE_ORIGIN, nonce: "n" }),
     ).rejects.toThrow(/no wallet key binding/);
   });
 
@@ -173,7 +173,7 @@ describe("the two chains are one purchase", () => {
     const { g, m } = await purchase();
     const cheaper = merchant(GATE_ORIGIN, [["tea", 1]]);
     const intent = DelegatedIntent.fromWalletPresentation({ presentation: g.presentation, disclosures: g.disclosures });
-    const honest = await intent.spend({ agentKey: g.agent.privateKey, checkoutJwt: m.checkoutJwt, payment: { payee: merchantFor(GATE_ORIGIN), amount: { amount: 450, currency: "USD" }, instrument: { id: "pi_1", type: "card" } }, audience: GATE_ORIGIN, nonce: "purchase-nonce" });
+    const honest = await intent.spend({ agentKey: g.agentKey, checkoutJwt: m.checkoutJwt, payment: { payee: merchantFor(GATE_ORIGIN), amount: { amount: 450, currency: "USD" }, instrument: { id: "pi_1", type: "card" } }, audience: GATE_ORIGIN, nonce: "purchase-nonce" });
     const hash = digestToken(m.checkoutJwt);
     const forged = await appendAgentHop({
       chain: walletChain(g.presentation, intent.disclosures.checkout)!,
@@ -190,8 +190,8 @@ describe("the two chains are one purchase", () => {
     const { g, m } = await purchase();
     const intent = DelegatedIntent.fromWalletPresentation({ presentation: g.presentation, disclosures: g.disclosures });
     const other = merchant(GATE_ORIGIN, [["tea", 1]]);
-    const a = await intent.spend({ agentKey: g.agent.privateKey, checkoutJwt: m.checkoutJwt, payment: { payee: merchantFor(GATE_ORIGIN), amount: { amount: 450, currency: "USD" }, instrument: { id: "pi_1", type: "card" } }, audience: GATE_ORIGIN, nonce: "purchase-nonce" });
-    const b = await intent.spend({ agentKey: g.agent.privateKey, checkoutJwt: other.checkoutJwt, payment: { payee: merchantFor(GATE_ORIGIN), amount: { amount: 450, currency: "USD" }, instrument: { id: "pi_1", type: "card" } }, audience: GATE_ORIGIN, nonce: "purchase-nonce" });
+    const a = await intent.spend({ agentKey: g.agentKey, checkoutJwt: m.checkoutJwt, payment: { payee: merchantFor(GATE_ORIGIN), amount: { amount: 450, currency: "USD" }, instrument: { id: "pi_1", type: "card" } }, audience: GATE_ORIGIN, nonce: "purchase-nonce" });
+    const b = await intent.spend({ agentKey: g.agentKey, checkoutJwt: other.checkoutJwt, payment: { payee: merchantFor(GATE_ORIGIN), amount: { amount: 450, currency: "USD" }, instrument: { id: "pi_1", type: "card" } }, audience: GATE_ORIGIN, nonce: "purchase-nonce" });
     const v = await verifyDelegatedPurchase({ checkout: a.checkout, payment: b.payment }, { audience: GATE_ORIGIN, nonce: "purchase-nonce", checkoutKey: m.ap2.checkoutPublicJwk, spent: { amount: 0, uses: 0 }, price: m.price });
     expect(v).toMatchObject({ ok: false, code: "unbound" });
   });

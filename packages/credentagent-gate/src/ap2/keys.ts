@@ -78,6 +78,37 @@ function publicPointFromD(d: string): { x: string; y: string } {
 }
 
 /**
+ * Import a PRIVATE P-256 JWK, refusing one that is not what it claims. `label` names the secret
+ * in every error, so the message says which one is broken.
+ *
+ * The public half is DERIVED from `d`, never copied from the JWK's `x` / `y`. Not every node
+ * build refuses a JWK whose `x` / `y` do not belong to its `d` at import — and on those that
+ * accept it, `createPublicKey(privateKey)` hands the imported `x` / `y` straight back rather
+ * than recomputing them, so it is no check at all. Only a scalar multiplication of `d` is;
+ * copying them would publish a key that matches nothing we sign, so every signature would fail
+ * its own check while doctor() stayed green. A mismatch is a broken secret, refused here rather
+ * than at the first verify.
+ */
+export function importPrivateJwk(jwk: PrivateJwkP256, label: string): { privateKey: KeyObject; x: string; y: string } {
+  if (jwk.kty !== "EC" || jwk.crv !== "P-256") {
+    throw new Error(`${label} must be an EC P-256 JWK (got kty=${jwk.kty} crv=${jwk.crv}) — AP2 mandates here are ES256`);
+  }
+  if (!jwk.d) throw new Error(`${label} must be a PRIVATE JWK (no \`d\` component present)`);
+  const mismatch = `${label}'s public \`x\` / \`y\` do not belong to its private \`d\` — the JWK is corrupt or mismatched`;
+  let privateKey: KeyObject;
+  try {
+    privateKey = createPrivateKey({ key: jwk as unknown as Record<string, unknown>, format: "jwk" });
+  } catch (err) {
+    // Some node/OpenSSL builds catch a mismatched pair at import ("Invalid JWK EC key"); name it
+    // the same way the explicit check below does, so the error does not depend on the runtime.
+    throw new Error(`${mismatch} (${err instanceof Error ? err.message : String(err)})`);
+  }
+  const derived = publicPointFromD(jwk.d);
+  if (derived.x !== jwk.x || derived.y !== jwk.y) throw new Error(mismatch);
+  return { privateKey, x: derived.x, y: derived.y };
+}
+
+/**
  * Resolve the gate's signing key.
  *
  * `hostKey` is a PRIVATE P-256 JWK the host controls (read it from a secret manager, not
@@ -88,36 +119,13 @@ export function resolveSigningKey(origin: string, hostKey?: PrivateJwkP256, frag
   const kid = `${issuer}#${fragment}`;
 
   if (hostKey) {
-    if (hostKey.kty !== "EC" || hostKey.crv !== "P-256") {
-      throw new Error(
-        `mandateSigningKey must be an EC P-256 JWK (got kty=${hostKey.kty} crv=${hostKey.crv}) — AP2 mandates here are ES256`,
-      );
-    }
-    if (!hostKey.d) throw new Error("mandateSigningKey must be a PRIVATE JWK (no `d` component present)");
-    const mismatch = "mandateSigningKey's public `x` / `y` do not belong to its private `d` — the JWK is corrupt or mismatched";
-    let privateKey: KeyObject;
-    try {
-      privateKey = createPrivateKey({ key: hostKey as unknown as Record<string, unknown>, format: "jwk" });
-    } catch (err) {
-      // Some node/OpenSSL builds catch a mismatched pair at import ("Invalid JWK EC key"); name it
-      // the same way the explicit check below does, so the error does not depend on the runtime.
-      throw new Error(`${mismatch} (${err instanceof Error ? err.message : String(err)})`);
-    }
-    // The public half is DERIVED from `d`, never copied from the host's `x` / `y`. Not every node
-    // build refuses a JWK whose `x` / `y` do not belong to its `d` at import — and on those that
-    // accept it, `createPublicKey(privateKey)` hands the imported `x` / `y` straight back rather
-    // than recomputing them, so it is no check at all. Only a scalar multiplication of `d` is; copying them would publish a
-    // key that matches nothing we sign, so every mandate would fail its own check while doctor()
-    // stayed green. A mismatch is a broken secret, refused here rather than at the first verify.
-    const derived = publicPointFromD(hostKey.d);
-    if (derived.x !== hostKey.x || derived.y !== hostKey.y) {
-      throw new Error(mismatch);
-    }
+    // Named by role, so an error says WHICH secret is broken.
+    const { privateKey, x, y } = importPrivateJwk(hostKey, fragment === CHECKOUT_KEY_FRAGMENT ? "checkoutSigningKey" : "mandateSigningKey");
     return {
       kid,
       issuer,
       privateKey,
-      publicJwk: { kty: "EC", crv: "P-256", x: derived.x, y: derived.y, alg: SIGNING_ALG, kid },
+      publicJwk: { kty: "EC", crv: "P-256", x, y, alg: SIGNING_ALG, kid },
       ephemeral: false,
     };
   }

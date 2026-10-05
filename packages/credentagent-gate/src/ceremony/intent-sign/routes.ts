@@ -155,6 +155,9 @@ export function registerIntentSignRail(app: RailApp, grants: Grants): void {
         // own grant record and required the wallet's signature to cover them, so they are what
         // the human agreed to — and dropping them here left the grant unable to say so.
         ...(out.mandates ? { mandates: out.mandates } : {}),
+        // The signed permission itself. The grant shows it only when the agent holds the key it
+        // names — the one case it can be spent (FR-5).
+        intent: out.intent,
       });
       if (!sealed) { res.status(409).json({ ok: false, reason: "grant is not pending" }); return; }
       res.json({ ok: true, status: "authorized", trustLevel: out.trustLevel, verifiedBy: out.verifiedBy, boundsHash: out.boundsHash });

@@ -123,6 +123,9 @@ export type IntentVerifyResult =
       credentialType: string;
       /** The AP2 Mandate Content the human authorized — the grant's record of what was signed. */
       mandates: MandateContent[];
+      /** The signed permission: the wallet's presentation and the `delegate` disclosures it signed
+       *  over — what an agent holding the key the mandates name spends (spec 014, FR-5). */
+      intent: { presentation: string; disclosures: string[] };
     }
   | { ok: false; reason: string };
 
@@ -237,7 +240,7 @@ export async function verifyIntentPresentation(args: {
   // digest, so this refuses for exactly the same reasons the old byte comparison did — and it
   // additionally catches a wallet that signed only some of the `delegate` entries.
   const expected = openMandatesForGrant({ bounds, origin: origin.origin, delegate: args.delegate, exp: args.mandateExp, allowedSkus: args.allowedSkus });
-  const { digests } = delegateEntries({
+  const { digests, disclosures } = delegateEntries({
     mandates: expected,
     credentialId: PAYMENT_CREDENTIAL_ID,
     secret,
@@ -271,5 +274,6 @@ export async function verifyIntentPresentation(args: {
     verifiedBy: verdict.verifiedBy,
     credentialType,
     mandates: expected,
+    intent: { presentation: sdjwt, disclosures },
   };
 }

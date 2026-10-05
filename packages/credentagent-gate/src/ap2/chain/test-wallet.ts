@@ -14,6 +14,7 @@ import { SDJwtInstance } from "@sd-jwt/core";
 import { hasher } from "../../ceremony/intent-sign/presentation.js";
 import { mandateContentDigest } from "./constraints.js";
 import type { Merchant } from "../types.js";
+import { AgentKey } from "./agent-key.js";
 import { delegateEntries, disclosureDigest, openMandatesForGrant, type MandateContent } from "../../ceremony/intent-sign/mandates.js";
 
 const b64uJson = (v: unknown) => Buffer.from(JSON.stringify(v), "utf-8").toString("base64url");
@@ -51,8 +52,10 @@ async function selfSignedCert(key: P256): Promise<string> {
 export const GATE_ORIGIN = "https://shop.example";
 
 export interface TestGrant {
-  /** The agent's key pair — `K_s`, named in both open mandates' `cnf`. */
+  /** The agent's key pair — `K_s`, named in both open mandates' `cnf`. Raw, for the hop tests. */
   agent: P256;
+  /** The same key as the agent's own `AgentKey` — what `DelegatedIntent.spend` takes. */
+  agentKey: AgentKey;
   /** The wallet's presentation, as `vp_token` carries it. */
   presentation: string;
   /** The `delegate_payload_disclosure`s the request carried: [open checkout, open payment]. */
@@ -139,6 +142,7 @@ export async function testGrant(opts: TestGrantOptions = {}): Promise<TestGrant>
   const kbKey = opts.forgeWalletKey ? p256().privateKey : wallet.holder.privateKey;
   return {
     agent,
+    agentKey: AgentKey.fromJwk(agent.privateKey.export({ format: "jwk" }) as never),
     presentation: `${credential}${input}.${sign(kbKey)(input)}`,
     disclosures: disclosures as [string, string],
     open,
