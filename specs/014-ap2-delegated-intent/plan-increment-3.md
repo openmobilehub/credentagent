@@ -42,6 +42,7 @@ const verdict = await verifyDelegatedPurchase(proof, { audience, nonce, checkout
 ## Decisions (agreed)
 
 1. Budget and recurrence need the caller's usage (`spent`); missing ⇒ refused.
+   A recurrence cadence other than `ON_DEMAND` is refused outright until it is enforced (#242).
 2. A hop whose payload carries `cnf` must be typed `kb+sd-jwt+kb`; the terminal hop `kb+sd-jwt` and
    no `cnf`. The simulated wallet's default changes to `kb+sd-jwt+kb`. What a released Multipaz
    build emits is unverified and needs a device run.

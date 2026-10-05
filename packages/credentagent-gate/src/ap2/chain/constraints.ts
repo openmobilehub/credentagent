@@ -146,6 +146,9 @@ export interface PaymentContext {
   nowMs?: number;
 }
 
+/** Clock tolerance on a payment's `execution_date` — the same minute the chain allows on `iat`. */
+const EXECUTION_SKEW_MS = 60_000;
+
 /** The claims an open payment mandate may fix, which the closed one must then carry unchanged. */
 const PRESET_CLAIMS = ["payment_amount", "payment_instrument", "pisp", "execution_date"] as const;
 
@@ -190,7 +193,13 @@ export function evaluatePayment(open: OpenPaymentMandate, closed: PaymentMandate
         }
         break;
       case "payment.agent_recurrence":
-        if (c.max_occurrences !== undefined) {
+        // A cadence (WEEKLY, MONTHLY…) is a limit this verifier does not enforce yet — enforcing it
+        // needs the earlier payments' times, and a rule for what "weekly" bounds. Passing it would
+        // let "WEEKLY, 4 times" be spent four times in a minute, so it refuses (rule 3, #242).
+        // ON_DEMAND has no cadence: only the count below applies.
+        if (c.frequency !== "ON_DEMAND") {
+          out.push(violation("constraint", `frequency ${String(c.frequency)} is not enforced by this verifier, so it cannot pass it`, c.type));
+        } else if (c.max_occurrences !== undefined) {
           if (!ctx.spent) out.push(violation("constraint", "recurrence cannot be checked without `spent.uses`", c.type));
           else if (ctx.spent.uses >= c.max_occurrences) out.push(violation("constraint", `${ctx.spent.uses} uses already — max_occurrences is ${c.max_occurrences}`, c.type));
         }
@@ -207,11 +216,19 @@ export function evaluatePayment(open: OpenPaymentMandate, closed: PaymentMandate
       case "payment.execution_date": {
         // A payment that names no date executes NOW — and now must sit inside the window too.
         // Skipping the check would let an agent leave the window simply by omitting the date (#236).
-        const when = closed.execution_date ?? new Date(ctx.nowMs ?? Date.now()).toISOString();
+        const now = ctx.nowMs ?? Date.now();
+        const when = closed.execution_date ?? new Date(now).toISOString();
         const t = Date.parse(when);
-        if (Number.isNaN(t)) out.push(violation("constraint", `execution_date ${when} is not a date`, c.type));
-        else if (c.not_before && t < Date.parse(c.not_before)) out.push(violation("constraint", `${when} is before ${c.not_before}`, c.type));
-        else if (c.not_after && t > Date.parse(c.not_after)) out.push(violation("constraint", `${when} is after ${c.not_after}`, c.type));
+        // A bound that does not parse would compare false both ways and silently drop out (#242).
+        const notBefore = c.not_before === undefined ? undefined : Date.parse(c.not_before);
+        const notAfter = c.not_after === undefined ? undefined : Date.parse(c.not_after);
+        if (Number.isNaN(notBefore) || Number.isNaN(notAfter)) out.push(violation("constraint", `the window ${c.not_before ?? "…"} – ${c.not_after ?? "…"} is not a pair of dates, so it cannot be checked`, c.type));
+        else if (Number.isNaN(t)) out.push(violation("constraint", `execution_date ${when} is not a date`, c.type));
+        // A date in the past executes NOW. Dating it inside the window does not put it there — the
+        // #236 bypass again, through a backdated value instead of an omitted one (#242).
+        else if (t < now - EXECUTION_SKEW_MS) out.push(violation("constraint", `execution_date ${when} is in the past — the payment would run now, not then`, c.type));
+        else if (notBefore !== undefined && t < notBefore) out.push(violation("constraint", `${when} is before ${c.not_before}`, c.type));
+        else if (notAfter !== undefined && t > notAfter) out.push(violation("constraint", `${when} is after ${c.not_after}`, c.type));
         break;
       }
       default:

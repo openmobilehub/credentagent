@@ -159,8 +159,33 @@ describe("payment constraints", () => {
 
   it("refuses an execution date outside its window (bypass)", () => {
     const window = { type: "payment.execution_date" as const, not_before: "2026-10-01", not_after: "2026-10-31" };
-    expect(evaluatePayment(openPayment([window]), closed({ execution_date: "2026-11-02" }), ctx())).toEqual([expect.objectContaining({ constraint: "payment.execution_date" })]);
-    expect(evaluatePayment(openPayment([window]), closed({ execution_date: "2026-10-15" }), ctx())).toEqual([]);
+    const now = { nowMs: Date.parse("2026-09-30T12:00:00Z") };
+    expect(evaluatePayment(openPayment([window]), closed({ execution_date: "2026-11-02" }), ctx(now))).toEqual([expect.objectContaining({ constraint: "payment.execution_date" })]);
+    expect(evaluatePayment(openPayment([window]), closed({ execution_date: "2026-10-15" }), ctx(now))).toEqual([]);
+  });
+
+  it("REFUSES a backdated execution date — it runs now, not inside the window it names (bypass, #242)", () => {
+    const window = { type: "payment.execution_date" as const, not_after: "2026-11-30T00:00:00Z" };
+    const dec5 = { nowMs: Date.parse("2026-12-05T12:00:00Z") };
+    expect(evaluatePayment(openPayment([window]), closed({ execution_date: "2026-11-30T00:00:00Z" }), ctx(dec5))).toEqual([
+      expect.objectContaining({ constraint: "payment.execution_date", detail: expect.stringMatching(/in the past/) }),
+    ]);
+    // Within the minute of clock tolerance is not "the past"; a future date inside the window is a scheduled payment.
+    const nov10 = Date.parse("2026-11-10T12:00:00Z");
+    expect(evaluatePayment(openPayment([window]), closed({ execution_date: new Date(nov10 - 30_000).toISOString() }), ctx({ nowMs: nov10 }))).toEqual([]);
+    expect(evaluatePayment(openPayment([window]), closed({ execution_date: "2026-11-15T00:00:00Z" }), ctx({ nowMs: nov10 }))).toEqual([]);
+  });
+
+  it("REFUSES a window bound that is not a date — it would silently drop out (bypass, #242)", () => {
+    const now = { nowMs: Date.parse("2026-10-10T12:00:00Z") };
+    for (const window of [
+      { type: "payment.execution_date" as const, not_before: "2026-10-01", not_after: "2026-13-45" },
+      { type: "payment.execution_date" as const, not_before: "someday" },
+    ]) {
+      expect(evaluatePayment(openPayment([window]), closed(), ctx(now))).toEqual([
+        expect.objectContaining({ constraint: "payment.execution_date", detail: expect.stringMatching(/not a pair of dates/) }),
+      ]);
+    }
   });
 
   it("REFUSES a payment that omits its date to escape the window — no date means now (bypass, #236)", () => {
@@ -177,7 +202,8 @@ describe("payment constraints", () => {
   });
 
   it("refuses once agent_recurrence's max_occurrences is used up, and demands its companions (bypass)", () => {
-    const recur = { type: "payment.agent_recurrence" as const, frequency: "MONTHLY" as const, max_occurrences: 3 };
+    const recur = { type: "payment.agent_recurrence" as const, frequency: "ON_DEMAND" as const, max_occurrences: 3 };
+    expect(evaluatePayment(openPayment([recur, range, budget]), closed(), ctx({ spent: { amount: 0, uses: 2 } }))).toEqual([]);
     expect(evaluatePayment(openPayment([recur, range, budget]), closed(), ctx({ spent: { amount: 0, uses: 3 } }))).toEqual([
       expect.objectContaining({ constraint: "payment.agent_recurrence" }),
     ]);
@@ -185,6 +211,17 @@ describe("payment constraints", () => {
       expect.objectContaining({ constraint: "payment.agent_recurrence", detail: expect.stringMatching(/amount_range/) }),
       expect.objectContaining({ constraint: "payment.agent_recurrence", detail: expect.stringMatching(/budget/) }),
     ]);
+  });
+
+  it("REFUSES a recurrence cadence it does not enforce — \"WEEKLY, 4 times\" is not 4 in a minute (bypass, #242)", () => {
+    for (const frequency of ["WEEKLY", "MONTHLY", "DAILY"] as const) {
+      // With the count to spare, and without one: the cadence alone refuses.
+      for (const recur of [{ type: "payment.agent_recurrence" as const, frequency, max_occurrences: 4 }, { type: "payment.agent_recurrence" as const, frequency }]) {
+        expect(evaluatePayment(openPayment([recur, range, budget]), closed(), ctx({ spent: { amount: 0, uses: 0 } }))).toEqual([
+          expect.objectContaining({ constraint: "payment.agent_recurrence", detail: expect.stringMatching(new RegExp(`frequency ${frequency} is not enforced`)) }),
+        ]);
+      }
+    }
   });
 
   // Spec 014: "open claims are preserved". What the person fixed, the agent cannot change.
