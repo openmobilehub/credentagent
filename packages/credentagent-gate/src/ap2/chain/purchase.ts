@@ -1,8 +1,8 @@
 // A delegated purchase: the agent spends a permission the person signed on their phone, and the
 // merchant checks it. The two halves of spec 014's flow, as two calls.
 //
-//   // Agent — keep the permission once, spend it per purchase.
-//   const intent = DelegatedIntent.fromWalletPresentation({ presentation, disclosures });
+//   // Agent (`@openmobilehub/credentagent-gate/agent`) — keep the permission once, spend it per purchase.
+//   const intent = DelegatedIntent.fromWalletPresentation(grant.mandate.intent);
 //   const proof = await intent.spend({ agentKey, checkoutJwt, payment, audience, nonce });
 //
 //   // Merchant — one call. `price` is your catalog: re-pricing still decides (invariant 2).
@@ -11,7 +11,6 @@
 // A purchase is TWO chains, one per AP2 mandate type, because the draft lets each chain disclose
 // exactly one of the payloads the wallet signed: the checkout authority, and the payment authority.
 // They must come from the same signature — `splice` is what refuses two permissions stapled together.
-import type { KeyObject } from "node:crypto";
 import { DEFAULT_MANDATE_TTL_MS } from "../issue.js";
 import { verifyCompactJwt } from "../jwt.js";
 import { digestToken, SD_HASH_ALG } from "../sdjwt.js";
@@ -28,6 +27,7 @@ import {
   type PaymentMandate,
   type UcpCheckout,
 } from "../types.js";
+import { agentPrivateKey, type AgentKey } from "./agent-key.js";
 import { appendAgentHop } from "./hop.js";
 import { walletChain } from "./serialize.js";
 import { evaluateCheckout, evaluatePayment, merchantMatches, type Spent, type Violation } from "./constraints.js";
@@ -52,8 +52,8 @@ const decodeDisclosure = (d: string): Record<string, unknown> | undefined => {
  * The permission an agent holds: the wallet's presentation and the two open mandates it signed.
  * Plain data — `JSON.stringify` it to store it, {@link DelegatedIntent.fromJSON} to bring it back.
  *
- * Holding it is not a secret in itself: spending it needs the agent's private key, which this
- * object never sees until `spend` is called with it.
+ * Holding it is not a secret in itself: spending it needs the {@link AgentKey} its mandates name,
+ * which this object never sees until `spend` is called with it.
  */
 export class DelegatedIntent {
   readonly presentation: string;
@@ -95,7 +95,8 @@ export class DelegatedIntent {
    * another store, or twice at this one.
    */
   async spend(args: {
-    agentKey: KeyObject;
+    /** The key the permission names in `cnf` — the agent's own, from `AgentKey`. */
+    agentKey: AgentKey;
     /** The merchant-signed UCP Checkout (`Ap2Issuer.signCheckout`). */
     checkoutJwt: string;
     payment: { payee: Merchant; amount: Amount; instrument: PaymentInstrument };
@@ -103,6 +104,11 @@ export class DelegatedIntent {
     nonce: string;
     ttlMs?: number;
   }): Promise<DelegatedPurchaseProof> {
+    // Said here, plainly, rather than as a `signature` refusal at the merchant: a permission
+    // signed for one agent key is spendable by that key alone.
+    for (const open of [this.openCheckout, this.openPayment]) {
+      if (!args.agentKey.matches(open?.cnf?.jwk)) throw new Error("this permission names a different agent key — spend it with the AgentKey whose publicJwk the grant was created with");
+    }
     const iat = Math.floor(Date.now() / 1000);
     const exp = iat + Math.floor((args.ttlMs ?? DEFAULT_MANDATE_TTL_MS) / 1000);
     const checkoutHash = digestToken(args.checkoutJwt, SD_HASH_ALG);
@@ -121,7 +127,7 @@ export class DelegatedIntent {
       if (!chain) throw new Error("the presentation ends in no wallet key binding — there is no signed permission to spend");
       return appendAgentHop({
         chain,
-        agentKey: args.agentKey,
+        agentKey: agentPrivateKey(args.agentKey),
         content: content as Record<string, unknown>,
         audience: args.audience,
         nonce: args.nonce,

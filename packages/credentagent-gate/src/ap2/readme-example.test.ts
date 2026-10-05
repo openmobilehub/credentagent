@@ -7,9 +7,10 @@ import { describe, expect, it } from "vitest";
 import { generateKeyPairSync } from "node:crypto";
 import express from "express";
 import request from "supertest";
-import { CredentAgent, DelegatedIntent, publicJwkFromDidDocument, verifyDelegatedPurchase, verifyMandate, VCT, type UcpCheckout } from "../index.js";
+import { CredentAgent, publicJwkFromDidDocument, verifyDelegatedPurchase, verifyMandate, VCT, type UcpCheckout } from "../index.js";
 import { merchantFor } from "./from-gate.js";
-import { testGrant } from "./chain/test-wallet.js";
+import { AgentKey, DelegatedIntent } from "../agent.js";
+import { devSimulateWalletSignature } from "../ceremony/intent-sign/simulate.js";
 
 const ucpCheckout: UcpCheckout = {
   id: "ord_1",
@@ -50,34 +51,58 @@ describe("README — AP2 mandates", () => {
     expect(theirs.ok).toBe(true);
   });
 
-  it("delegated purchases: the agent spends, the merchant verifies", async () => {
-    const g = await testGrant();
-    const credentagent = new CredentAgent({ walletOrigin: "https://shop.example", mandateSigningKey: generateKeyPairSync("ec", { namedCurve: "P-256" }).privateKey.export({ format: "jwk" }) as never });
-    const { presentation, disclosures } = g;
-    const agentKey = g.agent.privateKey;
+  it("delegated purchases: two processes — the merchant opens a grant, the agent spends it, the merchant verifies", async () => {
+    const ORIGIN = "http://shop.example";
+    const catalog = { coffee: { price: 4.5 }, tea: { price: 3 } };
+    const credentagent = new CredentAgent({ walletOrigin: ORIGIN, catalog, gateSecret: "stable-test-secret" });
+    const app = express();
+    app.use(express.json());
+    credentagent.grants.serve(app);
+    const AGENT_KEY = JSON.stringify(AgentKey.generate().exportPrivateJwk());
+    const agentPublicJwk = AgentKey.fromJwk(JSON.parse(AGENT_KEY)).publicJwk; // what the agent sends the merchant
+    const sendToUser = (_url: string) => undefined;
+    const catalogTotal = (cart: UcpCheckout) => cart.line_items.reduce((s, l) => s + catalog[l.item.id as keyof typeof catalog].price * 100 * l.quantity, 0);
     const nonce = "merchant-nonce";
-    const shopCheckout: UcpCheckout = { ...ucpCheckout, merchant: merchantFor("https://shop.example"), line_items: [{ id: "li_1", item: { id: "coffee", title: "Coffee", price: 450 }, quantity: 1, totals: [{ type: "total", amount: 450 }] }], totals: [{ type: "total", amount: 450 }] };
-    const checkoutJwt = credentagent.ap2.signCheckout(shopCheckout);
-    const payee = merchantFor("https://shop.example");
-    const instrument = { id: "pi_1", type: "card" };
-    const catalogTotal = (cart: UcpCheckout) => cart.line_items.reduce((s, l) => s + l.item.price * l.quantity, 0);
 
-    // ── README block: delegated purchases ──
-    const intent = DelegatedIntent.fromWalletPresentation({ presentation, disclosures });
+    // ── README block: MERCHANT — open a grant naming the agent's PUBLIC key ──
+    const grant = await credentagent.grants.create({
+      merchant: "utopia", budget: 200, perSpend: 50,
+      allow: { skus: ["coffee", "tea"] },
+      agentKey: agentPublicJwk, // agentKey.publicJwk, as the agent sent it
+    });
+    sendToUser(grant.approveUrl); // the person signs on their phone
+
+    // The person signs — the real rail, a simulated wallet.
+    const req = await request(app).get(`/credentagent/grants/${grant.id}/sign/request`).set("Host", "shop.example");
+    const result = await devSimulateWalletSignature({ request: { request: req.body.requests[0].data.request, dcql_query: req.body.dcql_query }, origin: ORIGIN });
+    await request(app).post(`/credentagent/grants/${grant.id}/sign/verify`).set("Host", "shop.example").send({ readerContextToken: req.body.readerContextToken, result });
+    const signedIntent = (await credentagent.grants.retrieve(grant.id))!.mandate!.intent!;
+
+    const ucpCheckout: UcpCheckout = { ...{ id: "ord_1", status: "ready_for_complete", currency: "USD", links: [] }, merchant: merchantFor(ORIGIN, "utopia"), line_items: [{ id: "li_1", item: { id: "coffee", title: "Coffee", price: 450 }, quantity: 1, totals: [{ type: "total", amount: 450 }] }], totals: [{ type: "total", amount: 450 }] };
+    const checkoutJwt = credentagent.ap2.signCheckout(ucpCheckout);
+    const payee = merchantFor(ORIGIN, "utopia");
+    const instrument = { id: "demo-instrument-0001", type: "card" };
+
+    // ── README block: AGENT — the `/agent` entry point ──
+    const agentKey = AgentKey.fromJwk(JSON.parse(AGENT_KEY)); // or AgentKey.generate()
+    const intent = DelegatedIntent.fromWalletPresentation(signedIntent); // plain JSON — keep it
     const proof = await intent.spend({
       agentKey,
-      checkoutJwt,
+      checkoutJwt, // the cart, as the merchant quoted it
       payment: { payee, amount: { amount: 450, currency: "USD" }, instrument },
-      audience: "https://shop.example",
+      audience: ORIGIN, // the merchant, and the nonce it issued
       nonce,
     });
 
+    // ── README block: MERCHANT — one call per purchase ──
+    const quote = credentagent.ap2.signCheckout(ucpCheckout); // what you hand the agent as checkoutJwt
+    expect(quote).toMatch(/^[\w-]+\.[\w-]+\.[\w-]+$/); // a compact JWS; ES256 is randomized, so not byte-equal to checkoutJwt
     const verdict = await verifyDelegatedPurchase(proof, {
-      audience: "https://shop.example",
+      audience: ORIGIN,
       nonce,
-      checkoutKey: credentagent.ap2.checkoutPublicJwk,
-      spent: { amount: 0, uses: 0 },
-      price: (cart) => catalogTotal(cart),
+      checkoutKey: credentagent.ap2.checkoutPublicJwk, // the key that quoted the cart
+      spent: { amount: 0, uses: 0 }, // already spent under this permission
+      price: (cart) => catalogTotal(cart), // YOUR catalog, in minor units — it decides
     });
     expect(verdict.ok).toBe(true);
   });
