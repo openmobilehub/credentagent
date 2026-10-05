@@ -41,7 +41,7 @@ describe("checkout mandate", () => {
     expect(v.ok).toBe(true);
     if (!v.ok) return;
 
-    const opened = await openCheckoutPayload(v.mandate, key.publicJwk, (t) => digestToken(t));
+    const opened = await openCheckoutPayload(v.mandate, ap2.checkoutPublicJwk, (t) => digestToken(t));
     expect(opened.ok).toBe(true);
     if (!opened.ok) return;
     expect(opened.checkout.line_items[0].totals).toEqual([{ type: "total", amount: 1999 }]);
@@ -62,7 +62,7 @@ describe("checkout mandate", () => {
     if (!v.ok) return;
 
     const tampered = { ...v.mandate, checkout_jwt: cheaper.checkoutJwt };
-    const opened = await openCheckoutPayload(tampered, key.publicJwk, (t) => digestToken(t));
+    const opened = await openCheckoutPayload(tampered, ap2.checkoutPublicJwk, (t) => digestToken(t));
     expect(opened.ok).toBe(false);
     if (opened.ok) return;
     expect(opened.code).toBe("checkout-unbound");

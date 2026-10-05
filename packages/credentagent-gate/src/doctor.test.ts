@@ -185,6 +185,8 @@ describe("CredentAgent.doctor() — assembles the instance's config + reads the 
       walletOrigin: "https://shop.example",
       gateSecret: "s".repeat(32),
       mandateSigningKey: privateKey.export({ format: "jwk" }) as never,
+      // …and so did `checkoutSigningKey` when carts got their own key (spec 014, FR-6).
+      checkoutSigningKey: generateKeyPairSync("ec", { namedCurve: "P-256" }).privateKey.export({ format: "jwk" }) as never,
       ...sharedStores(),
     });
     expect(ca.doctor().findings).toEqual([]);
@@ -296,5 +298,21 @@ describe("the mandate signing key", () => {
     const report = new CredentAgent().doctor();
     expect(report.findings).toEqual([]);
     expect(report.ok).toBe(true);
+  });
+
+  // Spec 014, FR-6: the checkout key. A warning, never an error — a deployment that never runs a
+  // delegated purchase must not start failing its `if (!report.ok)` preflight.
+  it("warns — without failing the preflight — when the checkout key was generated at boot", () => {
+    const report = runDoctor({ ...base, ephemeralCheckoutKey: true, env: { VERCEL: "1" } });
+    const finding = report.findings.find((f) => f.code === "ephemeral-checkout-key");
+    expect(finding?.level).toBe("warn");
+    expect(finding?.fix).toMatch(/checkoutSigningKey/);
+    expect(report.ok).toBe(true);
+  });
+
+  it("is reported by the deployed client that generated its checkout key", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    const credentagent = new CredentAgent({ walletOrigin: "https://shop.example" });
+    expect(credentagent.doctor().findings.some((f) => f.code === "ephemeral-checkout-key")).toBe(true);
   });
 });

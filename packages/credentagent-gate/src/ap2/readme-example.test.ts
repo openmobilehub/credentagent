@@ -75,7 +75,7 @@ describe("README — AP2 mandates", () => {
     const verdict = await verifyDelegatedPurchase(proof, {
       audience: "https://shop.example",
       nonce,
-      checkoutKey: credentagent.ap2.publicJwk,
+      checkoutKey: credentagent.ap2.checkoutPublicJwk,
       spent: { amount: 0, uses: 0 },
       price: (cart) => catalogTotal(cart),
     });

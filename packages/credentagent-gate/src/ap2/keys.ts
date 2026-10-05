@@ -22,6 +22,14 @@ export const SIGNING_ALG = "ES256" as const;
 /** Fragment of the gate's verification method — also every mandate's `kid`. */
 export const KEY_FRAGMENT = "gate-signing-key";
 
+/**
+ * Fragment of the merchant's CHECKOUT key — the `kid` on every UCP Checkout this gate quotes.
+ *
+ * A separate key from the mandate key (spec 014, FR-6): a cart the merchant quotes and a mandate
+ * the gate issues are different statements, and the `kid` says which one a signature makes.
+ */
+export const CHECKOUT_KEY_FRAGMENT = "merchant-checkout-key";
+
 /** A P-256 PRIVATE JWK — what a host injects as `{ mandateSigningKey }`. `d` is the secret. */
 export interface PrivateJwkP256 {
   kty: "EC";
@@ -75,9 +83,9 @@ function publicPointFromD(d: string): { x: string; y: string } {
  * `hostKey` is a PRIVATE P-256 JWK the host controls (read it from a secret manager, not
  * from source). Absent ⇒ an ephemeral key, flagged as such rather than silently accepted.
  */
-export function resolveSigningKey(origin: string, hostKey?: PrivateJwkP256): GateSigningKey {
+export function resolveSigningKey(origin: string, hostKey?: PrivateJwkP256, fragment: string = KEY_FRAGMENT): GateSigningKey {
   const issuer = didWebFor(origin);
-  const kid = `${issuer}#${KEY_FRAGMENT}`;
+  const kid = `${issuer}#${fragment}`;
 
   if (hostKey) {
     if (hostKey.kty !== "EC" || hostKey.crv !== "P-256") {
@@ -114,6 +122,12 @@ export function resolveSigningKey(origin: string, hostKey?: PrivateJwkP256): Gat
     };
   }
 
+  return ephemeralSigningKey(issuer, fragment);
+}
+
+/** A key made up at boot for `issuer#fragment` — flagged `ephemeral`, never silently accepted. */
+export function ephemeralSigningKey(issuer: string, fragment: string): GateSigningKey {
+  const kid = `${issuer}#${fragment}`;
   const { privateKey, publicKey } = generateKeyPairSync("ec", { namedCurve: "P-256" });
   const jwk = publicKey.export({ format: "jwk" }) as { x: string; y: string };
   return {
@@ -136,18 +150,18 @@ export function importVerifyKey(jwk: PublicJwkP256): KeyObject {
 /**
  * The DID document `mount()` serves at `/.well-known/did.json`.
  *
- * One verification method — this gate's mandate-signing key. `assertionMethod` is the
- * right relationship for issuing mandates; listing `authentication` too would over-state
- * what this key is for.
+ * The mandate-signing key, then any further keys this gate signs with — today the merchant's
+ * checkout key (FR-6). `assertionMethod` is the right relationship for issuing statements;
+ * listing `authentication` too would over-state what these keys are for. The mandate key is
+ * listed FIRST, so a reader that takes the first assertion method still gets it.
  */
-export function didDocument(key: GateSigningKey): Record<string, unknown> {
+export function didDocument(key: GateSigningKey, ...more: GateSigningKey[]): Record<string, unknown> {
+  const keys = [key, ...more];
   return {
     "@context": ["https://www.w3.org/ns/did/v1", "https://w3id.org/security/suites/jws-2020/v1"],
     id: key.issuer,
-    verificationMethod: [
-      { id: key.kid, type: "JsonWebKey2020", controller: key.issuer, publicKeyJwk: key.publicJwk },
-    ],
-    assertionMethod: [key.kid],
+    verificationMethod: keys.map((k) => ({ id: k.kid, type: "JsonWebKey2020", controller: k.issuer, publicKeyJwk: k.publicJwk })),
+    assertionMethod: keys.map((k) => k.kid),
   };
 }
 
