@@ -46,7 +46,7 @@ async function purchase(opts: { grant?: Parameters<typeof testGrant>[0]; at?: st
     nonce: "purchase-nonce",
   });
   const verify = (over: Partial<Parameters<typeof verifyDelegatedPurchase>[1]> = {}) =>
-    verifyDelegatedPurchase(proof, { audience: m.origin, nonce: "purchase-nonce", checkoutKey: m.ap2.publicJwk, spent: { amount: 0, uses: 0 }, price: m.price, ...over });
+    verifyDelegatedPurchase(proof, { audience: m.origin, nonce: "purchase-nonce", checkoutKey: m.ap2.checkoutPublicJwk, spent: { amount: 0, uses: 0 }, price: m.price, ...over });
   return { g, m, intent, proof, verify };
 }
 
@@ -152,18 +152,18 @@ describe("the two chains are one purchase", () => {
     const generous = await purchase({ grant: { wallet, agent, grantId: "generous", perSpend: 500 } });
     const spliced = { checkout: strict.proof.checkout, payment: generous.proof.payment };
     expect(await strict.verify()).toMatchObject({ ok: false, code: "constraint" }); // strict alone is over its $1 limit
-    expect(await verifyDelegatedPurchase(spliced, { audience: GATE_ORIGIN, nonce: "purchase-nonce", checkoutKey: strict.m.ap2.publicJwk, spent: { amount: 0, uses: 0 }, price: strict.m.price })).toMatchObject({ ok: false, code: "splice" });
+    expect(await verifyDelegatedPurchase(spliced, { audience: GATE_ORIGIN, nonce: "purchase-nonce", checkoutKey: strict.m.ap2.checkoutPublicJwk, spent: { amount: 0, uses: 0 }, price: strict.m.price })).toMatchObject({ ok: false, code: "splice" });
   });
 
   it("refuses chains whose mandate types are swapped (bypass)", async () => {
     const { proof, m } = await purchase();
-    const v = await verifyDelegatedPurchase({ checkout: proof.payment, payment: proof.checkout }, { audience: GATE_ORIGIN, nonce: "purchase-nonce", checkoutKey: m.ap2.publicJwk, spent: { amount: 0, uses: 0 }, price: m.price });
+    const v = await verifyDelegatedPurchase({ checkout: proof.payment, payment: proof.checkout }, { audience: GATE_ORIGIN, nonce: "purchase-nonce", checkoutKey: m.ap2.checkoutPublicJwk, spent: { amount: 0, uses: 0 }, price: m.price });
     expect(v).toMatchObject({ ok: false, code: "unexpected-type", detail: expect.stringMatching(/^the checkout chain/) });
   });
 
   it("refuses a payment chain that carries checkout mandates (bypass)", async () => {
     const { proof, m } = await purchase();
-    const v = await verifyDelegatedPurchase({ checkout: proof.checkout, payment: proof.checkout }, { audience: GATE_ORIGIN, nonce: "purchase-nonce", checkoutKey: m.ap2.publicJwk, spent: { amount: 0, uses: 0 }, price: m.price });
+    const v = await verifyDelegatedPurchase({ checkout: proof.checkout, payment: proof.checkout }, { audience: GATE_ORIGIN, nonce: "purchase-nonce", checkoutKey: m.ap2.checkoutPublicJwk, spent: { amount: 0, uses: 0 }, price: m.price });
     expect(v).toMatchObject({ ok: false, code: "unexpected-type", detail: expect.stringMatching(/^the payment chain/) });
   });
 
@@ -182,7 +182,7 @@ describe("the two chains are one purchase", () => {
       audience: GATE_ORIGIN,
       nonce: "purchase-nonce",
     });
-    const v = await verifyDelegatedPurchase({ checkout: forged, payment: honest.payment }, { audience: GATE_ORIGIN, nonce: "purchase-nonce", checkoutKey: m.ap2.publicJwk, spent: { amount: 0, uses: 0 }, price: m.price });
+    const v = await verifyDelegatedPurchase({ checkout: forged, payment: honest.payment }, { audience: GATE_ORIGIN, nonce: "purchase-nonce", checkoutKey: m.ap2.checkoutPublicJwk, spent: { amount: 0, uses: 0 }, price: m.price });
     expect(v).toMatchObject({ ok: false, code: "checkout-unbound", detail: expect.stringMatching(/does not hash/) });
   });
 
@@ -192,7 +192,7 @@ describe("the two chains are one purchase", () => {
     const other = merchant(GATE_ORIGIN, [["tea", 1]]);
     const a = await intent.spend({ agentKey: g.agent.privateKey, checkoutJwt: m.checkoutJwt, payment: { payee: merchantFor(GATE_ORIGIN), amount: { amount: 450, currency: "USD" }, instrument: { id: "pi_1", type: "card" } }, audience: GATE_ORIGIN, nonce: "purchase-nonce" });
     const b = await intent.spend({ agentKey: g.agent.privateKey, checkoutJwt: other.checkoutJwt, payment: { payee: merchantFor(GATE_ORIGIN), amount: { amount: 450, currency: "USD" }, instrument: { id: "pi_1", type: "card" } }, audience: GATE_ORIGIN, nonce: "purchase-nonce" });
-    const v = await verifyDelegatedPurchase({ checkout: a.checkout, payment: b.payment }, { audience: GATE_ORIGIN, nonce: "purchase-nonce", checkoutKey: m.ap2.publicJwk, spent: { amount: 0, uses: 0 }, price: m.price });
+    const v = await verifyDelegatedPurchase({ checkout: a.checkout, payment: b.payment }, { audience: GATE_ORIGIN, nonce: "purchase-nonce", checkoutKey: m.ap2.checkoutPublicJwk, spent: { amount: 0, uses: 0 }, price: m.price });
     expect(v).toMatchObject({ ok: false, code: "unbound" });
   });
 });

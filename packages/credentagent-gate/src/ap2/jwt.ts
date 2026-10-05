@@ -1,9 +1,9 @@
 // Compact JWS for the ONE payload AP2 carries as a plain JWT rather than an SD-JWT: the
 // merchant-signed Checkout that a Checkout Mandate wraps in `checkout_jwt`.
 //
-// v1 signs it with the gate's own key, because in this library the gate IS the merchant
-// surface. A distinct merchant key is a follow-up, and the `kid` makes that swap visible
-// rather than silent.
+// Signed with the merchant's CHECKOUT key, distinct from the key that issues mandates (spec 014,
+// FR-6). The `kid` names which key signed, and a verifier given a key with a `kid` holds the
+// token to it — so a token signed in one role is never read as a statement of the other.
 import type { KeyObject } from "node:crypto";
 import { es256Signer, es256Verifier } from "./sdjwt.js";
 import type { PublicJwkP256 } from "./keys.js";
@@ -20,6 +20,7 @@ export function verifyCompactJwt<T>(token: string, publicJwk: PublicJwkP256): T 
   const parts = token.split(".");
   if (parts.length !== 3) return undefined;
   const [header, payload, signature] = parts;
+  if (publicJwk.kid !== undefined && peekJwtHeader(token)?.kid !== publicJwk.kid) return undefined;
   if (!es256Verifier(publicJwk)(`${header}.${payload}`, signature)) return undefined;
   try {
     return JSON.parse(Buffer.from(payload, "base64url").toString("utf-8")) as T;

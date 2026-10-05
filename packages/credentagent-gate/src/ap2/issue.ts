@@ -8,7 +8,7 @@
 import type { KeyObject } from "node:crypto";
 import { digestToken, sdJwtInstance, SD_HASH_ALG } from "./sdjwt.js";
 import { signCompactJwt } from "./jwt.js";
-import type { GateSigningKey, PublicJwkP256 } from "./keys.js";
+import { CHECKOUT_KEY_FRAGMENT, ephemeralSigningKey, type GateSigningKey, type PublicJwkP256 } from "./keys.js";
 import {
   VCT,
   type Amount,
@@ -75,25 +75,44 @@ export interface IssueOpenPaymentArgs extends IssueOpenArgs<PaymentConstraint> {
   instrument?: PaymentInstrument;
 }
 
+export interface Ap2IssuerOptions {
+  /**
+   * The merchant key carts are quoted with (spec 014, FR-6) — distinct from the mandate key, its
+   * `kid` ending `#merchant-checkout-key`. Absent ⇒ one is generated, flagged `ephemeral`.
+   */
+  checkoutKey?: GateSigningKey;
+}
+
 /**
- * Mints AP2 mandates with the gate's key.
+ * Mints AP2 mandates with the gate's key, and signs the carts it quotes with the merchant's.
  *
  * ```ts
- * const issuer = new Ap2Issuer(key);
+ * const issuer = new Ap2Issuer(key, { checkoutKey });
  * const checkout = await issuer.checkout({ checkout: ucp });
  * const payment  = await issuer.payment({ transactionId: checkout.checkoutHash, ... });
  * ```
  */
 export class Ap2Issuer {
   readonly #key: GateSigningKey;
+  readonly #checkoutKey: GateSigningKey;
 
-  constructor(key: GateSigningKey) {
+  constructor(key: GateSigningKey, opts: Ap2IssuerOptions = {}) {
     this.#key = key;
+    this.#checkoutKey = opts.checkoutKey ?? ephemeralSigningKey(key.issuer, CHECKOUT_KEY_FRAGMENT);
   }
 
-  /** The public half — what `mount()` publishes and what a verifier imports. */
+  /** The mandate key's public half — what `mount()` publishes and what `verifyMandate` imports. */
   get publicJwk(): PublicJwkP256 {
     return this.#key.publicJwk;
+  }
+
+  /**
+   * The checkout key's public half — what a cart this merchant quoted verifies against
+   * (`verifyDelegatedPurchase({ checkoutKey })`, `openCheckoutPayload`). Published beside the
+   * mandate key at `/.well-known/did.json`.
+   */
+  get checkoutPublicJwk(): PublicJwkP256 {
+    return this.#checkoutKey.publicJwk;
   }
 
   get issuer(): string {
@@ -112,10 +131,11 @@ export class Ap2Issuer {
 
   /**
    * The merchant-signed UCP Checkout — what a merchant quotes to an agent, and what the agent's
-   * closed checkout mandate then names by `checkout_jwt` and its hash.
+   * closed checkout mandate then names by `checkout_jwt` and its hash. Signed with the CHECKOUT
+   * key, never the mandate key: verify it against {@link checkoutPublicJwk}.
    */
   signCheckout(checkout: UcpCheckout): string {
-    return signCompactJwt(checkout, this.#key.privateKey, this.#key.kid);
+    return signCompactJwt(checkout, this.#checkoutKey.privateKey, this.#checkoutKey.kid);
   }
 
   /** `mandate.checkout.1` — "I authorize THIS checkout." */

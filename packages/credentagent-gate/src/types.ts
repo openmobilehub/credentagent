@@ -331,6 +331,17 @@ export interface CredentAgentOptions {
    */
   mandateSigningKey?: PrivateJwkP256;
   /**
+   * The merchant's CHECKOUT key — a PRIVATE P-256 JWK the carts this gate quotes are signed with
+   * (`credentagent.ap2.signCheckout`). Kept apart from {@link CredentAgentOptions.mandateSigningKey}
+   * (spec 014, FR-6): a quoted cart and an issued mandate are different statements, and each key's
+   * `kid` (`#merchant-checkout-key` / `#gate-signing-key`) says which one a signature makes. Both
+   * public halves are published at `/.well-known/did.json`.
+   *
+   * Omit for local dev and the gate generates one at boot; `doctor()` warns on a deployment,
+   * because a cart quoted before a restart, or on another instance, then no longer verifies.
+   */
+  checkoutSigningKey?: PrivateJwkP256;
+  /**
    * Outbound HTTP webhooks (spec 010). Register endpoint URL(s) + their `whsec_` secret and every
    * settled order is POSTed to them as a signed event — the durable, cross-service signal the
    * in-process `on("order.settled")` listener can't provide. Omit ⇒ no delivery (additive, zero-cost).
