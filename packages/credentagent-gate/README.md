@@ -225,6 +225,7 @@ Each finding is `{ level: "error" | "warn", code, message, fix }`. It checks the
 | `in-memory-verification-store` | the default in-memory `store` on a deployment | inject a shared `{ store }` (Redis/Upstash) |
 | `in-memory-order-store` | the default in-memory order stores on a deployment | inject `{ orderStore, completedOrderStore }` |
 | `ephemeral-mandate-key` | no `mandateSigningKey` on a deployment — the AP2 key was generated at boot (**error** on any deployment) | pass a stable private P-256 JWK as `{ mandateSigningKey }` |
+| `ephemeral-checkout-key` | no `checkoutSigningKey` on a deployment — the key carts are quoted with was generated at boot (**warn**) | pass a second, different private P-256 JWK as `{ checkoutSigningKey }` |
 
 In plain local dev — no deployment env signals (`VERCEL`, `AWS_LAMBDA_*`, `NODE_ENV=production`, …) — every
 check stays quiet, so the zero-config quickstart is undisturbed. `ephemeral-mandate-key` is an error even on
@@ -242,13 +243,21 @@ your source:
 const credentagent = new CredentAgent({
   walletOrigin: "https://shop.example",
   mandateSigningKey: JSON.parse(process.env.MANDATE_SIGNING_KEY),   // a PRIVATE P-256 JWK
+  checkoutSigningKey: JSON.parse(process.env.CHECKOUT_SIGNING_KEY), // a DIFFERENT one — signs the carts you quote
 });
-credentagent.mount(app);        // serves GET /.well-known/did.json
+credentagent.mount(app);        // serves GET /.well-known/did.json — both public halves
 ```
 
 `mandateSigningKey` is **not** `gateSecret`. `gateSecret` is a symmetric HMAC secret for challenge
 tokens; this is an asymmetric key whose public half goes to the world. Omit it and the gate generates
 one at boot — fine for a dev server, an error on anything else.
+
+`checkoutSigningKey` signs the carts you quote (`credentagent.ap2.signCheckout`). It is a separate key
+because a quoted cart and an issued mandate are different statements: each key's `kid` —
+`#merchant-checkout-key` or `#gate-signing-key` — says which one a signature makes, and a cart is only
+ever checked against `credentagent.ap2.checkoutPublicJwk`. Passing the same JWK for both throws. Omit it
+and the gate generates one at boot; `doctor()` warns on a deployment, because a cart quoted before a
+restart, or on another instance, then no longer verifies.
 
 Mint and check:
 
@@ -310,30 +319,58 @@ On the wire this is an AP2 delegation chain (Delegate SD-JWT, `draft-gco-oauth-d
 wallet's credential, the wallet's signature over the open mandates, and the agent's signature over the
 closed ones.
 
-```ts
-import { DelegatedIntent, verifyDelegatedPurchase } from "@openmobilehub/credentagent-gate";
+The agent and the merchant run in **different processes, with different imports**. The agent's key —
+the permission's spending power — is generated and kept by the agent, and the merchant only ever sees its
+public half. Nothing the merchant imports from the package root can hold it.
 
-// Agent — keep the permission once (it is plain JSON), spend it per purchase:
-const intent = DelegatedIntent.fromWalletPresentation({ presentation, disclosures });
+```ts
+// MERCHANT — the package root. Open a grant naming the agent's PUBLIC key; the person signs it.
+const grant = await credentagent.grants.create({
+  merchant: "utopia", budget: 200, perSpend: 50,
+  allow: { skus: ["coffee", "tea"] },
+  agentKey: agentPublicJwk,                    // agentKey.publicJwk, as the agent sent it
+});
+sendToUser(grant.approveUrl);                  // the person signs on their phone
+// …then hand the agent (await credentagent.grants.retrieve(grant.id)).mandate.intent
+```
+
+```ts
+// AGENT — the `/agent` entry point. Its key never leaves this process.
+import { AgentKey, DelegatedIntent } from "@openmobilehub/credentagent-gate/agent";
+
+const agentKey = AgentKey.fromJwk(JSON.parse(process.env.AGENT_KEY));   // or AgentKey.generate()
+const intent = DelegatedIntent.fromWalletPresentation(signedIntent);    // plain JSON — keep it
 const proof = await intent.spend({
-  agentKey,                                    // the agent's private key — never the merchant's
-  checkoutJwt,                                 // the cart, as the merchant signed it
+  agentKey,
+  checkoutJwt,                                 // the cart, as the merchant quoted it
   payment: { payee, amount: { amount: 450, currency: "USD" }, instrument },
   audience: "https://shop.example",            // the merchant, and the nonce it issued
   nonce,
 });
+```
 
-// Merchant — one call:
+```ts
+// MERCHANT — one call per purchase.
+import { verifyDelegatedPurchase } from "@openmobilehub/credentagent-gate";
+
 const quote = credentagent.ap2.signCheckout(ucpCheckout);   // what you hand the agent as checkoutJwt
 const verdict = await verifyDelegatedPurchase(proof, {
   audience: "https://shop.example",
   nonce,
-  checkoutKey: credentagent.ap2.publicJwk,     // the key that signed the cart
+  checkoutKey: credentagent.ap2.checkoutPublicJwk,   // the key that quoted the cart
   spent: { amount: 0, uses: 0 },               // already spent under this permission
   price: (cart) => catalogTotal(cart),         // YOUR catalog, in minor units — it decides
 });
-if (!verdict.ok) console.error(verdict.code, verdict.violations);   // "constraint" | "price" | "splice" | …
+if (!verdict.ok) console.error(verdict.code, verdict.violations);   // "constraint" | "price" | "payee" | …
 ```
+
+A grant created with `agentKey` is spent this way, **at any merchant its permission names** — not
+through `grant.spend()`, which refuses it with `agent-held-key`: the gate has no key to spend it with,
+which is the point. Leave `agentKey` out and the gate generates the key and spends server-side, as below.
+**Revoking such a grant does not recall it.** The agent already holds the signed permission, and
+`verifyDelegatedPurchase` does not consult the grant, so the permission stays spendable until the
+expiry it was signed with — today a year from creation, because a grant does not yet take its own
+expiry. Bound it with `budget` and `perSpend`, which every merchant enforces.
 
 **What a verified purchase means:** every link of both chains verifies against the key the link before it
 names, both chains rest on the same wallet signature, the cart is the one you signed, the payment pays
