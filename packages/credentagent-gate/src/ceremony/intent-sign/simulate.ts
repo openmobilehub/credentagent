@@ -14,9 +14,10 @@
 // The `override*` options exist to drive the bypass tests. Each one produces a presentation
 // that a correct verifier MUST refuse; if any of them starts passing, a control has gone.
 import * as jose from "jose";
-import { generateKeyPairSync, sign as nodeSign, webcrypto, type KeyObject } from "node:crypto";
+import { generateKeyPairSync, webcrypto, type KeyObject } from "node:crypto";
 import * as x509 from "@peculiar/x509";
 import { SDJwtInstance } from "@sd-jwt/core";
+import { es256Signer } from "../../ap2/sdjwt.js";
 import { dcApiAudience, hasher } from "./presentation.js";
 import { PAYMENT_CREDENTIAL_VCTS, PAYMENT_INSTRUMENT_CLAIM } from "./dcql.js";
 import {
@@ -35,9 +36,8 @@ const utf8 = new TextEncoder();
 const saltGenerator = (n: number): string =>
   Buffer.from(webcrypto.getRandomValues(new Uint8Array(n))).toString("hex").slice(0, n);
 
-/** ES256 over P-256. `ieee-p1363` is the raw r‖s JWS wants; node's EC default is DER. */
-const signer = (key: KeyObject) => (data: string) =>
-  nodeSign("sha256", utf8.encode(data), { key, dsaEncoding: "ieee-p1363" }).toString("base64url");
+/** ES256 over P-256 — the package's own signer, so the wallet signs exactly as the gate verifies. */
+const signer = (key: KeyObject) => es256Signer(key);
 
 function p256() {
   const { privateKey, publicKey } = generateKeyPairSync("ec", { namedCurve: "P-256" });

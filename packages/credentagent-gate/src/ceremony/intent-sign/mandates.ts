@@ -91,6 +91,10 @@ function contentDigest(content: MandateContent): string {
 /**
  * The two "open" mandates for a grant: what the agent may buy, and how much it may spend.
  *
+ * CONTENT ONLY, for the WALLET to sign — this is the path where the person grants the authority.
+ * `Ap2Issuer.openCheckout` / `openPayment` are the other path: open mandates the GATE signs with
+ * its own key. Same wire format, different signer, and a verifier must not confuse the two.
+ *
  * Deterministic in its inputs — the same grant record and delegate key always produce the same
  * bytes. That is what lets `/verify` rebuild them and compare.
  *
