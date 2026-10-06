@@ -239,7 +239,9 @@ export async function devSimulateWalletSignature(
     const sdHashValue = opts.breakSdHash ? sdHash(`${disclosed}tampered`) : sdHash(disclosed);
     // `kb+sd-jwt+kb`: the payload names the agent's key in `cnf`, so this hop is one the agent
     // extends — and a chain verifier (ours, and the AP2 Python SDK's) refuses it typed terminal.
-    // The rail itself still accepts either, because what a released wallet emits is unverified.
+    // So does the rail, for a grant whose key the agent holds (#243): a real wallet (Multipaz) typed
+    // it `kb+sd-jwt`, and the person was shown "signed" for a permission every merchant refused.
+    // A grant whose key the gate holds still accepts either — the gate spends that one itself.
     const kbHeader = { alg: "ES256", typ: opts.overrideKbTyp ?? HOP_TYP.delegable };
     const kbPayload = {
       iat: Math.floor(Date.now() / 1000),

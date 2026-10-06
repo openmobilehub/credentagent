@@ -11,7 +11,7 @@ import request from "supertest";
 import { CredentAgent } from "./client.js";
 import { verifyDelegatedPurchase } from "./index.js";
 import { AgentKey, DelegatedIntent } from "./agent.js";
-import { devSimulateWalletSignature } from "./ceremony/intent-sign/simulate.js";
+import { devSimulateWalletSignature, type SimulateOptions } from "./ceremony/intent-sign/simulate.js";
 import { merchantFor } from "./ap2/from-gate.js";
 import type { UcpCheckout } from "./ap2/types.js";
 
@@ -27,12 +27,13 @@ function merchant() {
   return { credentagent, app };
 }
 
-/** The person signs the grant on their phone — the real rail, a simulated wallet. */
-async function signOnPhone(app: Express, id: string) {
+/** The person signs the grant on their phone — the real rail, a simulated wallet. `wallet` makes
+ *  that wallet behave like a particular real one (e.g. how it types its key binding). */
+async function signOnPhone(app: Express, id: string, wallet: Pick<SimulateOptions, "overrideKbTyp"> = {}) {
   const req = await request(app).get(`/credentagent/grants/${id}/sign/request`).set("Host", HOST);
   expect(req.status).toBe(200);
   const oid = req.body as { requests: { data: { request: string } }[]; dcql_query: unknown; readerContextToken: string };
-  const result = await devSimulateWalletSignature({ request: { request: oid.requests[0].data.request, dcql_query: oid.dcql_query as never }, origin: ORIGIN });
+  const result = await devSimulateWalletSignature({ request: { request: oid.requests[0].data.request, dcql_query: oid.dcql_query as never }, origin: ORIGIN, ...wallet });
   return request(app).post(`/credentagent/grants/${id}/sign/verify`).set("Host", HOST).send({ readerContextToken: oid.readerContextToken, result });
 }
 
@@ -128,6 +129,30 @@ describe("a grant whose key the agent holds (FR-5)", () => {
     expect(gateHeld.mandate?.mandates).toBeDefined();
     expect(gateHeld.mandate?.intent).toBeUndefined();
     expect(gateHeld.agentKey).toBeUndefined();
+  });
+
+  // #243. A real wallet (Multipaz) typed its key binding `kb+sd-jwt` while the mandates it signed
+  // name the agent's key. Delegate SD-JWT §5.1.4 makes that hop a KB-SD-JWT+KB, `kb+sd-jwt+kb`, and
+  // the merchant's chain verifier refuses anything else. The signing page used to accept it and show
+  // "signed"; every merchant then refused the purchase, after the person had left.
+  it("REFUSES at signing a wallet hop typed terminal (`kb+sd-jwt`) — the grant stays pending (bypass)", async () => {
+    const { credentagent, app } = merchant();
+    const g = await credentagent.grants.create({ merchant: "utopia", budget: 200, perSpend: 30, allow: { skus: ["coffee"] }, agentKey: AgentKey.generate().publicJwk });
+    const signed = await signOnPhone(app, g.id, { overrideKbTyp: "kb+sd-jwt" });
+    expect(signed.status).toBe(400);
+    expect(signed.body).toMatchObject({ ok: false, reason: expect.stringContaining("kb+sd-jwt+kb") });
+    expect(signed.body.reason).toContain("§5.1.4");
+    const after = (await credentagent.grants.retrieve(g.id))!;
+    expect(after.status).toBe("pending");
+    expect(after.mandate?.intent).toBeUndefined();
+  });
+
+  // The other half: what the check spares. The same grant, typed `kb+sd-jwt+kb`, authorizes — and
+  // the permission it hands the agent is one a merchant's `verifyDelegatedPurchase` accepts.
+  it("authorizes the same grant when the wallet types its hop `kb+sd-jwt+kb`", async () => {
+    const { credentagent, app } = merchant();
+    const g = await credentagent.grants.create({ merchant: "utopia", budget: 200, perSpend: 30, allow: { skus: ["coffee"] }, agentKey: AgentKey.generate().publicJwk });
+    expect((await signOnPhone(app, g.id, { overrideKbTyp: "kb+sd-jwt+kb" })).body).toMatchObject({ ok: true, status: "authorized" });
   });
 });
 
