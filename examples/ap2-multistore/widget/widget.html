@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent purchase</title>
+<style>
+  /* Host-first theming: Claude (MCP Apps) passes its own variables and fonts; ChatGPT and the local
+     preview fall back to these. Light by default, dark from the host's theme or the OS. */
+  :root {
+    --fg: var(--color-text-primary, #1f2328); --fg-2: var(--color-text-secondary, #57606a);
+    --line: var(--color-border-secondary, #d8dee4); --tint: var(--color-background-secondary, #f6f8fa);
+    --ok: var(--color-text-success, #1a7f37); --ok-bg: var(--color-background-success, #dafbe1);
+    --bad: var(--color-text-danger, #cf222e); --bad-bg: var(--color-background-danger, #ffebe9);
+    --warn: var(--color-text-warning, #9a6700); --warn-bg: var(--color-background-warning, #fff8c5);
+    --info: var(--color-text-info, #0969da);
+    --sans: var(--font-sans, system-ui, -apple-system, "Segoe UI", sans-serif);
+    --mono: var(--font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+    --r: var(--border-radius-md, 10px);
+    color-scheme: light dark;
+  }
+  :root[data-theme="dark"] {
+    --fg: var(--color-text-primary, #e6edf3); --fg-2: var(--color-text-secondary, #9198a1);
+    --line: var(--color-border-secondary, #3d444d); --tint: var(--color-background-secondary, #151b23);
+    --ok: var(--color-text-success, #3fb950); --ok-bg: var(--color-background-success, #12261e);
+    --bad: var(--color-text-danger, #f85149); --bad-bg: var(--color-background-danger, #25171c);
+    --warn: var(--color-text-warning, #d29922); --warn-bg: var(--color-background-warning, #272115);
+    --info: var(--color-text-info, #4493f8);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --fg: var(--color-text-primary, #e6edf3); --fg-2: var(--color-text-secondary, #9198a1);
+      --line: var(--color-border-secondary, #3d444d); --tint: var(--color-background-secondary, #151b23);
+      --ok: var(--color-text-success, #3fb950); --ok-bg: var(--color-background-success, #12261e);
+      --bad: var(--color-text-danger, #f85149); --bad-bg: var(--color-background-danger, #25171c);
+      --warn: var(--color-text-warning, #d29922); --warn-bg: var(--color-background-warning, #272115);
+      --info: var(--color-text-info, #4493f8);
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: transparent; }
+  body { color: var(--fg); font: 15px/1.5 var(--sans); padding: 2px; }
+  p, h1, h2, ul, ol, dl, dd { margin: 0; }
+  .card { border: 1px solid var(--line); border-radius: var(--r); padding: 16px; display: grid; gap: 14px; }
+  .eyebrow { font-size: 12px; font-weight: 600; letter-spacing: .02em; color: var(--fg-2); display: flex; align-items: center; gap: 6px; }
+  h1 { font-size: 18px; font-weight: 600; line-height: 1.35; }
+  .sub { color: var(--fg-2); font-size: 14px; }
+  .mono { font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
+  .icon { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; font-size: 13px; font-weight: 500; }
+  .pill.ok { background: var(--ok-bg); color: var(--ok); } .pill.warn { background: var(--warn-bg); color: var(--warn); } .pill.bad { background: var(--bad-bg); color: var(--bad); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+  @media (prefers-reduced-motion: no-preference) { .pill.warn .dot { animation: pulse 1.4s ease-in-out infinite; } @keyframes pulse { 50% { opacity: .35; } } }
+  .demo { font-size: 12px; color: var(--fg-2); border-top: 1px solid var(--line); padding-top: 10px; }
+  button { font: inherit; font-size: 14px; font-weight: 500; color: var(--fg); background: transparent; border: 1px solid var(--line); border-radius: var(--r); padding: 8px 14px; min-height: 40px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+  button:hover { background: var(--tint); }
+  button:focus-visible { outline: 2px solid var(--info); outline-offset: 2px; }
+
+  /* offers */
+  table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 14px; }
+  th, td { padding: 8px 6px; text-align: left; border-top: 1px solid var(--line); vertical-align: top; }
+  thead th { border-top: 0; font-size: 13px; font-weight: 600; }
+  tbody th { font-weight: 500; }
+  td .price { font-weight: 600; font-variant-numeric: tabular-nums; }
+  td .rate { color: var(--fg-2); font-size: 13px; }
+  .tag { display: inline-block; margin-top: 3px; font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 999px; }
+  .tag.low { background: var(--ok-bg); color: var(--ok); } .tag.top { background: var(--tint); color: var(--info); border: 1px solid var(--line); }
+
+  /* permission */
+  .split { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); }
+  @media (min-width: 520px) { .split { grid-template-columns: minmax(0, 1fr) 176px; align-items: start; } }
+  .why { border-left: 3px solid var(--info); padding: 2px 0 2px 10px; color: var(--fg-2); font-size: 14px; }
+  dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px; font-size: 14px; }
+  dt { color: var(--fg-2); }
+  dd { font-weight: 500; }
+  .qr { display: grid; gap: 8px; justify-items: center; text-align: center; font-size: 13px; color: var(--fg-2); }
+  .qr img { width: 168px; height: 168px; background: #fff; padding: 8px; border-radius: 8px; border: 1px solid var(--line); image-rendering: pixelated; }
+  .qr.done img { opacity: .25; }
+
+  /* receipt */
+  .hero { display: flex; gap: 12px; align-items: flex-start; }
+  .hero .badge { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; flex: none; }
+  .hero.ok .badge { background: var(--ok-bg); color: var(--ok); } .hero.bad .badge { background: var(--bad-bg); color: var(--bad); }
+  .hero .badge .icon { width: 22px; height: 22px; }
+  .checks { list-style: none; padding: 0; display: grid; gap: 4px; font-size: 14px; }
+  .checks li { display: flex; gap: 8px; align-items: flex-start; }
+  .checks .icon { width: 16px; height: 16px; margin-top: 3px; color: var(--ok); }
+  .row { display: flex; justify-content: space-between; gap: 12px; font-size: 14px; }
+  .total { font-weight: 600; font-size: 16px; border-top: 1px solid var(--line); padding-top: 8px; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-scale" viewBox="0 0 24 24"><path d="M12 3v18M7 21h10M5 7h14M5 7l-3 7a3 3 0 0 0 6 0zM19 7l-3 7a3 3 0 0 0 6 0z"/></symbol>
+  <symbol id="i-phone" viewBox="0 0 24 24"><rect x="6" y="2" width="12" height="20" rx="2"/><path d="M11 18h2"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+  <symbol id="i-link" viewBox="0 0 24 24"><path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></symbol>
+  <symbol id="i-store" viewBox="0 0 24 24"><path d="M3 9l1.5-5h15L21 9M3 9h18M3 9v11h18V9M9 20v-6h6v6"/></symbol>
+</svg>
+<main id="root" aria-live="polite"></main>
+
+<!--EXT_APPS-->
+<script type="module">
+  const Ext = globalThis.ExtApps; // the MCP Apps client, inlined by the server (absent in a plain browser)
+  const root = document.getElementById("root");
+  const usd = (n) => `$${Number(n).toFixed(2)}`;
+  const short = (name) => String(name).split(",")[0];
+  // Every string from a tool result becomes a text node — the agent and the stores never write HTML here.
+  const el = (tag, props = {}, ...kids) => {
+    const n = Object.assign(document.createElement(tag), props);
+    for (const k of kids) if (k != null && k !== false) n.append(k);
+    return n;
+  };
+  const icon = (name) => {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("class", "icon"); svg.setAttribute("aria-hidden", "true");
+    const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
+    use.setAttribute("href", `#i-${name}`); svg.append(use);
+    return svg;
+  };
+  const demo = () => el("p", { className: "demo" }, "Demo: the signatures are real, but the payment credential is not issuer-verified yet (presence-only-demo). No real money moves.");
+
+  // ── the host bridge: Claude (MCP Apps), ChatGPT (window.openai), or a plain browser (preview) ──
+  let app = null;
+  const host = window.openai ? "chatgpt" : window.self !== window.top && Ext ? "mcp" : "preview";
+  const bridge = {
+    async call(name, args) {
+      if (host === "chatgpt") { const r = await window.openai.callTool?.(name, args); return r?.structuredContent ?? r; }
+      if (host === "mcp") return (await app.callServerTool({ name, arguments: args }))?.structuredContent;
+      return null;
+    },
+    open(url) {
+      if (host === "chatgpt") return window.openai.openExternal?.({ href: url });
+      if (host === "mcp") return app.openLink({ url });
+      window.open(url, "_blank", "noopener");
+    },
+  };
+
+  // ── views ──────────────────────────────────────────────────────────────────
+  function offers({ stores }) {
+    const ok = stores.filter((s) => s.products);
+    const ids = [...new Set(ok.flatMap((s) => s.products.map((p) => p.id)))];
+    const rows = ids.map((id) => {
+      const cells = ok.map((s) => s.products.find((p) => p.id === id));
+      const prices = cells.filter(Boolean).map((p) => p.price), rates = cells.filter(Boolean).map((p) => p.rating);
+      const low = Math.min(...prices), top = Math.max(...rates);
+      const name = short(cells.find(Boolean).name);
+      return el("tr", {}, el("th", { scope: "row" }, name), ...cells.map((p) => el("td", {},
+        p ? el("div", {}, el("div", { className: "price" }, usd(p.price)), el("div", { className: "rate" }, `${Number(p.rating).toFixed(1)} ★`),
+          p.price === low ? el("span", { className: "tag low" }, "Lowest price") : null,
+          p.rating === top ? el("span", { className: "tag top" }, "Top rated") : null) : "—")));
+    });
+    return el("section", { className: "card" },
+      el("p", { className: "eyebrow" }, icon("scale"), `Compared ${ok.length} stores`),
+      el("h1", {}, "Offers, read live from each store"),
+      el("table", {}, el("thead", {}, el("tr", {}, el("th", {}, el("span", { className: "sub" }, "Product")), ...ok.map((s) => el("th", { scope: "col" }, s.store)))), el("tbody", {}, ...rows)),
+      el("p", { className: "sub" }, "The agent picks one store, then asks you to sign a permission for it on your phone."),
+    );
+  }
+
+  function permission(d, qr) {
+    const status = el("span", { className: "pill warn", role: "status" }, el("span", { className: "dot" }), "Waiting for your signature");
+    const qrBox = el("div", { className: "qr" },
+      qr ? el("img", { src: qr, alt: `QR code for the signing link at ${d.store}` }) : null,
+      el("span", {}, "Scan with your phone's camera"),
+      el("button", { type: "button", onclick: () => bridge.open(d.approveUrl) }, icon("link"), "Open link"));
+    const card = el("section", { className: "card" },
+      el("p", { className: "eyebrow" }, icon("phone"), "Permission request"),
+      el("div", { className: "split" },
+        el("div", { style: "display:grid;gap:12px" },
+          el("h1", {}, `Sign on your phone to let the agent buy at ${d.store}`),
+          d.why ? el("p", { className: "why" }, `Why ${d.store}: ${d.why}`) : null,
+          el("dl", {},
+            el("dt", {}, "Store"), el("dd", {}, d.store, el("div", { className: "mono sub" }, d.merchantId)),
+            el("dt", {}, "Products"), el("dd", {}, d.products.map(short).join(", ")),
+            el("dt", {}, "Per purchase"), el("dd", {}, `up to ${usd(d.perSpend)}`),
+            el("dt", {}, "In total"), el("dd", {}, `up to ${usd(d.budget)}`)),
+          el("div", {}, status)),
+        qrBox),
+      el("p", { className: "sub" }, "Only this store, only these products, only up to these amounts. The agent spends it with its own key, which the store never sees."),
+      demo());
+    // Watch for the signature (the agent's check-permission holds each call open ~45 s).
+    (async () => {
+      for (let i = 0; i < 20; i++) {
+        let r;
+        try { r = await bridge.call("check-permission", { store: d.storeUrl, grantId: d.grantId }); } catch { r = null; }
+        if (!r) { if (host === "preview") return; await new Promise((ok) => setTimeout(ok, 3000)); continue; }
+        if (r.status === "authorized") {
+          status.className = "pill ok"; status.replaceChildren(icon("check"), `Signed on your phone · ${r.trustLevel ?? "device-signed"}`);
+          qrBox.classList.add("done"); return;
+        }
+        if (r.status && r.status !== "pending") { status.className = "pill bad"; status.replaceChildren(icon("x"), `Not signed · ${r.status}`); return; }
+      }
+    })();
+    return card;
+  }
+
+  function receipt(d) {
+    if (!d.ok) {
+      return el("section", { className: "card" },
+        el("div", { className: "hero bad" }, el("div", { className: "badge" }, icon("x")),
+          el("div", {}, el("h1", {}, `${d.store ?? "The store"} refused this purchase`), el("p", { className: "sub" }, "Nothing was charged."))),
+        el("p", {}, d.reason ?? d.detail ?? d.error ?? "Refused."),
+        d.code ? el("p", { className: "mono sub" }, d.code) : null,
+        demo());
+    }
+    const o = d.order;
+    return el("section", { className: "card" },
+      el("div", { className: "hero ok" }, el("div", { className: "badge" }, icon("check")),
+        el("div", {}, el("h1", {}, `Paid ${usd(o.amount / 100)} at ${o.store}`), el("p", { className: "sub" }, "Verified by the store before it accepted the order"))),
+      el("div", { style: "display:grid;gap:4px" }, ...o.items.map((i) => el("div", { className: "row" }, el("span", {}, i))),
+        el("div", { className: "row total" }, el("span", {}, "Total"), el("span", {}, usd(o.amount / 100)))),
+      el("div", { style: "display:grid;gap:6px" }, el("p", { className: "eyebrow" }, icon("store"), `What ${o.store} checked`),
+        el("ul", { className: "checks" }, ...(o.checks ?? []).map((c) => el("li", {}, icon("check"), el("span", {}, c))))),
+      el("div", {}, el("button", { type: "button", onclick: () => bridge.open(d.receiptUrl) }, icon("link"), "Open receipt")),
+      demo());
+  }
+
+  function show(result) {
+    const d = result?.structuredContent ?? result;
+    const meta = result?._meta ?? {};
+    if (!d || typeof d !== "object" || !d.view) return;
+    const view = d.view === "offers" ? offers(d) : d.view === "permission" ? permission(d, meta["ap2/qr"]) : d.view === "receipt" ? receipt(d) : null;
+    if (view) root.replaceChildren(view);
+  }
+
+  function theme(ctx) {
+    if (!ctx) return;
+    if (ctx.theme) { Ext?.applyDocumentTheme?.(ctx.theme); document.documentElement.dataset.theme = ctx.theme; }
+    if (ctx.styles?.variables) Ext?.applyHostStyleVariables?.(ctx.styles.variables);
+    if (ctx.styles?.css?.fonts) Ext?.applyHostFonts?.(ctx.styles.css.fonts);
+  }
+
+  if (host === "chatgpt") {
+    const read = () => {
+      if (window.openai.theme) document.documentElement.dataset.theme = window.openai.theme;
+      show({ structuredContent: window.openai.toolOutput, _meta: window.openai.toolResponseMetadata });
+    };
+    read();
+    window.addEventListener("openai:set_globals", read);
+  } else if (host === "mcp") {
+    app = new Ext.App({ name: "credentagent-ap2-agent", version: "1.0.0" });
+    app.addEventListener("toolresult", show);
+    app.addEventListener("hostcontextchanged", theme);
+    await app.connect();
+    theme(app.getHostContext());
+  } else {
+    // Local preview: /widget?view=offers|permission|receipt|refused renders sample data, no host needed.
+    const r = await fetch(`preview.json?view=${new URLSearchParams(location.search).get("view") ?? "offers"}`).catch(() => null);
+    if (r?.ok) show(await r.json());
+  }
+</script>
+</body>
+</html>

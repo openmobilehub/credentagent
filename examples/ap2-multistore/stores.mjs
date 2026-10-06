@@ -164,7 +164,7 @@ async function startStore({ key, name, port, url, accent, products }) {
         agentKeyX: String(agentKey?.x ?? "").slice(0, 10),
       });
       watchGrant(g.id);
-      res.json({ grantId: g.id, approveUrl: g.approveUrl, status: g.status });
+      res.json({ grantId: g.id, approveUrl: g.approveUrl, status: g.status, store: name, merchantId: host, products: skus.map((s) => bySku.get(s).name) });
     } catch (err) {
       res.status(400).json({ error: err.message });
     }
@@ -192,7 +192,7 @@ async function startStore({ key, name, port, url, accent, products }) {
     const nonce = randomUUID();
     nonces.set(nonce, grantId);
     feed.emit("cart.quoted", { cartId: cart.id, items: line_items.map((l) => `${l.quantity} × ${l.item.title}`), total });
-    res.json({ checkoutJwt: credentagent.ap2.signCheckout(cart), payee: me, amount: { amount: total, currency: "USD" }, audience: origin, nonce });
+    res.json({ store: name, checkoutJwt: credentagent.ap2.signCheckout(cart), payee: me, amount: { amount: total, currency: "USD" }, audience: origin, nonce });
   });
 
   // One call decides. The catalog re-prices the cart (invariant 2); the nonce is used once (invariant 6).
@@ -200,7 +200,7 @@ async function startStore({ key, name, port, url, accent, products }) {
     const { proof, nonce } = req.body ?? {};
     if (!nonces.has(nonce)) {
       feed.emit("purchase.refused", { code: "nonce", reason: CODES.nonce });
-      return res.status(400).json({ ok: false, code: "nonce", detail: "unknown or already-used nonce" });
+      return res.status(400).json({ ok: false, store: name, code: "nonce", reason: CODES.nonce, detail: "unknown or already-used nonce" });
     }
     nonces.delete(nonce);
     // Key the running total by the permission itself (the chain's root, which the verdict checks), never
@@ -216,8 +216,9 @@ async function startStore({ key, name, port, url, accent, products }) {
     });
     if (!verdict.ok) {
       console.log(`  [${key}] purchase REFUSED: ${verdict.code} — ${verdict.detail}`);
-      feed.emit("purchase.refused", { code: verdict.code, reason: explain(verdict) });
-      return res.status(402).json(verdict);
+      const reason = explain(verdict);
+      feed.emit("purchase.refused", { code: verdict.code, reason });
+      return res.status(402).json({ ...verdict, store: name, reason });
     }
     const amount = verdict.payment.payment_amount.amount;
     spent.set(root, { amount: before.amount + amount, uses: before.uses + 1 });

@@ -1,14 +1,14 @@
 # AP2 multi-store — an agent compares three stores, you sign on your phone, it pays
 
-The end-to-end delegated purchase, live in a Claude chat, with a real phone wallet:
+The end-to-end delegated purchase, live in a Claude (or ChatGPT) chat, with a real phone wallet:
 
 1. **You:** "I need a bag of house blend coffee. Compare the stores and buy the best one — up to $50."
-2. **Claude** calls `compare-offers`, reads three stores' prices and ratings, picks one and says why.
-3. **Claude** calls `request-permission` for that store and gives you a link.
-4. **You** open the link on your phone and **sign** the permission with your wallet (Multipaz).
+2. **Claude** calls `compare-offers`. A card shows the three stores' prices and ratings side by side. Claude picks one and says why.
+3. **Claude** calls `request-permission` for that store. A card shows exactly what you would allow (the store, the products, the limits), why the agent picked that store, and a **QR code**.
+4. **You** scan the QR code with your phone and **sign** the permission with your wallet (Multipaz). The card turns to "Signed on your phone" by itself.
 5. **Claude** calls `check-permission`. It now holds the permission you signed.
 6. **Claude** calls `buy`. The store quotes and signs the cart. The agent signs the purchase with **its own key**. The store checks everything and answers.
-7. **You** open the receipt link Claude gives you.
+7. **You** see the answer in a card: paid and verified, with the list of what the store checked, or refused, with the reason.
 
 The agent (`agent.mjs`) and the stores (`stores.mjs`) are **separate processes**. The agent's private key never leaves the agent's process: the stores only ever see its public half.
 
@@ -20,7 +20,9 @@ node examples/ap2-multistore/smoke.mjs   # the whole flow, phone simulated — c
 node examples/ap2-multistore/up.mjs      # live: 4 tunnels + stores + agent (needs cloudflared)
 ```
 
-`up.mjs` prints a connector URL. Add it in **claude.ai → Settings → Connectors → Add custom connector**, then have the conversation above.
+`up.mjs` prints a connector URL. Add it in **claude.ai → Settings → Connectors → Add custom connector**, then have the conversation above. ChatGPT takes the same URL as a custom connector (it needs developer mode).
+
+The cards are one HTML page (`widget/widget.html`), served the way the storefront package serves its own: as an MCP Apps resource for Claude and as an Apps SDK resource for ChatGPT. They take the chat's theme and fonts. To see them without a chat, open `http://localhost:4100/widget?view=offers` (or `permission`, `receipt`, `refused`). That preview uses sample data.
 
 ## What the stores see
 

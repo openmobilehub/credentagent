@@ -31,8 +31,20 @@ try {
   const beanbarn = stores.find((s) => s.store === "BeanBarn").url;
   const acme = stores.find((s) => s.store === "Acme Coffee Co").url;
 
-  const grant = await tool("request-permission", { store: beanbarn, skus: ["house-blend"], budget: 50, perSpend: 25, description: "House Blend from BeanBarn — up to $50, $25 a purchase." });
-  check(grant.approveUrl?.startsWith(beanbarn), `request-permission → approveUrl ${grant.approveUrl}`);
+  // The chat cards: three tools render the widget, served as one resource per host (Claude, ChatGPT).
+  const { tools } = await mcp.listTools();
+  const carded = tools.filter((t) => t._meta?.ui?.resourceUri).map((t) => t.name).sort();
+  check(carded.join() === "buy,compare-offers,request-permission", `tools with a chat card → ${carded.join(", ")}`);
+  check(tools.find((t) => t.name === "check-permission")?._meta?.["openai/widgetAccessible"] === true, "the permission card may call check-permission (ChatGPT)");
+  const cardUri = tools.find((t) => t.name === "buy")._meta.ui.resourceUri;
+  const card = (await mcp.readResource({ uri: cardUri })).contents[0];
+  const tags = (re) => (card.text.match(re) ?? []).length; // a raw "</script" inside the inlined client would close its tag early
+  check(card.text.includes("globalThis.ExtApps=") && tags(/<script\b/gi) === tags(/<\/script/gi), `card resource ${cardUri.split("/").pop()} inlines the MCP Apps client`);
+
+  const asked = await mcp.callTool({ name: "request-permission", arguments: { store: beanbarn, skus: ["house-blend"], budget: 50, perSpend: 25, description: "House Blend from BeanBarn — up to $50, $25 a purchase.", why: "lowest price for House Blend with a 4.4 rating" } });
+  const grant = asked.structuredContent;
+  check(grant.approveUrl?.startsWith(beanbarn) && grant.store === "BeanBarn", `request-permission → approveUrl ${grant.approveUrl}`);
+  check(asked._meta?.["ap2/qr"]?.startsWith("data:image/svg+xml;base64,") && !asked.content[0].text.includes("data:image"), "the QR code reaches the card, not the model's text");
 
   // The phone, simulated: it opens the link, then the real signing endpoints, a real P-256 signature.
   await fetch(grant.approveUrl);
@@ -48,7 +60,7 @@ try {
 
   // The permission names BeanBarn. Acme must refuse it, even though the agent's signature is valid.
   const elsewhere = await tool("buy", { store: acme, grantId: grant.grantId, items: [{ sku: "house-blend" }] });
-  check(elsewhere.ok === false, `same permission at Acme → refused (${elsewhere.code ?? elsewhere.detail})`);
+  check(elsewhere.ok === false && elsewhere.reason === "This permission was signed for another store", `same permission at Acme → refused: "${elsewhere.reason}"`);
 
   // Not on the permission: green tea is in BeanBarn's catalog but not in what the person signed.
   const offList = await tool("buy", { store: beanbarn, grantId: grant.grantId, items: [{ sku: "green-tea" }] });
