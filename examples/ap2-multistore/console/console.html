@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Back office</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500&family=Fira+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="console/theme.css">
+<style>
+  main { padding: 16px; display: grid; gap: 16px; max-width: 1200px; margin: 0 auto; }
+  .metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .metric { padding: 10px 12px; }
+  .metric .n { font-size: 24px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .metric .n.bad { color: var(--bad); }
+  .cols { display: grid; gap: 16px; }
+  section.card { padding: 14px 16px; }
+  section.card > h2 { margin-bottom: 10px; }
+  #feed { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+  .ev { display: flex; gap: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); }
+  .ev .icon { margin-top: 2px; color: var(--fg-2); }
+  .ev.ok { border-color: var(--ok); } .ev.ok .icon, .ev.ok .title { color: var(--ok); }
+  .ev.bad { border-color: var(--bad); } .ev.bad .icon, .ev.bad .title { color: var(--bad); }
+  .ev.warn .icon, .ev.warn .title { color: var(--warn); }
+  .ev .body { min-width: 0; flex: 1; display: grid; gap: 3px; }
+  .ev .title { font-weight: 500; display: flex; justify-content: space-between; gap: 8px; }
+  .ev time { font-weight: 400; font-size: 12px; color: var(--fg-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .ev .detail { font-size: 14px; color: var(--fg-2); overflow-wrap: anywhere; }
+  .checks { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 2px; font-size: 13px; }
+  .checks li { display: flex; gap: 6px; align-items: flex-start; }
+  .checks .icon { width: 15px; height: 15px; margin-top: 2px; color: var(--ok); }
+  .empty { padding: 18px 4px; text-align: center; color: var(--fg-2); font-size: 14px; }
+  .empty strong { display: block; color: var(--fg); font-weight: 500; margin-bottom: 2px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  td { padding: 7px 0; border-top: 1px solid var(--border); }
+  tr:first-child td { border-top: 0; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  #orders { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; font-size: 14px; }
+  #orders li { display: grid; gap: 2px; padding-top: 8px; border-top: 1px solid var(--border); }
+  #orders li:first-child { padding-top: 0; border-top: 0; }
+  #orders .row { display: flex; justify-content: space-between; gap: 8px; }
+  aside { display: grid; gap: 16px; align-content: start; }
+  @media (min-width: 900px) {
+    .metrics { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .cols { grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr); align-items: start; }
+  }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></symbol>
+  <symbol id="i-key" viewBox="0 0 24 24"><circle cx="7.5" cy="15.5" r="4.5"/><path d="m10.7 12.3 9.8-9.8M17 6l3 3M14.5 8.5l2 2"/></symbol>
+  <symbol id="i-phone" viewBox="0 0 24 24"><rect x="6" y="2" width="12" height="20" rx="2"/><path d="M11 18h2"/></symbol>
+  <symbol id="i-phone-ok" viewBox="0 0 24 24"><rect x="6" y="2" width="12" height="20" rx="2"/><path d="m9 11 2 2 4-4"/></symbol>
+  <symbol id="i-receipt" viewBox="0 0 24 24"><path d="M5 3v18l2.3-1.5L9.7 21l2.3-1.5 2.3 1.5 2.4-1.5L19 21V3l-2.3 1.5L14.3 3 12 4.5 9.7 3 7.3 4.5z"/><path d="M9 9h6M9 13h6"/></symbol>
+  <symbol id="i-shield-ok" viewBox="0 0 24 24"><path d="M12 22s8-3.5 8-10V5l-8-3-8 3v7c0 6.5 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></symbol>
+  <symbol id="i-shield-x" viewBox="0 0 24 24"><path d="M12 22s8-3.5 8-10V5l-8-3-8 3v7c0 6.5 8 10 8 10z"/><path d="m9.5 9.5 5 5m0-5-5 5"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m15 9-6 6m0-6 6 6"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+  <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></symbol>
+</svg>
+
+<header class="brand">
+  <div class="mark" id="mark" aria-hidden="true"></div>
+  <div class="who">
+    <h1 id="name"></h1>
+    <p class="muted" style="font-size:13px">Back office · <span class="mono">merchant id <span id="merchant"></span></span></p>
+  </div>
+  <span class="pill warn" id="live" role="status"><span class="dot"></span><span id="live-text">Connecting…</span></span>
+</header>
+<p class="notice"><svg class="icon"><use href="#i-info"/></svg><span>Demo: the signatures are real, but the payment credential is not issuer-verified yet (<span class="mono">presence-only-demo</span>). No real money moves.</span></p>
+
+<main>
+  <section class="metrics" aria-label="Today">
+    <div class="metric card"><p class="muted">Verified orders</p><p class="n" id="m-orders">0</p></div>
+    <div class="metric card"><p class="muted">Revenue (demo)</p><p class="n" id="m-revenue">$0.00</p></div>
+    <div class="metric card"><p class="muted">Refused</p><p class="n" id="m-refused">0</p></div>
+    <div class="metric card"><p class="muted">Agent visits</p><p class="n" id="m-visits">0</p></div>
+  </section>
+  <div class="cols">
+    <section class="card" aria-labelledby="h-activity">
+      <h2 id="h-activity">Live activity</h2>
+      <ol id="feed" role="log" aria-live="polite" aria-relevant="additions"></ol>
+      <p class="empty" id="empty"><strong>No agent activity yet</strong>Ask the agent in Claude or ChatGPT to compare the stores.</p>
+    </section>
+    <aside>
+      <section class="card" aria-labelledby="h-orders">
+        <h2 id="h-orders">Orders</h2>
+        <ul id="orders"></ul>
+        <p class="empty" id="orders-empty">No orders yet.</p>
+      </section>
+      <section class="card" aria-labelledby="h-catalog">
+        <h2 id="h-catalog">Catalog</h2>
+        <table><tbody id="catalog"></tbody></table>
+      </section>
+    </aside>
+  </div>
+</main>
+
+<script type="application/json" id="cfg">/*CONFIG*/</script>
+<script>
+(() => {
+  const cfg = JSON.parse(document.getElementById("cfg").textContent);
+  const $ = (id) => document.getElementById(id);
+  const usd = (minor) => `$${(minor / 100).toFixed(2)}`;
+  const clock = (iso) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  const el = (tag, props = {}, ...kids) => {
+    const n = Object.assign(document.createElement(tag), props);
+    for (const k of kids) if (k != null) n.append(k); // strings become text nodes — agent-supplied text never becomes HTML
+    return n;
+  };
+  const icon = (name) => {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("class", "icon");
+    svg.setAttribute("aria-hidden", "true");
+    const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
+    use.setAttribute("href", `#i-${name}`);
+    svg.append(use);
+    return svg;
+  };
+
+  document.documentElement.style.setProperty("--accent", cfg.accent);
+  document.title = `${cfg.name} — back office`;
+  $("mark").textContent = cfg.name[0];
+  $("name").textContent = cfg.name;
+  $("merchant").textContent = cfg.merchantId;
+  for (const p of cfg.catalog) {
+    $("catalog").append(el("tr", {}, el("td", {}, p.name), el("td", { className: "num" }, `$${p.price.toFixed(2)} · ${p.rating}★`)));
+  }
+
+  // What each event says. `tone` colours it; `detail`/`mono` are plain text.
+  const VIEW = {
+    "catalog.read": (e) => ({ icon: "eye", title: "Agent read the catalog", detail: `Prices and ratings for ${cfg.catalog.length} products` }),
+    "permission.requested": (e) => ({
+      icon: "key", title: "Permission requested",
+      detail: `${e.products.join(", ")} · up to ${usd(e.perSpend)} a purchase · ${usd(e.budget)} total`,
+      mono: `agent public key x=${e.agentKeyX}… (public half only)`,
+    }),
+    "permission.opened": (e) => ({ icon: "phone", tone: "warn", title: "Opened on the person's phone", detail: "Waiting for the wallet signature…" }),
+    "permission.signed": (e) => ({ icon: "phone-ok", tone: "ok", title: "Signed on the person's phone", detail: `The agent now holds it · trust ${e.trustLevel}` }),
+    "permission.denied": (e) => ({ icon: "x", tone: "bad", title: "Permission declined", detail: `Status: ${e.status}` }),
+    "cart.quoted": (e) => ({ icon: "receipt", title: `Cart quoted and signed with our key · ${usd(e.total)}`, detail: e.items.join(", "), mono: e.cartId }),
+    "purchase.verified": (e) => ({ icon: "shield-ok", tone: "ok", title: `Purchase verified · ${usd(e.amount)}`, checks: e.checks, mono: `${e.orderId} · permission ${e.permission}` }),
+    "purchase.refused": (e) => ({ icon: "shield-x", tone: "bad", title: "Purchase refused", detail: e.reason, mono: e.code }),
+  };
+
+  const seen = new Set();
+  const totals = { orders: 0, revenue: 0, refused: 0, visits: 0 };
+
+  function add(e, fresh) {
+    if (seen.has(e.id) || !VIEW[e.type]) return;
+    seen.add(e.id);
+    const v = VIEW[e.type](e);
+    const body = el("div", { className: "body" },
+      el("p", { className: "title" }, el("span", {}, v.title), el("time", { dateTime: e.at }, clock(e.at))),
+      v.detail ? el("p", { className: "detail" }, v.detail) : null,
+      v.checks ? el("ul", { className: "checks", ariaLabel: "What we verified" }, ...v.checks.map((c) => el("li", {}, icon("check"), el("span", {}, c)))) : null,
+      v.mono ? el("p", { className: "mono muted" }, v.mono) : null,
+    );
+    const li = el("li", { className: `ev ${v.tone ?? ""}${fresh ? " fresh" : ""}` }, icon(v.icon), body);
+    $("feed").prepend(li);
+    $("empty").hidden = true;
+
+    if (e.type === "catalog.read") totals.visits++;
+    if (e.type === "purchase.refused") totals.refused++;
+    if (e.type === "purchase.verified") {
+      totals.orders++;
+      totals.revenue += e.amount;
+      $("orders-empty").hidden = true;
+      $("orders").prepend(el("li", {},
+        el("div", { className: "row" }, el("span", { className: "mono" }, e.orderId), el("span", { className: "pill ok" }, "verified")),
+        el("div", { className: "row" }, el("span", {}, e.items.join(", ")), el("strong", {}, usd(e.amount))),
+      ));
+    }
+    $("m-orders").textContent = totals.orders;
+    $("m-revenue").textContent = usd(totals.revenue);
+    $("m-refused").textContent = totals.refused;
+    $("m-refused").classList.toggle("bad", totals.refused > 0);
+    $("m-visits").textContent = totals.visits;
+  }
+
+  // "Live" only while we are actually hearing from the store (an event or a ping within 25 s).
+  let open = false, heard = 0, replaying = true;
+  function live() {
+    const fresh = open && Date.now() - heard < 25_000;
+    $("live").className = `pill ${fresh ? "ok" : "warn"}`;
+    $("live-text").textContent = fresh ? `Live · ${new Date(heard).toLocaleTimeString()}` : open ? "Connecting…" : "Reconnecting…";
+  }
+  const es = new EventSource("console/events");
+  es.onopen = () => { open = true; heard = Date.now(); live(); setTimeout(() => { replaying = false; }, 300); };
+  es.onerror = () => { open = false; live(); };
+  es.onmessage = (m) => { heard = Date.now(); add(JSON.parse(m.data), !replaying); live(); };
+  es.addEventListener("ping", () => { heard = Date.now(); live(); });
+  setInterval(live, 5000);
+})();
+</script>
+</body>
+</html>

@@ -13,8 +13,8 @@ import { McpServer, createMcpHandler, isLegacyRequest } from "@modelcontextproto
 import { NodeStreamableHTTPServerTransport, toNodeHandler, toWebRequest } from "@modelcontextprotocol/node";
 import { AgentKey, DelegatedIntent } from "@openmobilehub/credentagent-gate/agent";
 
-const PORT = Number(process.env.PORT ?? 4100);
-const STORES = (process.env.STORES ?? "http://localhost:4101,http://localhost:4102,http://localhost:4103").split(",").map((s) => s.trim().replace(/\/$/, ""));
+const PORT = Number(process.env.BASE_PORT ?? 4100);
+const STORES = (process.env.STORES ?? [1, 2, 3].map((n) => `http://localhost:${PORT + n}`).join(",")).split(",").map((s) => s.trim().replace(/\/$/, ""));
 
 // A real agent loads a stored key: AgentKey.fromJwk(JSON.parse(process.env.AGENT_KEY)).
 const agentKey = process.env.AGENT_KEY ? AgentKey.fromJwk(JSON.parse(process.env.AGENT_KEY)) : AgentKey.generate();

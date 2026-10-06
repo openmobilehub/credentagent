@@ -29,7 +29,8 @@ function tunnel(port) {
 }
 
 console.log("Opening four tunnels…");
-const [agent, acme, beanbarn, roastworks] = await Promise.all([4100, 4101, 4102, 4103].map(tunnel));
+const BASE = Number(process.env.BASE_PORT ?? 4100);
+const [agent, acme, beanbarn, roastworks] = await Promise.all([0, 1, 2, 3].map((n) => tunnel(BASE + n)));
 // A fresh quick tunnel can take a few seconds to resolve in DNS; the stores bind to it at startup regardless.
 kids.push(spawn(process.execPath, [here("./stores.mjs")], { stdio: "inherit", env: { ...process.env, ACME_URL: acme, BEANBARN_URL: beanbarn, ROASTWORKS_URL: roastworks } }));
 kids.push(spawn(process.execPath, [here("./agent.mjs")], { stdio: "inherit", env: { ...process.env, STORES: [acme, beanbarn, roastworks].join(",") } }));
@@ -38,6 +39,7 @@ setTimeout(() => {
   console.log(`\n────────────────────────────────────────────────────────────────`);
   console.log(`  Claude connector URL:  ${agent}/mcp`);
   console.log(`  (claude.ai → Settings → Connectors → Add custom connector)`);
+  console.log(`  Store wall, for the screen next to the chat:  http://localhost:${BASE + 4}`);
   console.log(`  Ctrl-C stops everything. Tunnels are new each run — re-add the connector.`);
   console.log(`────────────────────────────────────────────────────────────────\n`);
 }, 1500);

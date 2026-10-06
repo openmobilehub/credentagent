@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Three stores — live</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500&family=Fira+Sans:wght@400;500;600&display=swap">
+<style>
+  :root { --bg: #f8fafc; --fg: #0f172a; --fg-2: #475569; --border: #e2e8f0; color-scheme: light dark; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #0b1120; --fg: #f8fafc; --fg-2: #94a3b8; --border: #334155; } }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body { background: var(--bg); color: var(--fg); font: 15px/1.5 "Fira Sans", system-ui, sans-serif; display: flex; flex-direction: column; }
+  header { padding: 12px 16px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; border-bottom: 1px solid var(--border); }
+  h1 { margin: 0; font-size: 17px; font-weight: 600; }
+  header p { margin: 0; color: var(--fg-2); font-size: 14px; }
+  main { flex: 1; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; background: var(--border); min-height: 0; }
+  iframe { width: 100%; height: 100%; border: 0; background: var(--bg); min-height: 600px; }
+  @media (max-width: 1000px) { main { grid-template-columns: 1fr; } iframe { height: 90vh; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Three independent stores</h1>
+  <p>Each has its own origin, its own keys and its own grants. Each verifies the agent's purchase for itself.</p>
+</header>
+<main id="stores"></main>
+<script type="application/json" id="cfg">/*CONFIG*/</script>
+<script>
+  for (const s of JSON.parse(document.getElementById("cfg").textContent)) {
+    const f = Object.assign(document.createElement("iframe"), { src: s.url, title: `${s.name} back office` });
+    document.getElementById("stores").append(f);
+  }
+</script>
+</body>
+</html>

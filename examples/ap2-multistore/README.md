@@ -22,6 +22,19 @@ node examples/ap2-multistore/up.mjs      # live: 4 tunnels + stores + agent (nee
 
 `up.mjs` prints a connector URL. Add it in **claude.ai → Settings → Connectors → Add custom connector**, then have the conversation above.
 
+## What the stores see
+
+Each store has a live **back office** at its own root URL. `http://localhost:4104` shows all three side by side, so you can put it on the screen next to the chat. Each back office shows, as it happens:
+
+- the agent reading the catalog;
+- the permission being requested, opened on the phone, and signed;
+- the cart the store quoted and signed;
+- the verdict: **verified**, with the list of what the store checked, or **refused**, with the reason in plain words (for example, "This permission was signed for another store").
+
+The person's receipt (the link Claude gives back) shows the same list of checks. Each store's page names its merchant id, which is its host, and carries the demo notice.
+
+Two ports matter here. The live demo uses 4100–4104. `smoke.mjs` runs on 4200–4204, so it never collides with a demo that is running. Set `BASE_PORT` to move the live demo's ports.
+
 **The phone:** Android + Chrome (Digital Credentials API) and a Multipaz wallet built from `TheBlackBit/multipaz @ feat/ap2-delegate-transaction-utopia`. Stock Multipaz rejects the AP2 `delegate` request.
 
 Each store gets its own tunnel because **a store's merchant id is its host**. A permission signed for BeanBarn names BeanBarn's host, and Acme refuses it.
@@ -45,3 +58,5 @@ Each store gets its own tunnel because **a store's merchant id is its host**. A 
 - the same permission at another store,
 - a product you did not sign for,
 - a purchase over the budget.
+
+It also checks that each back office received every kind of event, and that Acme's back office gives the plain-words reason for its refusal.
