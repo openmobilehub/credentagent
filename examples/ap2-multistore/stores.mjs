@@ -54,7 +54,8 @@ const CONSOLE = page("console.html");
 const WALL = page("wall.html");
 const THEME = page("theme.css");
 // Config rides into a page as JSON inside <script type="application/json">; "<" is escaped so no value can close the tag.
-const fill = (html, config) => html.replace("/*CONFIG*/", JSON.stringify(config).replace(/</g, "\\u003c"));
+// A replacer function, because in a replacement string "$&" and friends are patterns, not text.
+const fill = (html, config) => html.replace("/*CONFIG*/", () => JSON.stringify(config).replace(/</g, "\\u003c"));
 
 // Why a purchase was refused, in words a person reading the back office understands.
 const LIMITS = {

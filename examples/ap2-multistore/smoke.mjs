@@ -6,6 +6,8 @@
 //
 // It runs on ports 4200–4204 (SMOKE_BASE_PORT), so it never collides with a live demo on 4100–4104.
 import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
+import vm from "node:vm";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { devSimulateWalletSignature } from "@openmobilehub/credentagent-gate";
 
@@ -40,6 +42,13 @@ try {
   const card = (await mcp.readResource({ uri: cardUri })).contents[0];
   const tags = (re) => (card.text.match(re) ?? []).length; // a raw "</script" inside the inlined client would close its tag early
   check(card.text.includes("globalThis.ExtApps=") && tags(/<script\b/gi) === tags(/<\/script/gi), `card resource ${cardUri.split("/").pop()} inlines the MCP Apps client`);
+  // Inlined byte for byte, and still valid JavaScript. A host reports any script error in a card as
+  // "Runtime error" (ChatGPT did, when a string replace() expanded the bundle's "$&" and "$`").
+  const inlined = card.text.match(/<script type="module">([\s\S]*?)<\/script>/)[1];
+  const bundle = readFileSync(new URL(import.meta.resolve("@modelcontextprotocol/ext-apps/app-with-deps")), "utf8");
+  let compiles = true;
+  try { new vm.Script(inlined); } catch { compiles = false; }
+  check(compiles && inlined.startsWith(bundle.slice(0, 2000)) && inlined.includes(bundle.slice(-6000, bundle.lastIndexOf("export"))), "the inlined MCP Apps client is intact and compiles");
 
   const asked = await mcp.callTool({ name: "request-permission", arguments: { store: beanbarn, skus: ["house-blend"], budget: 50, perSpend: 25, description: "House Blend from BeanBarn — up to $50, $25 a purchase.", why: "lowest price for House Blend with a 4.4 rating" } });
   const grant = asked.structuredContent;

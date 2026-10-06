@@ -21,7 +21,9 @@ function inlineExtApps() {
 }
 
 export function createWidget() {
-  const page = readFileSync(new URL("./widget.html", import.meta.url), "utf8").replace("<!--EXT_APPS-->", inlineExtApps());
+  // A replacer FUNCTION, not a string: in a replacement string "$&", "$`" and "$$" are patterns, and the
+  // minified client is full of them — a string replace() corrupts it into a syntax error.
+  const page = readFileSync(new URL("./widget.html", import.meta.url), "utf8").replace("<!--EXT_APPS-->", () => inlineExtApps());
   // Hosts cache a resource by URI, so the URI carries the page's hash: a changed page is a new URI.
   const version = createHash("sha256").update(page).digest("hex").slice(0, 12);
   const uri = `ui://credentagent-ap2-agent/widget-${version}.html`;

@@ -218,12 +218,19 @@
       demo());
   }
 
+  // A host turns any uncaught error into a bare "Runtime error"; say what went wrong in the card instead.
+  const trouble = (what, err) => root.replaceChildren(el("p", { className: "sub" }, `This card couldn't ${what}: ${err?.message ?? err}`));
+
   function show(result) {
     const d = result?.structuredContent ?? result;
     const meta = result?._meta ?? {};
     if (!d || typeof d !== "object" || !d.view) return;
-    const view = d.view === "offers" ? offers(d) : d.view === "permission" ? permission(d, meta["ap2/qr"]) : d.view === "receipt" ? receipt(d) : null;
-    if (view) root.replaceChildren(view);
+    try {
+      const view = d.view === "offers" ? offers(d) : d.view === "permission" ? permission(d, meta["ap2/qr"]) : d.view === "receipt" ? receipt(d) : null;
+      if (view) root.replaceChildren(view);
+    } catch (err) {
+      trouble("render", err);
+    }
   }
 
   function theme(ctx) {
@@ -241,11 +248,15 @@
     read();
     window.addEventListener("openai:set_globals", read);
   } else if (host === "mcp") {
-    app = new Ext.App({ name: "credentagent-ap2-agent", version: "1.0.0" });
-    app.addEventListener("toolresult", show);
-    app.addEventListener("hostcontextchanged", theme);
-    await app.connect();
-    theme(app.getHostContext());
+    try {
+      app = new Ext.App({ name: "credentagent-ap2-agent", version: "1.0.0" });
+      app.addEventListener("toolresult", show);
+      app.addEventListener("hostcontextchanged", theme);
+      await app.connect();
+      theme(app.getHostContext());
+    } catch (err) {
+      trouble("connect to the chat", err);
+    }
   } else {
     // Local preview: /widget?view=offers|permission|receipt|refused renders sample data, no host needed.
     const r = await fetch(`preview.json?view=${new URLSearchParams(location.search).get("view") ?? "offers"}`).catch(() => null);
