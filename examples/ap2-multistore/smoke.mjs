@@ -37,7 +37,8 @@ try {
   const { tools } = await mcp.listTools();
   const carded = tools.filter((t) => t._meta?.ui?.resourceUri).map((t) => t.name).sort();
   check(carded.join() === "buy,compare-offers,request-permission", `tools with a chat card → ${carded.join(", ")}`);
-  check(tools.find((t) => t.name === "check-permission")?._meta?.["openai/widgetAccessible"] === true, "the permission card may call check-permission (ChatGPT)");
+  const watcher = tools.find((t) => t.name === "watch-permission")?._meta;
+  check(watcher?.ui?.visibility?.join() === "app" && watcher["openai/widgetAccessible"] === true, "watch-permission is the card's: callable by it, hidden from the model");
   const cardUri = tools.find((t) => t.name === "buy")._meta.ui.resourceUri;
   const card = (await mcp.readResource({ uri: cardUri })).contents[0];
   const tags = (re) => (card.text.match(re) ?? []).length; // a raw "</script" inside the inlined client would close its tag early
@@ -56,10 +57,18 @@ try {
   check(asked._meta?.["ap2/qr"]?.startsWith("data:image/svg+xml;base64,") && !asked.content[0].text.includes("data:image"), "the QR code reaches the card, not the model's text");
 
   // The phone, simulated: it opens the link, then the real signing endpoints, a real P-256 signature.
-  await fetch(grant.approveUrl);
-  const oid = await (await fetch(`${beanbarn}/credentagent/grants/${grant.grantId}/sign/request`)).json();
-  const signature = await devSimulateWalletSignature({ request: { request: oid.requests[0].data.request, dcql_query: oid.dcql_query }, origin: beanbarn });
-  await fetch(`${beanbarn}/credentagent/grants/${grant.grantId}/sign/verify`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ readerContextToken: oid.readerContextToken, result: signature }) });
+  const signOnPhone = async (store, g) => {
+    await fetch(g.approveUrl);
+    const oid = await (await fetch(`${store}/credentagent/grants/${g.grantId}/sign/request`)).json();
+    const signature = await devSimulateWalletSignature({ request: { request: oid.requests[0].data.request, dcql_query: oid.dcql_query }, origin: store });
+    await fetch(`${store}/credentagent/grants/${g.grantId}/sign/verify`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ readerContextToken: oid.readerContextToken, result: signature }) });
+  };
+  await signOnPhone(beanbarn, grant);
+
+  // The card follows the signature and tells the chat ONCE, however often it redraws or reloads.
+  const seen = await tool("watch-permission", { store: beanbarn, grantId: grant.grantId });
+  const again = await tool("watch-permission", { store: beanbarn, grantId: grant.grantId });
+  check(seen.status === "authorized" && seen.announce === true && again.announce === false, "the card announces the signature exactly once");
 
   const held = await tool("check-permission", { store: beanbarn, grantId: grant.grantId });
   check(held.status === "authorized", `check-permission → ${held.status} (${held.trustLevel})`);
@@ -79,6 +88,15 @@ try {
   const second = await tool("buy", { store: beanbarn, grantId: grant.grantId, items: [{ sku: "house-blend" }] });
   const third = await tool("buy", { store: beanbarn, grantId: grant.grantId, items: [{ sku: "house-blend" }] });
   check(second.ok === true && third.ok === false, `budget $50: 2nd bag → ${second.ok ? "ok" : second.code}, 3rd → ${third.ok ? "ok (WRONG)" : third.code}`);
+
+  // …and never announces what the model already knows: here it checked first, so the card stays quiet
+  // (a second "go ahead" in the chat could send the model to buy twice).
+  const roastworks = stores.find((s) => s.store === "RoastWorks").url;
+  const espresso = (await mcp.callTool({ name: "request-permission", arguments: { store: roastworks, skus: ["espresso-beans"], budget: 20, perSpend: 20, description: "Espresso Beans from RoastWorks.", why: "top-rated espresso, and the cheapest" } })).structuredContent;
+  await signOnPhone(roastworks, espresso);
+  await tool("check-permission", { store: roastworks, grantId: espresso.grantId });
+  const quiet = await tool("watch-permission", { store: roastworks, grantId: espresso.grantId });
+  check(quiet.status === "authorized" && quiet.announce === false, "the card stays quiet when the model already knows it is signed");
 
   // The back offices: each store's page renders, and its live feed saw what happened there.
   const page = await (await fetch(`${beanbarn}/`)).text();

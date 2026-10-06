@@ -4,7 +4,8 @@
 //   STORES=<url>,<url>,<url> node examples/ap2-multistore/agent.mjs   # → http://localhost:4100/mcp
 //   (or run up.mjs, which wires the tunnels and starts this for you)
 //
-// Four tools, the whole story: compare-offers → request-permission → check-permission → buy.
+// Four tools, the whole story: compare-offers → request-permission → check-permission → buy. A fifth,
+// watch-permission, belongs to the permission card: it follows the signature and tells the chat once it lands.
 // The agent holds only PUBLIC data besides its key: the stores' catalogs, the permission the phone
 // signed, and the stores' signed carts. The proof it hands a store is checked there, not trusted here.
 //
@@ -47,6 +48,35 @@ const nameOf = (url) => names.get(url) ?? url;
 const usd = (dollars) => `$${Number(dollars).toFixed(2)}`;
 const log = (tool, line) => console.log(`  [agent] ${tool.padEnd(18)} ${line}`);
 
+// Grants the MODEL already knows are signed: it saw so itself (check-permission), or the card told the
+// chat. The card announces a signature only for a grant not in here — so it announces each one once.
+const told = new Set();
+const sleep = (ms) => new Promise((ok) => setTimeout(ok, ms));
+
+/** Read a grant at its store, waiting up to `holdMs` for the phone to sign. Once signed, the agent keeps
+ *  the signed permission (public data — it spends only with the agent's own key). */
+async function awaitSignature(tool, store, grantId, holdMs) {
+  const until = Date.now() + holdMs;
+  for (;;) {
+    const r = await call(`${store}/agent/grants/${encodeURIComponent(grantId)}`);
+    if (r.status !== 200) {
+      log(tool, `✗ ${nameOf(store)} ${grantId}: ${r.body.error ?? r.status}`);
+      return { error: r.body };
+    }
+    if (r.body.intent) {
+      if (!permissions.has(grantId)) log(tool, `${nameOf(store)} ${grantId} signed on the phone (${r.body.trustLevel}) — the agent now holds it`);
+      permissions.set(grantId, r.body.intent);
+      return { status: r.body.status, trustLevel: r.body.trustLevel };
+    }
+    if (r.body.status !== "pending") {
+      log(tool, `✗ ${nameOf(store)} ${grantId}: ${r.body.status}`);
+      return { status: r.body.status };
+    }
+    if (Date.now() > until) return { status: "pending" };
+    await sleep(1500);
+  }
+}
+
 function buildServer() {
   const server = new McpServer({ name: "credentagent-ap2-agent", version: "0.0.0" });
   widget.register(server);
@@ -73,7 +103,8 @@ function buildServer() {
     title: "Request a spending permission",
     description:
       "Ask the person for a spending permission at ONE store, naming exact products and limits. The person sees a card with a QR code: " +
-      "they scan it with their phone and SIGN the permission with their wallet. Nothing can be bought until they do. Then call check-permission.",
+      "they scan it with their phone and SIGN the permission with their wallet. Nothing can be bought until they do. The card posts a message " +
+      "to the chat once it is signed; then call check-permission, and buy.",
     inputSchema: {
       store: storeUrl,
       skus: z.array(z.string()).min(1).describe("product ids the permission covers"),
@@ -96,37 +127,48 @@ function buildServer() {
       approveUrl: r.body.approveUrl, products: r.body.products, budget, perSpend, description, why, status: r.body.status,
     };
     return result(data, {
-      note: "The person sees a card with a QR code for approveUrl. Ask them to scan it with their phone and sign; also give them the link. Then call check-permission.",
+      note:
+        "The person sees a card with a QR code for approveUrl. Ask them to scan it with their phone and sign; also give them the link. " +
+        "Don't ask them to tell you when they're done: the card posts a message to this chat the moment the phone signs. When it does, " +
+        "call check-permission, then buy.",
       widgetOnly: { "ap2/qr": await qrDataUrl(r.body.approveUrl) },
     });
   });
 
-  // No card of its own — the permission card calls it to show "signed" live (hence widgetAccessible for ChatGPT).
   server.registerTool("check-permission", {
     title: "Check the permission",
     description: "Wait (up to ~45 s) for the person to sign the permission on their phone. When it is signed the agent keeps it and can buy.",
     inputSchema: z.object({ store: storeUrl, grantId: z.string() }),
     annotations: { readOnlyHint: true },
-    _meta: { "openai/widgetAccessible": true },
   }, async ({ store, grantId }) => {
-    const until = Date.now() + 45_000;
-    for (;;) {
-      const r = await call(`${store}/agent/grants/${encodeURIComponent(grantId)}`);
-      if (r.status !== 200) {
-        log("check-permission", `✗ ${nameOf(store)} ${grantId}: ${r.body.error ?? r.status}`);
-        return result(r.body, { isError: true });
-      }
-      if (r.body.intent) {
-        if (!permissions.has(grantId)) log("check-permission", `${nameOf(store)} ${grantId} signed on the phone (${r.body.trustLevel}) — the agent now holds it`);
-        permissions.set(grantId, r.body.intent);
-        return result({ status: r.body.status, trustLevel: r.body.trustLevel }, { note: "Signed on the phone. The agent now holds this permission and can buy." });
-      }
-      if (r.body.status !== "pending" || Date.now() > until) {
-        if (r.body.status !== "pending") log("check-permission", `✗ ${nameOf(store)} ${grantId}: ${r.body.status}`);
-        return result({ status: r.body.status }, { note: r.body.status === "pending" ? "Not signed yet — call again." : "Not authorized." });
-      }
-      await new Promise((ok) => setTimeout(ok, 1500));
+    const r = await awaitSignature("check-permission", store, grantId, 45_000);
+    if (r.error) return result(r.error, { isError: true });
+    if (r.status !== "authorized") {
+      return result({ status: r.status }, { note: r.status === "pending" ? "Not signed yet — call again." : "Not authorized." });
     }
+    told.add(grantId); // the model knows now — the card must not announce it again
+    return result({ status: r.status, trustLevel: r.trustLevel }, { note: "Signed on the phone. The agent now holds this permission and can buy." });
+  });
+
+  // The permission card's own watch. Visibility "app": the card calls it, the model never sees it. It waits
+  // like check-permission and adds `announce`, true exactly ONCE per grant — the first time the grant is seen
+  // signed while the model does not know yet. The card then posts "signed" to the chat, so the person never
+  // has to type it, and a re-rendered, reloaded or duplicated card can never post it twice.
+  server.registerTool("watch-permission", {
+    title: "Watch the permission (card only)",
+    description: "Used by the permission card to follow the phone signature. The model uses check-permission instead.",
+    inputSchema: z.object({ store: storeUrl, grantId: z.string() }),
+    annotations: { readOnlyHint: true },
+    _meta: { ui: { visibility: ["app"] }, "openai/widgetAccessible": true },
+  }, async ({ store, grantId }) => {
+    const r = await awaitSignature("watch-permission", store, grantId, 25_000);
+    if (r.error) return result(r.error, { isError: true });
+    const announce = r.status === "authorized" && !told.has(grantId);
+    if (announce) {
+      told.add(grantId);
+      log("watch-permission", `${nameOf(store)} ${grantId} → the card tells the chat it is signed`);
+    }
+    return result({ status: r.status, ...(r.trustLevel ? { trustLevel: r.trustLevel } : {}), announce });
   });
 
   registerAppTool(server, "buy", {

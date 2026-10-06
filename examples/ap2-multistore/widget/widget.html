@@ -136,6 +136,15 @@
       if (host === "mcp") return app.openLink({ url });
       window.open(url, "_blank", "noopener");
     },
+    // Post a message to the chat as the person — ChatGPT's follow-up message, MCP Apps' `ui/message`.
+    async tell(text) {
+      try {
+        if (host === "chatgpt") return await window.openai.sendFollowUpMessage?.({ prompt: text });
+        if (host === "mcp") return await app.sendMessage({ role: "user", content: [{ type: "text", text }] });
+      } catch {
+        // A host that cannot post leaves the card's "Signed" as the signal; the person can say it themselves.
+      }
+    },
   };
 
   // ── views ──────────────────────────────────────────────────────────────────
@@ -160,8 +169,48 @@
     );
   }
 
+  // What the card knows about each grant OUTSIDE its DOM. A host may redraw the card at any time (ChatGPT
+  // does, on every `openai:set_globals`); state kept only in the DOM flickered back to "Waiting" each time.
+  const settled = new Map(); // grantId → { ok: true, trustLevel } | { ok: false, status }
+  const watching = new Set(); // grantIds with a watch running — one per grant, however often the card redraws
+
+  function paint(grantId) {
+    const s = settled.get(grantId);
+    for (const pill of document.querySelectorAll("[data-status]")) {
+      if (pill.dataset.status !== grantId) continue;
+      if (!s) { pill.className = "pill warn"; pill.replaceChildren(el("span", { className: "dot" }), "Waiting for your signature"); }
+      else if (s.ok) { pill.className = "pill ok"; pill.replaceChildren(icon("check"), `Signed on your phone · ${s.trustLevel ?? "device-signed"}`); }
+      else { pill.className = "pill bad"; pill.replaceChildren(icon("x"), `Not signed · ${s.status}`); }
+    }
+    for (const box of document.querySelectorAll("[data-qr]")) if (box.dataset.qr === grantId) box.classList.toggle("done", Boolean(s?.ok));
+  }
+
+  // Follow the signature through the agent's card-only tool (it holds each call up to ~25 s). When the agent
+  // says `announce`, post it to the chat: the model carries on without the person having to type "signed".
+  async function watch(d) {
+    if (watching.has(d.grantId) || settled.has(d.grantId)) return;
+    watching.add(d.grantId);
+    try {
+      for (let i = 0; i < 48; i++) {
+        let r;
+        try { r = await bridge.call("watch-permission", { store: d.storeUrl, grantId: d.grantId }); } catch { r = null; }
+        if (!r) { if (host === "preview") return; await new Promise((ok) => setTimeout(ok, 3000)); continue; }
+        if (r.status === "authorized") {
+          settled.set(d.grantId, { ok: true, trustLevel: r.trustLevel });
+          paint(d.grantId);
+          if (r.announce) await bridge.tell(`I signed the permission for ${d.store} on my phone (${d.grantId}). Please go ahead with the purchase.`);
+          return;
+        }
+        if (r.status && r.status !== "pending") { settled.set(d.grantId, { ok: false, status: r.status }); paint(d.grantId); return; }
+      }
+    } finally {
+      watching.delete(d.grantId);
+    }
+  }
+
   function permission(d, qr) {
-    const status = el("span", { className: "pill warn", role: "status" }, el("span", { className: "dot" }), "Waiting for your signature");
+    const status = el("span", { role: "status" });
+    status.dataset.status = d.grantId;
     const qrBox = el("div", { className: "qr" },
       qr ? el("img", { src: qr, alt: `QR code for the signing link at ${d.store}` }) : null,
       el("span", {}, "Scan with your phone's camera"),
@@ -181,19 +230,9 @@
         qrBox),
       el("p", { className: "sub" }, "Only this store, only these products, only up to these amounts. The agent spends it with its own key, which the store never sees."),
       demo());
-    // Watch for the signature (the agent's check-permission holds each call open ~45 s).
-    (async () => {
-      for (let i = 0; i < 20; i++) {
-        let r;
-        try { r = await bridge.call("check-permission", { store: d.storeUrl, grantId: d.grantId }); } catch { r = null; }
-        if (!r) { if (host === "preview") return; await new Promise((ok) => setTimeout(ok, 3000)); continue; }
-        if (r.status === "authorized") {
-          status.className = "pill ok"; status.replaceChildren(icon("check"), `Signed on your phone · ${r.trustLevel ?? "device-signed"}`);
-          qrBox.classList.add("done"); return;
-        }
-        if (r.status && r.status !== "pending") { status.className = "pill bad"; status.replaceChildren(icon("x"), `Not signed · ${r.status}`); return; }
-      }
-    })();
+    qrBox.dataset.qr = d.grantId;
+    // Paint from what the card already knows, after the card is in the document (the caller attaches it).
+    queueMicrotask(() => { paint(d.grantId); void watch(d); });
     return card;
   }
 
@@ -221,10 +260,14 @@
   // A host turns any uncaught error into a bare "Runtime error"; say what went wrong in the card instead.
   const trouble = (what, err) => root.replaceChildren(el("p", { className: "sub" }, `This card couldn't ${what}: ${err?.message ?? err}`));
 
+  let shown = null; // the result on screen — a host re-announcing the same one must not rebuild the card
   function show(result) {
     const d = result?.structuredContent ?? result;
     const meta = result?._meta ?? {};
     if (!d || typeof d !== "object" || !d.view) return;
+    const key = JSON.stringify(d);
+    if (key === shown) return;
+    shown = key;
     try {
       const view = d.view === "offers" ? offers(d) : d.view === "permission" ? permission(d, meta["ap2/qr"]) : d.view === "receipt" ? receipt(d) : null;
       if (view) root.replaceChildren(view);
