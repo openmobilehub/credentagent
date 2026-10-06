@@ -40,6 +40,13 @@ const result = (data, { note, isError, widgetOnly } = {}) => ({
 });
 const storeUrl = z.string().describe("the store's url, exactly as compare-offers returned it");
 
+// One terminal line per tool call, so a live demo shows how far each step got. A call the chat host
+// blocks before it reaches this process (ChatGPT's safety layer does, for `buy`) prints nothing at all.
+const names = new Map(); // store url → the name the store itself reported
+const nameOf = (url) => names.get(url) ?? url;
+const usd = (dollars) => `$${Number(dollars).toFixed(2)}`;
+const log = (tool, line) => console.log(`  [agent] ${tool.padEnd(18)} ${line}`);
+
 function buildServer() {
   const server = new McpServer({ name: "credentagent-ap2-agent", version: "0.0.0" });
   widget.register(server);
@@ -54,6 +61,9 @@ function buildServer() {
     const stores = await Promise.all(STORES.map(async (url) => {
       try { return { url, ...(await call(`${url}/agent/catalog`)).body }; } catch (err) { return { url, error: err.message }; }
     }));
+    for (const s of stores) if (s.store) names.set(s.url, s.store);
+    const down = stores.filter((s) => !s.store).map((s) => s.url);
+    log("compare-offers", `read ${stores.length - down.length} of ${stores.length} stores${down.length ? ` — unreachable: ${down.join(", ")}` : ""}`);
     return result({ view: "offers", stores }, {
       note: "The person sees these offers side by side in a card. Don't re-list them; say which store you pick and why, in a sentence or two.",
     });
@@ -75,7 +85,12 @@ function buildServer() {
     _meta: widget.meta("Preparing the permission…", "Waiting for your signature"),
   }, async ({ store, skus, budget, perSpend, description, why }) => {
     const r = await call(`${store}/agent/grants`, { agentKey: agentKey.publicJwk, skus, budget, perSpend, description });
-    if (r.status !== 200) return result(r.body, { isError: true });
+    if (r.status !== 200) {
+      log("request-permission", `✗ ${nameOf(store)}: ${r.body.error ?? r.status}`);
+      return result(r.body, { isError: true });
+    }
+    names.set(store, r.body.store);
+    log("request-permission", `${r.body.store} · ${r.body.products.join(", ")} · ${usd(perSpend)} a purchase · ${usd(budget)} total → waiting for the phone (${r.body.grantId})`);
     const data = {
       view: "permission", store: r.body.store, storeUrl: store, merchantId: r.body.merchantId, grantId: r.body.grantId,
       approveUrl: r.body.approveUrl, products: r.body.products, budget, perSpend, description, why, status: r.body.status,
@@ -97,12 +112,17 @@ function buildServer() {
     const until = Date.now() + 45_000;
     for (;;) {
       const r = await call(`${store}/agent/grants/${encodeURIComponent(grantId)}`);
-      if (r.status !== 200) return result(r.body, { isError: true });
+      if (r.status !== 200) {
+        log("check-permission", `✗ ${nameOf(store)} ${grantId}: ${r.body.error ?? r.status}`);
+        return result(r.body, { isError: true });
+      }
       if (r.body.intent) {
+        if (!permissions.has(grantId)) log("check-permission", `${nameOf(store)} ${grantId} signed on the phone (${r.body.trustLevel}) — the agent now holds it`);
         permissions.set(grantId, r.body.intent);
         return result({ status: r.body.status, trustLevel: r.body.trustLevel }, { note: "Signed on the phone. The agent now holds this permission and can buy." });
       }
       if (r.body.status !== "pending" || Date.now() > until) {
+        if (r.body.status !== "pending") log("check-permission", `✗ ${nameOf(store)} ${grantId}: ${r.body.status}`);
         return result({ status: r.body.status }, { note: r.body.status === "pending" ? "Not signed yet — call again." : "Not authorized." });
       }
       await new Promise((ok) => setTimeout(ok, 1500));
@@ -119,10 +139,17 @@ function buildServer() {
     },
     _meta: widget.meta("Paying…", "The store answered"),
   }, async ({ store, grantId, items }) => {
+    log("buy", `→ ${nameOf(store)}: ${items.map((i) => `${i.quantity ?? 1} × ${i.sku}`).join(", ")}`);
     const intent = permissions.get(grantId);
-    if (!intent) return result({ error: "No signed permission held for this grant — call check-permission first." }, { isError: true });
+    if (!intent) {
+      log("buy", `✗ no signed permission held for ${grantId}`);
+      return result({ error: "No signed permission held for this grant — call check-permission first." }, { isError: true });
+    }
     const quote = await call(`${store}/agent/quote`, { grantId, items });
-    if (quote.status !== 200) return result(quote.body, { isError: true });
+    if (quote.status !== 200) {
+      log("buy", `✗ ${nameOf(store)} would not quote: ${quote.body.error ?? quote.status}`);
+      return result(quote.body, { isError: true });
+    }
     const { checkoutJwt, payee, amount, audience, nonce } = quote.body;
     let proof;
     try {
@@ -131,10 +158,14 @@ function buildServer() {
       });
     } catch (err) {
       // spend() refuses only a permission this agent's key cannot spend; the limits are the store's to check.
+      log("buy", `✗ the agent can't spend this permission: ${err.message}`);
       return result({ view: "receipt", ok: false, store: quote.body.store, reason: "The agent can't spend this permission with its key", detail: err.message });
     }
     // A refusal is the store's answer, not a tool failure: the card shows it and the model explains it.
     const r = await call(`${store}/agent/purchase`, { proof, nonce });
+    log("buy", r.body.ok
+      ? `✓ ${r.body.order.store} verified the purchase · ${usd(r.body.order.amount / 100)} (${r.body.order.id})`
+      : `✗ ${r.body.store ?? nameOf(store)} refused: ${r.body.reason ?? r.body.detail}`);
     return result({ view: "receipt", ...r.body }, { note: "The person sees the store's answer in a card. Summarize it in one sentence." });
   });
 
