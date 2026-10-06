@@ -39,6 +39,19 @@ import {
   type MandateContent,
 } from "./mandates.js";
 import type { TrustLevel } from "../../types.js";
+import { HOP_TYP } from "../../ap2/chain/hop.js";
+
+/** The `typ` of a presentation's Key Binding JWT — the JWS after the last `~`. Read only AFTER the
+ *  backend has verified that JWS, so the header (which the signature covers) is the holder's. */
+function keyBindingTyp(sdjwt: string): string | undefined {
+  try {
+    const kbJwt = sdjwt.slice(sdjwt.lastIndexOf("~") + 1);
+    const header = JSON.parse(Buffer.from(kbJwt.split(".")[0], "base64url").toString("utf-8")) as { typ?: unknown };
+    return typeof header.typ === "string" ? header.typ : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 /** Single-use nonce ledger: `consume` records a nonce and returns true only the FIRST
  *  time (false on replay). In-process (grants are process-local); a multi-instance
@@ -154,6 +167,10 @@ export async function verifyIntentPresentation(args: {
   nonceGuard: NonceGuard;
   /** The agent's public key, from the SERVER's grant record — the `cnf` the mandates name. */
   delegate: DelegateJwk;
+  /** The agent holds that key (`grants.create({ agentKey })`): this permission is handed to the
+   *  agent and spent at a merchant, whose chain verifier requires the wallet's hop typed
+   *  `kb+sd-jwt+kb` — so this check requires it too (#243). From the SERVER's grant record. */
+  agentHeld?: boolean;
   /** The absolute expiry used when the request was built, epoch seconds. */
   mandateExp: number;
   /** The product ids the grant may buy, re-resolved from the SERVER\'s record. */
@@ -249,6 +266,22 @@ export async function verifyIntentPresentation(args: {
   });
   if (!delegatePayloadMatches(verdict.delegatePayload, digests)) {
     return { ok: false, reason: "mandate mismatch: the wallet signed different terms than the grant records" };
+  }
+
+  // #243 — sign nothing a merchant will refuse. These mandates name the agent's key in `cnf`, which
+  // makes the wallet's hop a KB-SD-JWT+KB: Delegate SD-JWT §5.1.4 types it `kb+sd-jwt+kb`, and the
+  // merchant's chain verifier (ap2/chain/verify.ts) refuses any other `typ`. When the agent holds
+  // the key, that verifier is where this permission is spent, so accepting `kb+sd-jwt` here showed
+  // the person "signed" for a permission every merchant then refused — after they had left. A grant
+  // whose key the gate holds is spent by the gate, never by that verifier, and is unchanged.
+  if (args.agentHeld) {
+    const typ = keyBindingTyp(sdjwt);
+    if (typ !== HOP_TYP.delegable) {
+      return {
+        ok: false,
+        reason: `key binding is typed ${typ ?? "∅"}, but the mandates name the agent's key, so Delegate SD-JWT §5.1.4 requires ${HOP_TYP.delegable} — a merchant refuses any other (update the wallet)`,
+      };
+    }
   }
 
   // Require the payment credential — the right type AND its instrument claim disclosed

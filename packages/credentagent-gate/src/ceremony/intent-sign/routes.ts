@@ -121,7 +121,7 @@ export function registerIntentSignRail(app: RailApp, grants: Grants): void {
     if (!g || g.signing !== "device") { res.status(404).json({ ok: false, reason: "unknown device grant" }); return; }
     const inputs = grants._intentSignInputsFor(id);
     if (!inputs) { res.status(404).json({ ok: false, reason: "unknown grant" }); return; }
-    const { bounds, delegate, mandateExp, allowedSkus } = inputs;
+    const { bounds, delegate, agentHeld, mandateExp, allowedSkus } = inputs;
     const body = await readJsonBody(req);
     const result = body.result as { protocol?: string; data?: unknown } | undefined;
     const readerContextToken = body.readerContextToken;
@@ -133,6 +133,7 @@ export function registerIntentSignRail(app: RailApp, grants: Grants): void {
       const cfg = grants.railConfig;
       const out = await verifyIntentPresentation({
         delegate,
+        agentHeld,
         mandateExp,
         allowedSkus,
         result,

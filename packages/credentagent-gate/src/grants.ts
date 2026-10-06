@@ -406,7 +406,7 @@ export class Grants {
    * than one whose horizon the caller can read. A grant that shows the human no expiry and then
    * signs a one-year one is a gap in the approve page, recorded in spec 014.
    */
-  _intentSignInputsFor(id: string): { bounds: IntentBoundsInput; delegate: { kty: "EC"; crv: "P-256"; x: string; y: string }; mandateExp: number; allowedSkus: string[] } | null {
+  _intentSignInputsFor(id: string): { bounds: IntentBoundsInput; delegate: { kty: "EC"; crv: "P-256"; x: string; y: string }; agentHeld: boolean; mandateExp: number; allowedSkus: string[] } | null {
     const bounds = this._boundsInputFor(id);
     // The key minted at CREATION for a device-mode grant — or the agent's own, when it brought one
     // (FR-5). Not the engine's: the engine does not exist until the grant is authorized, and by
@@ -422,6 +422,9 @@ export class Grants {
     return {
       bounds,
       delegate,
+      // The agent spends this permission at a merchant, whose chain verifier is strict about how the
+      // wallet typed its hop — so the signing page must be just as strict (#243).
+      agentHeld: rec?.agentKey !== undefined,
       mandateExp: Math.floor((Number.isFinite(expiresAt) ? expiresAt : fallback) / 1000),
       allowedSkus,
     };
