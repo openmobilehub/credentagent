@@ -11,20 +11,20 @@
 // The `override*` knobs each produce something a correct chain verifier MUST refuse.
 import { SDJwtInstance } from "@sd-jwt/core";
 import { hasher } from "../../ceremony/intent-sign/presentation.js";
-import { delegateKeyBinding, p256, saltGenerator, selfSignedCert, sign, type DevKeyPair } from "../../ceremony/intent-sign/dev-wallet.js";
+import { delegateKeyBinding, p256, saltGenerator, selfSignedCert, type DevKeyPair } from "../../ceremony/intent-sign/dev-wallet.js";
+import { DELEGATE_KB_TYP } from "../delegate.js";
+import { es256Signer } from "../sdjwt.js";
 import { mandateContentDigest } from "../digest.js";
 import type { Merchant } from "../types.js";
 import { AgentKey } from "./agent-key.js";
 import { delegateEntries, disclosureDigest, openMandatesForGrant, type MandateContent } from "../../ceremony/intent-sign/mandates.js";
 
-export { p256, sign };
-export type P256 = DevKeyPair;
 
 export const GATE_ORIGIN = "https://shop.example";
 
 export interface TestGrant {
   /** The agent's key pair — `K_s`, named in both open mandates' `cnf`. Raw, for the hop tests. */
-  agent: P256;
+  agent: DevKeyPair;
   /** The same key as the agent's own `AgentKey` — what `DelegatedIntent.spend` takes. */
   agentKey: AgentKey;
   /** The wallet's presentation, as `vp_token` carries it. */
@@ -41,14 +41,14 @@ export interface TestGrantOptions {
   budget?: number;
   skus?: string[];
   /** Reuse a wallet (credential + holder key) across grants — the splice tests need one key. */
-  wallet?: { issuer: P256; holder: P256; x5c: string };
+  wallet?: { issuer: DevKeyPair; holder: DevKeyPair; x5c: string };
   /** The wallet hop's `typ`. Default `kb+sd-jwt+kb`: its payload names the next key in `cnf`. */
   walletTyp?: string;
   /** Sign the wallet hop with a key the credential does not name. */
   forgeWalletKey?: boolean;
   /** Omit the credential's `x5c` — a root with no key to check it against. */
   omitX5c?: boolean;
-  agent?: P256;
+  agent?: DevKeyPair;
   /** Rewrite the open mandates before the wallet signs them — e.g. drop `cnf` or `exp`. */
   mapOpen?: (m: MandateContent, i: number) => MandateContent;
   /** The open mandates' expiry, seconds from now (default 3600). */
@@ -93,7 +93,7 @@ export async function testGrant(opts: TestGrantOptions = {}): Promise<TestGrant>
     hashAlg: "sha-256",
     saltGenerator,
     signAlg: "ES256",
-    signer: sign(wallet.issuer.privateKey),
+    signer: es256Signer(wallet.issuer.privateKey),
   }).issue(
     {
       iss: "https://test-wallet.local",
@@ -117,7 +117,7 @@ export async function testGrant(opts: TestGrantOptions = {}): Promise<TestGrant>
       aud: `origin:${GATE_ORIGIN}`,
       nonce: "ceremony-nonce",
       delegatePayload: disclosures.map((d) => ({ "...": disclosureDigest(d, "sha-256") })),
-      typ: opts.walletTyp ?? "kb+sd-jwt+kb",
+      typ: opts.walletTyp ?? DELEGATE_KB_TYP.delegable,
       iat,
     }),
     disclosures: disclosures as [string, string],

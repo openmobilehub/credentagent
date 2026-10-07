@@ -47,7 +47,8 @@ const decodeDisclosure = (d: string): Record<string, unknown> | undefined => {
 
 /**
  * The permission an agent holds: the wallet's presentation and the two open mandates it signed.
- * Plain data — `JSON.stringify` it to store it, {@link DelegatedIntent.fromJSON} to bring it back.
+ * Plain data — `JSON.stringify` it to store it, and pass the parsed value back to
+ * {@link DelegatedIntent.fromWalletPresentation}: what it serializes to is exactly what that takes.
  *
  * Holding it is not a secret in itself: spending it needs the {@link AgentKey} its mandates name,
  * which this object never sees until `spend` is called with it.
@@ -70,12 +71,6 @@ export class DelegatedIntent {
     return new DelegatedIntent(args.presentation, { checkout, payment });
   }
 
-  static fromJSON(json: { presentation: string; disclosures: { checkout: string; payment: string } }): DelegatedIntent {
-    return DelegatedIntent.fromWalletPresentation({
-      presentation: json.presentation,
-      disclosures: [json.disclosures.checkout, json.disclosures.payment],
-    });
-  }
 
   /** The open payment mandate — what the agent may spend. UNVERIFIED: read it to plan, not to decide. */
   get openPayment(): OpenPaymentMandate {
@@ -85,6 +80,11 @@ export class DelegatedIntent {
   /** The open checkout mandate — what the agent may buy. UNVERIFIED, like `openPayment`. */
   get openCheckout(): OpenCheckoutMandate {
     return decodeDisclosure(this.disclosures.checkout) as unknown as OpenCheckoutMandate;
+  }
+
+  /** Serializes to `fromWalletPresentation`'s own input, so storing and loading is one door. */
+  toJSON(): { presentation: string; disclosures: string[] } {
+    return { presentation: this.presentation, disclosures: [this.disclosures.checkout, this.disclosures.payment] };
   }
 
   /** This permission's id — the same one a merchant's verdict reports as `permissionId`. */
@@ -109,7 +109,6 @@ export class DelegatedIntent {
     instrument: PaymentInstrument;
     audience: string;
     nonce: string;
-    ttlMs?: number;
   }): Promise<DelegatedPurchaseProof> {
     // Said here, plainly, rather than as a `signature` refusal at the merchant: a permission
     // signed for one agent key is spendable by that key alone.
@@ -126,7 +125,7 @@ export class DelegatedIntent {
     if (!cart || problem)
       throw new Error(`checkoutJwt is not a UCP Checkout: ${problem} — pass the cart exactly as the merchant signed it`);
     const iat = Math.floor(Date.now() / 1000);
-    const exp = iat + Math.floor((args.ttlMs ?? DEFAULT_MANDATE_TTL_MS) / 1000);
+    const exp = iat + Math.floor(DEFAULT_MANDATE_TTL_MS / 1000);
     const checkoutHash = digestToken(args.checkoutJwt, SD_HASH_ALG);
     const closedCheckout: CheckoutMandate = { vct: VCT.checkout, checkout_jwt: args.checkoutJwt, checkout_hash: checkoutHash, iat, exp };
     const closedPayment: PaymentMandate = {
@@ -158,7 +157,8 @@ export type PurchaseRefusalCode =
   | "trust" // the caller did not opt in to presence-only trust — the only kind this verifier has
   | "splice" // the two chains do not rest on the same signed permission
   | "unexpected-type" // a chain carries the other mandate type
-  | "checkout-unbound" // the checkout is not this merchant's, or its hash does not match
+  | "no-checkout-key" // setup: no checkout key was passed, so no cart can be checked
+  | "checkout-unbound" // checkout_jwt does not hash to the closed mandate's checkout_hash
   | "payment-unbound" // the payment's transaction_id names a different checkout
   | "payee" // the payment pays someone other than the merchant whose checkout it is
   | "constraint" // the purchase leaves the permission's limits (see `violations`)
@@ -245,7 +245,7 @@ export async function verifyDelegatedPurchase(
     );
   }
   if (!opts.checkoutKey)
-    return refuse("checkout-unbound", "no checkout key configured — there is nothing to check the cart's signature against");
+    return refuse("no-checkout-key", "no checkout key configured — there is nothing to check the cart's signature against");
   const chainOpts = { audience: opts.audience, nonce: opts.nonce, ...(opts.nowMs !== undefined ? { nowMs: opts.nowMs } : {}) };
   const c = await verifyChain(proof.checkout, chainOpts);
   if (!c.ok) return refuse(c.code, `checkout chain: ${c.detail}`);
@@ -268,12 +268,15 @@ export async function verifyDelegatedPurchase(
   const openPayment = p.open as unknown as OpenPaymentMandate;
   const payment = p.closed as unknown as PaymentMandate;
 
-  // The cart: signed by this merchant, and the one the closed mandate's hash names.
-  if (!closedCheckout.checkout_jwt || digestToken(closedCheckout.checkout_jwt, SD_HASH_ALG) !== closedCheckout.checkout_hash) {
+  // The cart: signed by this merchant, and the one the closed mandate's hash names. The agent
+  // wrote this field, so it is checked for a string before anything hashes it.
+  if (typeof closedCheckout.checkout_jwt !== "string") return refuse("malformed", "checkout_jwt is not a compact JWT");
+  if (digestToken(closedCheckout.checkout_jwt, SD_HASH_ALG) !== closedCheckout.checkout_hash) {
     return refuse("checkout-unbound", "checkout_jwt does not hash to checkout_hash");
   }
   const checkout = verifyCompactJwt<UcpCheckout>(closedCheckout.checkout_jwt, opts.checkoutKey);
-  if (!checkout) return refuse("checkout-unbound", "the checkout is not signed by this merchant's key");
+  // `signature`, as `openCheckoutPayload` reports the same failure.
+  if (!checkout) return refuse("signature", "the checkout is not signed by this merchant's checkout key");
   // Signed is not well-formed: a cart or a payment missing a field is refused, never read.
   const shape = cartProblem(checkout) ?? paymentProblem(payment);
   if (shape) return refuse("malformed", shape);

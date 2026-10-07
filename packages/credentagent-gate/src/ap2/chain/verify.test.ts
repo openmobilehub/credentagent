@@ -7,9 +7,10 @@
 import { describe, expect, it } from "vitest";
 import { appendAgentHop, bindingHash } from "./hop.js";
 import { joinChain, splitChain, walletChain } from "./serialize.js";
-import { digestToken, sdJwtInstance } from "../sdjwt.js";
+import { digestToken, es256Signer, sdJwtInstance } from "../sdjwt.js";
 import { verifyChain } from "./verify.js";
-import { newWallet, p256, sign, testGrant } from "./test-wallet.js";
+import { newWallet, testGrant } from "./test-wallet.js";
+import { p256 } from "../../ceremony/intent-sign/dev-wallet.js";
 import { VCT } from "../types.js";
 
 const MERCHANT = "https://other-shop.example";
@@ -261,7 +262,7 @@ describe("the algorithm pin", () => {
     const [, payload] = hop.jwt.split(".");
     for (const alg of ["HS256", "none", "ES384"]) {
       const header = Buffer.from(JSON.stringify({ alg, typ: "kb+sd-jwt" })).toString("base64url");
-      const resigned = `${header}.${payload}.${sign(g.agent.privateKey)(`${header}.${payload}`)}`;
+      const resigned = `${header}.${payload}.${es256Signer(g.agent.privateKey)(`${header}.${payload}`)}`;
       const relabelled = joinChain(
         [...links.slice(0, 2), { ...hop, jwt: resigned }].map((l) => `${l.jwt}~${l.disclosures.map((d) => `${d}~`).join("")}`),
       );

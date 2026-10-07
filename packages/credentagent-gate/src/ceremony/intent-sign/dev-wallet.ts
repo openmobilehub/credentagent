@@ -26,9 +26,6 @@ export const saltGenerator = (n: number): string =>
     .toString("hex")
     .slice(0, n);
 
-/** ES256 over P-256 — the package's own signer, so a dev wallet signs exactly as the gate verifies. */
-export const sign = (key: KeyObject) => es256Signer(key);
-
 /**
  * A self-signed certificate for an issuer key, base64 DER for the JWS `x5c`.
  *
@@ -87,5 +84,6 @@ export function delegateKeyBinding(args: {
     [DELEGATE_PAYLOAD_CLAIM]: args.delegatePayload,
   };
   const signingInput = `${b64uJson(header)}.${b64uJson(payload)}`;
-  return `${args.presented}${signingInput}.${sign(args.holderKey)(signingInput)}`;
+  // The package's own ES256 signer, so a dev wallet signs exactly as the gate verifies.
+  return `${args.presented}${signingInput}.${es256Signer(args.holderKey)(signingInput)}`;
 }

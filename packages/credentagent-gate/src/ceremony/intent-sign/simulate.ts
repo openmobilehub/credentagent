@@ -18,7 +18,8 @@ import { SDJwtInstance } from "@sd-jwt/core";
 import { dcApiAudience, hasher } from "./presentation.js";
 import { PAYMENT_CREDENTIAL_VCTS, PAYMENT_INSTRUMENT_CLAIM } from "./dcql.js";
 import { peekJson } from "../../ap2/jwt.js";
-import { delegateKeyBinding, p256, saltGenerator, selfSignedCert, sign } from "./dev-wallet.js";
+import { delegateKeyBinding, p256, saltGenerator, selfSignedCert } from "./dev-wallet.js";
+import { es256Signer } from "../../ap2/sdjwt.js";
 import {
   arrayDisclosure,
   disclosureDigest,
@@ -135,7 +136,7 @@ export async function devSimulateWalletSignature(
     hashAlg: "sha-256",
     saltGenerator,
     signAlg: "ES256",
-    signer: sign(issuer.privateKey),
+    signer: es256Signer(issuer.privateKey),
   });
   const credential = await issuerInstance.issue(
     {
@@ -162,10 +163,6 @@ export async function devSimulateWalletSignature(
     // that anybody authorized anything.
     presentation = disclosed;
   } else {
-    // THE KEY BINDING IS ASSEMBLED HERE rather than through `SDJwtInstance.present({ kb })`,
-    // because that path hardcodes `typ: "kb+jwt"` (@sd-jwt/core's KB_JWT_TYP) and a Delegate
-    // KB-JWT must be typed `kb+sd-jwt` (Delegate SD-JWT §5.1.4). Everything else is the same
-    // JWS the library would have produced.
     const kbKey = opts.forgeHolderKey ? p256().privateKey : holder.privateKey;
     if (opts.duplicateDisclosure) {
       // `<jwt>~<d1>~…~<dn>~` — repeat the last disclosure before the trailing separator.

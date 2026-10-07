@@ -10,7 +10,8 @@ import type { Spent } from "./constraints.js";
 import { resolveSigningKey } from "../keys.js";
 import { Ap2Issuer } from "../issue.js";
 import { merchantFor } from "../from-gate.js";
-import { newWallet, p256, testGrant, GATE_ORIGIN } from "./test-wallet.js";
+import { newWallet, testGrant, GATE_ORIGIN } from "./test-wallet.js";
+import { p256 } from "../../ceremony/intent-sign/dev-wallet.js";
 import { VCT, type UcpCheckout } from "../types.js";
 import { digestToken } from "../sdjwt.js";
 import { appendAgentHop } from "./hop.js";
@@ -127,8 +128,9 @@ describe("a delegated purchase, end to end", () => {
 
   it("is plain data an agent can store and bring back", async () => {
     const { intent } = await purchase();
-    const restored = DelegatedIntent.fromJSON(JSON.parse(JSON.stringify(intent)));
+    const restored = DelegatedIntent.fromWalletPresentation(JSON.parse(JSON.stringify(intent)));
     expect(restored.openPayment).toEqual(intent.openPayment);
+    expect(restored.permissionId).toBe(intent.permissionId);
   });
 
   // Portability: the same signed permission, a different store that it names.
@@ -198,7 +200,7 @@ describe("the merchant's own checks", () => {
 
   it("refuses a checkout signed by someone other than this merchant (bypass)", async () => {
     const { verify } = await purchase();
-    expect(await verify({ checkoutKey: resolveSigningKey(GATE_ORIGIN).publicJwk })).toMatchObject({ ok: false, code: "checkout-unbound" });
+    expect(await verify({ checkoutKey: resolveSigningKey(GATE_ORIGIN).publicJwk })).toMatchObject({ ok: false, code: "signature" });
   });
 
   // Spec 014: "no key, no pass".
@@ -206,7 +208,7 @@ describe("the merchant's own checks", () => {
     const { verify } = await purchase();
     expect(await verify({ checkoutKey: undefined as never })).toMatchObject({
       ok: false,
-      code: "checkout-unbound",
+      code: "no-checkout-key",
       detail: expect.stringMatching(/^no checkout key/),
     });
   });
@@ -368,6 +370,43 @@ describe("one permission, one id", () => {
 });
 
 describe("malformed input is refused, never thrown", () => {
+  // A hostile agent signs its own hops, so it controls every field of the closed mandates.
+  async function forgedProof(checkoutContent: (jwt: string, hash: string) => Record<string, unknown>, payment: (hash: string) => Record<string, unknown>) {
+    const g = await testGrant();
+    const m = merchant(GATE_ORIGIN);
+    const hash = digestToken(m.checkoutJwt);
+    const hop = (which: 0 | 1, content: Record<string, unknown>) =>
+      appendAgentHop({ chain: walletChain(g.presentation, g.disclosures[which])!, agentKey: g.agent.privateKey, content, audience: GATE_ORIGIN, nonce: "n" });
+    const proof = { checkout: await hop(0, checkoutContent(m.checkoutJwt, hash)), payment: await hop(1, payment(hash)) };
+    return verifyWith(proof, m, { nonce: "n" });
+  }
+  const iat = () => Math.floor(Date.now() / 1000);
+  const honestPayment = (hash: string) => ({
+    vct: VCT.payment,
+    transaction_id: hash,
+    payee: merchantFor(GATE_ORIGIN),
+    payment_amount: { amount: 450, currency: "USD" },
+    payment_instrument: { id: "pi_1", type: "card" },
+    iat: iat(),
+  });
+
+  it("refuses a closed checkout whose checkout_jwt is not a string (bypass)", async () => {
+    for (const bad of [123, {}, true]) {
+      const v = await forgedProof((_jwt, hash) => ({ vct: VCT.checkout, checkout_jwt: bad, checkout_hash: hash, iat: iat() }), honestPayment);
+      expect(v).toMatchObject({ ok: false, code: "malformed", detail: expect.stringMatching(/checkout_jwt/) });
+    }
+  });
+
+  it("refuses a closed payment with no integer payment_amount (bypass)", async () => {
+    for (const amount of [undefined, { amount: 4.5, currency: "USD" }, { amount: 450 }]) {
+      const v = await forgedProof(
+        (jwt, hash) => ({ vct: VCT.checkout, checkout_jwt: jwt, checkout_hash: hash, iat: iat() }),
+        (hash) => ({ ...honestPayment(hash), payment_amount: amount }),
+      );
+      expect(v).toMatchObject({ ok: false, code: "malformed", detail: expect.stringMatching(/payment_amount/) });
+    }
+  });
+
   it("refuses a signed limit missing a field it needs — e.g. a spending range with no currency (bypass)", async () => {
     const dropCurrency = (m: Record<string, unknown>) => ({
       ...m,

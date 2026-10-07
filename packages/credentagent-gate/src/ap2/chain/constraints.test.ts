@@ -341,6 +341,12 @@ describe("malformed limits are refused, never thrown", () => {
 });
 
 describe("a payment dated past the permission", () => {
+  it("refuses an execution date that does not parse, even with no window to check it against (bypass)", () => {
+    expect(evaluatePayment(openPayment([]), closed({ execution_date: "someday" }), ctx())).toEqual([
+      expect.objectContaining({ code: "malformed", detail: expect.stringMatching(/not a date/) }),
+    ]);
+  });
+
   it("refuses an execution date after the open mandate expires, with or without a window (bypass)", () => {
     const now = { nowMs: Date.parse("2026-10-10T00:00:00Z") };
     const exp = Math.floor(Date.parse("2026-10-31T00:00:00Z") / 1000);
