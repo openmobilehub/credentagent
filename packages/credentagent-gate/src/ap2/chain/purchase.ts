@@ -13,7 +13,7 @@
 // They must come from the same signature — `splice` is what refuses two permissions stapled together.
 import { DEFAULT_MANDATE_TTL_MS } from "../issue.js";
 import { permissionIdOf } from "../digest.js";
-import { verifyCompactJwt } from "../jwt.js";
+import { peekJson, verifyCompactJwt } from "../jwt.js";
 import { digestToken, SD_HASH_ALG } from "../sdjwt.js";
 import { rederiveTotal, totalOf } from "../from-gate.js";
 import type { PublicJwkP256 } from "../keys.js";
@@ -39,13 +39,10 @@ export interface DelegatedPurchaseProof {
   payment: string;
 }
 
+/** An array-element disclosure `[salt, value]`'s value, when it is an object. */
 const decodeDisclosure = (d: string): Record<string, unknown> | undefined => {
-  try {
-    const arr = JSON.parse(Buffer.from(d, "base64url").toString("utf-8")) as unknown[];
-    return Array.isArray(arr) && arr.length === 2 && typeof arr[1] === "object" ? (arr[1] as Record<string, unknown>) : undefined;
-  } catch {
-    return undefined;
-  }
+  const arr = peekJson<unknown[]>(d);
+  return Array.isArray(arr) && arr.length === 2 && typeof arr[1] === "object" ? (arr[1] as Record<string, unknown>) : undefined;
 };
 
 /**
@@ -118,8 +115,9 @@ export class DelegatedIntent {
     }
     // Read, not verified: the agent spends against the cart it was quoted, and the merchant checks
     // its own signature on it. A cart that does not decode cannot be paid for.
-    const cart = decodeCart(args.checkoutJwt);
-    if (!cart) throw new Error("checkoutJwt is not a UCP Checkout — pass the cart exactly as the merchant signed it");
+    const cart = peekJson<UcpCheckout>(args.checkoutJwt.split(".")[1]);
+    const problem = cart ? cartProblem(cart) : "it does not decode";
+    if (!cart || problem) throw new Error(`checkoutJwt is not a UCP Checkout: ${problem} — pass the cart exactly as the merchant signed it`);
     const iat = Math.floor(Date.now() / 1000);
     const exp = iat + Math.floor((args.ttlMs ?? DEFAULT_MANDATE_TTL_MS) / 1000);
     const checkoutHash = digestToken(args.checkoutJwt, SD_HASH_ALG);
@@ -127,7 +125,7 @@ export class DelegatedIntent {
     const closedPayment: PaymentMandate = {
       vct: VCT.payment,
       transaction_id: checkoutHash,
-      payee: cart.merchant!, // decodeCart refuses a cart with no merchant
+      payee: cart.merchant!, // cartProblem refuses a cart with no merchant
       payment_amount: totalOf(cart),
       payment_instrument: args.instrument,
       iat,
@@ -304,15 +302,6 @@ export async function verifyDelegatedPurchase(proof: DelegatedPurchaseProof, opt
 }
 
 const isCount = (v: unknown): boolean => Number.isSafeInteger(v) && (v as number) >= 0;
-
-const decodeCart = (jwt: string): UcpCheckout | undefined => {
-  try {
-    const cart = JSON.parse(Buffer.from(jwt.split(".")[1] ?? "", "base64url").toString("utf-8")) as UcpCheckout;
-    return cartProblem(cart) ? undefined : cart;
-  } catch {
-    return undefined;
-  }
-};
 
 /** What a cart needs before anything reads it: a merchant, and lines with an item id and a count. */
 function cartProblem(cart: UcpCheckout): string | undefined {

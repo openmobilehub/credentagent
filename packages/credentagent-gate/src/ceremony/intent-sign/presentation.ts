@@ -24,18 +24,16 @@ import { createPublicKey, X509Certificate } from "node:crypto";
 // cannot drift between them.
 import { es256Verify, hasher } from "../../ap2/sdjwt.js";
 import { decodeSdJwt, getClaims, splitSdJwt } from "@sd-jwt/core";
-import { DELEGATE_KB_TYP, DELEGATE_PAYLOAD_CLAIM, type MandateContent } from "./mandates.js";
+import { peekJson } from "../../ap2/jwt.js";
+import { DELEGATE_KB_TYP, DELEGATE_PAYLOAD_CLAIM } from "../../ap2/delegate.js";
+import type { MandateContent } from "./mandates.js";
 
 /** Re-exported for the in-process wallet, which must hash the way this verifier does. */
 export { hasher };
 
 /** Decode a JWS segment without verifying. Only ever used to READ a key or a claim name. */
 function segment<T>(token: string, index: 0 | 1): T | undefined {
-  try {
-    return JSON.parse(Buffer.from(token.split(".")[index], "base64url").toString("utf-8")) as T;
-  } catch {
-    return undefined;
-  }
+  return peekJson<T>(token.split(".")[index]);
 }
 
 /**
@@ -156,8 +154,8 @@ export async function verifyDelegatedPresentation(args: {
   // delegation as a normal presentation, which is the shape this rail shipped before #192 — so
   // accepting it would let the old, non-conformant output keep passing unnoticed.
   const kbTyp = segment<{ typ?: string }>(parts.kbJwt, 0)?.typ;
-  if (!kbTyp || !(DELEGATE_KB_TYP as readonly string[]).includes(kbTyp)) {
-    return { ok: false, reason: `key binding is typed ${kbTyp ?? "∅"}, not ${DELEGATE_KB_TYP.join(" or ")}` };
+  if (!kbTyp || !(Object.values(DELEGATE_KB_TYP) as string[]).includes(kbTyp)) {
+    return { ok: false, reason: `key binding is typed ${kbTyp ?? "∅"}, not ${Object.values(DELEGATE_KB_TYP).join(" or ")}` };
   }
 
   const delegatePayload = kb[DELEGATE_PAYLOAD_CLAIM];

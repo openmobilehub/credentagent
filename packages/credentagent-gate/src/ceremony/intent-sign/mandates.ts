@@ -46,23 +46,6 @@ export type MandateContent = Record<string, unknown>;
  */
 export const DELEGATE_FORMAT = "dSD-JWT";
 
-/**
- * The KB-JWT claim carrying the digests of what the holder signed (Delegate SD-JWT §7.1).
- *
- * `delegate_payload`, with NO leading or trailing underscore — datatracker renders §7.1's
- * italicised heading as `_delegate_payload_`, and a verifier written against the draft looks for
- * the plain name that §7.1's prose spells out.
- */
-export const DELEGATE_PAYLOAD_CLAIM = "delegate_payload";
-
-/**
- * The `typ` a Delegate Key Binding JWT must carry (§5.1.4): "The typ parameter value MUST be
- * replaced with `kb+sd-jwt` for a KB-SD-JWT, and `kb+sd-jwt+kb` for a KB-SD-JWT+KB." A plain
- * `kb+jwt` — what a wallet emits when it treats this as an ordinary key binding — is the tell
- * that the delegation extension was never applied.
- */
-export const DELEGATE_KB_TYP = ["kb+sd-jwt", "kb+sd-jwt+kb"] as const;
-
 /** The hash algorithms this rail can produce, by their IANA `transaction_data_hashes_alg` name. */
 const HASH_ALGS = { "sha-256": "sha256", "sha-384": "sha384", "sha-512": "sha512" } as const;
 

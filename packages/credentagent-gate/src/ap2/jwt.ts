@@ -22,8 +22,18 @@ export function verifyCompactJwt<T>(token: string, publicJwk: PublicJwkP256): T 
   const [header, payload, signature] = parts;
   if (publicJwk.kid !== undefined && peekJwtHeader(token)?.kid !== publicJwk.kid) return undefined;
   if (!es256Verifier(publicJwk)(`${header}.${payload}`, signature)) return undefined;
+  return peekJson<T>(payload);
+}
+
+/**
+ * Decode one base64url JSON segment — a JWS header or payload, a disclosure, a `transaction_data`
+ * entry — WITHOUT verifying it. `undefined` when it is not JSON. The one decoder in this package:
+ * read with it to route (which key, which claim), never to decide.
+ */
+export function peekJson<T = Record<string, unknown>>(segment: string | undefined): T | undefined {
+  if (typeof segment !== "string") return undefined;
   try {
-    return JSON.parse(Buffer.from(payload, "base64url").toString("utf-8")) as T;
+    return JSON.parse(Buffer.from(segment, "base64url").toString("utf-8")) as T;
   } catch {
     return undefined;
   }
@@ -31,9 +41,5 @@ export function verifyCompactJwt<T>(token: string, publicJwk: PublicJwkP256): T 
 
 /** Decode WITHOUT verifying — only for reading a `kid` to decide which key to check against. */
 export function peekJwtHeader(token: string): Record<string, unknown> | undefined {
-  try {
-    return JSON.parse(Buffer.from(token.split(".")[0], "base64url").toString("utf-8")) as Record<string, unknown>;
-  } catch {
-    return undefined;
-  }
+  return peekJson(token.split(".")[0]);
 }

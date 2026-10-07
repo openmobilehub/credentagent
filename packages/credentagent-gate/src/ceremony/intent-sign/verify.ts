@@ -39,18 +39,14 @@ import {
   type MandateContent,
 } from "./mandates.js";
 import type { TrustLevel } from "../../types.js";
-import { HOP_TYP } from "../../ap2/chain/hop.js";
+import { peekJwtHeader } from "../../ap2/jwt.js";
+import { DELEGATE_KB_TYP } from "../../ap2/delegate.js";
 
 /** The `typ` of a presentation's Key Binding JWT — the JWS after the last `~`. Read only AFTER the
  *  backend has verified that JWS, so the header (which the signature covers) is the holder's. */
 function keyBindingTyp(sdjwt: string): string | undefined {
-  try {
-    const kbJwt = sdjwt.slice(sdjwt.lastIndexOf("~") + 1);
-    const header = JSON.parse(Buffer.from(kbJwt.split(".")[0], "base64url").toString("utf-8")) as { typ?: unknown };
-    return typeof header.typ === "string" ? header.typ : undefined;
-  } catch {
-    return undefined;
-  }
+  const typ = peekJwtHeader(sdjwt.slice(sdjwt.lastIndexOf("~") + 1))?.typ;
+  return typeof typ === "string" ? typ : undefined;
 }
 
 /** Single-use nonce ledger: `consume` records a nonce and returns true only the FIRST
@@ -276,10 +272,10 @@ export async function verifyIntentPresentation(args: {
   // whose key the gate holds is spent by the gate, never by that verifier, and is unchanged.
   if (args.agentHeld) {
     const typ = keyBindingTyp(sdjwt);
-    if (typ !== HOP_TYP.delegable) {
+    if (typ !== DELEGATE_KB_TYP.delegable) {
       return {
         ok: false,
-        reason: `key binding is typed ${typ ?? "∅"}, but the mandates name the agent's key, so Delegate SD-JWT §5.1.4 requires ${HOP_TYP.delegable} — a merchant refuses any other (update the wallet)`,
+        reason: `key binding is typed ${typ ?? "∅"}, but the mandates name the agent's key, so Delegate SD-JWT §5.1.4 requires ${DELEGATE_KB_TYP.delegable} — a merchant refuses any other (update the wallet)`,
       };
     }
   }

@@ -12,8 +12,8 @@
 // invariant 2), that the human agreed (that is `presence`), or that any credential behind
 // it came from a real issuer (that is #14, still open).
 import { splitSdJwt } from "@sd-jwt/core";
-import { sdJwtInstance } from "./sdjwt.js";
-import { verifyCompactJwt } from "./jwt.js";
+import { sdJwtInstance, libraryRefusal } from "./sdjwt.js";
+import { peekJson, verifyCompactJwt } from "./jwt.js";
 import type { PublicJwkP256 } from "./keys.js";
 import { VCT, type AnyMandate, type CheckoutMandate, type UcpCheckout, type Vct } from "./types.js";
 
@@ -87,20 +87,11 @@ export interface VerifyOptions {
 
 const refuse = (code: MandateRefusalCode, detail?: string): MandateRefusal => ({ ok: false, code, ...(detail ? { detail } : {}) });
 
-/**
- * Name an issuer-side failure from `@sd-jwt/core`'s message. The library reports every
- * failure as one exception type, so the message is all there is; `verify.test.ts` pins one
- * real token per message, so a library upgrade that rewords one turns a test red instead of
- * silently changing the code a caller switches on. Unknown messages fall to `signature` —
- * a refusal, never a pass.
- */
+/** Name an issuer-side failure. A mandate has no disclosure refusal of its own: a disclosure its
+ *  signer never committed to is a signature failure here, as it always was. */
 function issuerRefusal(message: string): MandateRefusal {
-  if (/is expired/i.test(message)) return refuse("expired", message);
-  if (/not yet valid/i.test(message)) return refuse("not-yet-valid", message);
-  if (/must be a number|missing required claim|invalid sd jwt|invalid jwt/i.test(message) && !/signature/i.test(message)) {
-    return refuse("malformed", message);
-  }
-  return refuse("signature", message);
+  const code = libraryRefusal(message);
+  return refuse(code === "disclosure" ? "signature" : code, message);
 }
 
 /** Name a key-binding failure. Runs only after the issuer side has passed, so every failure
@@ -250,10 +241,6 @@ export async function openCheckoutPayload(
 
 /** Read a token's `vct` without verifying it — for routing only, never for a decision. */
 export function peekVct(token: string): Vct | undefined {
-  try {
-    const claims = JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString("utf-8")) as { vct?: string };
-    return (Object.values(VCT) as string[]).includes(claims.vct ?? "") ? (claims.vct as Vct) : undefined;
-  } catch {
-    return undefined;
-  }
+  const vct = peekJson<{ vct?: unknown }>(token.split(".")[1])?.vct;
+  return typeof vct === "string" && (Object.values(VCT) as string[]).includes(vct) ? (vct as Vct) : undefined;
 }

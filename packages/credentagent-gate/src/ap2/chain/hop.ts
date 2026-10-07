@@ -7,27 +7,17 @@
 // permission signed by the same wallet.
 import type { KeyObject } from "node:crypto";
 import { digestToken, SD_HASH_ALG, sdJwtInstance } from "../sdjwt.js";
+import { peekJson } from "../jwt.js";
+import { DELEGATE_KB_TYP, DELEGATE_PAYLOAD_CLAIM } from "../delegate.js";
 import { joinChain, linkToString, splitChain, type ChainLink } from "./serialize.js";
 
-/** §5.1.4: a hop whose payload names a further key, and one that ends the chain. */
-export const HOP_TYP = { delegable: "kb+sd-jwt+kb", terminal: "kb+sd-jwt" } as const;
 
-/** The claim a KB-SD-JWT carries its Delegate Payload in (AP2's spelling of §5.1.4's). */
-export const DELEGATE_PAYLOAD = "delegate_payload";
-
-const decode = (segment: string): Record<string, unknown> | undefined => {
-  try {
-    return JSON.parse(Buffer.from(segment, "base64url").toString("utf-8")) as Record<string, unknown>;
-  } catch {
-    return undefined;
-  }
-};
 
 /** A link's header and payload, UNVERIFIED — for routing (which key, which hash), never a decision. */
 export function peekLink(link: ChainLink): { header: Record<string, unknown>; payload: Record<string, unknown> } | undefined {
   const [h, p] = link.jwt.split(".");
-  const header = decode(h);
-  const payload = decode(p);
+  const header = peekJson(h);
+  const payload = peekJson(p);
   return header && payload ? { header, payload } : undefined;
 }
 
@@ -56,16 +46,16 @@ export async function appendAgentHop(args: {
   if (!args.audience || !args.nonce) throw new Error("a delegation hop needs the merchant's audience and nonce — without them it replays anywhere");
   const links = splitChain(args.chain);
   if (!links) throw new Error("not a delegation chain: expected `<credential>~~<wallet hop>~…~`");
-  const typ = args.content.cnf ? HOP_TYP.delegable : HOP_TYP.terminal;
+  const typ = args.content.cnf ? DELEGATE_KB_TYP.delegable : DELEGATE_KB_TYP.terminal;
   const hop = await sdJwtInstance({ privateKey: args.agentKey }).issue(
     {
       iat: Math.floor(Date.now() / 1000),
       aud: args.audience,
       nonce: args.nonce,
       sd_hash: bindingHash(links[links.length - 1]),
-      [DELEGATE_PAYLOAD]: [args.content],
+      [DELEGATE_PAYLOAD_CLAIM]: [args.content],
     } as never,
-    { [DELEGATE_PAYLOAD]: { _sd: [0] } } as never,
+    { [DELEGATE_PAYLOAD_CLAIM]: { _sd: [0] } } as never,
     { header: { typ } },
   );
   return joinChain([...links.map(linkToString), hop]);

@@ -20,9 +20,9 @@ import { SDJwtInstance } from "@sd-jwt/core";
 import { es256Signer } from "../../ap2/sdjwt.js";
 import { dcApiAudience, hasher } from "./presentation.js";
 import { PAYMENT_CREDENTIAL_VCTS, PAYMENT_INSTRUMENT_CLAIM } from "./dcql.js";
-import { HOP_TYP } from "../../ap2/chain/hop.js";
+import { peekJson } from "../../ap2/jwt.js";
+import { DELEGATE_KB_TYP, DELEGATE_PAYLOAD_CLAIM } from "../../ap2/delegate.js";
 import {
-  DELEGATE_PAYLOAD_CLAIM,
   arrayDisclosure,
   disclosureDigest,
   isDelegateHashAlg,
@@ -140,17 +140,7 @@ export async function devSimulateWalletSignature(
   // does. Delegate SD-JWT §7.1 carries ONE array disclosure per entry, and every entry's digest
   // must end up in the signed `delegate_payload` — so this reads them ALL, not just the last.
   const delegateEntries = (payload.transaction_data ?? [])
-    .map((b64) => {
-      try {
-        return JSON.parse(Buffer.from(b64, "base64url").toString("utf-8")) as {
-          type?: string;
-          delegate_payload_disclosure?: string;
-          transaction_data_hashes_alg?: string[];
-        };
-      } catch {
-        return undefined;
-      }
-    })
+    .map((b64) => peekJson<{ type?: string; delegate_payload_disclosure?: string; transaction_data_hashes_alg?: string[] }>(b64))
     .filter((entry): entry is NonNullable<typeof entry> => entry?.type === "delegate");
 
   // The requested algorithm, honoured (#192) — a wallet that always answers in sha-256 makes a
@@ -167,7 +157,7 @@ export async function devSimulateWalletSignature(
 
   // RFC 9901 §4.2.4.2: an array element replaced by a disclosure is `{"...": "<digest>"}`.
   const delegatePayload: unknown[] = opts.plainDelegatePayload
-    ? signedDisclosures.map((d) => JSON.parse(Buffer.from(d, "base64url").toString("utf-8"))[1] as MandateContent)
+    ? signedDisclosures.map((d) => peekJson<[string, MandateContent]>(d)![1])
     : signedDisclosures.map((d) => ({ "...": disclosureDigest(d, hashAlg) }));
 
   // Mint the credential: issuer key + certificate, holder key in `cnf`.
@@ -242,7 +232,7 @@ export async function devSimulateWalletSignature(
     // So does the rail, for a grant whose key the agent holds (#243): a real wallet (Multipaz) typed
     // it `kb+sd-jwt`, and the person was shown "signed" for a permission every merchant refused.
     // A grant whose key the gate holds still accepts either — the gate spends that one itself.
-    const kbHeader = { alg: "ES256", typ: opts.overrideKbTyp ?? HOP_TYP.delegable };
+    const kbHeader = { alg: "ES256", typ: opts.overrideKbTyp ?? DELEGATE_KB_TYP.delegable };
     const kbPayload = {
       iat: Math.floor(Date.now() / 1000),
       // The DC API form, per OpenID4VP §B.3.6 — what a real wallet sends.

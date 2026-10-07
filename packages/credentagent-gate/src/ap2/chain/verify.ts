@@ -10,10 +10,12 @@
 // `constraints.ts`), that the price is right (re-price: invariant 2), or that the credential came
 // from a real issuer — its certificate is self-minted until #14 lands, which is why a chain
 // verified here is presence-only.
-import { createPublicKey, X509Certificate, type KeyObject } from "node:crypto";
-import { sdJwtInstance } from "../sdjwt.js";
+import { X509Certificate, type KeyObject } from "node:crypto";
+import { importVerifyKey, type PublicJwkP256 } from "../keys.js";
+import { libraryRefusal, sdJwtInstance } from "../sdjwt.js";
 import { linkToString, splitChain, type ChainLink } from "./serialize.js";
-import { bindingHash, DELEGATE_PAYLOAD, HOP_TYP, peekLink } from "./hop.js";
+import { DELEGATE_KB_TYP, DELEGATE_PAYLOAD_CLAIM } from "../delegate.js";
+import { bindingHash, peekLink } from "./hop.js";
 
 export type ChainRefusalCode =
   | "malformed" // not a three-link dSD-JWT, or a claim of the wrong type
@@ -59,14 +61,8 @@ const SKEW_SECONDS = 60;
 
 const refuse = (code: ChainRefusalCode, detail: string): ChainRefusal => ({ ok: false, code, detail });
 
-/** Name a library failure on link `i` by the side of the check that failed. */
-function linkRefusal(i: number, message: string): ChainRefusal {
-  if (/is expired/i.test(message)) return refuse("expired", `link ${i}: ${message}`);
-  if (/not yet valid/i.test(message)) return refuse("not-yet-valid", `link ${i}: ${message}`);
-  if (/disclosure|digest/i.test(message)) return refuse("disclosure", `link ${i}: ${message}`);
-  if (/must be a number/i.test(message)) return refuse("malformed", `link ${i}: ${message}`);
-  return refuse("signature", `link ${i}: ${message}`);
-}
+/** Name a library failure on link `i` — the same mapping `verifyMandate` uses. */
+const linkRefusal = (i: number, message: string): ChainRefusal => refuse(libraryRefusal(message), `link ${i}: ${message}`);
 
 /** The credential's issuer key, from its own `x5c` leaf. Demo trust: nothing anchors the certificate (#14). */
 function rootKey(link: ChainLink): KeyObject | undefined {
@@ -83,7 +79,7 @@ function cnfKey(holder: Record<string, unknown>): KeyObject | undefined {
   const jwk = (holder.cnf as { jwk?: Record<string, unknown> } | undefined)?.jwk;
   if (!jwk || jwk.kty !== "EC" || jwk.crv !== "P-256") return undefined;
   try {
-    return createPublicKey({ key: { kty: "EC", crv: "P-256", x: jwk.x, y: jwk.y } as never, format: "jwk" });
+    return importVerifyKey(jwk as unknown as PublicJwkP256);
   } catch {
     return undefined;
   }
@@ -140,8 +136,8 @@ export async function verifyChain(token: string, opts: VerifyChainOptions): Prom
     if (typeof payload.iat !== "number") return refuse("malformed", `link ${i}: a key-binding hop needs a numeric iat`);
 
     // Undisclosed elements were dropped by the verify above; what is left is what this chain shows.
-    const disclosed = Array.isArray(payload[DELEGATE_PAYLOAD])
-      ? (payload[DELEGATE_PAYLOAD] as unknown[]).filter((e): e is Record<string, unknown> => typeof e === "object" && e !== null && !("..." in e))
+    const disclosed = Array.isArray(payload[DELEGATE_PAYLOAD_CLAIM])
+      ? (payload[DELEGATE_PAYLOAD_CLAIM] as unknown[]).filter((e): e is Record<string, unknown> => typeof e === "object" && e !== null && !("..." in e))
       : [];
     if (disclosed.length !== 1) return refuse("disclosure", `link ${i}: discloses ${disclosed.length} delegate payloads — exactly one is required`);
     const element = disclosed[0];
@@ -150,7 +146,7 @@ export async function verifyChain(token: string, opts: VerifyChainOptions): Prom
     // the key that would do it. A wallet hop typed terminal while naming the agent is refused —
     // it is also what the AP2 Python SDK refuses.
     const typ = peekLink(links[i])?.header.typ;
-    const wants = element.cnf ? HOP_TYP.delegable : HOP_TYP.terminal;
+    const wants = element.cnf ? DELEGATE_KB_TYP.delegable : DELEGATE_KB_TYP.terminal;
     if (typ !== wants) return refuse("typ", `link ${i}: typed ${String(typ)} but ${element.cnf ? "names" : "names no"} further key — expected ${wants}`);
     if (last && element.cnf) return refuse("typ", `link ${i}: the last hop names a further key, so the chain is not finished`);
     if (!last && !element.cnf) return refuse("typ", `link ${i}: names no key for the next hop`);

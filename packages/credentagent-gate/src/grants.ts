@@ -28,7 +28,7 @@ import type { DelegateJwk, SealedAgeProof, SealedMembershipProof } from "./cerem
 import type { IntentBoundsInput } from "./ceremony/intent-sign/bounds.js";
 import type { Branding, ReaderIdentity, TrustLevel } from "./types.js";
 import { AmountError, toMinorUnits } from "./ap2/money.js";
-import { createPublicKey } from "node:crypto";
+import { importVerifyKey } from "./ap2/keys.js";
 
 /** Why a grant operation refused — a TYPED union (never `string`; #95 review). */
 export type GrantDoorCode =
@@ -952,7 +952,7 @@ function agentPublicKey(jwk: DelegateJwk, signing: GrantSigning): DelegateJwk {
     throw new Error("agentKey must be an EC P-256 public JWK — { kty, crv, x, y }");
   }
   try {
-    createPublicKey({ key: { kty: "EC", crv: "P-256", x: jwk.x, y: jwk.y } as never, format: "jwk" });
+    importVerifyKey(jwk);
   } catch {
     throw new Error("agentKey is not a point on P-256");
   }

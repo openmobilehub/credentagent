@@ -112,3 +112,21 @@ export function sdJwtInstance(opts: SdJwtOptions): SDJwtInstance<SdJwtPayload> {
 export function digestToken(token: string, alg: string = SD_HASH_ALG): string {
   return Buffer.from(hasher(token, alg)).toString("base64url");
 }
+
+/** What a `@sd-jwt/core` failure was about, read from its message. */
+export type LibraryRefusalCode = "expired" | "not-yet-valid" | "disclosure" | "malformed" | "signature";
+
+/**
+ * Name a `@sd-jwt/core` failure. The library reports every failure as one exception type, so the
+ * message is all there is. `verifyMandate` and the chain verifier both read it through here, and
+ * `sdjwt.test.ts` pins one real failure per message, so a library upgrade that rewords one turns a
+ * test red instead of silently changing the code a caller switches on. Unknown messages fall to
+ * `signature` — a refusal, never a pass.
+ */
+export function libraryRefusal(message: string): LibraryRefusalCode {
+  if (/is expired/i.test(message)) return "expired";
+  if (/not yet valid/i.test(message)) return "not-yet-valid";
+  if (/disclosure|digest/i.test(message)) return "disclosure";
+  if (/must be a number|missing required claim|invalid sd jwt|invalid jwt/i.test(message) && !/signature/i.test(message)) return "malformed";
+  return "signature";
+}
