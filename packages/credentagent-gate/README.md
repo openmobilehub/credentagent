@@ -252,7 +252,8 @@ credentagent.mount(app);        // serves GET /.well-known/did.json — both pub
 tokens; this is an asymmetric key whose public half goes to the world. Omit it and the gate generates
 one at boot — fine for a dev server, an error on anything else.
 
-`checkoutSigningKey` signs the carts you quote (`credentagent.ap2.signCheckout`). It is a separate key
+`checkoutSigningKey` signs the carts you quote (`credentagent.ap2.signCheckout`, which also fills in the
+cart's `merchant` — this gate's, the one a permission names — so you never build that identity by hand). It is a separate key
 because a quoted cart and an issued mandate are different statements: each key's `kid` —
 `#merchant-checkout-key` or `#gate-signing-key` — says which one a signature makes, and a cart is only
 ever checked against `credentagent.ap2.checkoutPublicJwk`. Passing the same JWK for both throws. Omit it

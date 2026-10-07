@@ -81,6 +81,11 @@ export interface Ap2IssuerOptions {
    * `kid` ending `#merchant-checkout-key`. Absent ⇒ one is generated, flagged `ephemeral`.
    */
   checkoutKey?: GateSigningKey;
+  /**
+   * This merchant, as a permission names it — what `signCheckout` puts in a cart that names none.
+   * `CredentAgent` passes the one for its `walletOrigin`, the same identity a grant's mandates carry.
+   */
+  merchant?: Merchant;
 }
 
 /**
@@ -95,10 +100,12 @@ export interface Ap2IssuerOptions {
 export class Ap2Issuer {
   readonly #key: GateSigningKey;
   readonly #checkoutKey: GateSigningKey;
+  readonly #merchant: Merchant | undefined;
 
   constructor(key: GateSigningKey, opts: Ap2IssuerOptions = {}) {
     this.#key = key;
     this.#checkoutKey = opts.checkoutKey ?? ephemeralSigningKey(key.issuer, CHECKOUT_KEY_FRAGMENT);
+    this.#merchant = opts.merchant;
     const [a, b] = [this.#key.publicJwk, this.#checkoutKey.publicJwk];
     if (a.x === b.x && a.y === b.y) {
       throw new Error("checkoutKey must be a different key from the mandate key — a quoted cart and an issued mandate are different statements (spec 014, FR-6)");
@@ -119,6 +126,11 @@ export class Ap2Issuer {
     return this.#checkoutKey.publicJwk;
   }
 
+  /** This merchant, as a delegated permission names it in `checkout.allowed_merchants`. */
+  get merchant(): Merchant | undefined {
+    return this.#merchant;
+  }
+
   get issuer(): string {
     return this.#key.issuer;
   }
@@ -137,9 +149,17 @@ export class Ap2Issuer {
    * The merchant-signed UCP Checkout — what a merchant quotes to an agent, and what the agent's
    * closed checkout mandate then names by `checkout_jwt` and its hash. Signed with the CHECKOUT
    * key, never the mandate key: verify it against {@link checkoutPublicJwk}.
+   *
+   * The cart's `merchant` is this merchant. Leave it out and it is filled in. A cart naming
+   * another merchant is refused, because no permission would ever match it.
    */
   signCheckout(checkout: UcpCheckout): string {
-    return signCompactJwt(checkout, this.#checkoutKey.privateKey, this.#checkoutKey.kid);
+    const merchant = checkout.merchant ?? this.#merchant;
+    if (!merchant) throw new Error("the cart names no merchant — pass checkout.merchant, or construct Ap2Issuer with { merchant }");
+    if (this.#merchant && merchant.id !== this.#merchant.id) {
+      throw new Error(`the cart names merchant ${merchant.id}, but this gate signs as ${this.#merchant.id}`);
+    }
+    return signCompactJwt({ ...checkout, merchant }, this.#checkoutKey.privateKey, this.#checkoutKey.kid);
   }
 
   /** `mandate.checkout.1` — "I authorize THIS checkout." */

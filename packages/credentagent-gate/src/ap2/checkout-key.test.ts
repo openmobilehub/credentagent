@@ -56,6 +56,16 @@ describe("the merchant's checkout key (FR-6)", () => {
     expect(() => new CredentAgent({ walletOrigin: ORIGIN, mandateSigningKey: one, checkoutSigningKey: privateJwk() })).not.toThrow();
   });
 
+  it("fills in this gate's merchant, and refuses a cart that names another", () => {
+    const credentagent = new CredentAgent({ walletOrigin: ORIGIN });
+    const { merchant: _none, ...unnamed } = cart;
+    void _none;
+    const signed = verifyCompactJwt<UcpCheckout>(credentagent.ap2.signCheckout(unnamed), credentagent.ap2.checkoutPublicJwk);
+    expect(signed?.merchant).toEqual(credentagent.ap2.merchant);
+    expect(credentagent.ap2.merchant).toMatchObject({ id: "shop.example" });
+    expect(() => credentagent.ap2.signCheckout({ ...cart, merchant: { id: "other.example", name: "Other" } })).toThrow(/signs as shop.example/);
+  });
+
   it("publishes both keys at /.well-known/did.json — the mandate key first", async () => {
     const credentagent = new CredentAgent({ walletOrigin: ORIGIN, mandateSigningKey: privateJwk(), checkoutSigningKey: privateJwk() });
     const app = express();

@@ -16,7 +16,7 @@ import express from "express";
 import { fork } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { CredentAgent, devSimulateWalletSignature, verifyDelegatedPurchase } from "@openmobilehub/credentagent-gate";
+import { CredentAgent, devSimulateWalletSignature, toMinorUnits, verifyDelegatedPurchase } from "@openmobilehub/credentagent-gate";
 
 const PORT = Number(process.env.PORT ?? 4031);
 const HOST = `127.0.0.1:${PORT}`;
@@ -62,9 +62,9 @@ try {
   step(`grant.spend() here → ${door.code} (the agent spends it, at the merchant)`);
 
   // 4) Quote a cart and issue a nonce, and hand the agent the signed permission.
-  const me = { id: HOST, name: "utopia", origin: ORIGIN }; // how a grant names this merchant: its host
+  // No `merchant` on the cart: signCheckout fills in this gate's own, the one the permission names.
   const cart = {
-    id: "ord_1", merchant: me, status: "ready_for_complete", currency: "USD", links: [],
+    id: "ord_1", status: "ready_for_complete", currency: "USD", links: [],
     line_items: [{ id: "li_1", item: { id: "coffee", title: "Coffee", price: 450 }, quantity: 1, totals: [{ type: "total", amount: 450 }] }],
     totals: [{ type: "total", amount: 450 }],
   };
@@ -79,7 +79,7 @@ try {
     nonce, // single-use is yours: verifyDelegatedPurchase checks the nonce, it does not remember it
     checkoutKey: credentagent.ap2.checkoutPublicJwk,
     spent: { amount: 0, uses: 0 },
-    price: (c) => c.line_items.reduce((sum, l) => sum + CATALOG[l.item.id].price * 100 * l.quantity, 0),
+    price: (c) => c.line_items.reduce((sum, l) => sum + toMinorUnits(CATALOG[l.item.id].price, "USD") * l.quantity, 0),
   });
   step(verdict.ok ? `purchase verified ✓ · ${verdict.checkout.totals[0].amount} ${verdict.payment.payment_amount.currency} minor units · trust_level=${verdict.trust_level}` : `refused: ${verdict.code} — ${verdict.detail}`);
   process.exitCode = verdict.ok ? 0 : 1;

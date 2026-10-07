@@ -7,8 +7,7 @@ import { describe, expect, it } from "vitest";
 import { generateKeyPairSync } from "node:crypto";
 import express from "express";
 import request from "supertest";
-import { CredentAgent, publicJwkFromDidDocument, verifyDelegatedPurchase, verifyMandate, VCT, type UcpCheckout } from "../index.js";
-import { merchantFor } from "./from-gate.js";
+import { CredentAgent, publicJwkFromDidDocument, verifyDelegatedPurchase, toMinorUnits, verifyMandate, VCT, type UcpCheckout } from "../index.js";
 import { AgentKey, DelegatedIntent } from "../agent.js";
 import { devSimulateWalletSignature } from "../ceremony/intent-sign/simulate.js";
 
@@ -61,7 +60,7 @@ describe("README — AP2 mandates", () => {
     const AGENT_KEY = JSON.stringify(AgentKey.generate().exportPrivateJwk());
     const agentPublicJwk = AgentKey.fromJwk(JSON.parse(AGENT_KEY)).publicJwk; // what the agent sends the merchant
     const sendToUser = (_url: string) => undefined;
-    const catalogTotal = (cart: UcpCheckout) => cart.line_items.reduce((s, l) => s + catalog[l.item.id as keyof typeof catalog].price * 100 * l.quantity, 0);
+    const catalogTotal = (cart: UcpCheckout) => cart.line_items.reduce((s, l) => s + toMinorUnits(catalog[l.item.id as keyof typeof catalog].price, "USD") * l.quantity, 0);
     const nonce = "merchant-nonce";
 
     // ── README block: MERCHANT — open a grant naming the agent's PUBLIC key ──
@@ -78,7 +77,7 @@ describe("README — AP2 mandates", () => {
     await request(app).post(`/credentagent/grants/${grant.id}/sign/verify`).set("Host", "shop.example").send({ readerContextToken: req.body.readerContextToken, result });
     const signedIntent = (await credentagent.grants.retrieve(grant.id))!.mandate!.intent!;
 
-    const ucpCheckout: UcpCheckout = { ...{ id: "ord_1", status: "ready_for_complete", currency: "USD", links: [] }, merchant: merchantFor(ORIGIN, "utopia"), line_items: [{ id: "li_1", item: { id: "coffee", title: "Coffee", price: 450 }, quantity: 1, totals: [{ type: "total", amount: 450 }] }], totals: [{ type: "total", amount: 450 }] };
+    const ucpCheckout: UcpCheckout = { id: "ord_1", status: "ready_for_complete", currency: "USD", links: [], line_items: [{ id: "li_1", item: { id: "coffee", title: "Coffee", price: 450 }, quantity: 1, totals: [{ type: "total", amount: 450 }] }], totals: [{ type: "total", amount: 450 }] };
     // What the agent receives — the quote, as the merchant block below sends it.
     let quoted: { checkoutJwt: string; nonce: string } | undefined;
     const sendToAgent = (msg: { checkoutJwt: string; nonce: string }) => (quoted = msg);

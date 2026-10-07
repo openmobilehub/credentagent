@@ -15,6 +15,7 @@ import { Grants } from "./grants.js";
 import { runDoctor, formatDoctorReport, type DoctorReport } from "./doctor.js";
 import { CHECKOUT_KEY_FRAGMENT, didDocument, resolveSigningKey, type GateSigningKey } from "./ap2/keys.js";
 import { Ap2Issuer } from "./ap2/issue.js";
+import { merchantFor } from "./ap2/from-gate.js";
 
 x509.cryptoProvider.set(globalThis.crypto);
 
@@ -132,7 +133,7 @@ export class CredentAgent {
     // FR-6). Same rules: injected or ephemeral, and doctor() names the ephemeral case.
     this.checkoutKey = resolveSigningKey(this.walletOrigin, opts.checkoutSigningKey, CHECKOUT_KEY_FRAGMENT);
     // Ap2Issuer refuses one key in both roles, so a host passing the same JWK twice fails here.
-    this.ap2 = new Ap2Issuer(this.mandateKey, { checkoutKey: this.checkoutKey });
+    this.ap2 = new Ap2Issuer(this.mandateKey, { checkoutKey: this.checkoutKey, merchant: merchantFor(this.walletOrigin) });
     this.store = opts.store ?? new MemoryVerificationStore();
     // #25 doctor(): remember what was configured — an injected store is "shared" (survives an
     // instance split); the default MemoryVerificationStore is not. A non-empty gateSecret makes
