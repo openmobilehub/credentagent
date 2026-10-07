@@ -1,6 +1,6 @@
 # Plan — AP2 increment 3: the delegation chain (spec 014, FR-3 / FR-4)
 
-Issue: #234. Stacked on #195 (spec 013 increment 2 — the signing key and `verifyMandate`).
+Builds on spec 013 increment 2 (the signing key and `verifyMandate`).
 
 ## Shape
 
@@ -34,7 +34,7 @@ const verdict = await verifyDelegatedPurchase(proof, { audience, nonce, checkout
 | file | does |
 | --- | --- |
 | `serialize.ts` | split / join on `~~`; the implemented draft revision, pinned in one constant |
-| `hop.ts` | mint the agent's KB-SD-JWT hop; verify one hop against the previous link's `cnf` |
+| `hop.ts` | mint the agent's KB-SD-JWT hop, bound to the link before it by `sd_hash`; peek a link's header and payload |
 | `verify.ts` | walk a chain: root via its `x5c`, each hop via the previous `cnf`, binding, `typ`, one disclosure |
 | `constraints.ts` | evaluate open vs closed; **an unknown constraint fails**; budget/recurrence need `spent` |
 | `purchase.ts` | `DelegatedIntent` (agent) and `verifyDelegatedPurchase` (merchant) |
@@ -42,7 +42,7 @@ const verdict = await verifyDelegatedPurchase(proof, { audience, nonce, checkout
 ## Decisions (agreed)
 
 1. Budget and recurrence need the caller's usage (`spent`); missing ⇒ refused.
-   A recurrence cadence other than `ON_DEMAND` is refused outright until it is enforced (#242).
+   A recurrence cadence other than `ON_DEMAND` is refused outright until it is enforced.
 2. A hop whose payload carries `cnf` must be typed `kb+sd-jwt+kb`; the terminal hop `kb+sd-jwt` and
    no `cnf`. The simulated wallet's default changes to `kb+sd-jwt+kb`. What a released Multipaz
    build emits is unverified and needs a device run.

@@ -5,20 +5,6 @@
 grants module (spec 009), the demo-PKI credential set
 **Feeds:** #12 (HNP delegation), #14 (issuer trust), #154 (multi-store epic)
 
-> **Status: every functional requirement has shipped (FR-1 – FR-8).** What remains is on-device
-> verification only. Three acceptance boxes need a phone and are still open; see *Acceptance*.
->
-> | Requirement | Where it lives | Pull request |
-> | --- | --- | --- |
-> | AP2 types and money (`src/ap2/types.ts`, `ap2/money.ts`) | spec 013 increment 1 | #187 |
-> | Mandate signing key, SD-JWT issuance, one verification door (`ap2/jwt.ts`, `issue.ts`, `verify.ts`) | spec 013 increment 2 | #195 |
-> | FR-1 — the DPC as an SD-JWT VC | `tools/demo-pki/mint/` | — |
-> | FR-2 — the delegation request on the rail | `ceremony/intent-sign/` | #189 |
-> | FR-3, FR-4 — the chain, built and verified | `src/ap2/chain/` (plan in `plan-increment-3.md`) | #235 |
-> | FR-5 — the agent holds its own key | `src/agent.ts`, `ap2/chain/agent-key.ts`, `grants.create({ agentKey })` | #235 (tracked in #237) |
-> | FR-6 — the merchant's checkout key | `ap2/keys.ts`, `Ap2Issuer`, `CredentAgentOptions.checkoutSigningKey` | #235 (tracked in #237) |
-> | FR-7, FR-8 — honesty labels and bypass tests | throughout, with each of the above | — |
-
 ## In plain terms
 
 Today, letting an agent spend on your behalf works like this: you click a button on a web
@@ -85,8 +71,8 @@ repository:
   explicit that an open mandate is "bound to a particular Agent who is allowed to use the
   Mandate", and that the closed mandate is produced by the Agent with the key `cnf` endorses.
   The human is not present at spend time, so the human's key cannot be the presentation key.
-  The delegate key is the one to put in `cnf` — which is the shape #189 implements in
-  `grants.ts`. An earlier draft of this design proposed the human's key there; that was wrong.
+  The delegate key is the one to put in `cnf` — which is the shape `grants.ts`
+  implements. An earlier draft of this design proposed the human's key there; that was wrong.
 - **The human's signature IS inside the chain.** It enters as the Key Binding of the user's
   own credential presentation, carrying the open mandate content. It is not an out-of-band
   attestation.
@@ -216,13 +202,11 @@ catalog and refuse a chain whose amount disagrees, however perfect its signature
   pinned twice, and the mdoc path never had a verified on-device baseline, so nothing proven
   is discarded. `credentagent.IntentBounds/v0` remains as the grant's content address
   (`boundsHash`); what the wallet SIGNS becomes AP2 Mandate Content.
-  **Decided, not done** — the replacement is written in #189. On `main`,
-  `ceremony/intent-sign/` is still the mdoc path, untouched.
 - The Trusted Agent Provider model.
 
 ## Functional requirements
 
-**FR-1 — The DPC as an SD-JWT VC. SHIPPED — `tools/demo-pki/mint/mint-dpc-sdjwt.mjs`.** The
+**FR-1 — The DPC as an SD-JWT VC** (`tools/demo-pki/mint/mint-dpc-sdjwt.mjs`). The
 tool produces a `dc+sd-jwt` DPC with `cnf` bound to a supplied device public key and the
 instrument claims selectively disclosable.
 
@@ -252,21 +236,21 @@ which embeds the holder's private scalar in the clear — is written to `tools/d
 which `.gitignore` covers. `tools/demo-pki/out/` is tracked and takes only publishable
 artifacts. A test pins the split and fails if it is removed.
 
-**FR-2 — The delegation request. SHIPPED — #189.** The intent-sign rail requests a `dc+sd-jwt` credential and
+**FR-2 — The delegation request** (`ceremony/intent-sign/`). The intent-sign rail requests a `dc+sd-jwt` credential and
 attaches both `transaction_data` entries. The `delegate_payload` is assembled from the
 server's own grant record — never from anything the client sends — so the response can be
 checked against what the server intended to ask.
 
-**FR-3 — Chain construction. SHIPPED — #235, `src/ap2/chain/`.** A module builds the dSD-JWT: the user credential, the
+**FR-3 — Chain construction** (`src/ap2/chain/`). A module builds the dSD-JWT: the user credential, the
 KB-SD-JWT carrying the open mandates, and the agent's closed hop, serialized per Delegate
 SD-JWT. It lives beside `ap2/` and mirrors the ceremony-rail file split.
 
-**FR-4 — Chain verification, fail-closed. SHIPPED — #235, `verifyDelegatedPurchase`.** One verification door implementing the three
+**FR-4 — Chain verification, fail-closed** (`verifyDelegatedPurchase`). One verification door implementing the three
 processing rules, with a refusal vocabulary distinct from business refusals. Unknown
 constraints fail. A chain arriving with no key to check it against is refused, never treated
 as "chain checking not configured".
 
-**FR-5 — The agent-side surface. SHIPPED — #235.** `K_s` is generated and held in the agent's process. The
+**FR-5 — The agent-side surface** (`src/agent.ts`). `K_s` is generated and held in the agent's process. The
 gate package gains an agent entry point exposing key generation, intent storage and
 closed-hop signing. The merchant-side import surface never exposes a private key.
 
@@ -283,7 +267,7 @@ without `agentKey` keeps the gate-held key and server-side spending of spec 012.
 expiry it was signed with. That is a year from creation today, because grants do not yet take
 their own expiry (see *Known gaps and risks*).
 
-**FR-6 — The merchant key. SHIPPED — #235.** The UCP Checkout is signed with a merchant key distinct from the
+**FR-6 — The merchant key** (`CredentAgentOptions.checkoutSigningKey`). The UCP Checkout is signed with a merchant key distinct from the
 mandate-issuing key, with the `kid` making the distinction visible.
 
 *As built:* `new CredentAgent({ checkoutSigningKey })`, kid `#merchant-checkout-key`, published
@@ -292,7 +276,7 @@ a key that names a `kid` must carry that `kid`. The same JWK for both roles is r
 ephemeral checkout key is a `doctor()` warning, not an error: a stale quote is refused and
 re-quoted, not lost for good.
 
-**FR-7 — Honesty. SHIPPED — throughout.** A verified delegated chain reports that the human's wallet signed the
+**FR-7 — Honesty.** A verified delegated chain reports that the human's wallet signed the
 open mandate and the agent signed the closed one. It does not report issuer-verified trust.
 Where the implementation follows an expired or superseded draft, the labels say which draft
 revision was implemented.
@@ -301,9 +285,9 @@ revision was implemented.
 `trust: "presence-only-demo"`. Without it the call is a type error, and at runtime it is refused
 with `code: "trust"`. The root credential is checked against the certificate it carries itself,
 so an agent can mint its own permission and it verifies. The caller must say that this is
-presence, not trust, before getting a verdict (#246).
+presence, not trust, before getting a verdict.
 
-**FR-8 — Bypass tests, each verified red-on-revert. SHIPPED — re-verified 2026-10-05.** Listed under *Security invariants*.
+**FR-8 — Bypass tests, each verified red-on-revert.** Listed under *Security invariants*.
 
 ## Security invariants and their tests
 
@@ -434,9 +418,9 @@ they authorized a spending authority nobody ever used.
 
 The fix is to mint it when a device-mode grant is created and hand it to the engine at
 authorization, so the key that was authorized is the key that can spend — `preApprove` taking
-an optional `delegateKeys`. **Fixed in #189.** One gap remained: a grant that left `signing`
-out, and so defaulted to device signing, was never minted the key. #238 fixed that in #235.
-Since #235, an agent can also bring its own key (FR-5), and then the gate mints none at all.
+an optional `delegateKeys`. A grant that leaves `signing` out is a device grant too, and is
+minted the key the same way. When the agent brings its own key (FR-5), the gate mints none at
+all.
 
 ## Sequencing
 
@@ -459,7 +443,7 @@ on nothing and is the gate for everything that changes the signed bytes.
 - [x] In-process end to end: delegate → store the intent → spend at a merchant → verify.
       Through the real rail with a simulated wallet: `grants.agent-key.test.ts`.
 - [x] The same intent verifies at a **second** merchant, and is refused at one outside its
-      allowed merchants. This is the test that portability is real. `purchase.test.ts` (#235).
+      allowed merchants. This is the test that portability is real. `purchase.test.ts`.
 - [x] All FR-8 bypass tests red-on-revert. Each control in the table above was removed in turn and
       its test went red (2026-10-05).
 - [x] `K_s` demonstrably never enters the merchant's process in the example:
@@ -480,7 +464,7 @@ settled here.
 1. **Who issues the demo DPC?** The demo PKI (#48) minting its own, or an external issuer.
    *Recommendation:* the demo PKI, so the whole loop stays runnable offline.
 2. ~~**Does the agent surface ship as an entry point or a third package?**~~ **Answered: an
-   entry point**, `@openmobilehub/credentagent-gate/agent` (#235). The recommendation was an
+   entry point**, `@openmobilehub/credentagent-gate/agent`. The recommendation was an
    entry point in the gate package, matching spec 013's reasoning for
    keeping `ap2/` a directory rather than a workspace. A package can follow if the boundary
    proves hard to hold.
