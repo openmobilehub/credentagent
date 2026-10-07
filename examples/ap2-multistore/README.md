@@ -6,7 +6,7 @@ The end-to-end delegated purchase, live in a Claude (or ChatGPT) chat, with a re
 2. **Claude** calls `compare-offers`. A card shows the three stores' prices and ratings side by side. Claude picks one and says why.
 3. **Claude** calls `request-permission` for that store. A card shows exactly what you would allow (the store, the products, the limits), why the agent picked that store, and a **QR code**.
 4. **You** scan the QR code with your phone and **sign** the permission with your wallet (Multipaz). The card turns to "Signed on your phone" by itself.
-5. **Claude** calls `check-permission`. It now holds the permission you signed.
+5. **Claude** is already waiting: it calls `check-permission` right after showing the QR code, and calls it again while it is pending. Each call waits up to 45 s for your signature. You never have to tell it you signed. If it ends its turn instead of waiting, the card posts *"I signed the permission…"* to the chat for you, once.
 6. **Claude** calls `buy`. The store quotes and signs the cart. The agent signs the purchase with **its own key**. The store checks everything and answers.
 7. **You** see the answer in a card: paid and verified, with the list of what the store checked, or refused, with the reason.
 

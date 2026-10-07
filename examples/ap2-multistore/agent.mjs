@@ -4,8 +4,10 @@
 //   STORES=<url>,<url>,<url> node examples/ap2-multistore/agent.mjs   # → http://localhost:4100/mcp
 //   (or run up.mjs, which wires the tunnels and starts this for you)
 //
-// Four tools, the whole story: compare-offers → request-permission → check-permission → buy. A fifth,
-// watch-permission, belongs to the permission card: it follows the signature and tells the chat once it lands.
+// Four tools, the whole story: compare-offers → request-permission → check-permission → buy. The model waits
+// for the phone's signature in its own turn (check-permission holds each call, and it calls again while
+// pending), so nobody has to type "signed". A fifth tool, watch-permission, belongs to the permission card:
+// if the model ended its turn instead of waiting, the card tells the chat once the signature lands.
 // The agent holds only PUBLIC data besides its key: the stores' catalogs, the permission the phone
 // signed, and the stores' signed carts. The proof it hands a store is checked there, not trusted here.
 //
@@ -52,6 +54,15 @@ const log = (tool, line) => console.log(`  [agent] ${tool.padEnd(18)} ${line}`);
 // chat. The card announces a signature only for a grant not in here — so it announces each one once.
 const told = new Set();
 const sleep = (ms) => new Promise((ok) => setTimeout(ok, ms));
+
+// Whether the MODEL is waiting for a grant's signature in its own turn: a check-permission call is open, or
+// one (or request-permission) returned less than GRACE_MS ago and the model is about to call again. While it
+// waits it will see the signature itself, so the card must stay quiet — a second "go ahead" in the chat
+// could send the model to buy twice. Past the grace window, the model has ended its turn: the card speaks.
+const GRACE_MS = Number(process.env.AP2_MODEL_GRACE_MS ?? 20_000);
+const openChecks = new Map(); // grantId → check-permission calls in flight
+const lastTouch = new Map(); // grantId → when the model last heard "pending" (or got the QR)
+const modelIsWaiting = (grantId) => (openChecks.get(grantId) ?? 0) > 0 || Date.now() - (lastTouch.get(grantId) ?? 0) < GRACE_MS;
 
 /** Read a grant at its store, waiting up to `holdMs` for the phone to sign. Once signed, the agent keeps
  *  the signed permission (public data — it spends only with the agent's own key). */
@@ -103,8 +114,8 @@ function buildServer() {
     title: "Request a spending permission",
     description:
       "Ask the person for a spending permission at ONE store, naming exact products and limits. The person sees a card with a QR code: " +
-      "they scan it with their phone and SIGN the permission with their wallet. Nothing can be bought until they do. The card posts a message " +
-      "to the chat once it is signed; then call check-permission, and buy.",
+      "they scan it with their phone and SIGN the permission with their wallet. Nothing can be bought until they do. Then, in the same turn, " +
+      "call check-permission — it waits for the signature — and buy as soon as it says authorized.",
     inputSchema: {
       store: storeUrl,
       skus: z.array(z.string()).min(1).describe("product ids the permission covers"),
@@ -126,34 +137,50 @@ function buildServer() {
       view: "permission", store: r.body.store, storeUrl: store, merchantId: r.body.merchantId, grantId: r.body.grantId,
       approveUrl: r.body.approveUrl, products: r.body.products, budget, perSpend, description, why, status: r.body.status,
     };
+    lastTouch.set(r.body.grantId, Date.now()); // the model has the QR and is about to wait for the signature
     return result(data, {
       note:
-        "The person sees a card with a QR code for approveUrl. Ask them to scan it with their phone and sign; also give them the link. " +
-        "Don't ask them to tell you when they're done: the card posts a message to this chat the moment the phone signs. When it does, " +
-        "call check-permission, then buy.",
+        "The person sees a card with a QR code for approveUrl. In one short sentence, ask them to scan it with their phone and sign " +
+        "(give them the link too). Then, WITHOUT ending your turn, call check-permission right away: it waits up to 45 s for the " +
+        "signature. While it says pending, call it again. When it says authorized, call buy. Don't ask the person to confirm they signed.",
       widgetOnly: { "ap2/qr": await qrDataUrl(r.body.approveUrl) },
     });
   });
 
   server.registerTool("check-permission", {
     title: "Check the permission",
-    description: "Wait (up to ~45 s) for the person to sign the permission on their phone. When it is signed the agent keeps it and can buy.",
+    description:
+      "Wait (up to ~45 s per call) for the person to sign the permission on their phone. Call it right after request-permission, and " +
+      "again while it says pending — in the same turn. When it says authorized, the agent holds the permission: call buy.",
     inputSchema: z.object({ store: storeUrl, grantId: z.string() }),
     annotations: { readOnlyHint: true },
   }, async ({ store, grantId }) => {
-    const r = await awaitSignature("check-permission", store, grantId, 45_000);
+    openChecks.set(grantId, (openChecks.get(grantId) ?? 0) + 1);
+    let r;
+    try {
+      r = await awaitSignature("check-permission", store, grantId, 45_000);
+      if (r.status === "authorized") told.add(grantId); // the model knows now — the card must not announce it
+    } finally {
+      openChecks.set(grantId, openChecks.get(grantId) - 1);
+      lastTouch.set(grantId, Date.now()); // a model that hears "pending" calls again within the grace window
+    }
     if (r.error) return result(r.error, { isError: true });
     if (r.status !== "authorized") {
-      return result({ status: r.status }, { note: r.status === "pending" ? "Not signed yet — call again." : "Not authorized." });
+      return result({ status: r.status }, {
+        note: r.status === "pending"
+          ? "Not signed yet — the person is signing on their phone. Call check-permission again now; don't end your turn."
+          : "Not authorized.",
+      });
     }
-    told.add(grantId); // the model knows now — the card must not announce it again
-    return result({ status: r.status, trustLevel: r.trustLevel }, { note: "Signed on the phone. The agent now holds this permission and can buy." });
+    return result({ status: r.status, trustLevel: r.trustLevel }, { note: "Signed on the phone. The agent now holds this permission: call buy now." });
   });
 
   // The permission card's own watch. Visibility "app": the card calls it, the model never sees it. It waits
-  // like check-permission and adds `announce`, true exactly ONCE per grant — the first time the grant is seen
-  // signed while the model does not know yet. The card then posts "signed" to the chat, so the person never
-  // has to type it, and a re-rendered, reloaded or duplicated card can never post it twice.
+  // like check-permission and decides `announce` — the FALLBACK for a model that ended its turn instead of
+  // waiting. Once signed: if the model already knows, nothing to say (final). If the model is still waiting
+  // in its turn, it will see the signature itself, so stay quiet; the answer is not final yet, and the card
+  // asks again. Otherwise announce, exactly ONCE per grant, so a redrawn, reloaded or duplicated card never
+  // posts it twice and a second "go ahead" never sends the model to buy twice.
   server.registerTool("watch-permission", {
     title: "Watch the permission (card only)",
     description: "Used by the permission card to follow the phone signature. The model uses check-permission instead.",
@@ -163,12 +190,15 @@ function buildServer() {
   }, async ({ store, grantId }) => {
     const r = await awaitSignature("watch-permission", store, grantId, 25_000);
     if (r.error) return result(r.error, { isError: true });
-    const announce = r.status === "authorized" && !told.has(grantId);
-    if (announce) {
-      told.add(grantId);
-      log("watch-permission", `${nameOf(store)} ${grantId} → the card tells the chat it is signed`);
-    }
-    return result({ status: r.status, ...(r.trustLevel ? { trustLevel: r.trustLevel } : {}), announce });
+    const signed = { status: r.status, ...(r.trustLevel ? { trustLevel: r.trustLevel } : {}) };
+    if (r.status !== "authorized") return result({ ...signed, announce: false, final: r.status !== "pending" });
+    const until = Date.now() + 20_000;
+    while (!told.has(grantId) && modelIsWaiting(grantId) && Date.now() < until) await sleep(500);
+    if (told.has(grantId)) return result({ ...signed, announce: false, final: true });
+    if (modelIsWaiting(grantId)) return result({ ...signed, announce: false, final: false });
+    told.add(grantId);
+    log("watch-permission", `${nameOf(store)} ${grantId} → the model stopped waiting; the card tells the chat it is signed`);
+    return result({ ...signed, announce: true, final: true });
   });
 
   registerAppTool(server, "buy", {

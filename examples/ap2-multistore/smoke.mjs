@@ -14,7 +14,8 @@ import { devSimulateWalletSignature } from "@openmobilehub/credentagent-gate";
 const here = (f) => new URL(f, import.meta.url).pathname;
 const BASE = Number(process.env.SMOKE_BASE_PORT ?? 4200);
 const local = (n, path = "") => `http://localhost:${BASE + n}${path}`;
-const env = { ...process.env, BASE_PORT: String(BASE) };
+// A short grace window, so "the model stopped waiting" is reached in milliseconds, not the live 20 s.
+const env = { ...process.env, BASE_PORT: String(BASE), AP2_MODEL_GRACE_MS: "300" };
 for (const k of ["ACME_URL", "BEANBARN_URL", "ROASTWORKS_URL", "STORES"]) delete env[k]; // local origins, never a tunnel's
 const kids = [spawn(process.execPath, [here("./stores.mjs")], { stdio: "inherit", env }), spawn(process.execPath, [here("./agent.mjs")], { stdio: "inherit", env })];
 const up = async (url) => { for (let i = 0; i < 100; i++) { try { await fetch(url); return; } catch { await new Promise((r) => setTimeout(r, 100)); } } throw new Error(`${url} never came up`); };
@@ -97,6 +98,15 @@ try {
   await tool("check-permission", { store: roastworks, grantId: espresso.grantId });
   const quiet = await tool("watch-permission", { store: roastworks, grantId: espresso.grantId });
   check(quiet.status === "authorized" && quiet.announce === false, "the card stays quiet when the model already knows it is signed");
+
+  // …and while the model is waiting for the signature in its own turn (the normal path): it will see the
+  // signature itself, so a message from the card would be a second "go ahead".
+  const tea = (await mcp.callTool({ name: "request-permission", arguments: { store: acme, skus: ["green-tea"], budget: 20, perSpend: 20, description: "Green Tea from Acme.", why: "the person asked for tea" } })).structuredContent;
+  const modelWaits = tool("check-permission", { store: acme, grantId: tea.grantId }); // open, holding for the signature
+  await new Promise((ok) => setTimeout(ok, 200));
+  await signOnPhone(acme, tea);
+  const [cardSaw, modelSaw] = await Promise.all([tool("watch-permission", { store: acme, grantId: tea.grantId }), modelWaits]);
+  check(modelSaw.status === "authorized" && cardSaw.announce === false && cardSaw.final === true, "the card stays quiet while the model waits for the signature in its turn");
 
   // The back offices: each store's page renders, and its live feed saw what happened there.
   const page = await (await fetch(`${beanbarn}/`)).text();

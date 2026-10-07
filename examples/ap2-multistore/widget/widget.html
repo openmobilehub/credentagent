@@ -173,6 +173,7 @@
   // does, on every `openai:set_globals`); state kept only in the DOM flickered back to "Waiting" each time.
   const settled = new Map(); // grantId → { ok: true, trustLevel } | { ok: false, status }
   const watching = new Set(); // grantIds with a watch running — one per grant, however often the card redraws
+  const finished = new Set(); // grantIds whose watch reached a final answer — a redraw does not start another
 
   function paint(grantId) {
     const s = settled.get(grantId);
@@ -185,23 +186,24 @@
     for (const box of document.querySelectorAll("[data-qr]")) if (box.dataset.qr === grantId) box.classList.toggle("done", Boolean(s?.ok));
   }
 
-  // Follow the signature through the agent's card-only tool (it holds each call up to ~25 s). When the agent
-  // says `announce`, post it to the chat: the model carries on without the person having to type "signed".
+  // Follow the signature through the agent's card-only tool (it holds each call up to ~25 s). The model
+  // normally waits for the signature in its own turn; when it has stopped waiting instead, the agent says
+  // `announce` and the card posts it to the chat, so the person never has to type "signed".
   async function watch(d) {
-    if (watching.has(d.grantId) || settled.has(d.grantId)) return;
+    if (watching.has(d.grantId) || finished.has(d.grantId)) return;
     watching.add(d.grantId);
     try {
-      for (let i = 0; i < 48; i++) {
+      for (let i = 0; i < 60; i++) {
         let r;
         try { r = await bridge.call("watch-permission", { store: d.storeUrl, grantId: d.grantId }); } catch { r = null; }
         if (!r) { if (host === "preview") return; await new Promise((ok) => setTimeout(ok, 3000)); continue; }
         if (r.status === "authorized") {
-          settled.set(d.grantId, { ok: true, trustLevel: r.trustLevel });
-          paint(d.grantId);
+          if (!settled.get(d.grantId)?.ok) { settled.set(d.grantId, { ok: true, trustLevel: r.trustLevel }); paint(d.grantId); }
           if (r.announce) await bridge.tell(`I signed the permission for ${d.store} on my phone (${d.grantId}). Please go ahead with the purchase.`);
-          return;
+          if (r.final) { finished.add(d.grantId); return; }
+          continue; // signed, but the model may still be waiting for it in its turn — ask again
         }
-        if (r.status && r.status !== "pending") { settled.set(d.grantId, { ok: false, status: r.status }); paint(d.grantId); return; }
+        if (r.status && r.status !== "pending") { settled.set(d.grantId, { ok: false, status: r.status }); paint(d.grantId); finished.add(d.grantId); return; }
       }
     } finally {
       watching.delete(d.grantId);
