@@ -6,6 +6,7 @@
 // The examples at the top of each test are the API's DX test: if one needed plumbing, the API failed.
 import { describe, expect, it } from "vitest";
 import { DelegatedIntent, verifyDelegatedPurchase } from "./purchase.js";
+import type { Spent } from "./constraints.js";
 import { resolveSigningKey } from "../keys.js";
 import { Ap2Issuer } from "../issue.js";
 import { merchantFor } from "../from-gate.js";
@@ -301,5 +302,74 @@ describe("malformed input is refused, never thrown", () => {
     };
     const v = await verifyDelegatedPurchase(proof, { trust: "presence-only-demo", audience: GATE_ORIGIN, nonce: "n", checkoutKey: m.ap2.checkoutPublicJwk, spent: { amount: 0, uses: 0 }, price: m.price });
     expect(v).toMatchObject({ ok: false, code: "malformed", detail: expect.stringMatching(/line_items/) });
+  });
+});
+
+describe("one permission, one id — however its signature is spelled", () => {
+  // An ECDSA signature has other spellings that still verify: `s` replaced by `n − s` ("high-S"),
+  // and the unused low bits of its last base64url character. A hostile agent can re-spell the
+  // wallet's signature and re-sign its own hops over it. If the id hashed the signature, each
+  // spelling would be a fresh permission with an empty ledger.
+  const N = BigInt("0xffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551");
+  const respell = (presentation: string, how: "high-s" | "spare-bits"): string => {
+    const cut = presentation.lastIndexOf(".") + 1;
+    const sig = presentation.slice(cut);
+    if (how === "high-s") {
+      const raw = Buffer.from(sig, "base64url");
+      const s = BigInt(`0x${raw.subarray(32).toString("hex")}`);
+      const high = Buffer.from((N - s).toString(16).padStart(64, "0"), "hex");
+      return presentation.slice(0, cut) + Buffer.concat([raw.subarray(0, 32), high]).toString("base64url");
+    }
+    const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    const last = alphabet.indexOf(sig.at(-1)!);
+    const same = [1, 2, 3].map((flip) => alphabet[last ^ flip]).find((c) => Buffer.from(sig.slice(0, -1) + c, "base64url").equals(Buffer.from(sig, "base64url")));
+    return presentation.slice(0, cut) + sig.slice(0, -1) + same!;
+  };
+
+  it("gives every spelling of the wallet's signature the same permissionId, so a budget cannot be re-spent (bypass)", async () => {
+    const g = await testGrant({ budget: 5 }); // 500 cents
+    const m = merchant(GATE_ORIGIN);
+    const ledger = new Map<string, Spent>();
+    const results = [];
+    for (const presentation of [g.presentation, respell(g.presentation, "high-s"), respell(g.presentation, "spare-bits")]) {
+      const intent = DelegatedIntent.fromWalletPresentation({ presentation, disclosures: g.disclosures });
+      const proof = await intent.spend({ agentKey: g.agentKey, checkoutJwt: m.checkoutJwt, instrument: { id: "pi_1", type: "card" }, audience: GATE_ORIGIN, nonce: "n" });
+      const v = await verifyDelegatedPurchase(proof, {
+        trust: "presence-only-demo",
+        audience: GATE_ORIGIN,
+        nonce: "n",
+        checkoutKey: m.ap2.checkoutPublicJwk,
+        spent: (id) => ledger.get(id) ?? { amount: 0, uses: 0 },
+        price: m.price,
+      });
+      if (v.ok) {
+        const before = ledger.get(v.permissionId) ?? { amount: 0, uses: 0 };
+        ledger.set(v.permissionId, { amount: before.amount + v.payment.payment_amount.amount, uses: before.uses + 1 });
+      }
+      results.push(v.ok ? "ok" : v.code);
+    }
+    // 450 of a 500 budget, then nothing more — whichever spelling the agent tries.
+    expect(results).toEqual(["ok", "constraint", "constraint"]);
+    expect(ledger.size).toBe(1);
+  });
+});
+
+describe("the caller's own input is checked too", () => {
+  it("refuses a ledger whose spent is not a pair of whole numbers — NaN would pass every budget (bypass)", async () => {
+    const { verify } = await purchase();
+    for (const bad of [{}, { uses: 2 }, { amount: Number.NaN, uses: 0 }, { amount: "0", uses: 0 }, { amount: -1, uses: 0 }]) {
+      expect(await verify({ spent: () => bad as never })).toMatchObject({ ok: false, code: "malformed" });
+      expect(await verify({ spent: bad as never })).toMatchObject({ ok: false, code: "malformed" });
+    }
+  });
+
+  it("refuses a proof that is not two chains, without throwing", async () => {
+    const { verify } = await purchase();
+    void verify;
+    const m = merchant(GATE_ORIGIN);
+    const opts = { trust: "presence-only-demo" as const, audience: GATE_ORIGIN, nonce: "n", checkoutKey: m.ap2.checkoutPublicJwk, price: m.price };
+    for (const bad of [null, {}, "a.b.c", { checkout: 1, payment: 2 }, { checkout: "a~~b~", payment: null }]) {
+      expect(await verifyDelegatedPurchase(bad as never, opts)).toMatchObject({ ok: false, code: "malformed" });
+    }
   });
 });

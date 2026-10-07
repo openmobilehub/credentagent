@@ -99,6 +99,10 @@ export class Ap2Issuer {
   constructor(key: GateSigningKey, opts: Ap2IssuerOptions = {}) {
     this.#key = key;
     this.#checkoutKey = opts.checkoutKey ?? ephemeralSigningKey(key.issuer, CHECKOUT_KEY_FRAGMENT);
+    const [a, b] = [this.#key.publicJwk, this.#checkoutKey.publicJwk];
+    if (a.x === b.x && a.y === b.y) {
+      throw new Error("checkoutKey must be a different key from the mandate key — a quoted cart and an issued mandate are different statements (spec 014, FR-6)");
+    }
   }
 
   /** The mandate key's public half — what `mount()` publishes and what `verifyMandate` imports. */

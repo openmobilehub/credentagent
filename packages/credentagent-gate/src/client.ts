@@ -131,9 +131,7 @@ export class CredentAgent {
     // The merchant's CHECKOUT key — carts are quoted with it, never with the mandate key (spec 014,
     // FR-6). Same rules: injected or ephemeral, and doctor() names the ephemeral case.
     this.checkoutKey = resolveSigningKey(this.walletOrigin, opts.checkoutSigningKey, CHECKOUT_KEY_FRAGMENT);
-    if (this.checkoutKey.publicJwk.x === this.mandateKey.publicJwk.x && this.checkoutKey.publicJwk.y === this.mandateKey.publicJwk.y) {
-      throw new Error("checkoutSigningKey must be a different key from mandateSigningKey — a quoted cart and an issued mandate are different statements (spec 014, FR-6)");
-    }
+    // Ap2Issuer refuses one key in both roles, so a host passing the same JWK twice fails here.
     this.ap2 = new Ap2Issuer(this.mandateKey, { checkoutKey: this.checkoutKey });
     this.store = opts.store ?? new MemoryVerificationStore();
     // #25 doctor(): remember what was configured — an injected store is "shared" (survives an

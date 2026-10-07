@@ -227,6 +227,9 @@ const refuse = (code: PurchaseRefusalCode, detail: string, violations?: Violatio
 export async function verifyDelegatedPurchase(proof: DelegatedPurchaseProof, opts: VerifyPurchaseOptions): Promise<PurchaseVerdict | PurchaseRefusal> {
   // Checked at runtime too: a JavaScript caller, or one casting past the type, gets a refusal — not
   // a verdict whose trust nobody asked for.
+  if (!proof || typeof proof !== "object" || typeof proof.checkout !== "string" || typeof proof.payment !== "string") {
+    return refuse("malformed", "a delegated purchase proof is { checkout: string, payment: string }");
+  }
   if (opts.trust !== "presence-only-demo") {
     return refuse("trust", 'pass trust: "presence-only-demo" — the credential is checked against its own certificate, so this verifies presence, not that a person set these limits (#14)');
   }
@@ -268,6 +271,11 @@ export async function verifyDelegatedPurchase(proof: DelegatedPurchaseProof, opt
   }
 
   const spent = typeof opts.spent === "function" ? await opts.spent(permissionId) : opts.spent;
+  // The ledger is the caller's, so it is checked like any input: `undefined + 450` is NaN, and
+  // `NaN > max` is false — a ledger that answered `{}` would pass every budget.
+  if (spent !== undefined && !(isCount(spent?.amount) && isCount(spent?.uses))) {
+    return refuse("malformed", "spent must be { amount, uses } as non-negative integers — what this store already spent under the permission");
+  }
   const violations = [
     ...evaluateCheckout(openCheckout, checkout),
     ...evaluatePayment(openPayment, payment, { openCheckout, ...(spent ? { spent } : {}), ...(opts.nowMs !== undefined ? { nowMs: opts.nowMs } : {}) }),
@@ -294,6 +302,8 @@ export async function verifyDelegatedPurchase(proof: DelegatedPurchaseProof, opt
 
   return { ok: true, permissionId, checkout, payment, open: { checkout: openCheckout, payment: openPayment }, trust_level: "presence-only-demo" };
 }
+
+const isCount = (v: unknown): boolean => Number.isSafeInteger(v) && (v as number) >= 0;
 
 const decodeCart = (jwt: string): UcpCheckout | undefined => {
   try {

@@ -49,6 +49,8 @@ describe("the merchant's checkout key (FR-6)", () => {
   });
 
   it("REFUSES the same key configured for both roles (bypass)", () => {
+    const shared = resolveSigningKey(ORIGIN);
+    expect(() => new Ap2Issuer(shared, { checkoutKey: shared })).toThrow(/different key/);
     const one = privateJwk();
     expect(() => new CredentAgent({ walletOrigin: ORIGIN, mandateSigningKey: one, checkoutSigningKey: one })).toThrow(/different key/);
     expect(() => new CredentAgent({ walletOrigin: ORIGIN, mandateSigningKey: one, checkoutSigningKey: privateJwk() })).not.toThrow();

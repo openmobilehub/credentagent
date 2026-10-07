@@ -7,7 +7,7 @@
 import { describe, expect, it } from "vitest";
 import { appendAgentHop, bindingHash } from "./hop.js";
 import { joinChain, splitChain, walletChain } from "./serialize.js";
-import { sdJwtInstance } from "../sdjwt.js";
+import { digestToken, sdJwtInstance } from "../sdjwt.js";
 import { verifyChain } from "./verify.js";
 import { newWallet, p256, sign, testGrant } from "./test-wallet.js";
 import { VCT } from "../types.js";
@@ -109,7 +109,19 @@ describe("each hop is bound to the one before it", () => {
       { header: { typ: "kb+sd-jwt" } },
     );
     const chain = joinChain([prefix, unbound]);
-    expect(await verify(chain)).toMatchObject({ ok: false, code: "binding", detail: expect.stringMatching(/exactly one of sd_hash/) });
+    expect(await verify(chain)).toMatchObject({ ok: false, code: "binding", detail: expect.stringMatching(/sd_hash does not name/) });
+  });
+
+  it("refuses a hop bound by issuer_jwt_hash, even one that names the right link (bypass)", async () => {
+    const { prefix, g } = await chainFor();
+    const wallet = splitChain(prefix)![1];
+    // A correct issuer_jwt_hash: the previous link's JWT, without its disclosures — the weaker binding.
+    const byIssuerJwt = await sdJwtInstance({ privateKey: g.agent.privateKey }).issue(
+      { iat: Math.floor(Date.now() / 1000), aud: MERCHANT, nonce: "n-1", issuer_jwt_hash: digestToken(wallet.jwt, "sha-256"), delegate_payload: [closedCheckout] } as never,
+      { delegate_payload: { _sd: [0] } } as never,
+      { header: { typ: "kb+sd-jwt" } },
+    );
+    expect(await verify(joinChain([prefix, byIssuerJwt]))).toMatchObject({ ok: false, code: "binding", detail: expect.stringMatching(/issuer_jwt_hash/) });
   });
 });
 

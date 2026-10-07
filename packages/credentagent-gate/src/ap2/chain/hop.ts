@@ -41,12 +41,6 @@ export function bindingHash(prev: ChainLink): string {
   return digestToken(linkToString(prev), typeof alg === "string" ? alg : SD_HASH_ALG);
 }
 
-/** The `issuer_jwt_hash` alternative: the previous link's signed JWT only, no disclosures. */
-export function issuerJwtHash(prev: ChainLink): string {
-  const alg = peekLink(prev)?.payload._sd_alg;
-  return digestToken(prev.jwt, typeof alg === "string" ? alg : SD_HASH_ALG);
-}
-
 /**
  * Append the agent's hop to a chain. `audience` and `nonce` are the MERCHANT's: they are what
  * keep this purchase from being replayed at another store or a second time at this one.

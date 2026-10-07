@@ -239,3 +239,30 @@ describe("payment constraints", () => {
     ]);
   });
 });
+
+describe("malformed limits are refused, never thrown", () => {
+  const range = { type: "payment.amount_range" as const, currency: "USD", max: 5000 };
+  it("refuses a list holding null where the evaluator reads an element (bypass)", () => {
+    const nullItem = openCheckout([{ type: "checkout.allowed_merchants", allowed: [SHOP] }, { type: "checkout.line_items", items: [{ id: "r", acceptable_items: [null as never], quantity: 1 }] as never }]);
+    expect(evaluateCheckout(nullItem, cart([["coffee", 1]]))).toEqual(expect.arrayContaining([expect.objectContaining({ code: "malformed", constraint: "checkout.line_items" })]));
+    const nullInstrument = openPayment([range, { type: "payment.allowed_payment_instruments", allowed: [null as never] }]);
+    expect(evaluatePayment(nullInstrument, closed(), ctx())).toEqual([expect.objectContaining({ code: "malformed", constraint: "payment.allowed_payment_instruments" })]);
+  });
+
+  it("refuses a payee fixed to null rather than skipping it as absent (bypass)", () => {
+    expect(evaluatePayment(openPayment([range], { payee: null as never }), closed(), ctx())).toEqual([expect.objectContaining({ code: "malformed" })]);
+  });
+});
+
+describe("a payment dated past the permission", () => {
+  it("refuses an execution date after the open mandate expires, with or without a window (bypass)", () => {
+    const now = { nowMs: Date.parse("2026-10-10T00:00:00Z") };
+    const exp = Math.floor(Date.parse("2026-10-31T00:00:00Z") / 1000);
+    for (const constraints of [[], [{ type: "payment.execution_date" as const, not_before: "2026-10-01" }]]) {
+      expect(evaluatePayment(openPayment(constraints, { exp }), closed({ execution_date: "2099-01-01" }), ctx(now))).toEqual([
+        expect.objectContaining({ code: "constraint", detail: expect.stringMatching(/after the permission expires/) }),
+      ]);
+      expect(evaluatePayment(openPayment(constraints, { exp }), closed({ execution_date: "2026-10-20" }), ctx(now))).toEqual([]);
+    }
+  });
+});

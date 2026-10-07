@@ -13,10 +13,15 @@ export function mandateContentDigest(content: Record<string, unknown>): string {
 }
 
 /**
- * A delegated permission's stable id: sha-256 of the wallet's signed key binding — the one
- * signature both of a purchase's chains rest on. The same for every purchase under one
+ * A delegated permission's stable id: sha-256 of what the wallet SIGNED in its key binding — the
+ * one signature both of a purchase's chains rest on. The same for every purchase under one
  * permission, at every merchant, and computable by the agent from its presentation alone.
+ *
+ * The signed part only — `header.payload`, never the signature bytes. An ECDSA signature has other
+ * spellings that verify just as well (`s` ↦ `n − s`, the spare bits of its last base64url
+ * character), so an id over the signature would give one permission several ids, each with an
+ * empty ledger: a budget spent once per spelling.
  */
 export function permissionIdOf(walletKbJwt: string): string {
-  return createHash("sha256").update(walletKbJwt).digest("base64url");
+  return createHash("sha256").update(walletKbJwt.slice(0, walletKbJwt.lastIndexOf("."))).digest("base64url");
 }

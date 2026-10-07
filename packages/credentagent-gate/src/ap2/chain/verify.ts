@@ -13,13 +13,13 @@
 import { createPublicKey, X509Certificate, type KeyObject } from "node:crypto";
 import { sdJwtInstance } from "../sdjwt.js";
 import { linkToString, splitChain, type ChainLink } from "./serialize.js";
-import { bindingHash, DELEGATE_PAYLOAD, HOP_TYP, issuerJwtHash, peekLink } from "./hop.js";
+import { bindingHash, DELEGATE_PAYLOAD, HOP_TYP, peekLink } from "./hop.js";
 
 export type ChainRefusalCode =
   | "malformed" // not a three-link dSD-JWT, or a claim of the wrong type
   | "root" // the credential carries no certificate to check it against
   | "signature" // a link does not verify against the key it must
-  | "binding" // a hop's sd_hash / issuer_jwt_hash does not name the link before it
+  | "binding" // a hop's sd_hash does not name the link before it, or it binds by issuer_jwt_hash
   | "typ" // a hop's typ disagrees with whether it names a further key
   | "disclosure" // a hop discloses other than exactly one delegate payload, or one it never signed
   | "audience" // the agent's hop is addressed to another merchant
@@ -96,6 +96,7 @@ function cnfKey(holder: Record<string, unknown>): KeyObject | undefined {
  * never committed to is refused, not read.
  */
 export async function verifyChain(token: string, opts: VerifyChainOptions): Promise<ChainVerdict | ChainRefusal> {
+  if (typeof token !== "string") return refuse("malformed", "a chain is a string");
   const nowSec = Math.floor((opts.nowMs ?? Date.now()) / 1000);
   const libOptions = { currentDate: nowSec, skewSeconds: SKEW_SECONDS, allowedIssuerAlgorithms: ["ES256"] };
 
@@ -130,15 +131,12 @@ export async function verifyChain(token: string, opts: VerifyChainOptions): Prom
       return linkRefusal(i, (err as Error).message);
     }
 
-    // §5.1.4: exactly one of the two binding claims, naming the link before this one. Without
-    // it, a hop signed by a reused key slots under any predecessor that key ever signed (§8.1).
-    const hasSd = "sd_hash" in payload;
-    const hasIss = "issuer_jwt_hash" in payload;
-    if (hasSd === hasIss) return refuse("binding", `link ${i}: carries ${hasSd ? "both" : "neither"} — needs exactly one of sd_hash / issuer_jwt_hash`);
-    const expected = hasSd ? bindingHash(links[i - 1]) : issuerJwtHash(links[i - 1]);
-    if ((hasSd ? payload.sd_hash : payload.issuer_jwt_hash) !== expected) {
-      return refuse("binding", `link ${i}: ${hasSd ? "sd_hash" : "issuer_jwt_hash"} does not name link ${i - 1}`);
-    }
+    // §5.1.4: a hop names the link before it, so a hop signed by a reused key cannot slot under any
+    // other predecessor that key ever signed (§8.1). Only `sd_hash` is accepted. The draft's other
+    // binding, `issuer_jwt_hash`, covers the previous JWT but not its disclosures, so it is the
+    // weaker one, and nothing here or in the AP2 SDK emits it. It is refused until a sender needs it.
+    if ("issuer_jwt_hash" in payload) return refuse("binding", `link ${i}: binds by issuer_jwt_hash, which this verifier does not accept — use sd_hash`);
+    if (payload.sd_hash !== bindingHash(links[i - 1])) return refuse("binding", `link ${i}: sd_hash does not name link ${i - 1}`);
     if (typeof payload.iat !== "number") return refuse("malformed", `link ${i}: a key-binding hop needs a numeric iat`);
 
     // Undisclosed elements were dropped by the verify above; what is left is what this chain shows.

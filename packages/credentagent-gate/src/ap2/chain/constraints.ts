@@ -66,22 +66,22 @@ const isInt = (v: unknown): boolean => Number.isSafeInteger(v);
 const isStr = (v: unknown): boolean => typeof v === "string" && v.length > 0;
 const isList = (v: unknown): boolean => Array.isArray(v);
 const optional = (v: unknown, check: (v: unknown) => boolean): boolean => v === undefined || check(v);
+const isObj = (v: unknown): boolean => v !== null && typeof v === "object" && !Array.isArray(v);
+/** A list whose every element is an object — `[null]` is a list, and reading `null.id` throws. */
+const objects = (v: unknown, each: (o: Record<string, unknown>) => boolean = () => true): boolean =>
+  isList(v) && (v as unknown[]).every((o) => isObj(o) && each(o as Record<string, unknown>));
+const withId = (o: Record<string, unknown>): boolean => isStr(o.id);
 
 const SHAPES: Record<string, (c: Record<string, unknown>) => boolean> = {
-  "checkout.allowed_merchants": (c) => isList(c.allowed),
-  "checkout.line_items": (c) =>
-    isList(c.items) &&
-    (c.items as unknown[]).every((r) => {
-      const req = r as Record<string, unknown> | null;
-      return req !== null && typeof req === "object" && isList(req.acceptable_items) && isInt(req.quantity) && (req.quantity as number) >= 0;
-    }),
+  "checkout.allowed_merchants": (c) => objects(c.allowed),
+  "checkout.line_items": (c) => objects(c.items, (r) => objects(r.acceptable_items, withId) && isInt(r.quantity) && (r.quantity as number) >= 0),
   "payment.reference": (c) => isStr(c.conditional_transaction_id),
   "payment.amount_range": (c) => isStr(c.currency) && isInt(c.max) && optional(c.min, isInt),
   "payment.budget": (c) => isStr(c.currency) && isInt(c.max),
   "payment.agent_recurrence": (c) => isStr(c.frequency) && optional(c.max_occurrences, isInt),
-  "payment.allowed_payees": (c) => isList(c.allowed),
-  "payment.allowed_payment_instruments": (c) => isList(c.allowed),
-  "payment.allowed_pisps": (c) => isList(c.allowed),
+  "payment.allowed_payees": (c) => objects(c.allowed),
+  "payment.allowed_payment_instruments": (c) => objects(c.allowed, withId),
+  "payment.allowed_pisps": (c) => objects(c.allowed),
   "payment.execution_date": (c) => optional(c.not_before, isStr) && optional(c.not_after, isStr),
 };
 
@@ -203,7 +203,10 @@ export function evaluatePayment(open: OpenPaymentMandate, closed: PaymentMandate
   const out: Violation[] = [];
   const constraints = wellFormed<PaymentConstraint>(open?.constraints, out);
 
-  if (open.payee !== undefined && !merchantMatches(open.payee, closed.payee)) {
+  // A preset is a claim the open mandate FIXED. `null` fixes nothing readable, so it is refused
+  // rather than skipped as if absent.
+  if (open.payee === null) out.push(violation("malformed", "payee is fixed to null"));
+  else if (open.payee !== undefined && !merchantMatches(open.payee, closed.payee)) {
     out.push(violation("preset", `payee was fixed to ${open.payee.id} and the payment names ${closed.payee?.id ?? "∅"}`));
   }
   for (const claim of PRESET_CLAIMS) {
@@ -217,6 +220,14 @@ export function evaluatePayment(open: OpenPaymentMandate, closed: PaymentMandate
     for (const companion of ["payment.amount_range", "payment.budget"] as const) {
       if (!constraints.some((c) => c.type === companion)) out.push(violation("constraint", `agent_recurrence requires ${companion}`, "payment.agent_recurrence"));
     }
+  }
+
+  // A payment cannot be dated past the permission it spends: the open mandate's `exp` is the last
+  // moment it authorizes anything, whatever window it names — or when it names none.
+  if (closed.execution_date !== undefined) {
+    const t = Date.parse(closed.execution_date);
+    if (Number.isNaN(t)) out.push(violation("malformed", `execution_date ${String(closed.execution_date)} is not a date`));
+    else if (typeof open.exp === "number" && t > open.exp * 1000) out.push(violation("constraint", `execution_date ${closed.execution_date} is after the permission expires`));
   }
 
   const amount = closed.payment_amount;
