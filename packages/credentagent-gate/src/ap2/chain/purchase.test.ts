@@ -38,15 +38,35 @@ async function purchase(opts: { grant?: Parameters<typeof testGrant>[0]; at?: st
   const g = await testGrant(opts.grant);
   const m = merchant(opts.at ?? GATE_ORIGIN, opts.lines, opts.mutate);
   const intent = DelegatedIntent.fromWalletPresentation({ presentation: g.presentation, disclosures: g.disclosures });
-  const proof = await intent.spend({
+  const honest = await intent.spend({
     agentKey: g.agentKey,
     checkoutJwt: m.checkoutJwt,
-    payment: { payee: merchantFor(opts.payee ?? m.origin), amount: { amount: opts.amount ?? m.ucp.totals[0].amount, currency: "USD" }, instrument: { id: "pi_1", type: "card" } },
+    instrument: { id: "pi_1", type: "card" },
     audience: m.origin,
     nonce: "purchase-nonce",
   });
+  // `spend` takes the payee and the amount from the cart, so an honest agent cannot get them wrong.
+  // A hostile one signs its own hop — which is what these overrides build, with the agent's real key.
+  const forged =
+    opts.payee !== undefined || opts.amount !== undefined
+      ? await appendAgentHop({
+          chain: walletChain(g.presentation, intent.disclosures.payment)!,
+          agentKey: g.agent.privateKey,
+          content: {
+            vct: VCT.payment,
+            transaction_id: digestToken(m.checkoutJwt),
+            payee: merchantFor(opts.payee ?? m.origin),
+            payment_amount: { amount: opts.amount ?? m.ucp.totals[0].amount, currency: "USD" },
+            payment_instrument: { id: "pi_1", type: "card" },
+            iat: Math.floor(Date.now() / 1000),
+          },
+          audience: m.origin,
+          nonce: "purchase-nonce",
+        })
+      : undefined;
+  const proof = forged ? { ...honest, payment: forged } : honest;
   const verify = (over: Partial<Parameters<typeof verifyDelegatedPurchase>[1]> = {}) =>
-    verifyDelegatedPurchase(proof, { audience: m.origin, nonce: "purchase-nonce", checkoutKey: m.ap2.checkoutPublicJwk, spent: { amount: 0, uses: 0 }, price: m.price, ...over });
+    verifyDelegatedPurchase(proof, { trust: "presence-only-demo", audience: m.origin, nonce: "purchase-nonce", checkoutKey: m.ap2.checkoutPublicJwk, spent: { amount: 0, uses: 0 }, price: m.price, ...over });
   return { g, m, intent, proof, verify };
 }
 
@@ -65,7 +85,7 @@ describe("a delegated purchase, end to end", () => {
     const { g, m } = await purchase();
     const intent = DelegatedIntent.fromWalletPresentation({ presentation: g.presentation.replace(/[^~]*$/, ""), disclosures: g.disclosures });
     await expect(
-      intent.spend({ agentKey: g.agentKey, checkoutJwt: m.checkoutJwt, payment: { payee: merchantFor(GATE_ORIGIN), amount: { amount: 450, currency: "USD" }, instrument: { id: "pi_1", type: "card" } }, audience: GATE_ORIGIN, nonce: "n" }),
+      intent.spend({ agentKey: g.agentKey, checkoutJwt: m.checkoutJwt, instrument: { id: "pi_1", type: "card" }, audience: GATE_ORIGIN, nonce: "n" }),
     ).rejects.toThrow(/no wallet key binding/);
   });
 
@@ -152,18 +172,18 @@ describe("the two chains are one purchase", () => {
     const generous = await purchase({ grant: { wallet, agent, grantId: "generous", perSpend: 500 } });
     const spliced = { checkout: strict.proof.checkout, payment: generous.proof.payment };
     expect(await strict.verify()).toMatchObject({ ok: false, code: "constraint" }); // strict alone is over its $1 limit
-    expect(await verifyDelegatedPurchase(spliced, { audience: GATE_ORIGIN, nonce: "purchase-nonce", checkoutKey: strict.m.ap2.checkoutPublicJwk, spent: { amount: 0, uses: 0 }, price: strict.m.price })).toMatchObject({ ok: false, code: "splice" });
+    expect(await verifyDelegatedPurchase(spliced, { trust: "presence-only-demo", audience: GATE_ORIGIN, nonce: "purchase-nonce", checkoutKey: strict.m.ap2.checkoutPublicJwk, spent: { amount: 0, uses: 0 }, price: strict.m.price })).toMatchObject({ ok: false, code: "splice" });
   });
 
   it("refuses chains whose mandate types are swapped (bypass)", async () => {
     const { proof, m } = await purchase();
-    const v = await verifyDelegatedPurchase({ checkout: proof.payment, payment: proof.checkout }, { audience: GATE_ORIGIN, nonce: "purchase-nonce", checkoutKey: m.ap2.checkoutPublicJwk, spent: { amount: 0, uses: 0 }, price: m.price });
+    const v = await verifyDelegatedPurchase({ checkout: proof.payment, payment: proof.checkout }, { trust: "presence-only-demo", audience: GATE_ORIGIN, nonce: "purchase-nonce", checkoutKey: m.ap2.checkoutPublicJwk, spent: { amount: 0, uses: 0 }, price: m.price });
     expect(v).toMatchObject({ ok: false, code: "unexpected-type", detail: expect.stringMatching(/^the checkout chain/) });
   });
 
   it("refuses a payment chain that carries checkout mandates (bypass)", async () => {
     const { proof, m } = await purchase();
-    const v = await verifyDelegatedPurchase({ checkout: proof.checkout, payment: proof.checkout }, { audience: GATE_ORIGIN, nonce: "purchase-nonce", checkoutKey: m.ap2.checkoutPublicJwk, spent: { amount: 0, uses: 0 }, price: m.price });
+    const v = await verifyDelegatedPurchase({ checkout: proof.checkout, payment: proof.checkout }, { trust: "presence-only-demo", audience: GATE_ORIGIN, nonce: "purchase-nonce", checkoutKey: m.ap2.checkoutPublicJwk, spent: { amount: 0, uses: 0 }, price: m.price });
     expect(v).toMatchObject({ ok: false, code: "unexpected-type", detail: expect.stringMatching(/^the payment chain/) });
   });
 
@@ -173,7 +193,7 @@ describe("the two chains are one purchase", () => {
     const { g, m } = await purchase();
     const cheaper = merchant(GATE_ORIGIN, [["tea", 1]]);
     const intent = DelegatedIntent.fromWalletPresentation({ presentation: g.presentation, disclosures: g.disclosures });
-    const honest = await intent.spend({ agentKey: g.agentKey, checkoutJwt: m.checkoutJwt, payment: { payee: merchantFor(GATE_ORIGIN), amount: { amount: 450, currency: "USD" }, instrument: { id: "pi_1", type: "card" } }, audience: GATE_ORIGIN, nonce: "purchase-nonce" });
+    const honest = await intent.spend({ agentKey: g.agentKey, checkoutJwt: m.checkoutJwt, instrument: { id: "pi_1", type: "card" }, audience: GATE_ORIGIN, nonce: "purchase-nonce" });
     const hash = digestToken(m.checkoutJwt);
     const forged = await appendAgentHop({
       chain: walletChain(g.presentation, intent.disclosures.checkout)!,
@@ -182,7 +202,7 @@ describe("the two chains are one purchase", () => {
       audience: GATE_ORIGIN,
       nonce: "purchase-nonce",
     });
-    const v = await verifyDelegatedPurchase({ checkout: forged, payment: honest.payment }, { audience: GATE_ORIGIN, nonce: "purchase-nonce", checkoutKey: m.ap2.checkoutPublicJwk, spent: { amount: 0, uses: 0 }, price: m.price });
+    const v = await verifyDelegatedPurchase({ checkout: forged, payment: honest.payment }, { trust: "presence-only-demo", audience: GATE_ORIGIN, nonce: "purchase-nonce", checkoutKey: m.ap2.checkoutPublicJwk, spent: { amount: 0, uses: 0 }, price: m.price });
     expect(v).toMatchObject({ ok: false, code: "checkout-unbound", detail: expect.stringMatching(/does not hash/) });
   });
 
@@ -190,9 +210,96 @@ describe("the two chains are one purchase", () => {
     const { g, m } = await purchase();
     const intent = DelegatedIntent.fromWalletPresentation({ presentation: g.presentation, disclosures: g.disclosures });
     const other = merchant(GATE_ORIGIN, [["tea", 1]]);
-    const a = await intent.spend({ agentKey: g.agentKey, checkoutJwt: m.checkoutJwt, payment: { payee: merchantFor(GATE_ORIGIN), amount: { amount: 450, currency: "USD" }, instrument: { id: "pi_1", type: "card" } }, audience: GATE_ORIGIN, nonce: "purchase-nonce" });
-    const b = await intent.spend({ agentKey: g.agentKey, checkoutJwt: other.checkoutJwt, payment: { payee: merchantFor(GATE_ORIGIN), amount: { amount: 450, currency: "USD" }, instrument: { id: "pi_1", type: "card" } }, audience: GATE_ORIGIN, nonce: "purchase-nonce" });
-    const v = await verifyDelegatedPurchase({ checkout: a.checkout, payment: b.payment }, { audience: GATE_ORIGIN, nonce: "purchase-nonce", checkoutKey: m.ap2.checkoutPublicJwk, spent: { amount: 0, uses: 0 }, price: m.price });
+    const a = await intent.spend({ agentKey: g.agentKey, checkoutJwt: m.checkoutJwt, instrument: { id: "pi_1", type: "card" }, audience: GATE_ORIGIN, nonce: "purchase-nonce" });
+    const b = await intent.spend({ agentKey: g.agentKey, checkoutJwt: other.checkoutJwt, instrument: { id: "pi_1", type: "card" }, audience: GATE_ORIGIN, nonce: "purchase-nonce" });
+    const v = await verifyDelegatedPurchase({ checkout: a.checkout, payment: b.payment }, { trust: "presence-only-demo", audience: GATE_ORIGIN, nonce: "purchase-nonce", checkoutKey: m.ap2.checkoutPublicJwk, spent: { amount: 0, uses: 0 }, price: m.price });
     expect(v).toMatchObject({ ok: false, code: "unbound" });
+  });
+});
+
+describe("trust — the opt-in that says what a verdict is worth", () => {
+  // The reviewer's probe, kept: the credential at the root is checked against the certificate it
+  // carries ITSELF, so an agent can mint its own "permission" with any limits. `testGrant` does
+  // exactly that — a fresh self-signed wallet each time. Nothing here anchors it (#14).
+  it("REFUSES to verify at all without trust: \"presence-only-demo\" (bypass)", async () => {
+    const { verify, m } = await purchase();
+    // @ts-expect-error — `trust` is required: leaving it out does not compile.
+    const missing: Parameters<typeof verifyDelegatedPurchase>[1] = { audience: GATE_ORIGIN, nonce: "purchase-nonce", checkoutKey: m.ap2.checkoutPublicJwk, price: m.price };
+    expect(await verifyDelegatedPurchase((await purchase()).proof, missing)).toMatchObject({ ok: false, code: "trust" });
+    expect(await verify({ trust: undefined as never })).toMatchObject({ ok: false, code: "trust" });
+    expect(await verify({ trust: "issuer-verified" as never })).toMatchObject({ ok: false, code: "trust" });
+  });
+
+  it("a self-made permission with $1,000,000 limits buys a $500,000 item — which is why it is opt-in", async () => {
+    const { verify } = await purchase({ grant: { perSpend: 1_000_000, budget: 1_000_000 }, mutate: (c) => ({ ...c, line_items: [{ ...c.line_items[0], item: { ...c.line_items[0].item, price: 50_000_000 }, totals: [{ type: "total", amount: 50_000_000 }] }], totals: [{ type: "total", amount: 50_000_000 }] }) });
+    const v = await verify({ price: () => 50_000_000 });
+    expect(v).toMatchObject({ ok: true, trust_level: "presence-only-demo" });
+  });
+});
+
+describe("one permission, one id", () => {
+  it("names the permission the same way to the agent and to every merchant", async () => {
+    const g = await testGrant({ alsoAllowed: [merchantFor(SECOND)] });
+    const intent = DelegatedIntent.fromWalletPresentation({ presentation: g.presentation, disclosures: g.disclosures });
+    const ids: string[] = [];
+    for (const origin of [GATE_ORIGIN, SECOND]) {
+      const m = merchant(origin);
+      const proof = await intent.spend({ agentKey: g.agentKey, checkoutJwt: m.checkoutJwt, instrument: { id: "pi_1", type: "card" }, audience: origin, nonce: "n" });
+      const v = await verifyDelegatedPurchase(proof, { trust: "presence-only-demo", audience: origin, nonce: "n", checkoutKey: m.ap2.checkoutPublicJwk, spent: { amount: 0, uses: 0 }, price: m.price });
+      expect(v.ok).toBe(true);
+      if (v.ok) ids.push(v.permissionId);
+    }
+    expect(ids).toEqual([intent.permissionId, intent.permissionId]);
+    const other = await testGrant();
+    expect(DelegatedIntent.fromWalletPresentation({ presentation: other.presentation, disclosures: other.disclosures }).permissionId).not.toBe(intent.permissionId);
+  });
+
+  it("looks `spent` up by the VERIFIED id — a budget spent out at this store refuses (bypass)", async () => {
+    const { verify, intent } = await purchase();
+    const asked: string[] = [];
+    const ledger = (id: string) => {
+      asked.push(id);
+      return { amount: 20_000, uses: 1 }; // $200 already spent here — the whole budget
+    };
+    expect(await verify({ spent: ledger })).toMatchObject({ ok: false, code: "constraint", violations: [expect.objectContaining({ constraint: "payment.budget" })] });
+    expect(asked).toEqual([intent.permissionId]);
+  });
+
+  it("never asks the ledger about a purchase whose chains do not verify", async () => {
+    const { verify } = await purchase();
+    let asked = false;
+    await verify({ nonce: "not-the-one-issued", spent: () => ((asked = true), { amount: 0, uses: 0 }) });
+    expect(asked).toBe(false);
+  });
+});
+
+describe("malformed input is refused, never thrown", () => {
+  it("REFUSES a signed limit missing a field it needs — e.g. a spending range with no currency (bypass)", async () => {
+    const dropCurrency = (m: Record<string, unknown>) => ({ ...m, constraints: (m.constraints as Array<Record<string, unknown>>).map((c) => (c.type === "payment.amount_range" ? { type: c.type, max: c.max } : c)) });
+    const { verify } = await purchase({ grant: { mapOpen: (m, i) => (i === 1 ? (dropCurrency(m as never) as never) : m) } });
+    expect(await verify()).toMatchObject({ ok: false, code: "malformed", violations: expect.arrayContaining([expect.objectContaining({ code: "malformed", constraint: "payment.amount_range" })]) });
+  });
+
+  it("REFUSES a line_items limit with no items, and an open mandate with no constraints list (bypass)", async () => {
+    const noItems = await purchase({ grant: { mapOpen: (m, i) => (i === 0 ? ({ ...m, constraints: (m.constraints as Array<{ type: string }>).map((c) => (c.type === "checkout.line_items" ? { type: c.type } : c)) } as never) : m) } });
+    expect(await noItems.verify()).toMatchObject({ ok: false, code: "malformed" });
+    const noList = await purchase({ grant: { mapOpen: (m, i) => (i === 0 ? ({ ...m, constraints: undefined } as never) : m) } });
+    expect(await noList.verify()).toMatchObject({ ok: false, code: "malformed" });
+  });
+
+  it("REFUSES a signed cart with no line_items — the merchant's signature does not make it well-formed (bypass)", async () => {
+    // `spend` refuses such a cart on the agent's side, so the hostile agent signs its own hops.
+    const g = await testGrant();
+    const m = merchant(GATE_ORIGIN, undefined, (c) => ({ ...c, line_items: undefined as never }));
+    const hash = digestToken(m.checkoutJwt);
+    const iat = Math.floor(Date.now() / 1000);
+    const hop = (which: 0 | 1, content: Record<string, unknown>) =>
+      appendAgentHop({ chain: walletChain(g.presentation, g.disclosures[which])!, agentKey: g.agent.privateKey, content, audience: GATE_ORIGIN, nonce: "n" });
+    const proof = {
+      checkout: await hop(0, { vct: VCT.checkout, checkout_jwt: m.checkoutJwt, checkout_hash: hash, iat }),
+      payment: await hop(1, { vct: VCT.payment, transaction_id: hash, payee: merchantFor(GATE_ORIGIN), payment_amount: { amount: 450, currency: "USD" }, payment_instrument: { id: "pi_1", type: "card" }, iat }),
+    };
+    const v = await verifyDelegatedPurchase(proof, { trust: "presence-only-demo", audience: GATE_ORIGIN, nonce: "n", checkoutKey: m.ap2.checkoutPublicJwk, spent: { amount: 0, uses: 0 }, price: m.price });
+    expect(v).toMatchObject({ ok: false, code: "malformed", detail: expect.stringMatching(/line_items/) });
   });
 });

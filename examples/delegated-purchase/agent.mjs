@@ -8,12 +8,12 @@ import { AgentKey, DelegatedIntent } from "@openmobilehub/credentagent-gate/agen
 const agentKey = AgentKey.generate();
 process.send({ publicJwk: agentKey.publicJwk });
 
-process.once("message", async ({ intent, checkoutJwt, payee, amount, audience, nonce }) => {
+process.once("message", async ({ intent, checkoutJwt, audience, nonce }) => {
   const permission = DelegatedIntent.fromWalletPresentation(intent); // plain JSON — an agent would store it
   const proof = await permission.spend({
     agentKey,
     checkoutJwt,
-    payment: { payee, amount, instrument: { id: "demo-instrument-0001", type: "card" } },
+    instrument: { id: "demo-instrument-0001", type: "card" }, // the payee and amount are the cart's own
     audience,
     nonce,
   });

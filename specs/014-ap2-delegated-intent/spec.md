@@ -15,8 +15,8 @@ grants module (spec 009), the demo-PKI credential set
 > | FR-1 — the DPC as an SD-JWT VC | `tools/demo-pki/mint/` | — |
 > | FR-2 — the delegation request on the rail | `ceremony/intent-sign/` | #189 |
 > | FR-3, FR-4 — the chain, built and verified | `src/ap2/chain/` (plan in `plan-increment-3.md`) | #235 |
-> | FR-5 — the agent holds its own key | `src/agent.ts`, `ap2/chain/agent-key.ts`, `grants.create({ agentKey })` | #237 |
-> | FR-6 — the merchant's checkout key | `ap2/keys.ts`, `Ap2Issuer`, `CredentAgentOptions.checkoutSigningKey` | #237 |
+> | FR-5 — the agent holds its own key | `src/agent.ts`, `ap2/chain/agent-key.ts`, `grants.create({ agentKey })` | #235 (tracked in #237) |
+> | FR-6 — the merchant's checkout key | `ap2/keys.ts`, `Ap2Issuer`, `CredentAgentOptions.checkoutSigningKey` | #235 (tracked in #237) |
 > | FR-7, FR-8 — honesty labels and bypass tests | throughout, with each of the above | — |
 
 ## In plain terms
@@ -266,7 +266,7 @@ processing rules, with a refusal vocabulary distinct from business refusals. Unk
 constraints fail. A chain arriving with no key to check it against is refused, never treated
 as "chain checking not configured".
 
-**FR-5 — The agent-side surface. SHIPPED — #237.** `K_s` is generated and held in the agent's process. The
+**FR-5 — The agent-side surface. SHIPPED — #235.** `K_s` is generated and held in the agent's process. The
 gate package gains an agent entry point exposing key generation, intent storage and
 closed-hop signing. The merchant-side import surface never exposes a private key.
 
@@ -283,7 +283,7 @@ without `agentKey` keeps the gate-held key and server-side spending of spec 012.
 expiry it was signed with. That is a year from creation today, because grants do not yet take
 their own expiry (see *Known gaps and risks*).
 
-**FR-6 — The merchant key. SHIPPED — #237.** The UCP Checkout is signed with a merchant key distinct from the
+**FR-6 — The merchant key. SHIPPED — #235.** The UCP Checkout is signed with a merchant key distinct from the
 mandate-issuing key, with the `kid` making the distinction visible.
 
 *As built:* `new CredentAgent({ checkoutSigningKey })`, kid `#merchant-checkout-key`, published
@@ -296,6 +296,12 @@ re-quoted, not lost for good.
 open mandate and the agent signed the closed one. It does not report issuer-verified trust.
 Where the implementation follows an expired or superseded draft, the labels say which draft
 revision was implemented.
+
+*As built:* the label is in the call, not only in the result. `verifyDelegatedPurchase` requires
+`trust: "presence-only-demo"`. Without it the call is a type error, and at runtime it is refused
+with `code: "trust"`. The root credential is checked against the certificate it carries itself,
+so an agent can mint its own permission and it verifies. The caller must say that this is
+presence, not trust, before getting a verdict (#246).
 
 **FR-8 — Bypass tests, each verified red-on-revert. SHIPPED — re-verified 2026-10-05.** Listed under *Security invariants*.
 
@@ -429,8 +435,8 @@ they authorized a spending authority nobody ever used.
 The fix is to mint it when a device-mode grant is created and hand it to the engine at
 authorization, so the key that was authorized is the key that can spend — `preApprove` taking
 an optional `delegateKeys`. **Fixed in #189.** One gap remained: a grant that left `signing`
-out, and so defaulted to device signing, was never minted the key. #238 fixed that in #237.
-Since #237, an agent can also bring its own key (FR-5), and then the gate mints none at all.
+out, and so defaulted to device signing, was never minted the key. #238 fixed that in #235.
+Since #235, an agent can also bring its own key (FR-5), and then the gate mints none at all.
 
 ## Sequencing
 
@@ -474,7 +480,7 @@ settled here.
 1. **Who issues the demo DPC?** The demo PKI (#48) minting its own, or an external issuer.
    *Recommendation:* the demo PKI, so the whole loop stays runnable offline.
 2. ~~**Does the agent surface ship as an entry point or a third package?**~~ **Answered: an
-   entry point**, `@openmobilehub/credentagent-gate/agent` (#237). The recommendation was an
+   entry point**, `@openmobilehub/credentagent-gate/agent` (#235). The recommendation was an
    entry point in the gate package, matching spec 013's reasoning for
    keeping `ap2/` a directory rather than a workspace. A package can follow if the boundary
    proves hard to hold.

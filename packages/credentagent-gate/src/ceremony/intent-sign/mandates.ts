@@ -22,7 +22,7 @@
 import { createHash, createHmac } from "node:crypto";
 // `payment.reference` names the open checkout by this digest. ONE definition, shared with the
 // chain verifier that checks it — two copies is two places for the encoding to drift.
-import { mandateContentDigest } from "../../ap2/chain/constraints.js";
+import { mandateContentDigest } from "../../ap2/digest.js";
 import { checkoutConstraintsFromGrant, paymentConstraintsFromGrant } from "../../ap2/from-gate.js";
 import { VCT } from "../../ap2/types.js";
 import type { IntentBoundsInput } from "./bounds.js";

@@ -36,7 +36,7 @@ describe("the agent's key", () => {
       intent.spend({
         agentKey: AgentKey.generate(),
         checkoutJwt: "x.y.z",
-        payment: { payee: { id: "shop.example", name: "Shop" }, amount: { amount: 450, currency: "USD" }, instrument: { id: "pi_1", type: "card" } },
+        instrument: { id: "pi_1", type: "card" },
         audience: "https://shop.example",
         nonce: "n",
       }),

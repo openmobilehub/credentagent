@@ -9,7 +9,7 @@ import { appendAgentHop, bindingHash } from "./hop.js";
 import { joinChain, splitChain, walletChain } from "./serialize.js";
 import { sdJwtInstance } from "../sdjwt.js";
 import { verifyChain } from "./verify.js";
-import { newWallet, p256, testGrant } from "./test-wallet.js";
+import { newWallet, p256, sign, testGrant } from "./test-wallet.js";
 import { VCT } from "../types.js";
 
 const MERCHANT = "https://other-shop.example";
@@ -177,5 +177,23 @@ describe("the agent's hop is addressed to this merchant, now", () => {
   it("refuses an open mandate with no exp — it would never end (bypass)", async () => {
     const { chain } = await chainFor({ mapOpen: ({ exp: _exp, ...m }) => m });
     expect(await verify(chain)).toMatchObject({ ok: false, code: "malformed", detail: expect.stringMatching(/needs an exp/) });
+  });
+});
+
+describe("the algorithm pin", () => {
+  // `es256Verify` ignores the header's `alg`, so a link CLAIMING another algorithm would still
+  // verify on its signature. The pin is what refuses it: only ES256 is ever signed here, so only
+  // ES256 is ever read.
+  it("REFUSES a link whose header names an algorithm other than ES256, however good its signature (bypass)", async () => {
+    const { g, chain } = await chainFor();
+    const links = splitChain(chain)!;
+    const hop = links[2];
+    const [, payload] = hop.jwt.split(".");
+    for (const alg of ["HS256", "none", "ES384"]) {
+      const header = Buffer.from(JSON.stringify({ alg, typ: "kb+sd-jwt" })).toString("base64url");
+      const resigned = `${header}.${payload}.${sign(g.agent.privateKey)(`${header}.${payload}`)}`;
+      const relabelled = joinChain([...links.slice(0, 2), { ...hop, jwt: resigned }].map((l) => `${l.jwt}~${l.disclosures.map((d) => `${d}~`).join("")}`));
+      expect(await verify(relabelled)).toMatchObject({ ok: false, code: "signature" });
+    }
   });
 });

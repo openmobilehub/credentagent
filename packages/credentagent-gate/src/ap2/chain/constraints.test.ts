@@ -2,7 +2,8 @@
 // and the rule that makes the vocabulary safe to grow: a constraint the evaluator does not know
 // FAILS (spec 014, AP2 processing rule 3) — silence would be a limit nobody enforces.
 import { describe, expect, it } from "vitest";
-import { evaluateCheckout, evaluatePayment, mandateContentDigest } from "./constraints.js";
+import { evaluateCheckout, evaluatePayment } from "./constraints.js";
+import { mandateContentDigest } from "../digest.js";
 import { VCT, type OpenCheckoutMandate, type OpenPaymentMandate, type PaymentMandate, type UcpCheckout } from "../types.js";
 
 const cnf = { jwk: { kty: "EC" as const, crv: "P-256" as const, x: "x", y: "y" } };

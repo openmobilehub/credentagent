@@ -69,11 +69,12 @@ try {
     totals: [{ type: "total", amount: 450 }],
   };
   const nonce = randomUUID();
-  agent.send({ intent: signed.mandate.intent, checkoutJwt: credentagent.ap2.signCheckout(cart), payee: me, amount: { amount: 450, currency: "USD" }, audience: ORIGIN, nonce });
+  agent.send({ intent: signed.mandate.intent, checkoutJwt: credentagent.ap2.signCheckout(cart), audience: ORIGIN, nonce });
 
   // 5) The agent's proof comes back. One call decides it; the catalog prices the cart.
   const { proof } = await next();
   const verdict = await verifyDelegatedPurchase(proof, {
+    trust: "presence-only-demo",
     audience: ORIGIN,
     nonce, // single-use is yours: verifyDelegatedPurchase checks the nonce, it does not remember it
     checkoutKey: credentagent.ap2.checkoutPublicJwk,

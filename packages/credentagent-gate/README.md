@@ -343,26 +343,36 @@ const intent = DelegatedIntent.fromWalletPresentation(signedIntent);    // plain
 const proof = await intent.spend({
   agentKey,
   checkoutJwt,                                 // the cart, as the merchant quoted it
-  payment: { payee, amount: { amount: 450, currency: "USD" }, instrument },
+  instrument,                                  // how it pays — the payee and amount are the cart's own
   audience: "https://shop.example",            // the merchant, and the nonce it issued
   nonce,
 });
 ```
 
 ```ts
-// MERCHANT — one call per purchase.
+// MERCHANT — quote the cart, then one call per purchase.
 import { verifyDelegatedPurchase } from "@openmobilehub/credentagent-gate";
 
-const quote = credentagent.ap2.signCheckout(ucpCheckout);   // what you hand the agent as checkoutJwt
+sendToAgent({ checkoutJwt: credentagent.ap2.signCheckout(ucpCheckout), nonce });   // the quote
+
 const verdict = await verifyDelegatedPurchase(proof, {
+  trust: "presence-only-demo",   // REQUIRED: nothing yet proves a person set these limits (#14)
   audience: "https://shop.example",
   nonce,
   checkoutKey: credentagent.ap2.checkoutPublicJwk,   // the key that quoted the cart
-  spent: { amount: 0, uses: 0 },               // already spent under this permission
+  spent: (permissionId) => ledger.spent(permissionId),   // what THIS store already spent under it
   price: (cart) => catalogTotal(cart),         // YOUR catalog, in minor units — it decides
 });
-if (!verdict.ok) console.error(verdict.code, verdict.violations);   // "constraint" | "price" | "payee" | …
+if (verdict.ok) ledger.record(verdict.permissionId, verdict.payment.payment_amount);
+else console.error(verdict.code, verdict.violations);   // "constraint" | "price" | "payee" | "malformed" | …
 ```
+
+**`trust: "presence-only-demo"` is required, and it means what it says.** The credential at the root of
+the chain is checked against the certificate it carries itself; nothing anchors that certificate to a
+real issuer yet ([#14](https://github.com/openmobilehub/credentagent/issues/14)). So an agent can mint
+its own "permission", with any limits it likes, and it verifies. Every limit is enforced — but nothing
+yet proves a **person** set them. Use it for demos, never as a real safety control. Leaving the option
+out is a type error, and a refusal (`code: "trust"`) at runtime.
 
 A grant created with `agentKey` is spent this way, **at any merchant its permission names** — not
 through `grant.spend()`, which refuses it with `agent-held-key`: the gate has no key to spend it with,
@@ -374,14 +384,19 @@ expiry. Bound it with `budget` and `perSpend`, which every merchant enforces.
 
 **What a verified purchase means:** every link of both chains verifies against the key the link before it
 names, both chains rest on the same wallet signature, the cart is the one you signed, the payment pays
-exactly its total, every limit the person set holds — and **a limit this verifier does not recognise
-fails** — and your catalog agrees with the price. It does **not** mean the credential came from a real
-issuer ([#14](https://github.com/openmobilehub/credentagent/issues/14)), so `trust_level` is
-`"presence-only-demo"`.
+exactly its total, every limit in the permission holds — **a limit this verifier does not recognise, or
+one missing a field, fails** — and your catalog agrees with the price. It does **not** mean a person set
+those limits (see `trust`, above), so `trust_level` is `"presence-only-demo"`.
 
-Two things stay yours: **`spent`** — a budget or a use count can only be checked against what was spent
-before, so leaving it out refuses any permission that has one — and **consuming the nonce**, which
-`verifyDelegatedPurchase` checks but does not remember.
+Two things stay yours: **`spent`** and **consuming the nonce**, which `verifyDelegatedPurchase` checks but
+does not remember.
+
+- **`spent` is looked up by `permissionId`** — a stable id for the permission, the same at every merchant
+  and on the agent's side (`intent.permissionId`). Pass a function and it is called with the id **after**
+  the chains verify, so your ledger is keyed by something the signatures vouch for. Leaving `spent` out
+  refuses any permission that has a budget or a use count.
+- **A budget holds per merchant.** One permission works at every store it names, and each store sees only
+  its own `spent`: a "$200 in total" permission is $200 at each of them. Set `budget` with that in mind.
 
 ### Webhooks — tell a *different* service when an order settles
 

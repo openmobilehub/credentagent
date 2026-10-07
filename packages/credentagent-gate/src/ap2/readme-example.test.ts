@@ -79,8 +79,18 @@ describe("README — AP2 mandates", () => {
     const signedIntent = (await credentagent.grants.retrieve(grant.id))!.mandate!.intent!;
 
     const ucpCheckout: UcpCheckout = { ...{ id: "ord_1", status: "ready_for_complete", currency: "USD", links: [] }, merchant: merchantFor(ORIGIN, "utopia"), line_items: [{ id: "li_1", item: { id: "coffee", title: "Coffee", price: 450 }, quantity: 1, totals: [{ type: "total", amount: 450 }] }], totals: [{ type: "total", amount: 450 }] };
-    const checkoutJwt = credentagent.ap2.signCheckout(ucpCheckout);
-    const payee = merchantFor(ORIGIN, "utopia");
+    // What the agent receives — the quote, as the merchant block below sends it.
+    let quoted: { checkoutJwt: string; nonce: string } | undefined;
+    const sendToAgent = (msg: { checkoutJwt: string; nonce: string }) => (quoted = msg);
+    const spentAt = new Map<string, { amount: number; uses: number }>();
+    const ledger = {
+      spent: (id: string) => spentAt.get(id) ?? { amount: 0, uses: 0 },
+      record: (id: string, paid: { amount: number }) => spentAt.set(id, { amount: ledger.spent(id).amount + paid.amount, uses: ledger.spent(id).uses + 1 }),
+    };
+
+    // ── README block: MERCHANT — quote the cart ──
+    sendToAgent({ checkoutJwt: credentagent.ap2.signCheckout(ucpCheckout), nonce }); // the quote
+    const { checkoutJwt } = quoted!;
     const instrument = { id: "demo-instrument-0001", type: "card" };
 
     // ── README block: AGENT — the `/agent` entry point ──
@@ -89,21 +99,23 @@ describe("README — AP2 mandates", () => {
     const proof = await intent.spend({
       agentKey,
       checkoutJwt, // the cart, as the merchant quoted it
-      payment: { payee, amount: { amount: 450, currency: "USD" }, instrument },
+      instrument, // how it pays — the payee and the amount are the cart's own
       audience: ORIGIN, // the merchant, and the nonce it issued
       nonce,
     });
 
     // ── README block: MERCHANT — one call per purchase ──
-    const quote = credentagent.ap2.signCheckout(ucpCheckout); // what you hand the agent as checkoutJwt
-    expect(quote).toMatch(/^[\w-]+\.[\w-]+\.[\w-]+$/); // a compact JWS; ES256 is randomized, so not byte-equal to checkoutJwt
     const verdict = await verifyDelegatedPurchase(proof, {
+      trust: "presence-only-demo", // REQUIRED: nothing yet proves a person set these limits (#14)
       audience: ORIGIN,
       nonce,
       checkoutKey: credentagent.ap2.checkoutPublicJwk, // the key that quoted the cart
-      spent: { amount: 0, uses: 0 }, // already spent under this permission
+      spent: (permissionId) => ledger.spent(permissionId), // what THIS store already spent under it
       price: (cart) => catalogTotal(cart), // YOUR catalog, in minor units — it decides
     });
+    if (verdict.ok) ledger.record(verdict.permissionId, verdict.payment.payment_amount);
+    else console.error(verdict.code, verdict.violations);
     expect(verdict.ok).toBe(true);
+    expect(ledger.spent(intent.permissionId)).toEqual({ amount: 450, uses: 1 });
   });
 });

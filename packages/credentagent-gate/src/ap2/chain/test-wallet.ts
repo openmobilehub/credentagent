@@ -12,7 +12,7 @@ import { es256Signer } from "../sdjwt.js";
 import * as x509 from "@peculiar/x509";
 import { SDJwtInstance } from "@sd-jwt/core";
 import { hasher } from "../../ceremony/intent-sign/presentation.js";
-import { mandateContentDigest } from "./constraints.js";
+import { mandateContentDigest } from "../digest.js";
 import type { Merchant } from "../types.js";
 import { AgentKey } from "./agent-key.js";
 import { delegateEntries, disclosureDigest, openMandatesForGrant, type MandateContent } from "../../ceremony/intent-sign/mandates.js";

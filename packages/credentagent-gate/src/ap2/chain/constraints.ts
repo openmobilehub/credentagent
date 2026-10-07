@@ -10,8 +10,8 @@
 //
 // The result is a list of violations, empty when the purchase is inside the permission. Nothing
 // here re-prices the cart: whether the amounts are TRUE is the catalog's answer (invariant 2).
-import { createHash } from "node:crypto";
 import { canonical } from "../../ceremony/mandate.js";
+import { mandateContentDigest } from "../digest.js";
 import type {
   CheckoutConstraint,
   LineItemRequirement,
@@ -24,8 +24,9 @@ import type {
 } from "../types.js";
 
 export interface Violation {
-  /** `constraint`: a known limit was exceeded. `preset`: a fixed claim was changed. */
-  code: "constraint" | "preset" | "unknown-constraint";
+  /** `constraint`: a known limit was exceeded. `preset`: a fixed claim was changed. `malformed`: a
+   *  limit is missing a field it needs, so it cannot be evaluated — refused, never thrown. */
+  code: "constraint" | "preset" | "unknown-constraint" | "malformed";
   /** The constraint `type` that refused, when one did. */
   constraint?: string;
   detail: string;
@@ -37,15 +38,6 @@ export interface Spent {
   amount: number;
   /** Earlier payments under this mandate. */
   uses: number;
-}
-
-/**
- * The digest an Open Payment Mandate's `payment.reference` names: sha-256 over the canonical
- * encoding of the Open Checkout Mandate's content. The intent-sign rail mints it this way, so this
- * is the one definition both sides use.
- */
-export function mandateContentDigest(content: Record<string, unknown>): string {
-  return createHash("sha256").update(canonical(content)).digest("base64url");
 }
 
 const violation = (code: Violation["code"], detail: string, constraint?: string): Violation => ({
@@ -62,6 +54,59 @@ export function merchantMatches(candidate: Merchant | undefined, target: Merchan
 }
 
 const sameJson = (a: unknown, b: unknown): boolean => canonical(a) === canonical(b);
+
+// ── shape ────────────────────────────────────────────────────────────────
+//
+// A signed limit is still untrusted input: the wallet signed whatever bytes it was given. Each
+// known type names the fields it needs, and a limit missing one is refused as `malformed` rather
+// than read — a `TypeError` halfway through would still fail closed, but as an exception, not as
+// the `{ ok: false }` every caller of this module handles.
+
+const isInt = (v: unknown): boolean => Number.isSafeInteger(v);
+const isStr = (v: unknown): boolean => typeof v === "string" && v.length > 0;
+const isList = (v: unknown): boolean => Array.isArray(v);
+const optional = (v: unknown, check: (v: unknown) => boolean): boolean => v === undefined || check(v);
+
+const SHAPES: Record<string, (c: Record<string, unknown>) => boolean> = {
+  "checkout.allowed_merchants": (c) => isList(c.allowed),
+  "checkout.line_items": (c) =>
+    isList(c.items) &&
+    (c.items as unknown[]).every((r) => {
+      const req = r as Record<string, unknown> | null;
+      return req !== null && typeof req === "object" && isList(req.acceptable_items) && isInt(req.quantity) && (req.quantity as number) >= 0;
+    }),
+  "payment.reference": (c) => isStr(c.conditional_transaction_id),
+  "payment.amount_range": (c) => isStr(c.currency) && isInt(c.max) && optional(c.min, isInt),
+  "payment.budget": (c) => isStr(c.currency) && isInt(c.max),
+  "payment.agent_recurrence": (c) => isStr(c.frequency) && optional(c.max_occurrences, isInt),
+  "payment.allowed_payees": (c) => isList(c.allowed),
+  "payment.allowed_payment_instruments": (c) => isList(c.allowed),
+  "payment.allowed_pisps": (c) => isList(c.allowed),
+  "payment.execution_date": (c) => optional(c.not_before, isStr) && optional(c.not_after, isStr),
+};
+
+/**
+ * The constraints of an open mandate, each either well-formed or reported. An unknown `type` is
+ * left for the evaluator, which refuses it as `unknown-constraint`.
+ */
+function wellFormed<C extends { type: string }>(constraints: unknown, out: Violation[]): C[] {
+  if (!Array.isArray(constraints)) {
+    out.push(violation("malformed", "the open mandate carries no constraints list"));
+    return [];
+  }
+  return constraints.filter((c): c is C => {
+    if (c === null || typeof c !== "object" || typeof (c as { type?: unknown }).type !== "string") {
+      out.push(violation("malformed", "a constraint with no type"));
+      return false;
+    }
+    const shape = SHAPES[(c as { type: string }).type];
+    if (shape && !shape(c as Record<string, unknown>)) {
+      out.push(violation("malformed", "a field this limit needs is missing or of the wrong type", (c as { type: string }).type));
+      return false;
+    }
+    return true;
+  });
+}
 
 // ── checkout ──────────────────────────────────────────────────────────────
 
@@ -111,12 +156,13 @@ function lineItemsFit(checkout: UcpCheckout, requirements: LineItemRequirement[]
 /** Violations of an Open Checkout Mandate by the checkout the agent signed for. */
 export function evaluateCheckout(open: OpenCheckoutMandate, checkout: UcpCheckout): Violation[] {
   const out: Violation[] = [];
+  const constraints = wellFormed<CheckoutConstraint>(open?.constraints, out);
   // AP2's schema: an open checkout MUST contain a line_items constraint. Without one it bounds
   // nothing at all, so it is refused rather than read as "anything goes".
-  if (!open.constraints.some((c) => c.type === "checkout.line_items")) {
+  if (!constraints.some((c) => c.type === "checkout.line_items")) {
     out.push(violation("constraint", "an open checkout mandate must contain checkout.line_items", "checkout.line_items"));
   }
-  for (const c of open.constraints as CheckoutConstraint[]) {
+  for (const c of constraints) {
     switch (c.type) {
       case "checkout.allowed_merchants":
         if (!c.allowed.some((m) => merchantMatches(m, checkout.merchant))) {
@@ -155,6 +201,7 @@ const PRESET_CLAIMS = ["payment_amount", "payment_instrument", "pisp", "executio
 /** Violations of an Open Payment Mandate by the closed payment the agent signed. */
 export function evaluatePayment(open: OpenPaymentMandate, closed: PaymentMandate, ctx: PaymentContext): Violation[] {
   const out: Violation[] = [];
+  const constraints = wellFormed<PaymentConstraint>(open?.constraints, out);
 
   if (open.payee !== undefined && !merchantMatches(open.payee, closed.payee)) {
     out.push(violation("preset", `payee was fixed to ${open.payee.id} and the payment names ${closed.payee?.id ?? "∅"}`));
@@ -163,17 +210,17 @@ export function evaluatePayment(open: OpenPaymentMandate, closed: PaymentMandate
     if (open[claim] !== undefined && !sameJson(open[claim], closed[claim])) out.push(violation("preset", `${claim} was fixed by the open mandate and changed`));
   }
 
-  if (!open.constraints.some((c) => c.type === "payment.reference")) {
+  if (!constraints.some((c) => c.type === "payment.reference")) {
     out.push(violation("constraint", "an open payment mandate must contain payment.reference", "payment.reference"));
   }
-  if (open.constraints.some((c) => c.type === "payment.agent_recurrence")) {
+  if (constraints.some((c) => c.type === "payment.agent_recurrence")) {
     for (const companion of ["payment.amount_range", "payment.budget"] as const) {
-      if (!open.constraints.some((c) => c.type === companion)) out.push(violation("constraint", `agent_recurrence requires ${companion}`, "payment.agent_recurrence"));
+      if (!constraints.some((c) => c.type === companion)) out.push(violation("constraint", `agent_recurrence requires ${companion}`, "payment.agent_recurrence"));
     }
   }
 
   const amount = closed.payment_amount;
-  for (const c of open.constraints as PaymentConstraint[]) {
+  for (const c of constraints) {
     switch (c.type) {
       case "payment.reference":
         if (c.conditional_transaction_id !== mandateContentDigest(ctx.openCheckout as never)) {
@@ -195,7 +242,7 @@ export function evaluatePayment(open: OpenPaymentMandate, closed: PaymentMandate
       case "payment.agent_recurrence":
         // A cadence (WEEKLY, MONTHLY…) is a limit this verifier does not enforce yet — enforcing it
         // needs the earlier payments' times, and a rule for what "weekly" bounds. Passing it would
-        // let "WEEKLY, 4 times" be spent four times in a minute, so it refuses (rule 3, #242).
+        // let "WEEKLY, 4 times" be spent four times in a minute, so it refuses (rule 3).
         // ON_DEMAND has no cadence: only the count below applies.
         if (c.frequency !== "ON_DEMAND") {
           out.push(violation("constraint", `frequency ${String(c.frequency)} is not enforced by this verifier, so it cannot pass it`, c.type));
@@ -215,17 +262,17 @@ export function evaluatePayment(open: OpenPaymentMandate, closed: PaymentMandate
         break;
       case "payment.execution_date": {
         // A payment that names no date executes NOW — and now must sit inside the window too.
-        // Skipping the check would let an agent leave the window simply by omitting the date (#236).
+        // Skipping the check would let an agent leave the window simply by omitting the date.
         const now = ctx.nowMs ?? Date.now();
         const when = closed.execution_date ?? new Date(now).toISOString();
         const t = Date.parse(when);
-        // A bound that does not parse would compare false both ways and silently drop out (#242).
+        // A bound that does not parse would compare false both ways and silently drop out.
         const notBefore = c.not_before === undefined ? undefined : Date.parse(c.not_before);
         const notAfter = c.not_after === undefined ? undefined : Date.parse(c.not_after);
         if (Number.isNaN(notBefore) || Number.isNaN(notAfter)) out.push(violation("constraint", `the window ${c.not_before ?? "…"} – ${c.not_after ?? "…"} is not a pair of dates, so it cannot be checked`, c.type));
         else if (Number.isNaN(t)) out.push(violation("constraint", `execution_date ${when} is not a date`, c.type));
-        // A date in the past executes NOW. Dating it inside the window does not put it there — the
-        // #236 bypass again, through a backdated value instead of an omitted one (#242).
+        // A date in the past executes NOW. Dating it inside the window does not put it there, any
+        // more than omitting the date does.
         else if (t < now - EXECUTION_SKEW_MS) out.push(violation("constraint", `execution_date ${when} is in the past — the payment would run now, not then`, c.type));
         else if (notBefore !== undefined && t < notBefore) out.push(violation("constraint", `${when} is before ${c.not_before}`, c.type));
         else if (notAfter !== undefined && t > notAfter) out.push(violation("constraint", `${when} is after ${c.not_after}`, c.type));

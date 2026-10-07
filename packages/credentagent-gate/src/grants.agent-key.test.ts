@@ -70,13 +70,14 @@ describe("a grant whose key the agent holds (FR-5)", () => {
     const proof = await intent.spend({
       agentKey,
       checkoutJwt: quote,
-      payment: { payee: merchantFor(ORIGIN, "utopia"), amount: { amount: 1800, currency: "USD" }, instrument: { id: "demo-instrument-0001", type: "card" } },
+      instrument: { id: "demo-instrument-0001", type: "card" },
       audience: ORIGIN,
       nonce: "merchant-nonce",
     });
 
     // MERCHANT — one call.
     const verdict = await verifyDelegatedPurchase(proof, {
+      trust: "presence-only-demo",
       audience: ORIGIN,
       nonce: "merchant-nonce",
       checkoutKey: credentagent.ap2.checkoutPublicJwk,
