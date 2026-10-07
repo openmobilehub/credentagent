@@ -165,7 +165,7 @@ export async function verifyIntentPresentation(args: {
   delegate: DelegateJwk;
   /** The agent holds that key (`grants.create({ agentKey })`): this permission is handed to the
    *  agent and spent at a merchant, whose chain verifier requires the wallet's hop typed
-   *  `kb+sd-jwt+kb` — so this check requires it too (#243). From the SERVER's grant record. */
+   *  `kb+sd-jwt+kb` — so this check requires it too. From the SERVER's grant record. */
   agentHeld?: boolean;
   /** The absolute expiry used when the request was built, epoch seconds. */
   mandateExp: number;
@@ -264,7 +264,7 @@ export async function verifyIntentPresentation(args: {
     return { ok: false, reason: "mandate mismatch: the wallet signed different terms than the grant records" };
   }
 
-  // #243 — sign nothing a merchant will refuse. These mandates name the agent's key in `cnf`, which
+  // Sign nothing a merchant will refuse. These mandates name the agent's key in `cnf`, which
   // makes the wallet's hop a KB-SD-JWT+KB: Delegate SD-JWT §5.1.4 types it `kb+sd-jwt+kb`, and the
   // merchant's chain verifier (ap2/chain/verify.ts) refuses any other `typ`. When the agent holds
   // the key, that verifier is where this permission is spent, so accepting `kb+sd-jwt` here showed

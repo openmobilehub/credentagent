@@ -11,8 +11,6 @@ import { peekJson } from "../jwt.js";
 import { DELEGATE_KB_TYP, DELEGATE_PAYLOAD_CLAIM } from "../delegate.js";
 import { joinChain, linkToString, splitChain, type ChainLink } from "./serialize.js";
 
-
-
 /** A link's header and payload, UNVERIFIED — for routing (which key, which hash), never a decision. */
 export function peekLink(link: ChainLink): { header: Record<string, unknown>; payload: Record<string, unknown> } | undefined {
   const [h, p] = link.jwt.split(".");
@@ -23,7 +21,7 @@ export function peekLink(link: ChainLink): { header: Record<string, unknown>; pa
 
 /**
  * The `sd_hash` binding a hop to the link before it: the digest of that link's exact
- * serialization, disclosures included (§5.1.3). Hashed with the previous link's own `_sd_alg`,
+ * serialization, disclosures included (§5.1.4). Hashed with the previous link's own `_sd_alg`,
  * sha-256 when it names none — the AP2 Python SDK's rule, so the two compute the same bytes.
  */
 export function bindingHash(prev: ChainLink): string {
@@ -43,7 +41,8 @@ export async function appendAgentHop(args: {
   audience: string;
   nonce: string;
 }): Promise<string> {
-  if (!args.audience || !args.nonce) throw new Error("a delegation hop needs the merchant's audience and nonce — without them it replays anywhere");
+  if (!args.audience || !args.nonce)
+    throw new Error("a delegation hop needs the merchant's audience and nonce — without them it replays anywhere");
   const links = splitChain(args.chain);
   if (!links) throw new Error("not a delegation chain: expected `<credential>~~<wallet hop>~…~`");
   const typ = args.content.cnf ? DELEGATE_KB_TYP.delegable : DELEGATE_KB_TYP.terminal;

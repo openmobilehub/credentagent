@@ -24,8 +24,9 @@ import type {
 } from "../types.js";
 
 export interface Violation {
-  /** `constraint`: a known limit was exceeded. `preset`: a fixed claim was changed. `malformed`: a
-   *  limit is missing a field it needs, so it cannot be evaluated — refused, never thrown. */
+  /** `constraint`: a known limit was exceeded. `preset`: a claim the open mandate fixed was changed.
+   *  `unknown-constraint`: a limit this verifier does not know, so it cannot pass it (rule 3).
+   *  `malformed`: a limit is missing a field it needs, so it cannot be evaluated — refused, never thrown. */
   code: "constraint" | "preset" | "unknown-constraint" | "malformed";
   /** The constraint `type` that refused, when one did. */
   constraint?: string;
@@ -74,7 +75,8 @@ const withId = (o: Record<string, unknown>): boolean => isStr(o.id);
 
 const SHAPES: Record<string, (c: Record<string, unknown>) => boolean> = {
   "checkout.allowed_merchants": (c) => objects(c.allowed),
-  "checkout.line_items": (c) => objects(c.items, (r) => objects(r.acceptable_items, withId) && isInt(r.quantity) && (r.quantity as number) >= 0),
+  "checkout.line_items": (c) =>
+    objects(c.items, (r) => objects(r.acceptable_items, withId) && isInt(r.quantity) && (r.quantity as number) >= 0),
   "payment.reference": (c) => isStr(c.conditional_transaction_id),
   "payment.amount_range": (c) => isStr(c.currency) && isInt(c.max) && optional(c.min, isInt),
   "payment.budget": (c) => isStr(c.currency) && isInt(c.max),
@@ -175,7 +177,9 @@ export function evaluateCheckout(open: OpenCheckoutMandate, checkout: UcpCheckou
         break;
       }
       default:
-        out.push(violation("unknown-constraint", "this verifier does not know the constraint, so it cannot pass it", (c as { type: string }).type));
+        out.push(
+          violation("unknown-constraint", "this verifier does not know the constraint, so it cannot pass it", (c as { type: string }).type),
+        );
     }
   }
   return out;
@@ -210,7 +214,8 @@ export function evaluatePayment(open: OpenPaymentMandate, closed: PaymentMandate
     out.push(violation("preset", `payee was fixed to ${open.payee.id} and the payment names ${closed.payee?.id ?? "∅"}`));
   }
   for (const claim of PRESET_CLAIMS) {
-    if (open[claim] !== undefined && !sameJson(open[claim], closed[claim])) out.push(violation("preset", `${claim} was fixed by the open mandate and changed`));
+    if (open[claim] !== undefined && !sameJson(open[claim], closed[claim]))
+      out.push(violation("preset", `${claim} was fixed by the open mandate and changed`));
   }
 
   if (!constraints.some((c) => c.type === "payment.reference")) {
@@ -218,7 +223,8 @@ export function evaluatePayment(open: OpenPaymentMandate, closed: PaymentMandate
   }
   if (constraints.some((c) => c.type === "payment.agent_recurrence")) {
     for (const companion of ["payment.amount_range", "payment.budget"] as const) {
-      if (!constraints.some((c) => c.type === companion)) out.push(violation("constraint", `agent_recurrence requires ${companion}`, "payment.agent_recurrence"));
+      if (!constraints.some((c) => c.type === companion))
+        out.push(violation("constraint", `agent_recurrence requires ${companion}`, "payment.agent_recurrence"));
     }
   }
 
@@ -227,7 +233,8 @@ export function evaluatePayment(open: OpenPaymentMandate, closed: PaymentMandate
   if (closed.execution_date !== undefined) {
     const t = Date.parse(closed.execution_date);
     if (Number.isNaN(t)) out.push(violation("malformed", `execution_date ${String(closed.execution_date)} is not a date`));
-    else if (typeof open.exp === "number" && t > open.exp * 1000) out.push(violation("constraint", `execution_date ${closed.execution_date} is after the permission expires`));
+    else if (typeof open.exp === "number" && t > open.exp * 1000)
+      out.push(violation("constraint", `execution_date ${closed.execution_date} is after the permission expires`));
   }
 
   const amount = closed.payment_amount;
@@ -239,13 +246,19 @@ export function evaluatePayment(open: OpenPaymentMandate, closed: PaymentMandate
         }
         break;
       case "payment.amount_range":
-        if (amount.currency !== c.currency.toUpperCase()) out.push(violation("constraint", `currency ${amount.currency} is not ${c.currency}`, c.type));
+        if (amount.currency !== c.currency.toUpperCase())
+          out.push(violation("constraint", `currency ${amount.currency} is not ${c.currency}`, c.type));
         else if (amount.amount > c.max) out.push(violation("constraint", `amount ${amount.amount} exceeds max ${c.max}`, c.type));
-        else if (c.min !== undefined && amount.amount < c.min) out.push(violation("constraint", `amount ${amount.amount} is below min ${c.min}`, c.type));
+        else if (c.min !== undefined && amount.amount < c.min)
+          out.push(violation("constraint", `amount ${amount.amount} is below min ${c.min}`, c.type));
         break;
       case "payment.budget":
-        if (amount.currency !== c.currency.toUpperCase()) out.push(violation("constraint", `currency ${amount.currency} is not ${c.currency}`, c.type));
-        else if (!ctx.spent) out.push(violation("constraint", "a budget cannot be checked without `spent` — what was already spent under this mandate", c.type));
+        if (amount.currency !== c.currency.toUpperCase())
+          out.push(violation("constraint", `currency ${amount.currency} is not ${c.currency}`, c.type));
+        else if (!ctx.spent)
+          out.push(
+            violation("constraint", "a budget cannot be checked without `spent` — what was already spent under this mandate", c.type),
+          );
         else if (ctx.spent.amount + amount.amount > c.max) {
           out.push(violation("constraint", `cumulative ${ctx.spent.amount + amount.amount} exceeds budget ${c.max}`, c.type));
         }
@@ -256,20 +269,26 @@ export function evaluatePayment(open: OpenPaymentMandate, closed: PaymentMandate
         // let "WEEKLY, 4 times" be spent four times in a minute, so it refuses (rule 3).
         // ON_DEMAND has no cadence: only the count below applies.
         if (c.frequency !== "ON_DEMAND") {
-          out.push(violation("constraint", `frequency ${String(c.frequency)} is not enforced by this verifier, so it cannot pass it`, c.type));
+          out.push(
+            violation("constraint", `frequency ${String(c.frequency)} is not enforced by this verifier, so it cannot pass it`, c.type),
+          );
         } else if (c.max_occurrences !== undefined) {
           if (!ctx.spent) out.push(violation("constraint", "recurrence cannot be checked without `spent.uses`", c.type));
-          else if (ctx.spent.uses >= c.max_occurrences) out.push(violation("constraint", `${ctx.spent.uses} uses already — max_occurrences is ${c.max_occurrences}`, c.type));
+          else if (ctx.spent.uses >= c.max_occurrences)
+            out.push(violation("constraint", `${ctx.spent.uses} uses already — max_occurrences is ${c.max_occurrences}`, c.type));
         }
         break;
       case "payment.allowed_payees":
-        if (!c.allowed.some((m) => merchantMatches(m, closed.payee))) out.push(violation("constraint", `payee ${closed.payee?.id ?? "∅"} is not allowed`, c.type));
+        if (!c.allowed.some((m) => merchantMatches(m, closed.payee)))
+          out.push(violation("constraint", `payee ${closed.payee?.id ?? "∅"} is not allowed`, c.type));
         break;
       case "payment.allowed_payment_instruments":
-        if (!c.allowed.some((i) => i.id === closed.payment_instrument?.id)) out.push(violation("constraint", `instrument ${closed.payment_instrument?.id ?? "∅"} is not allowed`, c.type));
+        if (!c.allowed.some((i) => i.id === closed.payment_instrument?.id))
+          out.push(violation("constraint", `instrument ${closed.payment_instrument?.id ?? "∅"} is not allowed`, c.type));
         break;
       case "payment.allowed_pisps":
-        if (!closed.pisp || !c.allowed.some((p) => sameJson(p, closed.pisp))) out.push(violation("constraint", "the payment names no allowed PISP", c.type));
+        if (!closed.pisp || !c.allowed.some((p) => sameJson(p, closed.pisp)))
+          out.push(violation("constraint", "the payment names no allowed PISP", c.type));
         break;
       case "payment.execution_date": {
         // A payment that names no date executes NOW — and now must sit inside the window too.
@@ -280,17 +299,27 @@ export function evaluatePayment(open: OpenPaymentMandate, closed: PaymentMandate
         // A bound that does not parse would compare false both ways and silently drop out.
         const notBefore = c.not_before === undefined ? undefined : Date.parse(c.not_before);
         const notAfter = c.not_after === undefined ? undefined : Date.parse(c.not_after);
-        if (Number.isNaN(notBefore) || Number.isNaN(notAfter)) out.push(violation("constraint", `the window ${c.not_before ?? "…"} – ${c.not_after ?? "…"} is not a pair of dates, so it cannot be checked`, c.type));
+        if (Number.isNaN(notBefore) || Number.isNaN(notAfter))
+          out.push(
+            violation(
+              "constraint",
+              `the window ${c.not_before ?? "…"} – ${c.not_after ?? "…"} is not a pair of dates, so it cannot be checked`,
+              c.type,
+            ),
+          );
         else if (Number.isNaN(t)) out.push(violation("constraint", `execution_date ${when} is not a date`, c.type));
         // A date in the past executes NOW. Dating it inside the window does not put it there, any
         // more than omitting the date does.
-        else if (t < now - EXECUTION_SKEW_MS) out.push(violation("constraint", `execution_date ${when} is in the past — the payment would run now, not then`, c.type));
+        else if (t < now - EXECUTION_SKEW_MS)
+          out.push(violation("constraint", `execution_date ${when} is in the past — the payment would run now, not then`, c.type));
         else if (notBefore !== undefined && t < notBefore) out.push(violation("constraint", `${when} is before ${c.not_before}`, c.type));
         else if (notAfter !== undefined && t > notAfter) out.push(violation("constraint", `${when} is after ${c.not_after}`, c.type));
         break;
       }
       default:
-        out.push(violation("unknown-constraint", "this verifier does not know the constraint, so it cannot pass it", (c as { type: string }).type));
+        out.push(
+          violation("unknown-constraint", "this verifier does not know the constraint, so it cannot pass it", (c as { type: string }).type),
+        );
     }
   }
   return out;

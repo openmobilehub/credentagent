@@ -2,7 +2,7 @@
 // SD-JWT with its own disclosures. These tests pin the wire shape a verifier written to the draft
 // — or the AP2 Python SDK — will split on.
 import { describe, expect, it } from "vitest";
-import { DELEGATE_SD_JWT_REVISION, joinChain, splitChain } from "./serialize.js";
+import { DELEGATE_SD_JWT_REVISION, joinChain, splitChain, linkToString } from "./serialize.js";
 
 const jwt = (n: number) => `h${n}.p${n}.s${n}`;
 
@@ -27,7 +27,7 @@ describe("the chain's compact serialization", () => {
 
   it("round-trips", () => {
     const chain = `${jwt(0)}~d0~~${jwt(1)}~e0~e1~~${jwt(2)}~f0~`;
-    expect(joinChain(splitChain(chain)!.map((l) => `${l.jwt}~${l.disclosures.map((d) => `${d}~`).join("")}`))).toBe(chain);
+    expect(joinChain(splitChain(chain)!.map(linkToString))).toBe(chain);
   });
 
   // A chain of one link is just an SD-JWT, not a delegation: refusing it here keeps a plain

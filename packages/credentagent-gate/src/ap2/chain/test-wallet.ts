@@ -95,7 +95,14 @@ export async function testGrant(opts: TestGrantOptions = {}): Promise<TestGrant>
     signAlg: "ES256",
     signer: sign(wallet.issuer.privateKey),
   }).issue(
-    { iss: "https://test-wallet.local", vct: "com.emvco.dpc", iat, exp: iat + 3600, cnf: { jwk: wallet.holder.publicJwk }, payment_instrument_id: "pi_1" } as never,
+    {
+      iss: "https://test-wallet.local",
+      vct: "com.emvco.dpc",
+      iat,
+      exp: iat + 3600,
+      cnf: { jwk: wallet.holder.publicJwk },
+      payment_instrument_id: "pi_1",
+    } as never,
     { _sd: ["payment_instrument_id"] } as never,
     { header: { typ: "dc+sd-jwt", ...(opts.omitX5c ? {} : { x5c: [wallet.x5c] }) } },
   );

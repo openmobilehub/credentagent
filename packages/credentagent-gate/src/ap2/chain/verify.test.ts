@@ -18,7 +18,13 @@ const closedCheckout = { vct: VCT.checkout, checkout_jwt: "h.p.s", checkout_hash
 async function chainFor(opts: Parameters<typeof testGrant>[0] = {}, which: 0 | 1 = 0) {
   const g = await testGrant(opts);
   const prefix = walletChain(g.presentation, g.disclosures[which]);
-  const chain = await appendAgentHop({ chain: prefix!, agentKey: g.agent.privateKey, content: closedCheckout, audience: MERCHANT, nonce: "n-1" });
+  const chain = await appendAgentHop({
+    chain: prefix!,
+    agentKey: g.agent.privateKey,
+    content: closedCheckout,
+    audience: MERCHANT,
+    nonce: "n-1",
+  });
   return { g, prefix: prefix!, chain };
 }
 
@@ -50,7 +56,11 @@ describe("structure and keys", () => {
   // under it — must not pass as a purchase whose agent hop was "checked".
   it("refuses a chain that is not exactly three links (bypass)", async () => {
     const g = await testGrant();
-    expect(await verify(walletChain(g.presentation, g.disclosures[0])!)).toMatchObject({ ok: false, code: "malformed", detail: expect.stringMatching(/^expected `<credential>/) });
+    expect(await verify(walletChain(g.presentation, g.disclosures[0])!)).toMatchObject({
+      ok: false,
+      code: "malformed",
+      detail: expect.stringMatching(/^expected `<credential>/),
+    });
   });
 
   it("refuses a single SD-JWT as if it were a chain", async () => {
@@ -71,7 +81,13 @@ describe("structure and keys", () => {
   // Spec 014: "the agent key is the one cnf endorses".
   it("refuses an agent hop signed by a key the open mandate's cnf does not name (bypass)", async () => {
     const { prefix } = await chainFor();
-    const chain = await appendAgentHop({ chain: prefix, agentKey: p256().privateKey, content: closedCheckout, audience: MERCHANT, nonce: "n-1" });
+    const chain = await appendAgentHop({
+      chain: prefix,
+      agentKey: p256().privateKey,
+      content: closedCheckout,
+      audience: MERCHANT,
+      nonce: "n-1",
+    });
     expect(await verify(chain)).toMatchObject({ ok: false, code: "signature", detail: expect.stringMatching(/^link 2/) });
   });
 });
@@ -96,7 +112,13 @@ describe("each hop is bound to the one before it", () => {
     const credentialB = b.presentation.slice(0, b.presentation.lastIndexOf("~") + 1);
     const walletHopA = a.presentation.slice(a.presentation.lastIndexOf("~") + 1);
     const prefix = walletChain(`${credentialB}${walletHopA}`, a.disclosures[0])!;
-    const chain = await appendAgentHop({ chain: prefix, agentKey: a.agent.privateKey, content: closedCheckout, audience: MERCHANT, nonce: "n-1" });
+    const chain = await appendAgentHop({
+      chain: prefix,
+      agentKey: a.agent.privateKey,
+      content: closedCheckout,
+      audience: MERCHANT,
+      nonce: "n-1",
+    });
     expect(await verify(chain)).toMatchObject({ ok: false, code: "binding", detail: expect.stringMatching(/^link 1/) });
   });
 
@@ -117,11 +139,21 @@ describe("each hop is bound to the one before it", () => {
     const wallet = splitChain(prefix)![1];
     // A correct issuer_jwt_hash: the previous link's JWT, without its disclosures — the weaker binding.
     const byIssuerJwt = await sdJwtInstance({ privateKey: g.agent.privateKey }).issue(
-      { iat: Math.floor(Date.now() / 1000), aud: MERCHANT, nonce: "n-1", issuer_jwt_hash: digestToken(wallet.jwt, "sha-256"), delegate_payload: [closedCheckout] } as never,
+      {
+        iat: Math.floor(Date.now() / 1000),
+        aud: MERCHANT,
+        nonce: "n-1",
+        issuer_jwt_hash: digestToken(wallet.jwt, "sha-256"),
+        delegate_payload: [closedCheckout],
+      } as never,
       { delegate_payload: { _sd: [0] } } as never,
       { header: { typ: "kb+sd-jwt" } },
     );
-    expect(await verify(joinChain([prefix, byIssuerJwt]))).toMatchObject({ ok: false, code: "binding", detail: expect.stringMatching(/issuer_jwt_hash/) });
+    expect(await verify(joinChain([prefix, byIssuerJwt]))).toMatchObject({
+      ok: false,
+      code: "binding",
+      detail: expect.stringMatching(/issuer_jwt_hash/),
+    });
   });
 });
 
@@ -146,12 +178,22 @@ describe("typ and disclosure rules (§5.1.4, §6)", () => {
       { delegate_payload: { _sd: [0] } } as never,
       { header: { typ: "kb+sd-jwt" } },
     );
-    expect(await verify(joinChain([prefix, undated]))).toMatchObject({ ok: false, code: "malformed", detail: expect.stringMatching(/numeric iat/) });
+    expect(await verify(joinChain([prefix, undated]))).toMatchObject({
+      ok: false,
+      code: "malformed",
+      detail: expect.stringMatching(/numeric iat/),
+    });
   });
 
   it("refuses an agent hop that names a further key (bypass)", async () => {
     const { prefix, g } = await chainFor();
-    const chain = await appendAgentHop({ chain: prefix, agentKey: g.agent.privateKey, content: { ...closedCheckout, cnf: { jwk: p256().publicJwk } }, audience: MERCHANT, nonce: "n-1" });
+    const chain = await appendAgentHop({
+      chain: prefix,
+      agentKey: g.agent.privateKey,
+      content: { ...closedCheckout, cnf: { jwk: p256().publicJwk } },
+      audience: MERCHANT,
+      nonce: "n-1",
+    });
     expect(await verify(chain)).toMatchObject({ ok: false, code: "typ", detail: expect.stringMatching(/^link 2/) });
   });
 
@@ -160,14 +202,26 @@ describe("typ and disclosure rules (§5.1.4, §6)", () => {
   it("refuses a wallet hop that discloses both open mandates (bypass)", async () => {
     const g = await testGrant();
     const both = `${walletChain(g.presentation, g.disclosures[0])!}${g.disclosures[1]}~`;
-    const chain = await appendAgentHop({ chain: both, agentKey: g.agent.privateKey, content: closedCheckout, audience: MERCHANT, nonce: "n-1" });
+    const chain = await appendAgentHop({
+      chain: both,
+      agentKey: g.agent.privateKey,
+      content: closedCheckout,
+      audience: MERCHANT,
+      nonce: "n-1",
+    });
     expect(await verify(chain)).toMatchObject({ ok: false, code: "disclosure", detail: expect.stringMatching(/^link 1.*exactly one/) });
   });
 
   it("refuses a disclosure the wallet never signed (bypass)", async () => {
     const g = await testGrant();
     const other = await testGrant({ grantId: "other" });
-    const chain = await appendAgentHop({ chain: walletChain(g.presentation, other.disclosures[0])!, agentKey: g.agent.privateKey, content: closedCheckout, audience: MERCHANT, nonce: "n-1" });
+    const chain = await appendAgentHop({
+      chain: walletChain(g.presentation, other.disclosures[0])!,
+      agentKey: g.agent.privateKey,
+      content: closedCheckout,
+      audience: MERCHANT,
+      nonce: "n-1",
+    });
     expect(await verify(chain)).toMatchObject({ ok: false, code: "disclosure" });
   });
 });
@@ -183,7 +237,11 @@ describe("the agent's hop is addressed to this merchant, now", () => {
   // only the mandate's own `exp` can refuse — the library never sees it, it sits in a disclosure.
   it("refuses an expired open mandate (bypass)", async () => {
     const { chain } = await chainFor({ openTtlSec: 60 });
-    expect(await verify(chain, { nowMs: Date.now() + 600_000 })).toMatchObject({ ok: false, code: "expired", detail: expect.stringMatching(/^link 1: exp=/) });
+    expect(await verify(chain, { nowMs: Date.now() + 600_000 })).toMatchObject({
+      ok: false,
+      code: "expired",
+      detail: expect.stringMatching(/^link 1: exp=/),
+    });
   });
 
   it("refuses an open mandate with no exp — it would never end (bypass)", async () => {
@@ -196,7 +254,7 @@ describe("the algorithm pin", () => {
   // `es256Verify` ignores the header's `alg`, so a link CLAIMING another algorithm would still
   // verify on its signature. The pin is what refuses it: only ES256 is ever signed here, so only
   // ES256 is ever read.
-  it("REFUSES a link whose header names an algorithm other than ES256, however good its signature (bypass)", async () => {
+  it("refuses a link whose header names an algorithm other than ES256, however good its signature (bypass)", async () => {
     const { g, chain } = await chainFor();
     const links = splitChain(chain)!;
     const hop = links[2];
@@ -204,7 +262,9 @@ describe("the algorithm pin", () => {
     for (const alg of ["HS256", "none", "ES384"]) {
       const header = Buffer.from(JSON.stringify({ alg, typ: "kb+sd-jwt" })).toString("base64url");
       const resigned = `${header}.${payload}.${sign(g.agent.privateKey)(`${header}.${payload}`)}`;
-      const relabelled = joinChain([...links.slice(0, 2), { ...hop, jwt: resigned }].map((l) => `${l.jwt}~${l.disclosures.map((d) => `${d}~`).join("")}`));
+      const relabelled = joinChain(
+        [...links.slice(0, 2), { ...hop, jwt: resigned }].map((l) => `${l.jwt}~${l.disclosures.map((d) => `${d}~`).join("")}`),
+      );
       expect(await verify(relabelled)).toMatchObject({ ok: false, code: "signature" });
     }
   });

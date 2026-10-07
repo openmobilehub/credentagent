@@ -29,7 +29,7 @@ describe("the agent's key", () => {
     expect(() => AgentKey.fromJwk({ ...jwk, x: other.x, y: other.y })).toThrow(/agent key/);
   });
 
-  it("REFUSES to spend a permission signed for a different agent key (bypass)", async () => {
+  it("refuses to spend a permission signed for a different agent key (bypass)", async () => {
     const g = await testGrant();
     const intent = DelegatedIntent.fromWalletPresentation({ presentation: g.presentation, disclosures: g.disclosures });
     await expect(

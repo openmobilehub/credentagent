@@ -131,15 +131,19 @@ export async function verifyChain(token: string, opts: VerifyChainOptions): Prom
     // other predecessor that key ever signed (§8.1). Only `sd_hash` is accepted. The draft's other
     // binding, `issuer_jwt_hash`, covers the previous JWT but not its disclosures, so it is the
     // weaker one, and nothing here or in the AP2 SDK emits it. It is refused until a sender needs it.
-    if ("issuer_jwt_hash" in payload) return refuse("binding", `link ${i}: binds by issuer_jwt_hash, which this verifier does not accept — use sd_hash`);
+    if ("issuer_jwt_hash" in payload)
+      return refuse("binding", `link ${i}: binds by issuer_jwt_hash, which this verifier does not accept — use sd_hash`);
     if (payload.sd_hash !== bindingHash(links[i - 1])) return refuse("binding", `link ${i}: sd_hash does not name link ${i - 1}`);
     if (typeof payload.iat !== "number") return refuse("malformed", `link ${i}: a key-binding hop needs a numeric iat`);
 
     // Undisclosed elements were dropped by the verify above; what is left is what this chain shows.
     const disclosed = Array.isArray(payload[DELEGATE_PAYLOAD_CLAIM])
-      ? (payload[DELEGATE_PAYLOAD_CLAIM] as unknown[]).filter((e): e is Record<string, unknown> => typeof e === "object" && e !== null && !("..." in e))
+      ? (payload[DELEGATE_PAYLOAD_CLAIM] as unknown[]).filter(
+          (e): e is Record<string, unknown> => typeof e === "object" && e !== null && !("..." in e),
+        )
       : [];
-    if (disclosed.length !== 1) return refuse("disclosure", `link ${i}: discloses ${disclosed.length} delegate payloads — exactly one is required`);
+    if (disclosed.length !== 1)
+      return refuse("disclosure", `link ${i}: discloses ${disclosed.length} delegate payloads — exactly one is required`);
     const element = disclosed[0];
 
     // `typ` says whether this hop may be delegated again, and must agree with whether it names
@@ -147,13 +151,15 @@ export async function verifyChain(token: string, opts: VerifyChainOptions): Prom
     // it is also what the AP2 Python SDK refuses.
     const typ = peekLink(links[i])?.header.typ;
     const wants = element.cnf ? DELEGATE_KB_TYP.delegable : DELEGATE_KB_TYP.terminal;
-    if (typ !== wants) return refuse("typ", `link ${i}: typed ${String(typ)} but ${element.cnf ? "names" : "names no"} further key — expected ${wants}`);
+    if (typ !== wants)
+      return refuse("typ", `link ${i}: typed ${String(typ)} but ${element.cnf ? "names" : "names no"} further key — expected ${wants}`);
     if (last && element.cnf) return refuse("typ", `link ${i}: the last hop names a further key, so the chain is not finished`);
     if (!last && !element.cnf) return refuse("typ", `link ${i}: names no key for the next hop`);
 
     // The open mandate's own lifetime. The library saw the hop's claims, not the mandate's.
     if (element.exp !== undefined && typeof element.exp !== "number") return refuse("malformed", `link ${i}: exp is not a number`);
-    if (!last && typeof element.exp !== "number") return refuse("malformed", `link ${i}: an open mandate needs an exp — without one it never ends`);
+    if (!last && typeof element.exp !== "number")
+      return refuse("malformed", `link ${i}: an open mandate needs an exp — without one it never ends`);
     if (typeof element.exp === "number" && nowSec >= element.exp) return refuse("expired", `link ${i}: exp=${element.exp} now=${nowSec}`);
 
     if (last) {

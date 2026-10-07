@@ -423,7 +423,7 @@ export class Grants {
       bounds,
       delegate,
       // The agent spends this permission at a merchant, whose chain verifier is strict about how the
-      // wallet typed its hop — so the signing page must be just as strict (#243).
+      // wallet typed its hop — so the signing page must be just as strict.
       agentHeld: rec?.agentKey !== undefined,
       mandateExp: Math.floor((Number.isFinite(expiresAt) ? expiresAt : fallback) / 1000),
       allowedSkus,
@@ -558,7 +558,7 @@ export class Grants {
       boundsNonce: globalThis.crypto.randomUUID(),
       // Device-signed grants only: the key the human signs over (see the field's own note). The
       // RESOLVED mode, not the raw option — a grant that leaves `signing` out is a device grant too,
-      // and without this key its phone ceremony could never start (#238). When the agent brought
+      // and without this key its phone ceremony could never start. When the agent brought
       // its own key, the gate makes none: it never holds the agent's private half (FR-5).
       ...(agentKey ? { agentKey } : sealed.signing === "device" ? { delegateKeys: await generateDelegate() } : {}),
       cache: new Map(),

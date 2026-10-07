@@ -21,7 +21,10 @@ export function p256(): DevKeyPair {
 }
 
 /** SD-JWT disclosure salts. */
-export const saltGenerator = (n: number): string => Buffer.from(webcrypto.getRandomValues(new Uint8Array(n))).toString("hex").slice(0, n);
+export const saltGenerator = (n: number): string =>
+  Buffer.from(webcrypto.getRandomValues(new Uint8Array(n)))
+    .toString("hex")
+    .slice(0, n);
 
 /** ES256 over P-256 — the package's own signer, so a dev wallet signs exactly as the gate verifies. */
 export const sign = (key: KeyObject) => es256Signer(key);
@@ -34,7 +37,9 @@ export const sign = (key: KeyObject) => es256Signer(key);
  */
 export async function selfSignedCert(key: DevKeyPair, name: string): Promise<string> {
   const alg = { name: "ECDSA", namedCurve: "P-256", hash: "SHA-256" } as const;
-  const priv = await webcrypto.subtle.importKey("jwk", key.privateKey.export({ format: "jwk" }) as webcrypto.JsonWebKey, alg, false, ["sign"]);
+  const priv = await webcrypto.subtle.importKey("jwk", key.privateKey.export({ format: "jwk" }) as webcrypto.JsonWebKey, alg, false, [
+    "sign",
+  ]);
   const pub = await webcrypto.subtle.importKey("jwk", { ...key.publicJwk, ext: true } as webcrypto.JsonWebKey, alg, true, ["verify"]);
   const notBefore = new Date(Date.now() - 60_000);
   const cert = await x509.X509CertificateGenerator.createSelfSigned(

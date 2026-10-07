@@ -9,11 +9,20 @@ import { libraryRefusal, sdJwtInstance } from "./sdjwt.js";
 const pair = () => generateKeyPairSync("ec", { namedCurve: "P-256" });
 const now = Math.floor(Date.now() / 1000);
 
-async function failure(claims: Record<string, unknown>, opts: { verifyWith?: ReturnType<typeof pair>; tamper?: (t: string) => string } = {}): Promise<string> {
+async function failure(
+  claims: Record<string, unknown>,
+  opts: { verifyWith?: ReturnType<typeof pair>; tamper?: (t: string) => string } = {},
+): Promise<string> {
   const signer = pair();
-  const token = await sdJwtInstance({ privateKey: signer.privateKey }).issue({ iat: now, ...claims } as never, { _sd: ["secret"] } as never);
+  const token = await sdJwtInstance({ privateKey: signer.privateKey }).issue(
+    { iat: now, ...claims } as never,
+    { _sd: ["secret"] } as never,
+  );
   try {
-    await sdJwtInstance({ publicKey: (opts.verifyWith ?? signer).publicKey }).verify((opts.tamper ?? ((t) => t))(token), { currentDate: now, skewSeconds: 60 } as never);
+    await sdJwtInstance({ publicKey: (opts.verifyWith ?? signer).publicKey }).verify((opts.tamper ?? ((t) => t))(token), {
+      currentDate: now,
+      skewSeconds: 60,
+    } as never);
   } catch (err) {
     return (err as Error).message;
   }

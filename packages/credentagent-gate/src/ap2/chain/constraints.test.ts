@@ -9,7 +9,12 @@ import { VCT, type OpenCheckoutMandate, type OpenPaymentMandate, type PaymentMan
 const cnf = { jwk: { kty: "EC" as const, crv: "P-256" as const, x: "x", y: "y" } };
 const SHOP = { id: "shop.example", name: "Shop" };
 
-const openCheckout = (constraints: OpenCheckoutMandate["constraints"]): OpenCheckoutMandate => ({ vct: VCT.openCheckout, constraints, cnf, exp: 2 ** 31 });
+const openCheckout = (constraints: OpenCheckoutMandate["constraints"]): OpenCheckoutMandate => ({
+  vct: VCT.openCheckout,
+  constraints,
+  cnf,
+  exp: 2 ** 31,
+});
 
 const coffee = { id: "r-coffee", acceptable_items: [{ id: "coffee", title: "Coffee" }], quantity: 2 };
 const lineItems = { type: "checkout.line_items" as const, items: [coffee] as [typeof coffee] };
@@ -17,7 +22,12 @@ const lineItems = { type: "checkout.line_items" as const, items: [coffee] as [ty
 const cart = (lines: Array<[string, number]>, merchant = SHOP): UcpCheckout => ({
   id: "ord_1",
   merchant,
-  line_items: lines.map(([id, quantity], i) => ({ id: `li${i}`, item: { id, title: id, price: 300 }, quantity, totals: [{ type: "total", amount: 300 * quantity }] })),
+  line_items: lines.map(([id, quantity], i) => ({
+    id: `li${i}`,
+    item: { id, title: id, price: 300 },
+    quantity,
+    totals: [{ type: "total", amount: 300 * quantity }],
+  })),
   status: "ready_for_complete",
   currency: "USD",
   totals: [{ type: "total", amount: lines.reduce((s, [, q]) => s + 300 * q, 0) }],
@@ -38,8 +48,16 @@ describe("checkout constraints", () => {
   });
 
   it("refuses an item no requirement accepts (bypass)", () => {
-    const v = evaluateCheckout(checkoutOk, cart([["coffee", 1], ["whisky", 1]]));
-    expect(v).toEqual([expect.objectContaining({ constraint: "checkout.line_items", detail: expect.stringMatching(/whisky not accepted/) })]);
+    const v = evaluateCheckout(
+      checkoutOk,
+      cart([
+        ["coffee", 1],
+        ["whisky", 1],
+      ]),
+    );
+    expect(v).toEqual([
+      expect.objectContaining({ constraint: "checkout.line_items", detail: expect.stringMatching(/whisky not accepted/) }),
+    ]);
   });
 
   it("refuses more of an item than its requirement allows (bypass)", () => {
@@ -53,13 +71,36 @@ describe("checkout constraints", () => {
   // An item two requirements accept must be assigned where capacity remains — a greedy first-fit
   // would put both teas in the first slot and refuse a cart the mandate allows.
   it("assigns shared items across requirements, not first-fit", () => {
-    const either = { id: "r-any", acceptable_items: [{ id: "coffee", title: "C" }, { id: "tea", title: "T" }], quantity: 1 };
+    const either = {
+      id: "r-any",
+      acceptable_items: [
+        { id: "coffee", title: "C" },
+        { id: "tea", title: "T" },
+      ],
+      quantity: 1,
+    };
     const teaOnly = { id: "r-tea", acceptable_items: [{ id: "tea", title: "T" }], quantity: 1 };
     const open = openCheckout([{ type: "checkout.line_items", items: [either, teaOnly] }]);
-    expect(evaluateCheckout(open, cart([["coffee", 1], ["tea", 1]]))).toEqual([]);
+    expect(
+      evaluateCheckout(
+        open,
+        cart([
+          ["coffee", 1],
+          ["tea", 1],
+        ]),
+      ),
+    ).toEqual([]);
     expect(evaluateCheckout(open, cart([["tea", 2]]))).toEqual([]);
     // Tea first takes the shared slot; coffee then only fits if tea is MOVED to the tea-only one.
-    expect(evaluateCheckout(open, cart([["tea", 1], ["coffee", 1]]))).toEqual([]);
+    expect(
+      evaluateCheckout(
+        open,
+        cart([
+          ["tea", 1],
+          ["coffee", 1],
+        ]),
+      ),
+    ).toEqual([]);
     expect(evaluateCheckout(open, cart([["coffee", 2]]))).not.toEqual([]);
   });
 
@@ -71,7 +112,9 @@ describe("checkout constraints", () => {
 
   it("FAILS a constraint it does not know (bypass)", () => {
     const open = openCheckout([lineItems, { type: "checkout.shipping_country", allowed: ["US"] } as never]);
-    expect(evaluateCheckout(open, cart([["coffee", 1]]))).toEqual([expect.objectContaining({ code: "unknown-constraint", constraint: "checkout.shipping_country" })]);
+    expect(evaluateCheckout(open, cart([["coffee", 1]]))).toEqual([
+      expect.objectContaining({ code: "unknown-constraint", constraint: "checkout.shipping_country" }),
+    ]);
   });
 });
 
@@ -94,7 +137,11 @@ const closed = (over: Partial<PaymentMandate> = {}): PaymentMandate => ({
   payment_instrument: { id: "pi_1", type: "card" },
   ...over,
 });
-const ctx = (over: Partial<Parameters<typeof evaluatePayment>[2]> = {}) => ({ openCheckout: openC, spent: { amount: 0, uses: 0 }, ...over });
+const ctx = (over: Partial<Parameters<typeof evaluatePayment>[2]> = {}) => ({
+  openCheckout: openC,
+  spent: { amount: 0, uses: 0 },
+  ...over,
+});
 
 describe("payment constraints", () => {
   const range = { type: "payment.amount_range" as const, currency: "USD", max: 5000 };
@@ -112,7 +159,9 @@ describe("payment constraints", () => {
   });
 
   it("refuses a payment below amount_range.min, or in another currency (bypass)", () => {
-    expect(evaluatePayment(openPayment([{ ...range, min: 700 }]), closed(), ctx())).toEqual([expect.objectContaining({ constraint: "payment.amount_range" })]);
+    expect(evaluatePayment(openPayment([{ ...range, min: 700 }]), closed(), ctx())).toEqual([
+      expect.objectContaining({ constraint: "payment.amount_range" }),
+    ]);
     expect(evaluatePayment(openPayment([range]), closed({ payment_amount: { amount: 600, currency: "EUR" } }), ctx())).toEqual([
       expect.objectContaining({ constraint: "payment.amount_range", detail: expect.stringMatching(/currency/i) }),
     ]);
@@ -132,40 +181,56 @@ describe("payment constraints", () => {
   });
 
   it("refuses a payee outside allowed_payees (bypass)", () => {
-    expect(evaluatePayment(openPayment([{ type: "payment.allowed_payees", allowed: [SHOP] }]), closed({ payee: { id: "evil.example", name: "Evil" } }), ctx())).toEqual([
-      expect.objectContaining({ constraint: "payment.allowed_payees" }),
-    ]);
+    expect(
+      evaluatePayment(
+        openPayment([{ type: "payment.allowed_payees", allowed: [SHOP] }]),
+        closed({ payee: { id: "evil.example", name: "Evil" } }),
+        ctx(),
+      ),
+    ).toEqual([expect.objectContaining({ constraint: "payment.allowed_payees" })]);
   });
 
   // payment.reference is what ties this payment authority to ITS checkout authority. A payment
   // chain presented beside another grant's checkout chain names the wrong digest.
   it("refuses a payment.reference that names another open checkout (bypass)", () => {
     const otherCheckout = openCheckout([{ type: "checkout.allowed_merchants", allowed: [{ id: "x", name: "X" }] }, lineItems]);
-    expect(evaluatePayment(openPayment([]), closed(), ctx({ openCheckout: otherCheckout }))).toEqual([expect.objectContaining({ constraint: "payment.reference" })]);
+    expect(evaluatePayment(openPayment([]), closed(), ctx({ openCheckout: otherCheckout }))).toEqual([
+      expect.objectContaining({ constraint: "payment.reference" }),
+    ]);
   });
 
   it("refuses an open payment with no payment.reference (bypass)", () => {
     const unbound = { ...openPayment([range]), constraints: [range] };
-    expect(evaluatePayment(unbound, closed(), ctx())).toEqual([expect.objectContaining({ constraint: "payment.reference", detail: expect.stringMatching(/must contain/) })]);
+    expect(evaluatePayment(unbound, closed(), ctx())).toEqual([
+      expect.objectContaining({ constraint: "payment.reference", detail: expect.stringMatching(/must contain/) }),
+    ]);
   });
 
   it("refuses an instrument or PISP outside its allow-list (bypass)", () => {
-    expect(evaluatePayment(openPayment([{ type: "payment.allowed_payment_instruments", allowed: [{ id: "pi_2", type: "card" }] }]), closed(), ctx())).toEqual([
-      expect.objectContaining({ constraint: "payment.allowed_payment_instruments" }),
-    ]);
+    expect(
+      evaluatePayment(
+        openPayment([{ type: "payment.allowed_payment_instruments", allowed: [{ id: "pi_2", type: "card" }] }]),
+        closed(),
+        ctx(),
+      ),
+    ).toEqual([expect.objectContaining({ constraint: "payment.allowed_payment_instruments" })]);
     const pisp = { legal_name: "P Ltd", brand_name: "P", domain_name: "p.example" };
-    expect(evaluatePayment(openPayment([{ type: "payment.allowed_pisps", allowed: [pisp] }]), closed(), ctx())).toEqual([expect.objectContaining({ constraint: "payment.allowed_pisps" })]);
+    expect(evaluatePayment(openPayment([{ type: "payment.allowed_pisps", allowed: [pisp] }]), closed(), ctx())).toEqual([
+      expect.objectContaining({ constraint: "payment.allowed_pisps" }),
+    ]);
     expect(evaluatePayment(openPayment([{ type: "payment.allowed_pisps", allowed: [pisp] }]), closed({ pisp }), ctx())).toEqual([]);
   });
 
   it("refuses an execution date outside its window (bypass)", () => {
     const window = { type: "payment.execution_date" as const, not_before: "2026-10-01", not_after: "2026-10-31" };
     const now = { nowMs: Date.parse("2026-09-30T12:00:00Z") };
-    expect(evaluatePayment(openPayment([window]), closed({ execution_date: "2026-11-02" }), ctx(now))).toEqual([expect.objectContaining({ constraint: "payment.execution_date" })]);
+    expect(evaluatePayment(openPayment([window]), closed({ execution_date: "2026-11-02" }), ctx(now))).toEqual([
+      expect.objectContaining({ constraint: "payment.execution_date" }),
+    ]);
     expect(evaluatePayment(openPayment([window]), closed({ execution_date: "2026-10-15" }), ctx(now))).toEqual([]);
   });
 
-  it("REFUSES a backdated execution date — it runs now, not inside the window it names (bypass, #242)", () => {
+  it("refuses a backdated execution date — it runs now, not inside the window it names (bypass)", () => {
     const window = { type: "payment.execution_date" as const, not_after: "2026-11-30T00:00:00Z" };
     const dec5 = { nowMs: Date.parse("2026-12-05T12:00:00Z") };
     expect(evaluatePayment(openPayment([window]), closed({ execution_date: "2026-11-30T00:00:00Z" }), ctx(dec5))).toEqual([
@@ -173,11 +238,13 @@ describe("payment constraints", () => {
     ]);
     // Within the minute of clock tolerance is not "the past"; a future date inside the window is a scheduled payment.
     const nov10 = Date.parse("2026-11-10T12:00:00Z");
-    expect(evaluatePayment(openPayment([window]), closed({ execution_date: new Date(nov10 - 30_000).toISOString() }), ctx({ nowMs: nov10 }))).toEqual([]);
+    expect(
+      evaluatePayment(openPayment([window]), closed({ execution_date: new Date(nov10 - 30_000).toISOString() }), ctx({ nowMs: nov10 })),
+    ).toEqual([]);
     expect(evaluatePayment(openPayment([window]), closed({ execution_date: "2026-11-15T00:00:00Z" }), ctx({ nowMs: nov10 }))).toEqual([]);
   });
 
-  it("REFUSES a window bound that is not a date — it would silently drop out (bypass, #242)", () => {
+  it("refuses a window bound that is not a date — it would silently drop out (bypass)", () => {
     const now = { nowMs: Date.parse("2026-10-10T12:00:00Z") };
     for (const window of [
       { type: "payment.execution_date" as const, not_before: "2026-10-01", not_after: "2026-13-45" },
@@ -189,7 +256,7 @@ describe("payment constraints", () => {
     }
   });
 
-  it("REFUSES a payment that omits its date to escape the window — no date means now (bypass, #236)", () => {
+  it("refuses a payment that omits its date to escape the window — no date means now (bypass)", () => {
     const window = { type: "payment.execution_date" as const, not_before: "2026-11-01", not_after: "2026-11-30" };
     const before = Date.parse("2026-10-10T12:00:00Z");
     const after = Date.parse("2026-12-05T12:00:00Z");
@@ -214,12 +281,18 @@ describe("payment constraints", () => {
     ]);
   });
 
-  it("REFUSES a recurrence cadence it does not enforce — \"WEEKLY, 4 times\" is not 4 in a minute (bypass, #242)", () => {
+  it('refuses a recurrence cadence it does not enforce — "WEEKLY, 4 times" is not 4 in a minute (bypass)', () => {
     for (const frequency of ["WEEKLY", "MONTHLY", "DAILY"] as const) {
       // With the count to spare, and without one: the cadence alone refuses.
-      for (const recur of [{ type: "payment.agent_recurrence" as const, frequency, max_occurrences: 4 }, { type: "payment.agent_recurrence" as const, frequency }]) {
+      for (const recur of [
+        { type: "payment.agent_recurrence" as const, frequency, max_occurrences: 4 },
+        { type: "payment.agent_recurrence" as const, frequency },
+      ]) {
         expect(evaluatePayment(openPayment([recur, range, budget]), closed(), ctx({ spent: { amount: 0, uses: 0 } }))).toEqual([
-          expect.objectContaining({ constraint: "payment.agent_recurrence", detail: expect.stringMatching(new RegExp(`frequency ${frequency} is not enforced`)) }),
+          expect.objectContaining({
+            constraint: "payment.agent_recurrence",
+            detail: expect.stringMatching(new RegExp(`frequency ${frequency} is not enforced`)),
+          }),
         ]);
       }
     }
@@ -229,8 +302,12 @@ describe("payment constraints", () => {
   it("refuses a closed mandate that changes a claim the open one fixed (bypass)", () => {
     const fixed = openPayment([], { payment_amount: { amount: 600, currency: "USD" }, payee: SHOP });
     expect(evaluatePayment(fixed, closed(), ctx())).toEqual([]);
-    expect(evaluatePayment(fixed, closed({ payment_amount: { amount: 599, currency: "USD" } }), ctx())).toEqual([expect.objectContaining({ code: "preset", detail: expect.stringMatching(/payment_amount/) })]);
-    expect(evaluatePayment(fixed, closed({ payee: { id: "evil.example", name: "Shop" } }), ctx())).toEqual([expect.objectContaining({ code: "preset", detail: expect.stringMatching(/payee/) })]);
+    expect(evaluatePayment(fixed, closed({ payment_amount: { amount: 599, currency: "USD" } }), ctx())).toEqual([
+      expect.objectContaining({ code: "preset", detail: expect.stringMatching(/payment_amount/) }),
+    ]);
+    expect(evaluatePayment(fixed, closed({ payee: { id: "evil.example", name: "Shop" } }), ctx())).toEqual([
+      expect.objectContaining({ code: "preset", detail: expect.stringMatching(/payee/) }),
+    ]);
   });
 
   it("FAILS a constraint it does not know (bypass)", () => {
@@ -243,14 +320,23 @@ describe("payment constraints", () => {
 describe("malformed limits are refused, never thrown", () => {
   const range = { type: "payment.amount_range" as const, currency: "USD", max: 5000 };
   it("refuses a list holding null where the evaluator reads an element (bypass)", () => {
-    const nullItem = openCheckout([{ type: "checkout.allowed_merchants", allowed: [SHOP] }, { type: "checkout.line_items", items: [{ id: "r", acceptable_items: [null as never], quantity: 1 }] as never }]);
-    expect(evaluateCheckout(nullItem, cart([["coffee", 1]]))).toEqual(expect.arrayContaining([expect.objectContaining({ code: "malformed", constraint: "checkout.line_items" })]));
+    const nullItem = openCheckout([
+      { type: "checkout.allowed_merchants", allowed: [SHOP] },
+      { type: "checkout.line_items", items: [{ id: "r", acceptable_items: [null as never], quantity: 1 }] as never },
+    ]);
+    expect(evaluateCheckout(nullItem, cart([["coffee", 1]]))).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: "malformed", constraint: "checkout.line_items" })]),
+    );
     const nullInstrument = openPayment([range, { type: "payment.allowed_payment_instruments", allowed: [null as never] }]);
-    expect(evaluatePayment(nullInstrument, closed(), ctx())).toEqual([expect.objectContaining({ code: "malformed", constraint: "payment.allowed_payment_instruments" })]);
+    expect(evaluatePayment(nullInstrument, closed(), ctx())).toEqual([
+      expect.objectContaining({ code: "malformed", constraint: "payment.allowed_payment_instruments" }),
+    ]);
   });
 
   it("refuses a payee fixed to null rather than skipping it as absent (bypass)", () => {
-    expect(evaluatePayment(openPayment([range], { payee: null as never }), closed(), ctx())).toEqual([expect.objectContaining({ code: "malformed" })]);
+    expect(evaluatePayment(openPayment([range], { payee: null as never }), closed(), ctx())).toEqual([
+      expect.objectContaining({ code: "malformed" }),
+    ]);
   });
 });
 

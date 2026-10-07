@@ -12,7 +12,8 @@ import { signCompactJwt, verifyCompactJwt } from "./jwt.js";
 import type { UcpCheckout } from "./types.js";
 
 const ORIGIN = "https://shop.example";
-const privateJwk = () => generateKeyPairSync("ec", { namedCurve: "P-256" }).privateKey.export({ format: "jwk" }) as unknown as PrivateJwkP256;
+const privateJwk = () =>
+  generateKeyPairSync("ec", { namedCurve: "P-256" }).privateKey.export({ format: "jwk" }) as unknown as PrivateJwkP256;
 
 const cart: UcpCheckout = {
   id: "ord_1",
@@ -35,20 +36,20 @@ describe("the merchant's checkout key (FR-6)", () => {
     expect(verifyCompactJwt(quote, ap2.checkoutPublicJwk)).toEqual(cart);
   });
 
-  it("REFUSES a cart signed with the MANDATE key — only the checkout key quotes carts (bypass)", () => {
+  it("refuses a cart signed with the MANDATE key — only the checkout key quotes carts (bypass)", () => {
     const mandateKey = resolveSigningKey(ORIGIN);
     const ap2 = new Ap2Issuer(mandateKey);
     const wrongRole = signCompactJwt(cart, mandateKey.privateKey, mandateKey.kid);
     expect(verifyCompactJwt(wrongRole, ap2.checkoutPublicJwk)).toBeUndefined();
   });
 
-  it("REFUSES a cart whose kid names the other role, even when the signature is good (bypass)", () => {
+  it("refuses a cart whose kid names the other role, even when the signature is good (bypass)", () => {
     const checkoutKey = resolveSigningKey(ORIGIN, undefined, CHECKOUT_KEY_FRAGMENT);
     const mislabelled = signCompactJwt(cart, checkoutKey.privateKey, `did:web:shop.example#${KEY_FRAGMENT}`);
     expect(verifyCompactJwt(mislabelled, checkoutKey.publicJwk)).toBeUndefined();
   });
 
-  it("REFUSES the same key configured for both roles (bypass)", () => {
+  it("refuses the same key configured for both roles (bypass)", () => {
     const shared = resolveSigningKey(ORIGIN);
     expect(() => new Ap2Issuer(shared, { checkoutKey: shared })).toThrow(/different key/);
     const one = privateJwk();
@@ -63,7 +64,9 @@ describe("the merchant's checkout key (FR-6)", () => {
     const signed = verifyCompactJwt<UcpCheckout>(credentagent.ap2.signCheckout(unnamed), credentagent.ap2.checkoutPublicJwk);
     expect(signed?.merchant).toEqual(credentagent.ap2.merchant);
     expect(credentagent.ap2.merchant).toMatchObject({ id: "shop.example" });
-    expect(() => credentagent.ap2.signCheckout({ ...cart, merchant: { id: "other.example", name: "Other" } })).toThrow(/signs as shop.example/);
+    expect(() => credentagent.ap2.signCheckout({ ...cart, merchant: { id: "other.example", name: "Other" } })).toThrow(
+      /signs as shop.example/,
+    );
   });
 
   it("publishes both keys at /.well-known/did.json — the mandate key first", async () => {

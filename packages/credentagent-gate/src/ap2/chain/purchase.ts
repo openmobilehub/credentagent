@@ -71,7 +71,10 @@ export class DelegatedIntent {
   }
 
   static fromJSON(json: { presentation: string; disclosures: { checkout: string; payment: string } }): DelegatedIntent {
-    return DelegatedIntent.fromWalletPresentation({ presentation: json.presentation, disclosures: [json.disclosures.checkout, json.disclosures.payment] });
+    return DelegatedIntent.fromWalletPresentation({
+      presentation: json.presentation,
+      disclosures: [json.disclosures.checkout, json.disclosures.payment],
+    });
   }
 
   /** The open payment mandate — what the agent may spend. UNVERIFIED: read it to plan, not to decide. */
@@ -111,13 +114,17 @@ export class DelegatedIntent {
     // Said here, plainly, rather than as a `signature` refusal at the merchant: a permission
     // signed for one agent key is spendable by that key alone.
     for (const open of [this.openCheckout, this.openPayment]) {
-      if (!args.agentKey.matches(open?.cnf?.jwk)) throw new Error("this permission names a different agent key — spend it with the AgentKey whose publicJwk the grant was created with");
+      if (!args.agentKey.matches(open?.cnf?.jwk))
+        throw new Error(
+          "this permission names a different agent key — spend it with the AgentKey whose publicJwk the grant was created with",
+        );
     }
     // Read, not verified: the agent spends against the cart it was quoted, and the merchant checks
     // its own signature on it. A cart that does not decode cannot be paid for.
     const cart = peekJson<UcpCheckout>(args.checkoutJwt.split(".")[1]);
     const problem = cart ? cartProblem(cart) : "it does not decode";
-    if (!cart || problem) throw new Error(`checkoutJwt is not a UCP Checkout: ${problem} — pass the cart exactly as the merchant signed it`);
+    if (!cart || problem)
+      throw new Error(`checkoutJwt is not a UCP Checkout: ${problem} — pass the cart exactly as the merchant signed it`);
     const iat = Math.floor(Date.now() / 1000);
     const exp = iat + Math.floor((args.ttlMs ?? DEFAULT_MANDATE_TTL_MS) / 1000);
     const checkoutHash = digestToken(args.checkoutJwt, SD_HASH_ALG);
@@ -152,7 +159,7 @@ export type PurchaseRefusalCode =
   | "splice" // the two chains do not rest on the same signed permission
   | "unexpected-type" // a chain carries the other mandate type
   | "checkout-unbound" // the checkout is not this merchant's, or its hash does not match
-  | "unbound" // the payment pays for a different checkout
+  | "payment-unbound" // the payment's transaction_id names a different checkout
   | "payee" // the payment pays someone other than the merchant whose checkout it is
   | "constraint" // the purchase leaves the permission's limits (see `violations`)
   | "amount" // the payment does not pay the checkout's total, or the total does not add up
@@ -222,16 +229,23 @@ const refuse = (code: PurchaseRefusalCode, detail: string, violations?: Violatio
  * permission, the checkout being this merchant's, the payment paying exactly that checkout, every
  * limit the person set, and the catalog's own price.
  */
-export async function verifyDelegatedPurchase(proof: DelegatedPurchaseProof, opts: VerifyPurchaseOptions): Promise<PurchaseVerdict | PurchaseRefusal> {
+export async function verifyDelegatedPurchase(
+  proof: DelegatedPurchaseProof,
+  opts: VerifyPurchaseOptions,
+): Promise<PurchaseVerdict | PurchaseRefusal> {
   // Checked at runtime too: a JavaScript caller, or one casting past the type, gets a refusal — not
   // a verdict whose trust nobody asked for.
   if (!proof || typeof proof !== "object" || typeof proof.checkout !== "string" || typeof proof.payment !== "string") {
     return refuse("malformed", "a delegated purchase proof is { checkout: string, payment: string }");
   }
   if (opts.trust !== "presence-only-demo") {
-    return refuse("trust", 'pass trust: "presence-only-demo" — the credential is checked against its own certificate, so this verifies presence, not that a person set these limits (#14)');
+    return refuse(
+      "trust",
+      'pass trust: "presence-only-demo" — the credential is checked against its own certificate, so this verifies presence, not that a person set these limits (#14)',
+    );
   }
-  if (!opts.checkoutKey) return refuse("checkout-unbound", "no checkout key configured — there is nothing to check the cart's signature against");
+  if (!opts.checkoutKey)
+    return refuse("checkout-unbound", "no checkout key configured — there is nothing to check the cart's signature against");
   const chainOpts = { audience: opts.audience, nonce: opts.nonce, ...(opts.nowMs !== undefined ? { nowMs: opts.nowMs } : {}) };
   const c = await verifyChain(proof.checkout, chainOpts);
   if (!c.ok) return refuse(c.code, `checkout chain: ${c.detail}`);
@@ -245,8 +259,10 @@ export async function verifyDelegatedPurchase(proof: DelegatedPurchaseProof, opt
     return refuse("splice", "the checkout and payment chains rest on different wallet signatures");
   }
   const permissionId = permissionIdOf(c.links[1].jwt);
-  if (c.open.vct !== VCT.openCheckout || c.closed.vct !== VCT.checkout) return refuse("unexpected-type", "the checkout chain does not carry checkout mandates");
-  if (p.open.vct !== VCT.openPayment || p.closed.vct !== VCT.payment) return refuse("unexpected-type", "the payment chain does not carry payment mandates");
+  if (c.open.vct !== VCT.openCheckout || c.closed.vct !== VCT.checkout)
+    return refuse("unexpected-type", "the checkout chain does not carry checkout mandates");
+  if (p.open.vct !== VCT.openPayment || p.closed.vct !== VCT.payment)
+    return refuse("unexpected-type", "the payment chain does not carry payment mandates");
   const openCheckout = c.open as unknown as OpenCheckoutMandate;
   const closedCheckout = c.closed as unknown as CheckoutMandate;
   const openPayment = p.open as unknown as OpenPaymentMandate;
@@ -261,7 +277,8 @@ export async function verifyDelegatedPurchase(proof: DelegatedPurchaseProof, opt
   // Signed is not well-formed: a cart or a payment missing a field is refused, never read.
   const shape = cartProblem(checkout) ?? paymentProblem(payment);
   if (shape) return refuse("malformed", shape);
-  if (payment.transaction_id !== closedCheckout.checkout_hash) return refuse("unbound", "the payment's transaction_id names a different checkout");
+  if (payment.transaction_id !== closedCheckout.checkout_hash)
+    return refuse("payment-unbound", "the payment's transaction_id names a different checkout");
   // The payee is the merchant that signed the cart. A permission naming several stores lets each
   // be paid — but only for its OWN checkout, never for another's.
   if (!merchantMatches(payment.payee, checkout.merchant)) {
@@ -272,11 +289,18 @@ export async function verifyDelegatedPurchase(proof: DelegatedPurchaseProof, opt
   // The ledger is the caller's, so it is checked like any input: `undefined + 450` is NaN, and
   // `NaN > max` is false — a ledger that answered `{}` would pass every budget.
   if (spent !== undefined && !(isCount(spent?.amount) && isCount(spent?.uses))) {
-    return refuse("malformed", "spent must be { amount, uses } as non-negative integers — what this store already spent under the permission");
+    return refuse(
+      "malformed",
+      "spent must be { amount, uses } as non-negative integers — what this store already spent under the permission",
+    );
   }
   const violations = [
     ...evaluateCheckout(openCheckout, checkout),
-    ...evaluatePayment(openPayment, payment, { openCheckout, ...(spent ? { spent } : {}), ...(opts.nowMs !== undefined ? { nowMs: opts.nowMs } : {}) }),
+    ...evaluatePayment(openPayment, payment, {
+      openCheckout,
+      ...(spent ? { spent } : {}),
+      ...(opts.nowMs !== undefined ? { nowMs: opts.nowMs } : {}),
+    }),
   ];
   if (violations.length) {
     const code = violations.some((v) => v.code === "malformed") ? "malformed" : "constraint";
@@ -292,13 +316,23 @@ export async function verifyDelegatedPurchase(proof: DelegatedPurchaseProof, opt
     return refuse("amount", (err as Error).message);
   }
   if (payment.payment_amount.amount !== total.amount || payment.payment_amount.currency !== total.currency) {
-    return refuse("amount", `payment ${payment.payment_amount.amount} ${payment.payment_amount.currency} does not pay the total ${total.amount} ${total.currency}`);
+    return refuse(
+      "amount",
+      `payment ${payment.payment_amount.amount} ${payment.payment_amount.currency} does not pay the total ${total.amount} ${total.currency}`,
+    );
   }
   // Invariant 2: the catalog decides, however perfect the signatures.
   const priced = await opts.price(checkout);
   if (priced !== total.amount) return refuse("price", `the catalog prices this cart at ${priced}, the checkout says ${total.amount}`);
 
-  return { ok: true, permissionId, checkout, payment, open: { checkout: openCheckout, payment: openPayment }, trust_level: "presence-only-demo" };
+  return {
+    ok: true,
+    permissionId,
+    checkout,
+    payment,
+    open: { checkout: openCheckout, payment: openPayment },
+    trust_level: "presence-only-demo",
+  };
 }
 
 const isCount = (v: unknown): boolean => Number.isSafeInteger(v) && (v as number) >= 0;
@@ -309,7 +343,8 @@ function cartProblem(cart: UcpCheckout): string | undefined {
   if (!cart.merchant || typeof cart.merchant !== "object") return "the checkout names no merchant";
   if (!Array.isArray(cart.line_items) || !Array.isArray(cart.totals)) return "the checkout has no line_items or totals list";
   for (const line of cart.line_items) {
-    if (!line?.item || typeof line.item.id !== "string" || !Number.isSafeInteger(line.quantity)) return "a checkout line has no item id or no integer quantity";
+    if (!line?.item || typeof line.item.id !== "string" || !Number.isSafeInteger(line.quantity))
+      return "a checkout line has no item id or no integer quantity";
   }
   return undefined;
 }
@@ -317,6 +352,7 @@ function cartProblem(cart: UcpCheckout): string | undefined {
 /** What a closed payment needs before anything reads it: an integer amount in a named currency. */
 function paymentProblem(payment: PaymentMandate): string | undefined {
   const amount = payment.payment_amount;
-  if (!amount || !Number.isSafeInteger(amount.amount) || typeof amount.currency !== "string") return "the payment has no integer payment_amount in a named currency";
+  if (!amount || !Number.isSafeInteger(amount.amount) || typeof amount.currency !== "string")
+    return "the payment has no integer payment_amount in a named currency";
   return undefined;
 }

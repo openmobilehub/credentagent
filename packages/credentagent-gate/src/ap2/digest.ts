@@ -23,5 +23,7 @@ export function mandateContentDigest(content: Record<string, unknown>): string {
  * empty ledger: a budget spent once per spelling.
  */
 export function permissionIdOf(walletKbJwt: string): string {
-  return createHash("sha256").update(walletKbJwt.slice(0, walletKbJwt.lastIndexOf("."))).digest("base64url");
+  return createHash("sha256")
+    .update(walletKbJwt.slice(0, walletKbJwt.lastIndexOf(".")))
+    .digest("base64url");
 }
