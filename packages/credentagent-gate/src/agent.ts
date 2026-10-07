@@ -6,7 +6,7 @@
 //   const agentKey = AgentKey.fromJwk(JSON.parse(process.env.AGENT_KEY!));    // or AgentKey.generate()
 //   // …the merchant creates a grant naming agentKey.publicJwk; the person signs it on their phone…
 //   const intent = DelegatedIntent.fromWalletPresentation(grant.mandate.intent);
-//   const proof = await intent.spend({ agentKey, checkoutJwt, payment, audience, nonce });
+//   const proof = await intent.spend({ agentKey, checkoutJwt, instrument, audience, nonce });
 //
 // The merchant checks `proof` with `verifyDelegatedPurchase`, from the package root.
 export { AgentKey } from "./ap2/chain/agent-key.js";

@@ -23,7 +23,7 @@ which is the interop reference.
 ```ts
 // Agent — keep the permission once, spend it per purchase.
 const intent = DelegatedIntent.fromWalletPresentation({ presentation, disclosures });
-const proof = await intent.spend({ agentKey, checkoutJwt, payment, audience, nonce });
+const proof = await intent.spend({ agentKey, checkoutJwt, instrument, audience, nonce });   // the payee and amount are the cart's own
 
 // Merchant — one call. `price` is the catalog: re-pricing still decides (invariant 2).
 const verdict = await verifyDelegatedPurchase(proof, { audience, nonce, checkoutKey, spent, price });
