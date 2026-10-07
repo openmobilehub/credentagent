@@ -1,53 +1,24 @@
 // TEST UTILITY — a wallet and a grant, in-process, for the chain tests. Not exported from the
 // package and not compiled into `dist/` (nothing the package entry imports reaches it).
 //
-// It produces exactly what the intent-sign rail hands a gate after a real ceremony: the
-// wallet's presentation `<credential>~<disclosures>~<KB-SD-JWT>` and the `delegate` disclosures
-// the request carried, built by the rail's own `openMandatesForGrant` / `delegateEntries` — so
-// the chain is tested against the bytes the rail actually produces, not a shape invented here.
+// It produces what the intent-sign rail hands a gate after a ceremony: the wallet's presentation
+// `<credential>~<disclosures>~<KB-SD-JWT>` and the `delegate` disclosures the request carried. The
+// MANDATES and their disclosures come from the rail's own `openMandatesForGrant` /
+// `delegateEntries`; the credential and the key binding are signed here, with the same dev-wallet
+// helpers the shipped simulator uses — so the chain is tested against the terms the rail builds,
+// signed the way a wallet signs them.
 //
 // The `override*` knobs each produce something a correct chain verifier MUST refuse.
-import { generateKeyPairSync, webcrypto, type KeyObject } from "node:crypto";
-import { es256Signer } from "../sdjwt.js";
-import * as x509 from "@peculiar/x509";
 import { SDJwtInstance } from "@sd-jwt/core";
 import { hasher } from "../../ceremony/intent-sign/presentation.js";
+import { delegateKeyBinding, p256, saltGenerator, selfSignedCert, sign, type DevKeyPair } from "../../ceremony/intent-sign/dev-wallet.js";
 import { mandateContentDigest } from "../digest.js";
 import type { Merchant } from "../types.js";
 import { AgentKey } from "./agent-key.js";
 import { delegateEntries, disclosureDigest, openMandatesForGrant, type MandateContent } from "../../ceremony/intent-sign/mandates.js";
 
-const b64uJson = (v: unknown) => Buffer.from(JSON.stringify(v), "utf-8").toString("base64url");
-const saltGenerator = (n: number) => Buffer.from(webcrypto.getRandomValues(new Uint8Array(n))).toString("hex").slice(0, n);
-/** The package's own ES256 signer, so the test wallet signs exactly as the gate verifies. */
-export const sign = (key: KeyObject) => es256Signer(key);
-
-export function p256() {
-  const { privateKey, publicKey } = generateKeyPairSync("ec", { namedCurve: "P-256" });
-  const { kty, crv, x, y } = publicKey.export({ format: "jwk" }) as { kty: "EC"; crv: "P-256"; x: string; y: string };
-  return { privateKey, publicJwk: { kty, crv, x, y } };
-}
-
-export type P256 = ReturnType<typeof p256>;
-
-async function selfSignedCert(key: P256): Promise<string> {
-  const alg = { name: "ECDSA", namedCurve: "P-256", hash: "SHA-256" } as const;
-  const priv = await webcrypto.subtle.importKey("jwk", key.privateKey.export({ format: "jwk" }) as webcrypto.JsonWebKey, alg, false, ["sign"]);
-  const pub = await webcrypto.subtle.importKey("jwk", { ...key.publicJwk, ext: true } as webcrypto.JsonWebKey, alg, true, ["verify"]);
-  const notBefore = new Date(Date.now() - 60_000);
-  const cert = await x509.X509CertificateGenerator.createSelfSigned(
-    {
-      serialNumber: "01",
-      name: "CN=CredentAgent Test Wallet Issuer",
-      notBefore,
-      notAfter: new Date(notBefore.getTime() + 86_400_000),
-      signingAlgorithm: alg,
-      keys: { privateKey: priv, publicKey: pub },
-    },
-    webcrypto as unknown as Parameters<typeof x509.X509CertificateGenerator.createSelfSigned>[1],
-  );
-  return Buffer.from(cert.rawData).toString("base64");
-}
+export { p256, sign };
+export type P256 = DevKeyPair;
 
 export const GATE_ORIGIN = "https://shop.example";
 
@@ -98,7 +69,7 @@ function widen(open: [MandateContent, MandateContent], extra: Merchant[]): void 
 
 export async function newWallet() {
   const issuer = p256();
-  return { issuer, holder: p256(), x5c: await selfSignedCert(issuer) };
+  return { issuer, holder: p256(), x5c: await selfSignedCert(issuer, "CredentAgent Test Wallet Issuer") };
 }
 
 /** Run a grant's ceremony in-process: what the rail's `/verify` has in hand on success. */
@@ -129,21 +100,19 @@ export async function testGrant(opts: TestGrantOptions = {}): Promise<TestGrant>
     { header: { typ: "dc+sd-jwt", ...(opts.omitX5c ? {} : { x5c: [wallet.x5c] }) } },
   );
 
-  const sdHash = Buffer.from(hasher(credential, "sha-256")).toString("base64url");
-  const kbHeader = { alg: "ES256", typ: opts.walletTyp ?? "kb+sd-jwt+kb" };
-  const kbPayload = {
-    iat,
-    aud: `origin:${GATE_ORIGIN}`,
-    nonce: "ceremony-nonce",
-    sd_hash: sdHash,
-    delegate_payload: disclosures.map((d) => ({ "...": disclosureDigest(d, "sha-256") })),
-  };
-  const input = `${b64uJson(kbHeader)}.${b64uJson(kbPayload)}`;
   const kbKey = opts.forgeWalletKey ? p256().privateKey : wallet.holder.privateKey;
   return {
     agent,
     agentKey: AgentKey.fromJwk(agent.privateKey.export({ format: "jwk" }) as never),
-    presentation: `${credential}${input}.${sign(kbKey)(input)}`,
+    presentation: delegateKeyBinding({
+      presented: credential,
+      holderKey: kbKey,
+      aud: `origin:${GATE_ORIGIN}`,
+      nonce: "ceremony-nonce",
+      delegatePayload: disclosures.map((d) => ({ "...": disclosureDigest(d, "sha-256") })),
+      typ: opts.walletTyp ?? "kb+sd-jwt+kb",
+      iat,
+    }),
     disclosures: disclosures as [string, string],
     open,
   };
