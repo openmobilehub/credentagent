@@ -145,6 +145,8 @@
     "permission.denied": (e) => ({ icon: "x", tone: "bad", title: "Permission declined", detail: `Status: ${e.status}` }),
     "permission.refused": (e) => ({ icon: "x", tone: "bad", title: "Permission not offered: nothing fits its limit", detail: e.reason }),
     "price.changed": (e) => ({ icon: "receipt", tone: "warn", title: `Price changed · ${usd(e.from)} → ${usd(e.to)}`, detail: e.product }),
+    "offer.accepted": (e) => ({ icon: "receipt", tone: "ok", title: `Offer accepted · ${usd(e.offered)} (list ${usd(e.list)})`, detail: e.product }),
+    "offer.declined": (e) => ({ icon: "x", tone: "warn", title: `Offer declined · ${usd(e.offered)}`, detail: `${e.product} — the lowest we accept is ${usd(e.counter)}` }),
     "cart.quoted": (e) => ({ icon: "receipt", title: `Cart quoted and signed with our key · ${usd(e.total)}`, detail: e.items.join(", "), mono: e.cartId }),
     "purchase.verified": (e) => ({ icon: "shield-ok", tone: "ok", title: `Purchase verified · ${usd(e.amount)}`, checks: e.checks, mono: `${e.orderId} · permission ${e.permission}` }),
     "purchase.refused": (e) => ({ icon: "shield-x", tone: "bad", title: "Purchase refused", detail: e.reason, mono: e.code }),

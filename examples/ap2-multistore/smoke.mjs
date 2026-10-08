@@ -37,7 +37,7 @@ try {
   // The chat cards: three tools render the widget, served as one resource per host (Claude, ChatGPT).
   const { tools } = await mcp.listTools();
   const carded = tools.filter((t) => t._meta?.ui?.resourceUri).map((t) => t.name).sort();
-  check(carded.join() === "buy,buy-when-price-drops,compare-offers,request-permission", `tools with a chat card → ${carded.join(", ")}`);
+  check(carded.join() === "buy,buy-when-price-drops,compare-offers,make-offer,request-permission", `tools with a chat card → ${carded.join(", ")}`);
   const watcher = tools.find((t) => t.name === "watch-permission")?._meta;
   check(watcher?.ui?.visibility?.join() === "app" && watcher["openai/widgetAccessible"] === true, "watch-permission is the card's: callable by it, hidden from the model");
   const cardUri = tools.find((t) => t.name === "buy")._meta.ui.resourceUri;
@@ -145,16 +145,39 @@ try {
   }
   check(set.ok && done?.status === "bought" && done.receipt?.order?.amount === 1500, `scenario 2(b): price dropped to $15 → ${done?.status ?? "still watching"}${done?.receipt?.order ? ` at $${done.receipt.order.amount / 100}, verified` : ""}`);
 
+  // Scenario 2(c): the person's $20 limit is under every list price for House Blend, so the agent offers it.
+  // Each store answers against a floor it never shows; an accepted offer is the store's record and buys once.
+  check(stores.every((s) => s.products.every((p) => !("floor" in p))), "scenario 2(c): no store's catalog shows the agent its lowest price");
+  const offered = await mcp.callTool({ name: "make-offer", arguments: { product: "house blend", price: 20 } });
+  const answer = (name) => offered.structuredContent.answers.find((a) => a.store === name);
+  check(answer("Acme Coffee Co")?.accepted === false && answer("Acme Coffee Co").counter === 22 && answer("BeanBarn")?.accepted === true && answer("BeanBarn").offerId && offered.content[0].text.startsWith("BeanBarn accepted $20.00"),
+    `scenario 2(c): $20 offered → Acme declines (takes $${answer("Acme Coffee Co")?.counter}), BeanBarn accepts (list $${answer("BeanBarn")?.list})`);
+  const offerId = answer("BeanBarn").offerId;
+  const noOffer = await mcp.callTool({ name: "request-permission", arguments: { store: beanbarn, skus: ["house-blend"], budget: 40, perSpend: 20, description: "House Blend, $20.", why: "accepted our offer" } });
+  check(noOffer.isError === true, "scenario 2(c): without the accepted offer, BeanBarn won't open a $20 permission (its price is $21)");
+  const deal = (await mcp.callTool({ name: "request-permission", arguments: { store: beanbarn, skus: ["house-blend"], budget: 40, perSpend: 20, description: "House Blend from BeanBarn at the $20 it accepted.", why: "accepted our offer", offerId } })).structuredContent;
+  await signOnPhone(beanbarn, deal);
+  await tool("check-permission", { store: beanbarn, grantId: deal.grantId });
+  const dealt = await tool("buy", { store: beanbarn, grantId: deal.grantId, items: [{ sku: "house-blend" }] });
+  check(dealt.ok === true && dealt.order?.amount === 2000 && dealt.order.checks.some((c) => c.startsWith("Our record of the offer we accepted")), `scenario 2(c): bought at the offer → ${dealt.ok ? `$${dealt.order.amount / 100}, verified` : dealt.reason}`);
+  // The offer is spent: a second bag under the same permission (budget $40) is priced at the $21 list, over its $20 limit.
+  const twice = await tool("buy", { store: beanbarn, grantId: deal.grantId, items: [{ sku: "house-blend" }] });
+  check(twice.ok === false, `scenario 2(c): the offer buys once — a second bag → refused (${twice.code ?? twice.reason})`);
+  // …and a second permission signed for the same offer cannot spend it again either.
+  const reuse = (await mcp.callTool({ name: "request-permission", arguments: { store: beanbarn, skus: ["house-blend"], budget: 20, perSpend: 20, description: "House Blend, $20.", why: "same offer", offerId } }));
+  check(reuse.isError === true, "scenario 2(c): a used offer can't open another $20 permission");
+
   // The back offices: each store's page renders, and its live feed saw what happened there.
   const page = await (await fetch(`${beanbarn}/`)).text();
   check(page.includes("Live activity") && page.includes('"BeanBarn"'), "BeanBarn back office renders");
   const types = (await (await fetch(`${beanbarn}/console/history`)).json()).map((e) => e.type);
-  const want = ["catalog.read", "permission.requested", "permission.opened", "permission.signed", "cart.quoted", "purchase.verified", "purchase.refused"];
+  const want = ["catalog.read", "permission.requested", "permission.opened", "permission.signed", "cart.quoted", "purchase.verified", "purchase.refused", "offer.accepted"];
   const missing = want.filter((t) => !types.includes(t));
   check(missing.length === 0, `BeanBarn feed → every event kind${missing.length ? ` (missing: ${missing.join(", ")})` : ""}`);
   const acmeFeed = await (await fetch(`${acme}/console/history`)).json();
   const acmeRefusal = acmeFeed.find((e) => e.type === "purchase.refused");
   check(acmeRefusal?.reason === "This permission was signed for another store", `Acme feed says why → "${acmeRefusal?.reason}"`);
+  check(acmeFeed.some((e) => e.type === "offer.declined" && e.counter === 2200), "Acme feed shows the offer it declined, and the lowest it takes");
   const wall = await (await fetch(local(4, "/"))).text();
   check([1, 2, 3].every((n) => wall.includes(local(n, "/"))), "store wall frames all three back offices");
 
