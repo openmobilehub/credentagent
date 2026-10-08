@@ -1,7 +1,8 @@
 // Connects the card page to whichever app shows it (spec 015 FR-5) and returns its Bridge.
 //  • Claude and other MCP Apps hosts: the ext-apps client — results arrive as `toolresult`.
 //  • ChatGPT: `window.openai` — the result is re-delivered on every `openai:set_globals`, which the
-//    card store absorbs (it replaces the card only when the data changed).
+//    card store absorbs (it replaces the card only when the data changed), and which `read()`
+//    ignores when the host's result is the one it already delivered.
 //  • A plain browser tab: the preview, from the `?view=` samples.
 
 import { App, applyDocumentTheme, applyHostFonts, applyHostStyleVariables, type McpUiHostContext } from "@modelcontextprotocol/ext-apps";
@@ -45,8 +46,14 @@ async function connectMcp(store: CardStore): Promise<Bridge> {
 }
 
 function connectChatGpt(store: CardStore, win: CardWindow, openai: OpenAiGlobals): Bridge {
+  // What the host last delivered. A re-delivery of the same result is ignored, so a card the person
+  // changed (a Revoke) is not put back to the old result the host still holds.
+  let delivered: string | undefined;
   const read = (): void => {
     if (openai.theme) setTheme(openai.theme);
+    const key = JSON.stringify([openai.toolOutput, openai.toolResponseMetadata]);
+    if (key === delivered) return;
+    delivered = key;
     store.show({ structuredContent: openai.toolOutput, _meta: openai.toolResponseMetadata });
   };
   read();
