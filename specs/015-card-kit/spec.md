@@ -1,6 +1,6 @@
 # Feature Specification: One card kit any MCP server can serve
 
-**Feature branch:** `feat/256-cards-core` (and the stacked increments below) · **Issue:** #256 · **Date:** 2026-10-08
+**Feature branches:** `feat/256-cards-*`, one per stacked pull request below · **Issue:** #256 · **Date:** 2026-10-08
 **Builds on:** spec 011 (the grant card gallery, #143 / #151), the multi-store AP2 demo (draft #244, scenarios #253 and #254)
 **Broadens:** #176 (publish the gallery), whose remaining half becomes this kit's follow-up
 
@@ -209,11 +209,14 @@ and "Open receipt". Refused: who refused, the reason, "Nothing was charged."
 
 ## Increments (stacked pull requests, about 500 lines each, one concern each)
 
-1. **Kit core** — FR-1 to FR-5 with `grant()`: packaging and build, `createCards`, `register`,
-   `toolMeta`, the page with its bridge and preview, and the gallery **moved without behavior
-   change** (`GrantViewData` and `GRANT_VIEW_KIND` move to the gate; the storefront's picker
-   imports the gallery through an internal build alias, so its widget is unchanged). This spec
-   ships here.
+1. **Kit core** — FR-1 to FR-5 with `grant()`, in three pull requests to stay near 500 lines
+   each (plan: `plan-increment-1.md`):
+   - **1a** — this spec, and the gallery **moved without behavior change**: `GrantViewData` and
+     `GRANT_VIEW_KIND` move to the gate's new `./cards` subpath; the storefront's picker
+     compiles the gallery from its new home through a relative source import (internal, not a
+     published API), so its widget is unchanged.
+   - **1b** — the card page: bridge, redraw guard, theme, preview, and its one-file build.
+   - **1c** — the server half: `createCards`, `register`, `toolMeta`, `grant()`.
 2. **Permission card** — FR-6, FR-7: the frame, the QR, live status, the card-only tool,
    `waitForSignature`, and the announcement rule.
 3. **Offers and receipt cards** — FR-8, FR-9.
