@@ -24,6 +24,15 @@ node examples/ap2-multistore/up.mjs      # live: 4 tunnels + stores + agent (nee
 
 The cards are one HTML page (`widget/widget.html`), served the way the storefront package serves its own: as an MCP Apps resource for Claude and as an Apps SDK resource for ChatGPT. They take the chat's theme and fonts. To see them without a chat, open `http://localhost:4100/widget?view=offers` (or `permission`, `receipt`, `refused`). That preview uses sample data.
 
+## Scenarios, simplest first
+
+Ask Claude (or ChatGPT) for each one in a new chat.
+
+1. **Simple: one store has it.** *"Buy me a Cold Brew Concentrate, up to $20."* Only RoastWorks sells it, so the offers card says there is nothing to compare. The agent asks for a permission at RoastWorks; you sign on your phone; it buys.
+2. **More stores, one choice.** The conversation at the top of this page: three stores sell House Blend, and the agent picks one and says why.
+
+Scenarios that are coming next: a product priced above your limit, and stores bidding against each other (tracked in #252).
+
 ## What the stores see
 
 Each store has a live **back office** at its own root URL. `http://localhost:4104` shows all three side by side, so you can put it on the screen next to the chat. Each back office shows, as it happens:

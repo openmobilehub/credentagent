@@ -148,24 +148,32 @@
   };
 
   // ── views ──────────────────────────────────────────────────────────────────
-  function offers({ stores }) {
+  function offers({ stores, summary }) {
     const ok = stores.filter((s) => s.products);
     const ids = [...new Set(ok.flatMap((s) => s.products.map((p) => p.id)))];
     const rows = ids.map((id) => {
       const cells = ok.map((s) => s.products.find((p) => p.id === id));
-      const prices = cells.filter(Boolean).map((p) => p.price), rates = cells.filter(Boolean).map((p) => p.rating);
-      const low = Math.min(...prices), top = Math.max(...rates);
-      const name = short(cells.find(Boolean).name);
+      const sold = cells.filter(Boolean);
+      const low = Math.min(...sold.map((p) => p.price)), top = Math.max(...sold.map((p) => p.rating));
+      const compared = sold.length > 1; // "lowest" and "top rated" mean nothing with a single seller
+      const name = short(sold[0].name);
       return el("tr", {}, el("th", { scope: "row" }, name), ...cells.map((p) => el("td", {},
         p ? el("div", {}, el("div", { className: "price" }, usd(p.price)), el("div", { className: "rate" }, `${Number(p.rating).toFixed(1)} ★`),
-          p.price === low ? el("span", { className: "tag low" }, "Lowest price") : null,
-          p.rating === top ? el("span", { className: "tag top" }, "Top rated") : null) : "—")));
+          compared && p.price === low ? el("span", { className: "tag low" }, "Lowest price") : null,
+          compared && p.rating === top ? el("span", { className: "tag top" }, "Top rated") : null) : "—")));
     });
+    // When the person named a product, say plainly who sells it — the table alone makes them work it out.
+    const sellers = summary?.sellers;
+    const said = !summary ? null
+      : sellers.length === 0 ? `No store sells “${summary.product}”.`
+      : sellers.length === 1 ? `Only ${sellers[0]} sells it, so there is nothing to compare.`
+      : `${sellers.length} of ${ok.length} stores sell it.`;
     return el("section", { className: "card" },
       el("p", { className: "eyebrow" }, icon("scale"), `Compared ${ok.length} stores`),
       el("h1", {}, "Offers, read live from each store"),
-      el("table", {}, el("thead", {}, el("tr", {}, el("th", {}, el("span", { className: "sub" }, "Product")), ...ok.map((s) => el("th", { scope: "col" }, s.store)))), el("tbody", {}, ...rows)),
-      el("p", { className: "sub" }, "The agent picks one store, then asks you to sign a permission for it on your phone."),
+      said ? el("p", {}, said) : null,
+      rows.length ? el("table", {}, el("thead", {}, el("tr", {}, el("th", {}, el("span", { className: "sub" }, "Product")), ...ok.map((s) => el("th", { scope: "col" }, s.store)))), el("tbody", {}, ...rows)) : null,
+      el("p", { className: "sub" }, rows.length ? "The agent picks one store, then asks you to sign a permission for it on your phone." : "Nothing to buy, so nothing to sign."),
     );
   }
 

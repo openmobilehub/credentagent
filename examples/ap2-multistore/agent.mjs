@@ -94,20 +94,33 @@ function buildServer() {
 
   registerAppTool(server, "compare-offers", {
     title: "Compare offers",
-    description: "Read every store's catalog (price + rating per product). Use it first, then pick the store with the best price-to-rating balance for what the person wants, and say why.",
-    inputSchema: {},
+    description:
+      "Read every store's catalog (price + rating per product). Pass `product` when the person names one, to see which stores sell it. " +
+      "Use it first, then pick the store with the best price-to-rating balance for what the person wants, and say why.",
+    inputSchema: {
+      product: z.string().optional().describe("a product id or words from its name, e.g. \"cold brew\" — omit to read whole catalogs"),
+    },
     annotations: { readOnlyHint: true },
     _meta: widget.meta("Reading the stores…", "Compared the stores"),
-  }, async () => {
-    const stores = await Promise.all(STORES.map(async (url) => {
+  }, async ({ product }) => {
+    let stores = await Promise.all(STORES.map(async (url) => {
       try { return { url, ...(await call(`${url}/agent/catalog`)).body }; } catch (err) { return { url, error: err.message }; }
     }));
     for (const s of stores) if (s.store) names.set(s.url, s.store);
     const down = stores.filter((s) => !s.store).map((s) => s.url);
-    log("compare-offers", `read ${stores.length - down.length} of ${stores.length} stores${down.length ? ` — unreachable: ${down.join(", ")}` : ""}`);
-    return result({ view: "offers", stores }, {
-      note: "The person sees these offers side by side in a card. Don't re-list them; say which store you pick and why, in a sentence or two.",
-    });
+    // A named product narrows every catalog to it. A store that does not sell it keeps its column, empty —
+    // "only one store sells this" is something the person should see, not infer.
+    const wanted = product?.trim().toLowerCase();
+    const matches = (p) => p.id === wanted || p.name.toLowerCase().includes(wanted);
+    if (wanted) stores = stores.map((s) => (s.products ? { ...s, products: s.products.filter(matches) } : s));
+    const sellers = stores.filter((s) => s.products?.length).map((s) => s.store);
+    const summary = wanted ? { product, sellers } : undefined;
+    log("compare-offers", `read ${stores.length - down.length} of ${stores.length} stores${wanted ? ` — "${product}" sold by ${sellers.length ? sellers.join(", ") : "none"}` : ""}${down.length ? ` — unreachable: ${down.join(", ")}` : ""}`);
+    const note =
+      wanted && sellers.length === 0 ? `No store sells "${product}". Say so; don't request a permission.`
+      : wanted && sellers.length === 1 ? `Only ${sellers[0]} sells it — no comparison to make. Say so in a sentence, then request the permission there.`
+      : "The person sees these offers side by side in a card. Don't re-list them; say which store you pick and why, in a sentence or two.";
+    return result({ view: "offers", stores, ...(summary ? { summary } : {}) }, { note });
   });
 
   registerAppTool(server, "request-permission", {
