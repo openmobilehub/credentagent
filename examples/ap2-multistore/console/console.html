@@ -140,6 +140,7 @@
     "permission.opened": (e) => ({ icon: "phone", tone: "warn", title: "Opened on the person's phone", detail: "Waiting for the wallet signature…" }),
     "permission.signed": (e) => ({ icon: "phone-ok", tone: "ok", title: "Signed on the person's phone", detail: `The agent now holds it · trust ${e.trustLevel}` }),
     "permission.denied": (e) => ({ icon: "x", tone: "bad", title: "Permission declined", detail: `Status: ${e.status}` }),
+    "permission.refused": (e) => ({ icon: "x", tone: "bad", title: "Permission not offered: nothing fits its limit", detail: e.reason }),
     "cart.quoted": (e) => ({ icon: "receipt", title: `Cart quoted and signed with our key · ${usd(e.total)}`, detail: e.items.join(", "), mono: e.cartId }),
     "purchase.verified": (e) => ({ icon: "shield-ok", tone: "ok", title: `Purchase verified · ${usd(e.amount)}`, checks: e.checks, mono: `${e.orderId} · permission ${e.permission}` }),
     "purchase.refused": (e) => ({ icon: "shield-x", tone: "bad", title: "Purchase refused", detail: e.reason, mono: e.code }),

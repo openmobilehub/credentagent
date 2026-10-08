@@ -99,10 +99,11 @@ function buildServer() {
       "Use it first, then pick the store with the best price-to-rating balance for what the person wants, and say why.",
     inputSchema: {
       product: z.string().optional().describe("a product id or words from its name, e.g. \"cold brew\" — omit to read whole catalogs"),
+      maxPrice: z.number().positive().optional().describe("the most the person will pay for one, in USD, when they gave a limit"),
     },
     annotations: { readOnlyHint: true },
     _meta: widget.meta("Reading the stores…", "Compared the stores"),
-  }, async ({ product }) => {
+  }, async ({ product, maxPrice }) => {
     let stores = await Promise.all(STORES.map(async (url) => {
       try { return { url, ...(await call(`${url}/agent/catalog`)).body }; } catch (err) { return { url, error: err.message }; }
     }));
@@ -114,10 +115,17 @@ function buildServer() {
     const matches = (p) => p.id === wanted || p.name.toLowerCase().includes(wanted);
     if (wanted) stores = stores.map((s) => (s.products ? { ...s, products: s.products.filter(matches) } : s));
     const sellers = stores.filter((s) => s.products?.length).map((s) => s.store);
-    const summary = wanted ? { product, sellers } : undefined;
-    log("compare-offers", `read ${stores.length - down.length} of ${stores.length} stores${wanted ? ` — "${product}" sold by ${sellers.length ? sellers.join(", ") : "none"}` : ""}${down.length ? ` — unreachable: ${down.join(", ")}` : ""}`);
+    // Scenario 2(a): with a limit, say which offers fit it — and, when none does, what the cheapest costs.
+    const offers = stores.flatMap((s) => (s.products ?? []).map((p) => ({ store: s.store, price: p.price })));
+    const cheapest = offers.reduce((a, b) => (b.price < (a?.price ?? Infinity) ? b : a), undefined);
+    const within = maxPrice === undefined ? undefined : [...new Set(offers.filter((o) => o.price <= maxPrice).map((o) => o.store))];
+    const summary = wanted ? { product, sellers, ...(maxPrice !== undefined ? { maxPrice, within, cheapest } : {}) } : undefined;
+    log("compare-offers", `read ${stores.length - down.length} of ${stores.length} stores${wanted ? ` — "${product}" sold by ${sellers.length ? sellers.join(", ") : "none"}` : ""}${within ? `, ${within.length} within $${maxPrice}` : ""}${down.length ? ` — unreachable: ${down.join(", ")}` : ""}`);
     const note =
       wanted && sellers.length === 0 ? `No store sells "${product}". Say so; don't request a permission.`
+      : within && within.length === 0
+        ? `No offer is within the person's maximum of ${usd(maxPrice)}: the cheapest is ${usd(cheapest.price)} at ${cheapest.store}. Don't request a permission ` +
+          "and don't buy. Tell them that, and that buying it would need a higher limit, which means signing a new permission on their phone."
       : wanted && sellers.length === 1 ? `Only ${sellers[0]} sells it — no comparison to make. Say so in a sentence, then request the permission there.`
       : "The person sees these offers side by side in a card. Don't re-list them; say which store you pick and why, in a sentence or two.";
     return result({ view: "offers", stores, ...(summary ? { summary } : {}) }, { note });
