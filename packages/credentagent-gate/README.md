@@ -434,6 +434,7 @@ text. `@openmobilehub/credentagent-gate/cards` is one card page that **any** MCP
 storefront or an agent — with no widget code of its own:
 
 ```js
+import { McpServer } from "@modelcontextprotocol/server";
 import { createCards } from "@openmobilehub/credentagent-gate/cards";
 
 const cards = createCards(); // once per process — fails at startup if the package was built without its page
@@ -442,16 +443,19 @@ function buildServer() {
   const server = new McpServer({ name: "my-server", version: "1.0.0" });
   cards.register(server); // the page for Claude (MCP Apps) and ChatGPT (skybridge), with its CSP
   server.registerTool("get-grant", { inputSchema, _meta: cards.toolMeta() }, async ({ grantId }) =>
-    cards.grant(await viewOf(grantId)), // renders as the grant card; the model gets a short note + the data
+    cards.grant(await viewOf(grantId)), // takes a GrantViewData: the grant card's plain data (kind: GRANT_VIEW_KIND), money already computed on the server
   );
   return server;
 }
 
-app.get("/cards", (_req, res) => res.type("html").send(cards.html)); // preview: /cards?view=grant-product
+app.get("/cards", (_req, res) => res.type("html").send(cards.html)); // your Express app · preview: /cards?view=grant-product
 ```
 
-A card only shows; it never decides — every limit is enforced on the server. Today the page renders
-grants (the gallery: product, category, open, approval, low, spent, revoked, declined). The
+`createStorefront()` builds this data from a live grant for its own grant tools; another server passes its own `GrantViewData` (the type and `GRANT_VIEW_KIND` are exported from `@openmobilehub/credentagent-gate/cards`).
+
+A card only shows; it never decides — every limit must be enforced on your server. Today the page renders
+grants; `/cards` with no `view` lists them all (`?view=grant-pending`, `grant-product`, `grant-category`,
+`grant-open`, `grant-low`, `grant-spent`, `grant-revoked`, `grant-declined`). The
 permission card with a QR code, the offers card and the receipt card are next
 ([#256](https://github.com/openmobilehub/credentagent/issues/256)).
 
@@ -970,6 +974,8 @@ MemoryVerificationStore  ·  completeOrder(input, ctx)
 // Bring your own host — the typed seam contract (builds completion + publishes the seams)
 defineHost({ catalog, orderStore, records | completion, signingKey | allowEphemeralKey })
   → { verificationStore, publish(app), complete(input) → { completed, reason? } }
+
+@openmobilehub/credentagent-gate/cards  ·  createCards()  (see the Cards section)
 
 // Delegated draws (HNP, 005 preview) — the Stripe-grade facade + the underlying seams
 DelegatedGate  ·  gate.preApprove(bounds) → DelegatedGrant  ·  grant.spend(purchase) → SpendResult  ·  grant.revoke()
