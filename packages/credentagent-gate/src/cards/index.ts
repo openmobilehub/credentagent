@@ -23,7 +23,7 @@ export interface Cards {
   grant(view: GrantViewData, options?: { note?: string }): CardResult;
 }
 
-const GRANT_NOTE = "The person sees this grant in a card. Don't repeat its numbers; say in a sentence what changed.";
+const GRANT_NOTE = "If the person can see this grant in a card, don't repeat its numbers; say in a sentence what changed.";
 
 /** Configure once per process. Reads the built page now, so a missing build fails at startup, not mid-chat. */
 export function createCards(): Cards {

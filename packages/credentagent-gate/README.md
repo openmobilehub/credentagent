@@ -453,6 +453,8 @@ app.get("/cards", (_req, res) => res.type("html").send(cards.html)); // your Exp
 
 `createStorefront()` builds this data from a live grant for its own grant tools; another server passes its own `GrantViewData` (the type and `GRANT_VIEW_KIND` are exported from `@openmobilehub/credentagent-gate/cards`).
 
+The grant card's **Revoke** button calls your server's `revoke-grant` tool with `{ grantId }` — register it with `_meta: cards.toolMeta()` (ChatGPT needs that to let the card call it) and return `cards.grant(view)`; without that tool, Revoke shows "This card couldn't complete that action".
+
 A card only shows; it never decides — every limit must be enforced on your server. Today the page renders
 grants; `/cards` with no `view` lists them all (`?view=grant-pending`, `grant-product`, `grant-category`,
 `grant-open`, `grant-low`, `grant-spent`, `grant-revoked`, `grant-declined`). The
@@ -975,7 +977,10 @@ MemoryVerificationStore  ·  completeOrder(input, ctx)
 defineHost({ catalog, orderStore, records | completion, signingKey | allowEphemeralKey })
   → { verificationStore, publish(app), complete(input) → { completed, reason? } }
 
-@openmobilehub/credentagent-gate/cards  ·  createCards()  (see the Cards section)
+// Cards (spec 015) — one card page any MCP server serves to Claude and ChatGPT (see the Cards section)
+// from "@openmobilehub/credentagent-gate/cards"
+createCards() → { html, register(server), toolMeta(status?), grant(view, { note? }) → CardResult }
+GRANT_VIEW_KIND  ·  GrantViewData / CardResult (types)
 
 // Delegated draws (HNP, 005 preview) — the Stripe-grade facade + the underlying seams
 DelegatedGate  ·  gate.preApprove(bounds) → DelegatedGrant  ·  grant.spend(purchase) → SpendResult  ·  grant.revoke()

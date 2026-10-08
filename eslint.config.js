@@ -95,4 +95,25 @@ export default [
       ],
     },
   },
+
+  // Card kit server half (spec 015 FR-1): registers through the CardsServer port, so it needs neither React nor the MCP SDK.
+  {
+    files: ["packages/credentagent-gate/src/cards/*.ts"],
+    ignores: ["**/*.test.ts"],
+    languageOptions: { parser: tsParser },
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              group: ["react", "react-dom", "react/*", "@modelcontextprotocol/*"],
+              message:
+                "The card kit's server half imports neither React nor the MCP SDK (spec 015 FR-1): register through the CardsServer port.",
+            },
+          ],
+        },
+      ],
+    },
+  },
 ];
