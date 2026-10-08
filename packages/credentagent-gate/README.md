@@ -427,6 +427,34 @@ redirects are never followed, and each attempt is bounded by a timeout (`timeout
 `verifyEvent(...)` is the never-throws verdict door if you prefer a result to a try/catch. Runnable:
 [`examples/order-webhooks/`](https://github.com/openmobilehub/credentagent/tree/main/examples/order-webhooks).
 
+## Cards — show the moment in the chat (`/cards`)
+
+Claude and ChatGPT can show a small interactive card inside the conversation instead of a wall of
+text. `@openmobilehub/credentagent-gate/cards` is one card page that **any** MCP server serves — a
+storefront or an agent — with no widget code of its own:
+
+```js
+import { createCards } from "@openmobilehub/credentagent-gate/cards";
+
+const cards = createCards(); // once per process — fails at startup if the package was built without its page
+
+function buildServer() {
+  const server = new McpServer({ name: "my-server", version: "1.0.0" });
+  cards.register(server); // the page for Claude (MCP Apps) and ChatGPT (skybridge), with its CSP
+  server.registerTool("get-grant", { inputSchema, _meta: cards.toolMeta() }, async ({ grantId }) =>
+    cards.grant(await viewOf(grantId)), // renders as the grant card; the model gets a short note + the data
+  );
+  return server;
+}
+
+app.get("/cards", (_req, res) => res.type("html").send(cards.html)); // preview: /cards?view=grant-product
+```
+
+A card only shows; it never decides — every limit is enforced on the server. Today the page renders
+grants (the gallery: product, category, open, approval, low, spent, revoked, declined). The
+permission card with a QR code, the offers card and the receipt card are next
+([#256](https://github.com/openmobilehub/credentagent/issues/256)).
+
 ## Bring your own host — mount on YOUR MCP server
 
 `createStorefront()` is one host; the product promise is "mount the gate on **any** app." If you
