@@ -209,6 +209,9 @@ async function startStore({ key, name, port, url, accent, products }) {
     const root = typeof proof?.payment === "string" ? createHash("sha256").update(proof.payment.split("~")[0]).digest("hex") : "";
     const before = spent.get(root) ?? { amount: 0, uses: 0 };
     const verdict = await verifyDelegatedPurchase(proof, {
+      // Said out loud, as the library requires: the demo's payment credential has no issuer trust anchor
+      // yet (#14), so this verifies presence and binding, not that a bank stands behind the card.
+      trust: "presence-only-demo",
       audience: origin,
       nonce,
       checkoutKey: credentagent.ap2.checkoutPublicJwk,
