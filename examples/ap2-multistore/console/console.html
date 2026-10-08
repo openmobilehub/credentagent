@@ -125,8 +125,11 @@
   $("mark").textContent = cfg.name[0];
   $("name").textContent = cfg.name;
   $("merchant").textContent = cfg.merchantId;
+  const priceCell = new Map(); // product name → its price cell, so a price change shows up in place (scenario 2(b))
   for (const p of cfg.catalog) {
-    $("catalog").append(el("tr", {}, el("td", {}, p.name), el("td", { className: "num" }, `$${p.price.toFixed(2)} · ${p.rating}★`)));
+    const cell = el("td", { className: "num" }, `$${p.price.toFixed(2)} · ${p.rating}★`);
+    priceCell.set(p.name, { cell, rating: p.rating });
+    $("catalog").append(el("tr", {}, el("td", {}, p.name), cell));
   }
 
   // What each event says. `tone` colours it; `detail`/`mono` are plain text.
@@ -134,13 +137,14 @@
     "catalog.read": (e) => ({ icon: "eye", title: "Agent read the catalog", detail: `Prices and ratings for ${cfg.catalog.length} products` }),
     "permission.requested": (e) => ({
       icon: "key", title: "Permission requested",
-      detail: `${e.products.join(", ")} · up to ${usd(e.perSpend)} a purchase · ${usd(e.budget)} total`,
+      detail: `${e.products.join(", ")} · up to ${usd(e.perSpend)} a purchase · ${usd(e.budget)} total${e.waitsForPrice ? " · buys when the price drops to that" : ""}`,
       mono: `agent public key x=${e.agentKeyX}… (public half only)`,
     }),
     "permission.opened": (e) => ({ icon: "phone", tone: "warn", title: "Opened on the person's phone", detail: "Waiting for the wallet signature…" }),
     "permission.signed": (e) => ({ icon: "phone-ok", tone: "ok", title: "Signed on the person's phone", detail: `The agent now holds it · trust ${e.trustLevel}` }),
     "permission.denied": (e) => ({ icon: "x", tone: "bad", title: "Permission declined", detail: `Status: ${e.status}` }),
     "permission.refused": (e) => ({ icon: "x", tone: "bad", title: "Permission not offered: nothing fits its limit", detail: e.reason }),
+    "price.changed": (e) => ({ icon: "receipt", tone: "warn", title: `Price changed · ${usd(e.from)} → ${usd(e.to)}`, detail: e.product }),
     "cart.quoted": (e) => ({ icon: "receipt", title: `Cart quoted and signed with our key · ${usd(e.total)}`, detail: e.items.join(", "), mono: e.cartId }),
     "purchase.verified": (e) => ({ icon: "shield-ok", tone: "ok", title: `Purchase verified · ${usd(e.amount)}`, checks: e.checks, mono: `${e.orderId} · permission ${e.permission}` }),
     "purchase.refused": (e) => ({ icon: "shield-x", tone: "bad", title: "Purchase refused", detail: e.reason, mono: e.code }),
@@ -164,6 +168,10 @@
     $("empty").hidden = true;
 
     if (e.type === "catalog.read") totals.visits++;
+    if (e.type === "price.changed" && priceCell.has(e.product)) {
+      const row = priceCell.get(e.product);
+      row.cell.textContent = `${usd(e.to)} · ${row.rating}★`;
+    }
     if (e.type === "purchase.refused") totals.refused++;
     if (e.type === "purchase.verified") {
       totals.orders++;

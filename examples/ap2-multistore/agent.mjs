@@ -15,6 +15,7 @@
 // a QR code to scan and its live status, and the receipt with what the store checked. Preview the cards
 // without a chat at http://localhost:4100/widget?view=offers|permission|receipt|refused.
 import express from "express";
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { McpServer, createMcpHandler, isLegacyRequest } from "@modelcontextprotocol/server";
 import { NodeStreamableHTTPServerTransport, toNodeHandler, toWebRequest } from "@modelcontextprotocol/node";
@@ -88,6 +89,74 @@ async function awaitSignature(tool, store, grantId, holdMs) {
   }
 }
 
+/** Quote, sign and pay at `store` under a signed permission — the whole purchase, used by `buy` and by a
+ *  standing order. `receipt` is the store's answer (verified or refused); `error` means it never got there. */
+async function purchase(tool, store, grantId, items) {
+  log(tool, `→ ${nameOf(store)}: ${items.map((i) => `${i.quantity ?? 1} × ${i.sku}`).join(", ")}`);
+  const intent = permissions.get(grantId);
+  if (!intent) {
+    log(tool, `✗ no signed permission held for ${grantId}`);
+    return { error: { error: "No signed permission held for this grant — call check-permission first." } };
+  }
+  const quote = await call(`${store}/agent/quote`, { grantId, items });
+  if (quote.status !== 200) {
+    log(tool, `✗ ${nameOf(store)} would not quote: ${quote.body.error ?? quote.status}`);
+    return { error: quote.body };
+  }
+  const { checkoutJwt, payee, amount, audience, nonce } = quote.body;
+  let proof;
+  try {
+    proof = await DelegatedIntent.fromWalletPresentation(intent).spend({
+      agentKey, checkoutJwt, payment: { payee, amount, instrument: { id: "demo-instrument-0001", type: "card" } }, audience, nonce,
+    });
+  } catch (err) {
+    // spend() refuses only a permission this agent's key cannot spend; the limits are the store's to check.
+    log(tool, `✗ the agent can't spend this permission: ${err.message}`);
+    return { receipt: { view: "receipt", ok: false, store: quote.body.store, reason: "The agent can't spend this permission with its key", detail: err.message } };
+  }
+  const r = await call(`${store}/agent/purchase`, { proof, nonce });
+  log(tool, r.body.ok
+    ? `✓ ${r.body.order.store} verified the purchase · ${usd(r.body.order.amount / 100)} (${r.body.order.id})`
+    : `✗ ${r.body.store ?? nameOf(store)} refused: ${r.body.reason ?? r.body.detail}`);
+  return { receipt: { view: "receipt", ...r.body } };
+}
+
+// Scenario 2(b): standing orders — "buy it when the price drops to $X", carried out with the person gone.
+// The agent checks the store's price every PRICE_POLL_MS and spends the signed permission once it fits.
+const PRICE_POLL_MS = Number(process.env.AP2_PRICE_POLL_MS ?? 3000);
+const ORDER_TTL_MS = 30 * 60_000;
+const standing = new Map(); // orderId → order
+const stateOf = (o) => `${o.status}:${o.lastPrice ?? ""}`;
+const publicOrder = ({ timer, ...o }) => o;
+
+async function leaveStandingOrder(store, grantId, sku, maxPrice) {
+  const order = {
+    orderId: `so_${randomUUID().slice(0, 8)}`, store, storeName: nameOf(store), grantId, sku, product: sku,
+    maxPrice, status: "watching", lastPrice: null, startedAt: new Date().toISOString(),
+  };
+  standing.set(order.orderId, order);
+  log("buy-when-price-drops", `${order.storeName} · ${sku} at ≤ ${usd(maxPrice)} → watching (${order.orderId})`);
+  const tick = async () => {
+    if (order.status !== "watching") return;
+    if (Date.now() - Date.parse(order.startedAt) > ORDER_TTL_MS) { order.status = "expired"; clearInterval(order.timer); return; }
+    let quote;
+    try { quote = (await call(`${store}/agent/price/${encodeURIComponent(sku)}`)).body; } catch { return; } // unreachable for a moment: next tick
+    if (typeof quote?.price !== "number") return;
+    order.product = quote.name; order.lastPrice = quote.price;
+    if (quote.price > maxPrice) return;
+    order.status = "buying";
+    clearInterval(order.timer);
+    log("buy-when-price-drops", `${order.storeName} dropped ${quote.name} to ${usd(quote.price)} — buying, with the person away (${order.orderId})`);
+    const r = await purchase("buy-when-price-drops", store, grantId, [{ sku }]);
+    order.receipt = r.receipt ?? null;
+    order.status = r.receipt?.ok ? "bought" : "refused";
+    if (!r.receipt?.ok) order.reason = r.receipt?.reason ?? r.error?.error ?? "the purchase did not go through";
+  };
+  order.timer = setInterval(tick, PRICE_POLL_MS);
+  await tick(); // the first look happens now, so the card opens with today's price
+  return publicOrder(order);
+}
+
 function buildServer() {
   const server = new McpServer({ name: "credentagent-ap2-agent", version: "0.0.0" });
   widget.register(server);
@@ -125,7 +194,8 @@ function buildServer() {
       wanted && sellers.length === 0 ? `No store sells "${product}". Say so; don't request a permission.`
       : within && within.length === 0
         ? `No offer is within the person's maximum of ${usd(maxPrice)}: the cheapest is ${usd(cheapest.price)} at ${cheapest.store}. Don't request a permission ` +
-          "and don't buy. Tell them that, and that buying it would need a higher limit, which means signing a new permission on their phone."
+          "and don't buy now. Tell them that, and offer two options: a higher limit (a new permission they sign on their phone), or " +
+          "buying it automatically once the price drops to their limit (request-permission with waitForPrice: true, then buy-when-price-drops)."
       : wanted && sellers.length === 1 ? `Only ${sellers[0]} sells it — no comparison to make. Say so in a sentence, then request the permission there.`
       : "The person sees these offers side by side in a card. Don't re-list them; say which store you pick and why, in a sentence or two.";
     return result({ view: "offers", stores, ...(summary ? { summary } : {}) }, { note });
@@ -144,10 +214,11 @@ function buildServer() {
       perSpend: z.number().positive().describe("max per purchase in USD"),
       description: z.string().describe("one plain sentence the person will see before signing"),
       why: z.string().describe("one sentence: why this store won the comparison (shown to the person)"),
+      waitForPrice: z.boolean().optional().describe("true when the person asked to buy once the price drops to their limit (then call buy-when-price-drops)"),
     },
     _meta: widget.meta("Preparing the permission…", "Waiting for your signature"),
-  }, async ({ store, skus, budget, perSpend, description, why }) => {
-    const r = await call(`${store}/agent/grants`, { agentKey: agentKey.publicJwk, skus, budget, perSpend, description });
+  }, async ({ store, skus, budget, perSpend, description, why, waitForPrice }) => {
+    const r = await call(`${store}/agent/grants`, { agentKey: agentKey.publicJwk, skus, budget, perSpend, description, waitForPrice });
     if (r.status !== 200) {
       log("request-permission", `✗ ${nameOf(store)}: ${r.body.error ?? r.status}`);
       return result(r.body, { isError: true });
@@ -232,34 +303,55 @@ function buildServer() {
     },
     _meta: widget.meta("Paying…", "The store answered"),
   }, async ({ store, grantId, items }) => {
-    log("buy", `→ ${nameOf(store)}: ${items.map((i) => `${i.quantity ?? 1} × ${i.sku}`).join(", ")}`);
-    const intent = permissions.get(grantId);
-    if (!intent) {
-      log("buy", `✗ no signed permission held for ${grantId}`);
-      return result({ error: "No signed permission held for this grant — call check-permission first." }, { isError: true });
-    }
-    const quote = await call(`${store}/agent/quote`, { grantId, items });
-    if (quote.status !== 200) {
-      log("buy", `✗ ${nameOf(store)} would not quote: ${quote.body.error ?? quote.status}`);
-      return result(quote.body, { isError: true });
-    }
-    const { checkoutJwt, payee, amount, audience, nonce } = quote.body;
-    let proof;
-    try {
-      proof = await DelegatedIntent.fromWalletPresentation(intent).spend({
-        agentKey, checkoutJwt, payment: { payee, amount, instrument: { id: "demo-instrument-0001", type: "card" } }, audience, nonce,
-      });
-    } catch (err) {
-      // spend() refuses only a permission this agent's key cannot spend; the limits are the store's to check.
-      log("buy", `✗ the agent can't spend this permission: ${err.message}`);
-      return result({ view: "receipt", ok: false, store: quote.body.store, reason: "The agent can't spend this permission with its key", detail: err.message });
-    }
+    const p = await purchase("buy", store, grantId, items);
+    if (p.error) return result(p.error, { isError: true });
     // A refusal is the store's answer, not a tool failure: the card shows it and the model explains it.
-    const r = await call(`${store}/agent/purchase`, { proof, nonce });
-    log("buy", r.body.ok
-      ? `✓ ${r.body.order.store} verified the purchase · ${usd(r.body.order.amount / 100)} (${r.body.order.id})`
-      : `✗ ${r.body.store ?? nameOf(store)} refused: ${r.body.reason ?? r.body.detail}`);
-    return result({ view: "receipt", ...r.body }, { note: "The person sees the store's answer in a card. Summarize it in one sentence." });
+    return result(p.receipt, { note: "The person sees the store's answer in a card. Summarize it in one sentence." });
+  });
+
+  // Scenario 2(b): buy later, when the price drops — with the person gone. The agent watches the store's price
+  // and spends the permission the person already signed (made with `waitForPrice`) the moment it fits.
+  registerAppTool(server, "buy-when-price-drops", {
+    title: "Buy when the price drops",
+    description:
+      "Leave a standing order: the agent watches the store's price and buys under the signed permission as soon as the price is at or " +
+      "below maxPrice, without the person. The permission must already be signed (request-permission with waitForPrice: true, then " +
+      "check-permission). Returns at once; ask standing-orders later to see whether it bought.",
+    inputSchema: {
+      store: storeUrl,
+      grantId: z.string(),
+      sku: z.string().describe("the product id to buy, one unit"),
+      maxPrice: z.number().positive().describe("buy once the price is at or below this, in USD — the permission's per-purchase limit"),
+    },
+    _meta: widget.meta("Leaving the order…", "Watching the price"),
+  }, async ({ store, grantId, sku, maxPrice }) => {
+    if (!permissions.has(grantId)) return result({ error: "No signed permission held for this grant — call check-permission first." }, { isError: true });
+    const order = await leaveStandingOrder(store, grantId, sku, maxPrice);
+    return result({ view: "standing-order", ...order }, {
+      note: `The agent is watching ${order.storeName}'s price for ${order.product} and will buy it once it is ${usd(maxPrice)} or less, ` +
+        "without the person. Tell them that in one sentence; they can leave. They can ask later whether it bought.",
+    });
+  });
+
+  server.registerTool("standing-orders", {
+    title: "Standing orders",
+    description: "List the agent's standing orders (buy when the price drops) and whether each one bought yet.",
+    inputSchema: z.object({}),
+    annotations: { readOnlyHint: true },
+  }, async () => result({ orders: [...standing.values()].map(publicOrder) }));
+
+  // The standing-order card's own watch (visibility "app"): holds up to ~25 s for the order to change.
+  server.registerTool("watch-standing-order", {
+    title: "Watch a standing order (card only)",
+    description: "Used by the standing-order card to follow the order. The model uses standing-orders instead.",
+    inputSchema: z.object({ orderId: z.string(), seen: z.string().optional() }),
+    annotations: { readOnlyHint: true },
+    _meta: { ui: { visibility: ["app"] }, "openai/widgetAccessible": true },
+  }, async ({ orderId, seen }) => {
+    const until = Date.now() + 25_000;
+    let o = standing.get(orderId);
+    while (o && stateOf(o) === seen && Date.now() < until) { await sleep(500); o = standing.get(orderId); }
+    return o ? result(publicOrder(o)) : result({ error: "no such order" }, { isError: true });
   });
 
   return server;

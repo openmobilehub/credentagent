@@ -15,7 +15,7 @@ const here = (f) => new URL(f, import.meta.url).pathname;
 const BASE = Number(process.env.SMOKE_BASE_PORT ?? 4200);
 const local = (n, path = "") => `http://localhost:${BASE + n}${path}`;
 // A short grace window, so "the model stopped waiting" is reached in milliseconds, not the live 20 s.
-const env = { ...process.env, BASE_PORT: String(BASE), AP2_MODEL_GRACE_MS: "300" };
+const env = { ...process.env, BASE_PORT: String(BASE), AP2_MODEL_GRACE_MS: "300", AP2_PRICE_POLL_MS: "200" };
 for (const k of ["ACME_URL", "BEANBARN_URL", "ROASTWORKS_URL", "STORES"]) delete env[k]; // local origins, never a tunnel's
 const kids = [spawn(process.execPath, [here("./stores.mjs")], { stdio: "inherit", env }), spawn(process.execPath, [here("./agent.mjs")], { stdio: "inherit", env })];
 const up = async (url) => { for (let i = 0; i < 100; i++) { try { await fetch(url); return; } catch { await new Promise((r) => setTimeout(r, 100)); } } throw new Error(`${url} never came up`); };
@@ -37,7 +37,7 @@ try {
   // The chat cards: three tools render the widget, served as one resource per host (Claude, ChatGPT).
   const { tools } = await mcp.listTools();
   const carded = tools.filter((t) => t._meta?.ui?.resourceUri).map((t) => t.name).sort();
-  check(carded.join() === "buy,compare-offers,request-permission", `tools with a chat card → ${carded.join(", ")}`);
+  check(carded.join() === "buy,buy-when-price-drops,compare-offers,request-permission", `tools with a chat card → ${carded.join(", ")}`);
   const watcher = tools.find((t) => t.name === "watch-permission")?._meta;
   check(watcher?.ui?.visibility?.join() === "app" && watcher["openai/widgetAccessible"] === true, "watch-permission is the card's: callable by it, hidden from the model");
   const cardUri = tools.find((t) => t.name === "buy")._meta.ui.resourceUri;
@@ -128,6 +128,22 @@ try {
   const useless = await mcp.callTool({ name: "request-permission", arguments: { store: roastworks, skus: ["espresso-beans"], budget: 15, perSpend: 15, description: "Espresso, up to $15.", why: "cheapest" } });
   const roastFeed = await (await fetch(`${roastworks}/console/history`)).json();
   check(useless.isError === true && /within its limit/.test(useless.structuredContent?.error ?? "") && roastFeed.some((e) => e.type === "permission.refused"), "scenario 2(a): the store won't open a permission nothing fits — and its back office says why");
+
+  // Scenario 2(b): the person signs "buy it when it drops to $15" and leaves. The agent watches the price and
+  // buys the moment the store owner drops it, under the permission already signed — with nobody in the chat.
+  const later = (await mcp.callTool({ name: "request-permission", arguments: { store: roastworks, skus: ["espresso-beans"], budget: 15, perSpend: 15, description: "Espresso Beans once they cost $15 or less.", why: "the cheapest, once it drops", waitForPrice: true } })).structuredContent;
+  check(Boolean(later.grantId), "scenario 2(b): a permission to buy when the price drops can be signed (the 2(a) refusal steps aside)");
+  await signOnPhone(roastworks, later);
+  await tool("check-permission", { store: roastworks, grantId: later.grantId });
+  const order = await tool("buy-when-price-drops", { store: roastworks, grantId: later.grantId, sku: "espresso-beans", maxPrice: 15 });
+  check(order.status === "watching" && order.lastPrice === 18, `scenario 2(b): standing order watching — price now $${order.lastPrice}`);
+  const set = await fetch(local(4, "/price"), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ store: "roastworks", sku: "espresso-beans", price: 15 }) });
+  let done = null;
+  for (let i = 0; i < 50 && !done; i++) {
+    await new Promise((ok) => setTimeout(ok, 100));
+    done = (await tool("standing-orders", {})).orders.find((o) => o.orderId === order.orderId && o.status !== "watching" && o.status !== "buying") ?? null;
+  }
+  check(set.ok && done?.status === "bought" && done.receipt?.order?.amount === 1500, `scenario 2(b): price dropped to $15 → ${done?.status ?? "still watching"}${done?.receipt?.order ? ` at $${done.receipt.order.amount / 100}, verified` : ""}`);
 
   // The back offices: each store's page renders, and its live feed saw what happened there.
   const page = await (await fetch(`${beanbarn}/`)).text();

@@ -153,16 +153,25 @@ async function startStore({ key, name, port, url, accent, products }) {
     res.json({ store: name, merchant: me, products: catalog.map(({ id, name, price, rating }) => ({ id, name, price, currency: "USD", rating })) });
   });
 
+  // One product's current price, for an agent watching it (scenario 2(b)). Quiet on purpose: a watcher asks every
+  // few seconds, and "agent read the catalog" each time would bury the back office.
+  store.app.get("/agent/price/:sku", (req, res) => {
+    const p = bySku.get(req.params.sku);
+    if (!p) return res.status(404).json({ error: "no such product" });
+    res.json({ sku: p.id, name: p.name, price: p.price });
+  });
+
   // Open a grant naming the AGENT's public key. The gate generates no key for it and refuses a private one.
   store.app.post("/agent/grants", json, async (req, res) => {
-    const { agentKey, skus, budget, perSpend, description } = req.body ?? {};
+    const { agentKey, skus, budget, perSpend, description, waitForPrice } = req.body ?? {};
     try {
       const unknown = (skus ?? []).filter((s) => !bySku.has(s));
       if (!skus?.length || unknown.length) return res.status(400).json({ error: `unknown or missing skus: ${unknown.join(", ") || "none given"}` });
       // Scenario 2(a): never ask the person to sign a permission nothing can be bought with. If every product
       // costs more than the per-purchase limit, refuse now — at the phone it would be a signature for nothing.
+      // Scenario 2(b) is the one exception: the person asked to buy WHEN the price drops, so it is not for nothing.
       const cheapest = skus.map((s) => bySku.get(s)).reduce((a, b) => (b.price < a.price ? b : a));
-      if (cheapest.price > perSpend) {
+      if (cheapest.price > perSpend && !waitForPrice) {
         const reason = `${cheapest.name} costs $${cheapest.price.toFixed(2)}, above the $${Number(perSpend).toFixed(2)} per-purchase limit`;
         feed.emit("permission.refused", { products: skus.map((s) => bySku.get(s).name), reason });
         return res.status(400).json({ error: `No product in this permission can be bought within its limit: ${reason}.` });
@@ -171,7 +180,7 @@ async function startStore({ key, name, port, url, accent, products }) {
       grantIds.add(g.id);
       feed.emit("permission.requested", {
         grantId: g.id, products: skus.map((s) => bySku.get(s).name), budget: minor(budget), perSpend: minor(perSpend),
-        agentKeyX: String(agentKey?.x ?? "").slice(0, 10),
+        agentKeyX: String(agentKey?.x ?? "").slice(0, 10), ...(cheapest.price > perSpend ? { waitsForPrice: true } : {}),
       });
       watchGrant(g.id);
       res.json({ grantId: g.id, approveUrl: g.approveUrl, status: g.status, store: name, merchantId: host, products: skus.map((s) => bySku.get(s).name) });
@@ -278,17 +287,35 @@ async function startStore({ key, name, port, url, accent, products }) {
 </main></body></html>`);
   });
 
+  // Scenario 2(b): the store owner changes a price. Quotes and the purchase check read `bySku`, so the new
+  // price is what the next cart is priced at, and what the store verifies against.
+  function setPrice(sku, price) {
+    const p = bySku.get(sku);
+    if (!p || !(price > 0)) return false;
+    const from = p.price;
+    p.price = price;
+    feed.emit("price.changed", { product: p.name, from: minor(from), to: minor(price) });
+    return true;
+  }
+
   await store.listen(port);
   console.log(`  ${name.padEnd(15)} ${origin}   (local :${port}, merchant id ${host})`);
-  return { name, port, origin };
+  return { key, name, port, origin, setPrice, products: () => catalog.map(({ id, name, price }) => ({ id, name, price })) };
 }
 
 console.log("\nap2-multistore — three stores:");
 const started = [];
 for (const s of STORES) started.push(await startStore(s));
 
-// The wall: all three back offices side by side, for the screen next to the chat. Local only.
+// The wall: all three back offices side by side, for the screen next to the chat. Local only — it listens on
+// 127.0.0.1 and is never tunneled, which is why the store owner's price control lives here (scenario 2(b)).
 const wall = express();
-wall.get("/", (_req, res) => res.type("html").send(fill(WALL, started.map(({ name, port }) => ({ name, url: `http://localhost:${port}/` })))));
+wall.get("/", (_req, res) => res.type("html").send(fill(WALL, started.map(({ key, name, port, products }) => ({ key, name, url: `http://localhost:${port}/`, products: products() })))));
+wall.post("/price", express.json(), (req, res) => {
+  const { store, sku, price } = req.body ?? {};
+  const s = started.find((x) => x.key === store);
+  if (!s || !s.setPrice(sku, Number(price))) return res.status(400).json({ error: "unknown store or product, or a price that is not positive" });
+  res.json({ ok: true });
+});
 wall.listen(WALL_PORT, "127.0.0.1", () => console.log(`\n  Store wall (all three back offices, live) → http://localhost:${WALL_PORT}`));
 if (!process.env.ACME_URL) console.log(`\nStart the agent with:  STORES=${started.map((s) => s.origin).join(",")} node examples/ap2-multistore/agent.mjs\n`);
