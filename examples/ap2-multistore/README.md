@@ -31,7 +31,9 @@ Ask Claude (or ChatGPT) for each one in a new chat.
 1. **Simple: one store has it.** *"Buy me a Cold Brew Concentrate, up to $20."* Only RoastWorks sells it, so the offers card says there is nothing to compare. The agent asks for a permission at RoastWorks; you sign on your phone; it buys.
 2. **More stores, one choice.** The conversation at the top of this page: three stores sell House Blend, and the agent picks one and says why.
 
-Scenarios that are coming next: a product priced above your limit, and stores bidding against each other (tracked in #252).
+3. **Above your limit.** *"Buy a bag of Espresso Beans, but don't pay more than $15."* Every store sells it for more (the cheapest is $18 at RoastWorks). The agent doesn't ask you to sign anything and doesn't buy. It tells you the cheapest offer, and that a higher limit means signing a new permission on your phone. If it asked anyway, the store would refuse to open a permission nothing fits, and its back office would say why.
+
+Coming next: waiting for the price to drop, offering your maximum to the store, and stores bidding against each other (tracked in #252).
 
 ## What the stores see
 

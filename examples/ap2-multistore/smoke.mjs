@@ -120,6 +120,15 @@ try {
   const decaf = await mcp.callTool({ name: "compare-offers", arguments: { product: "decaf" } });
   check(decaf.structuredContent.summary?.sellers.length === 0 && decaf.content[0].text.startsWith('No store sells "decaf"'), "a product no store sells: the agent is told not to ask for a permission");
 
+  // Scenario 2(a): every store sells it above the person's limit. The agent is told not to ask and not to buy,
+  // and a store refuses to open a permission nothing could be bought with, so the phone is never asked to sign one.
+  const pricey = await mcp.callTool({ name: "compare-offers", arguments: { product: "espresso", maxPrice: 15 } });
+  const ps = pricey.structuredContent.summary;
+  check(ps?.within?.length === 0 && ps.cheapest?.store === "RoastWorks" && ps.cheapest.price === 18 && pricey.content[0].text.startsWith("No offer is within the person's maximum of $15.00"), `scenario 2(a): nothing within $15 — cheapest $${ps?.cheapest?.price} at ${ps?.cheapest?.store}`);
+  const useless = await mcp.callTool({ name: "request-permission", arguments: { store: roastworks, skus: ["espresso-beans"], budget: 15, perSpend: 15, description: "Espresso, up to $15.", why: "cheapest" } });
+  const roastFeed = await (await fetch(`${roastworks}/console/history`)).json();
+  check(useless.isError === true && /within its limit/.test(useless.structuredContent?.error ?? "") && roastFeed.some((e) => e.type === "permission.refused"), "scenario 2(a): the store won't open a permission nothing fits — and its back office says why");
+
   // The back offices: each store's page renders, and its live feed saw what happened there.
   const page = await (await fetch(`${beanbarn}/`)).text();
   check(page.includes("Live activity") && page.includes('"BeanBarn"'), "BeanBarn back office renders");

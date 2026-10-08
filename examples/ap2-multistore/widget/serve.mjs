@@ -56,7 +56,7 @@ export async function qrDataUrl(url) {
   return `data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}`;
 }
 
-/** Sample results for the local preview (`/widget?view=offers|only-one|permission|receipt|refused`), shaped exactly like the tools' results. */
+/** Sample results for the local preview (`/widget?view=offers|only-one|over-limit|permission|receipt|refused`), shaped exactly like the tools' results. */
 export async function previewResult(view) {
   const products = (h, e, t) => [
     { id: "house-blend", name: "House Blend, 1 lb bag", price: h[0], rating: h[1] },
@@ -91,6 +91,12 @@ export async function previewResult(view) {
       id: "ord_preview", store: "BeanBarn", amount: 2100, items: ["1 × House Blend, 1 lb bag"], trust_level: "presence-only-demo", checks,
     } },
     refused: { view: "receipt", ok: false, store: "Acme Coffee Co", code: "constraint", reason: "This permission was signed for another store" },
+    // Scenario 2(a): every offer is above the person's limit.
+    "over-limit": { view: "offers", summary: { product: "espresso", sellers: ["Acme Coffee Co", "BeanBarn", "RoastWorks"], maxPrice: 15, within: [], cheapest: { store: "RoastWorks", price: 18 } }, stores: [
+      { store: "Acme Coffee Co", url: "https://acme.example", products: [{ id: "espresso-beans", name: "Espresso Beans, 1 lb bag", price: 19, rating: 4.0 }] },
+      { store: "BeanBarn", url: "https://beanbarn.example", products: [{ id: "espresso-beans", name: "Espresso Beans, 1 lb bag", price: 22, rating: 4.2 }] },
+      { store: "RoastWorks", url: "https://roastworks.example", products: [{ id: "espresso-beans", name: "Espresso Beans, 1 lb bag", price: 18, rating: 4.7 }] },
+    ] },
     // Scenario 1: the person named a product only one store sells.
     "only-one": { view: "offers", summary: { product: "cold brew", sellers: ["RoastWorks"] }, stores: [
       { store: "Acme Coffee Co", url: "https://acme.example", products: [] },

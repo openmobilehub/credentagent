@@ -159,6 +159,14 @@ async function startStore({ key, name, port, url, accent, products }) {
     try {
       const unknown = (skus ?? []).filter((s) => !bySku.has(s));
       if (!skus?.length || unknown.length) return res.status(400).json({ error: `unknown or missing skus: ${unknown.join(", ") || "none given"}` });
+      // Scenario 2(a): never ask the person to sign a permission nothing can be bought with. If every product
+      // costs more than the per-purchase limit, refuse now — at the phone it would be a signature for nothing.
+      const cheapest = skus.map((s) => bySku.get(s)).reduce((a, b) => (b.price < a.price ? b : a));
+      if (cheapest.price > perSpend) {
+        const reason = `${cheapest.name} costs $${cheapest.price.toFixed(2)}, above the $${Number(perSpend).toFixed(2)} per-purchase limit`;
+        feed.emit("permission.refused", { products: skus.map((s) => bySku.get(s).name), reason });
+        return res.status(400).json({ error: `No product in this permission can be bought within its limit: ${reason}.` });
+      }
       const g = await credentagent.grants.create({ merchant: key, budget, perSpend, allow: { skus }, agentKey, description });
       grantIds.add(g.id);
       feed.emit("permission.requested", {

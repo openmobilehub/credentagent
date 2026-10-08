@@ -65,6 +65,8 @@
   td .rate { color: var(--fg-2); font-size: 13px; }
   .tag { display: inline-block; margin-top: 3px; font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 999px; }
   .tag.low { background: var(--ok-bg); color: var(--ok); } .tag.top { background: var(--tint); color: var(--info); border: 1px solid var(--line); }
+  .tag.over { background: var(--bad-bg); color: var(--bad); }
+  .limit { border-left: 3px solid var(--bad); padding: 2px 0 2px 10px; }
 
   /* permission */
   .split { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); }
@@ -157,23 +159,32 @@
       const low = Math.min(...sold.map((p) => p.price)), top = Math.max(...sold.map((p) => p.rating));
       const compared = sold.length > 1; // "lowest" and "top rated" mean nothing with a single seller
       const name = short(sold[0].name);
+      const max = summary?.maxPrice;
       return el("tr", {}, el("th", { scope: "row" }, name), ...cells.map((p) => el("td", {},
         p ? el("div", {}, el("div", { className: "price" }, usd(p.price)), el("div", { className: "rate" }, `${Number(p.rating).toFixed(1)} ★`),
           compared && p.price === low ? el("span", { className: "tag low" }, "Lowest price") : null,
-          compared && p.rating === top ? el("span", { className: "tag top" }, "Top rated") : null) : "—")));
+          compared && p.rating === top ? el("span", { className: "tag top" }, "Top rated") : null,
+          max !== undefined && p.price > max ? el("span", { className: "tag over" }, `Over your ${usd(max)}`) : null) : "—")));
     });
     // When the person named a product, say plainly who sells it — the table alone makes them work it out.
+    // With a limit, say what fits it; when nothing does, say what the cheapest costs (scenario 2(a)).
     const sellers = summary?.sellers;
+    const over = summary?.within && summary.within.length === 0 && sellers.length > 0;
     const said = !summary ? null
       : sellers.length === 0 ? `No store sells “${summary.product}”.`
+      : over ? `None is within your ${usd(summary.maxPrice)} limit. The cheapest is ${usd(summary.cheapest.price)} at ${summary.cheapest.store}.`
+      : summary.within ? `${summary.within.length} of ${sellers.length} ${sellers.length === 1 ? "store sells" : "stores sell"} it within your ${usd(summary.maxPrice)} limit.`
       : sellers.length === 1 ? `Only ${sellers[0]} sells it, so there is nothing to compare.`
       : `${sellers.length} of ${ok.length} stores sell it.`;
+    const footer = !rows.length ? "Nothing to buy, so nothing to sign."
+      : over ? "Nothing within your limit, so nothing to sign. Buying it would need a higher limit, signed on your phone."
+      : "The agent picks one store, then asks you to sign a permission for it on your phone.";
     return el("section", { className: "card" },
       el("p", { className: "eyebrow" }, icon("scale"), `Compared ${ok.length} stores`),
       el("h1", {}, "Offers, read live from each store"),
-      said ? el("p", {}, said) : null,
+      said ? el("p", { className: over ? "limit" : "" }, said) : null,
       rows.length ? el("table", {}, el("thead", {}, el("tr", {}, el("th", {}, el("span", { className: "sub" }, "Product")), ...ok.map((s) => el("th", { scope: "col" }, s.store)))), el("tbody", {}, ...rows)) : null,
-      el("p", { className: "sub" }, rows.length ? "The agent picks one store, then asks you to sign a permission for it on your phone." : "Nothing to buy, so nothing to sign."),
+      el("p", { className: "sub" }, footer),
     );
   }
 
