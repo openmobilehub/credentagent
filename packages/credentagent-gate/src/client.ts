@@ -13,8 +13,9 @@ import { serveOrders } from "./orders-serve.js";
 import { Webhooks } from "./webhooks.js";
 import { Grants } from "./grants.js";
 import { runDoctor, formatDoctorReport, type DoctorReport } from "./doctor.js";
-import { didDocument, resolveSigningKey, type GateSigningKey } from "./ap2/keys.js";
+import { CHECKOUT_KEY_FRAGMENT, didDocument, resolveSigningKey, type GateSigningKey } from "./ap2/keys.js";
 import { Ap2Issuer } from "./ap2/issue.js";
+import { merchantFor } from "./ap2/from-gate.js";
 
 x509.cryptoProvider.set(globalThis.crypto);
 
@@ -85,6 +86,7 @@ export class CredentAgent {
   // what was configured once — a stable gateSecret, and whether the stores are shared (injected)
   // or the in-memory defaults. `walletOrigin` + `readerIdentity` are already public/held above.
   private readonly mandateKey: GateSigningKey;
+  private readonly checkoutKey: GateSigningKey;
   // True once /.well-known/did.json has been registered, so a second mount() does not re-register it.
   private didServed = false;
   private readonly hasGateSecret: boolean;
@@ -127,7 +129,11 @@ export class CredentAgent {
     // race in the middle of a security check. Absent ⇒ an ephemeral key, which doctor() reports as
     // an error on a deployment rather than accepting silently.
     this.mandateKey = resolveSigningKey(this.walletOrigin, opts.mandateSigningKey);
-    this.ap2 = new Ap2Issuer(this.mandateKey);
+    // The merchant's CHECKOUT key — carts are quoted with it, never with the mandate key (spec 014,
+    // FR-6). Same rules: injected or ephemeral, and doctor() names the ephemeral case.
+    this.checkoutKey = resolveSigningKey(this.walletOrigin, opts.checkoutSigningKey, CHECKOUT_KEY_FRAGMENT);
+    // Ap2Issuer refuses one key in both roles, so a host passing the same JWK twice fails here.
+    this.ap2 = new Ap2Issuer(this.mandateKey, { checkoutKey: this.checkoutKey, merchant: merchantFor(this.walletOrigin) });
     this.store = opts.store ?? new MemoryVerificationStore();
     // #25 doctor(): remember what was configured — an injected store is "shared" (survives an
     // instance split); the default MemoryVerificationStore is not. A non-empty gateSecret makes
@@ -294,6 +300,7 @@ export class CredentAgent {
       sharedOrderStores: this.sharedOrderStores,
       composedWithHost: this.composedWithHost,
       ephemeralMandateKey: this.mandateKey.ephemeral,
+      ephemeralCheckoutKey: this.checkoutKey.ephemeral,
       env: process.env,
     });
     if (opts.print) {
@@ -378,7 +385,7 @@ export class CredentAgent {
    */
   private publishSigningKey(app: ExpressApp): void {
     if (this.didServed || typeof app.get !== "function") return;
-    const doc = didDocument(this.mandateKey);
+    const doc = didDocument(this.mandateKey, this.checkoutKey);
     app.get("/.well-known/did.json", (_req, res) => res.json(doc));
     this.didServed = true;
   }

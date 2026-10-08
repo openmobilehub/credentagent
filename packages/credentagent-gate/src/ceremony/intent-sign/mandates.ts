@@ -20,7 +20,9 @@
 // mandates. It proves nothing about whether the credential came from a real card issuer —
 // that is #14, and `trust_level` still says so.
 import { createHash, createHmac } from "node:crypto";
-import { canonical } from "../mandate.js";
+// `payment.reference` names the open checkout by this digest. ONE definition, shared with the
+// chain verifier that checks it — two copies is two places for the encoding to drift.
+import { mandateContentDigest } from "../../ap2/digest.js";
 import { checkoutConstraintsFromGrant, paymentConstraintsFromGrant } from "../../ap2/from-gate.js";
 import { VCT } from "../../ap2/types.js";
 import type { IntentBoundsInput } from "./bounds.js";
@@ -44,23 +46,6 @@ export type MandateContent = Record<string, unknown>;
  */
 export const DELEGATE_FORMAT = "dSD-JWT";
 
-/**
- * The KB-JWT claim carrying the digests of what the holder signed (Delegate SD-JWT §7.1).
- *
- * `delegate_payload`, with NO leading or trailing underscore — datatracker renders §7.1's
- * italicised heading as `_delegate_payload_`, and a verifier written against the draft looks for
- * the plain name that §7.1's prose spells out.
- */
-export const DELEGATE_PAYLOAD_CLAIM = "delegate_payload";
-
-/**
- * The `typ` a Delegate Key Binding JWT must carry (§5.1.4): "The typ parameter value MUST be
- * replaced with `kb+sd-jwt` for a KB-SD-JWT, and `kb+sd-jwt+kb` for a KB-SD-JWT+KB." A plain
- * `kb+jwt` — what a wallet emits when it treats this as an ordinary key binding — is the tell
- * that the delegation extension was never applied.
- */
-export const DELEGATE_KB_TYP = ["kb+sd-jwt", "kb+sd-jwt+kb"] as const;
-
 /** The hash algorithms this rail can produce, by their IANA `transaction_data_hashes_alg` name. */
 const HASH_ALGS = { "sha-256": "sha256", "sha-384": "sha384", "sha-512": "sha512" } as const;
 
@@ -73,19 +58,6 @@ export const DEFAULT_HASH_ALG: DelegateHashAlg = "sha-256";
 /** Is `alg` one this rail can actually compute? A wallet asked for anything else cannot answer. */
 export function isDelegateHashAlg(alg: string): alg is DelegateHashAlg {
   return alg in HASH_ALGS;
-}
-
-/**
- * Digest of a Mandate Content object, over its canonical encoding.
- *
- * Used for `payment.reference`, which is how AP2 ties the two halves of a grant together: the
- * payment authority is only valid for the checkout authority whose digest it names. Both
- * halves travel inside ONE key binding here, so they are already bound by that signature —
- * but naming the digest keeps the pair readable on its own, and keeps the constraint AP2
- * requires present rather than omitted for convenience.
- */
-function contentDigest(content: MandateContent): string {
-  return createHash("sha256").update(canonical(content)).digest("base64url");
 }
 
 /**
@@ -144,7 +116,7 @@ export function openMandatesForGrant(args: {
 
   const payment: MandateContent = {
     vct: VCT.openPayment,
-    constraints: paymentConstraintsFromGrant(grantBounds, origin, contentDigest(checkout)),
+    constraints: paymentConstraintsFromGrant(grantBounds, origin, mandateContentDigest(checkout)),
     cnf: { jwk: delegate },
     exp,
   };

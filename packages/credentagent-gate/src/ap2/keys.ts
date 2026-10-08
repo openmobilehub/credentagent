@@ -22,6 +22,14 @@ export const SIGNING_ALG = "ES256" as const;
 /** Fragment of the gate's verification method — also every mandate's `kid`. */
 export const KEY_FRAGMENT = "gate-signing-key";
 
+/**
+ * Fragment of the merchant's CHECKOUT key — the `kid` on every UCP Checkout this gate quotes.
+ *
+ * A separate key from the mandate key (spec 014, FR-6): a cart the merchant quotes and a mandate
+ * the gate issues are different statements, and the `kid` says which one a signature makes.
+ */
+export const CHECKOUT_KEY_FRAGMENT = "merchant-checkout-key";
+
 /** A P-256 PRIVATE JWK — what a host injects as `{ mandateSigningKey }`. `d` is the secret. */
 export interface PrivateJwkP256 {
   kty: "EC";
@@ -70,50 +78,64 @@ function publicPointFromD(d: string): { x: string; y: string } {
 }
 
 /**
+ * Import a PRIVATE P-256 JWK, refusing one that is not what it claims. `label` names the secret
+ * in every error, so the message says which one is broken.
+ *
+ * The public half is DERIVED from `d`, never copied from the JWK's `x` / `y`. Not every node
+ * build refuses a JWK whose `x` / `y` do not belong to its `d` at import — and on those that
+ * accept it, `createPublicKey(privateKey)` hands the imported `x` / `y` straight back rather
+ * than recomputing them, so it is no check at all. Only a scalar multiplication of `d` is;
+ * copying them would publish a key that matches nothing we sign, so every signature would fail
+ * its own check while doctor() stayed green. A mismatch is a broken secret, refused here rather
+ * than at the first verify.
+ */
+export function importPrivateJwk(jwk: PrivateJwkP256, label: string): { privateKey: KeyObject; x: string; y: string } {
+  if (jwk.kty !== "EC" || jwk.crv !== "P-256") {
+    throw new Error(`${label} must be an EC P-256 JWK (got kty=${jwk.kty} crv=${jwk.crv}) — AP2 mandates here are ES256`);
+  }
+  if (!jwk.d) throw new Error(`${label} must be a PRIVATE JWK (no \`d\` component present)`);
+  const mismatch = `${label}'s public \`x\` / \`y\` do not belong to its private \`d\` — the JWK is corrupt or mismatched`;
+  let privateKey: KeyObject;
+  try {
+    privateKey = createPrivateKey({ key: jwk as unknown as Record<string, unknown>, format: "jwk" });
+  } catch (err) {
+    // Some node/OpenSSL builds catch a mismatched pair at import ("Invalid JWK EC key"); name it
+    // the same way the explicit check below does, so the error does not depend on the runtime.
+    throw new Error(`${mismatch} (${err instanceof Error ? err.message : String(err)})`);
+  }
+  const derived = publicPointFromD(jwk.d);
+  if (derived.x !== jwk.x || derived.y !== jwk.y) throw new Error(mismatch);
+  return { privateKey, x: derived.x, y: derived.y };
+}
+
+/**
  * Resolve the gate's signing key.
  *
  * `hostKey` is a PRIVATE P-256 JWK the host controls (read it from a secret manager, not
  * from source). Absent ⇒ an ephemeral key, flagged as such rather than silently accepted.
  */
-export function resolveSigningKey(origin: string, hostKey?: PrivateJwkP256): GateSigningKey {
+export function resolveSigningKey(origin: string, hostKey?: PrivateJwkP256, fragment: string = KEY_FRAGMENT): GateSigningKey {
   const issuer = didWebFor(origin);
-  const kid = `${issuer}#${KEY_FRAGMENT}`;
+  const kid = `${issuer}#${fragment}`;
 
   if (hostKey) {
-    if (hostKey.kty !== "EC" || hostKey.crv !== "P-256") {
-      throw new Error(
-        `mandateSigningKey must be an EC P-256 JWK (got kty=${hostKey.kty} crv=${hostKey.crv}) — AP2 mandates here are ES256`,
-      );
-    }
-    if (!hostKey.d) throw new Error("mandateSigningKey must be a PRIVATE JWK (no `d` component present)");
-    const mismatch = "mandateSigningKey's public `x` / `y` do not belong to its private `d` — the JWK is corrupt or mismatched";
-    let privateKey: KeyObject;
-    try {
-      privateKey = createPrivateKey({ key: hostKey as unknown as Record<string, unknown>, format: "jwk" });
-    } catch (err) {
-      // Some node/OpenSSL builds catch a mismatched pair at import ("Invalid JWK EC key"); name it
-      // the same way the explicit check below does, so the error does not depend on the runtime.
-      throw new Error(`${mismatch} (${err instanceof Error ? err.message : String(err)})`);
-    }
-    // The public half is DERIVED from `d`, never copied from the host's `x` / `y`. Not every node
-    // build refuses a JWK whose `x` / `y` do not belong to its `d` at import — and on those that
-    // accept it, `createPublicKey(privateKey)` hands the imported `x` / `y` straight back rather
-    // than recomputing them, so it is no check at all. Only a scalar multiplication of `d` is; copying them would publish a
-    // key that matches nothing we sign, so every mandate would fail its own check while doctor()
-    // stayed green. A mismatch is a broken secret, refused here rather than at the first verify.
-    const derived = publicPointFromD(hostKey.d);
-    if (derived.x !== hostKey.x || derived.y !== hostKey.y) {
-      throw new Error(mismatch);
-    }
+    // Named by role, so an error says WHICH secret is broken.
+    const { privateKey, x, y } = importPrivateJwk(hostKey, fragment === CHECKOUT_KEY_FRAGMENT ? "checkoutSigningKey" : "mandateSigningKey");
     return {
       kid,
       issuer,
       privateKey,
-      publicJwk: { kty: "EC", crv: "P-256", x: derived.x, y: derived.y, alg: SIGNING_ALG, kid },
+      publicJwk: { kty: "EC", crv: "P-256", x, y, alg: SIGNING_ALG, kid },
       ephemeral: false,
     };
   }
 
+  return ephemeralSigningKey(issuer, fragment);
+}
+
+/** A key made up at boot for `issuer#fragment` — flagged `ephemeral`, never silently accepted. */
+export function ephemeralSigningKey(issuer: string, fragment: string): GateSigningKey {
+  const kid = `${issuer}#${fragment}`;
   const { privateKey, publicKey } = generateKeyPairSync("ec", { namedCurve: "P-256" });
   const jwk = publicKey.export({ format: "jwk" }) as { x: string; y: string };
   return {
@@ -136,18 +158,18 @@ export function importVerifyKey(jwk: PublicJwkP256): KeyObject {
 /**
  * The DID document `mount()` serves at `/.well-known/did.json`.
  *
- * One verification method — this gate's mandate-signing key. `assertionMethod` is the
- * right relationship for issuing mandates; listing `authentication` too would over-state
- * what this key is for.
+ * The mandate-signing key, then any further keys this gate signs with — today the merchant's
+ * checkout key (FR-6). `assertionMethod` is the right relationship for issuing statements;
+ * listing `authentication` too would over-state what these keys are for. The mandate key is
+ * listed FIRST, so a reader that takes the first assertion method still gets it.
  */
-export function didDocument(key: GateSigningKey): Record<string, unknown> {
+export function didDocument(key: GateSigningKey, ...more: GateSigningKey[]): Record<string, unknown> {
+  const keys = [key, ...more];
   return {
     "@context": ["https://www.w3.org/ns/did/v1", "https://w3id.org/security/suites/jws-2020/v1"],
     id: key.issuer,
-    verificationMethod: [
-      { id: key.kid, type: "JsonWebKey2020", controller: key.issuer, publicKeyJwk: key.publicJwk },
-    ],
-    assertionMethod: [key.kid],
+    verificationMethod: keys.map((k) => ({ id: k.kid, type: "JsonWebKey2020", controller: k.issuer, publicKeyJwk: k.publicJwk })),
+    assertionMethod: keys.map((k) => k.kid),
   };
 }
 

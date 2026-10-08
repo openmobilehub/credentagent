@@ -399,7 +399,7 @@ describe("Delegate SD-JWT conformance (draft-gco-oauth-delegate-sd-jwt-00)", () 
     const { req, result } = await signFor(bounds(), { plainDelegatePayload: false });
     const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: bounds(), origin: ORIGIN, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
     expect(out.ok).toBe(true);
-    const { DELEGATE_PAYLOAD_CLAIM } = await import("./mandates.js");
+    const { DELEGATE_PAYLOAD_CLAIM } = await import("../../ap2/delegate.js");
     expect(DELEGATE_PAYLOAD_CLAIM).toBe("delegate_payload");
     expect(DELEGATE_PAYLOAD_CLAIM.startsWith("_")).toBe(false);
   });

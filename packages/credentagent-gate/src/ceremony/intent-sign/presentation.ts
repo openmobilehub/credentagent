@@ -17,25 +17,24 @@
 //
 // It also does not decide whether the mandates are the RIGHT ones. That comparison is
 // `mandates.ts`, against the server's own grant record, and the caller must do it.
-import { createPublicKey, X509Certificate } from "node:crypto";
+import { X509Certificate, type KeyObject } from "node:crypto";
+import { importVerifyKey, type PublicJwkP256 } from "../../ap2/keys.js";
 // The shared ES256 check and SD-JWT hasher. This rail keeps its own presentation check (a
 // Delegate KB-JWT is typed `kb+sd-jwt`, which the library's key-binding path refuses), but its
 // primitives are the package's: one copy of each, so the `ieee-p1363` detail and the hash names
 // cannot drift between them.
 import { es256Verify, hasher } from "../../ap2/sdjwt.js";
 import { decodeSdJwt, getClaims, splitSdJwt } from "@sd-jwt/core";
-import { DELEGATE_KB_TYP, DELEGATE_PAYLOAD_CLAIM, type MandateContent } from "./mandates.js";
+import { peekJson } from "../../ap2/jwt.js";
+import { DELEGATE_KB_TYP, DELEGATE_PAYLOAD_CLAIM } from "../../ap2/delegate.js";
+import type { MandateContent } from "./mandates.js";
 
 /** Re-exported for the in-process wallet, which must hash the way this verifier does. */
 export { hasher };
 
 /** Decode a JWS segment without verifying. Only ever used to READ a key or a claim name. */
 function segment<T>(token: string, index: 0 | 1): T | undefined {
-  try {
-    return JSON.parse(Buffer.from(token.split(".")[index], "base64url").toString("utf-8")) as T;
-  } catch {
-    return undefined;
-  }
+  return peekJson<T>(token.split(".")[index]);
 }
 
 /**
@@ -103,7 +102,7 @@ export async function verifyDelegatedPresentation(args: {
   const leaf = header?.x5c?.[0];
   if (!leaf) return { ok: false, reason: "credential has no x5c certificate chain" };
 
-  let issuerKey: ReturnType<typeof createPublicKey>;
+  let issuerKey: KeyObject;
   try {
     issuerKey = new X509Certificate(
       `-----BEGIN CERTIFICATE-----\n${leaf.replace(/(.{64})/g, "$1\n")}\n-----END CERTIFICATE-----`,
@@ -134,9 +133,9 @@ export async function verifyDelegatedPresentation(args: {
     return { ok: false, reason: "credential has expired" };
   }
 
-  let holderKey: ReturnType<typeof createPublicKey>;
+  let holderKey: KeyObject;
   try {
-    holderKey = createPublicKey({ key: cnfJwk as unknown as Record<string, unknown>, format: "jwk" });
+    holderKey = importVerifyKey(cnfJwk as unknown as PublicJwkP256);
   } catch (err) {
     return { ok: false, reason: `cnf: ${(err as Error).message}` };
   }
@@ -156,8 +155,8 @@ export async function verifyDelegatedPresentation(args: {
   // delegation as a normal presentation, which is the shape this rail shipped before #192 — so
   // accepting it would let the old, non-conformant output keep passing unnoticed.
   const kbTyp = segment<{ typ?: string }>(parts.kbJwt, 0)?.typ;
-  if (!kbTyp || !(DELEGATE_KB_TYP as readonly string[]).includes(kbTyp)) {
-    return { ok: false, reason: `key binding is typed ${kbTyp ?? "∅"}, not ${DELEGATE_KB_TYP.join(" or ")}` };
+  if (!kbTyp || !(Object.values(DELEGATE_KB_TYP) as string[]).includes(kbTyp)) {
+    return { ok: false, reason: `key binding is typed ${kbTyp ?? "∅"}, not ${Object.values(DELEGATE_KB_TYP).join(" or ")}` };
   }
 
   const delegatePayload = kb[DELEGATE_PAYLOAD_CLAIM];

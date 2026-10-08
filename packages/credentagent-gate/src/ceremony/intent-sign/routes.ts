@@ -121,7 +121,7 @@ export function registerIntentSignRail(app: RailApp, grants: Grants): void {
     if (!g || g.signing !== "device") { res.status(404).json({ ok: false, reason: "unknown device grant" }); return; }
     const inputs = grants._intentSignInputsFor(id);
     if (!inputs) { res.status(404).json({ ok: false, reason: "unknown grant" }); return; }
-    const { bounds, delegate, mandateExp, allowedSkus } = inputs;
+    const { bounds, delegate, agentHeld, mandateExp, allowedSkus } = inputs;
     const body = await readJsonBody(req);
     const result = body.result as { protocol?: string; data?: unknown } | undefined;
     const readerContextToken = body.readerContextToken;
@@ -133,6 +133,7 @@ export function registerIntentSignRail(app: RailApp, grants: Grants): void {
       const cfg = grants.railConfig;
       const out = await verifyIntentPresentation({
         delegate,
+        agentHeld,
         mandateExp,
         allowedSkus,
         result,
@@ -155,6 +156,9 @@ export function registerIntentSignRail(app: RailApp, grants: Grants): void {
         // own grant record and required the wallet's signature to cover them, so they are what
         // the human agreed to — and dropping them here left the grant unable to say so.
         ...(out.mandates ? { mandates: out.mandates } : {}),
+        // The signed permission itself. The grant shows it only when the agent holds the key it
+        // names — the one case it can be spent (FR-5).
+        intent: out.intent,
       });
       if (!sealed) { res.status(409).json({ ok: false, reason: "grant is not pending" }); return; }
       res.json({ ok: true, status: "authorized", trustLevel: out.trustLevel, verifiedBy: out.verifiedBy, boundsHash: out.boundsHash });

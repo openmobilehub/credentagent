@@ -53,6 +53,8 @@ export interface DoctorInput {
   composedWithHost?: boolean;
   /** Was the AP2 mandate-signing key generated at boot (no `mandateSigningKey` supplied)? */
   ephemeralMandateKey?: boolean;
+  /** Was the merchant's checkout key generated at boot (no `checkoutSigningKey` supplied)? */
+  ephemeralCheckoutKey?: boolean;
   /** Environment to read deployment signals from. Defaults to `process.env`; injected in tests. */
   env?: Record<string, string | undefined>;
 }
@@ -178,6 +180,20 @@ export function runDoctor(input: DoctorInput): DoctorReport {
       message:
         "The AP2 mandate-signing key was generated at boot. Every mandate this process signs becomes unverifiable when it restarts — including ones already handed to a wallet.",
       fix: "Pass `new CredentAgent({ mandateSigningKey })` with a stable private P-256 JWK from your secret manager.",
+    });
+  }
+
+  // The merchant's checkout key (spec 014, FR-6). A WARNING, not an error: only a delegated
+  // purchase reads it, and what breaks is a cart quoted before a restart or on another instance —
+  // that purchase is refused and the agent asks for a fresh quote. Nothing already handed out
+  // becomes unverifiable for good, which is what makes the mandate key's finding an error.
+  if (env.deployment && input.ephemeralCheckoutKey) {
+    findings.push({
+      level: "warn",
+      code: "ephemeral-checkout-key",
+      message:
+        "The merchant's checkout key was generated at boot. A cart quoted before a restart, or on another instance, no longer verifies — that delegated purchase is refused.",
+      fix: "Pass `new CredentAgent({ checkoutSigningKey })` with a stable private P-256 JWK from your secret manager — a different one from mandateSigningKey.",
     });
   }
 

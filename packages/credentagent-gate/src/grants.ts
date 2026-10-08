@@ -28,6 +28,7 @@ import type { DelegateJwk, SealedAgeProof, SealedMembershipProof } from "./cerem
 import type { IntentBoundsInput } from "./ceremony/intent-sign/bounds.js";
 import type { Branding, ReaderIdentity, TrustLevel } from "./types.js";
 import { AmountError, toMinorUnits } from "./ap2/money.js";
+import { importVerifyKey } from "./ap2/keys.js";
 
 /** Why a grant operation refused — a TYPED union (never `string`; #95 review). */
 export type GrantDoorCode =
@@ -41,6 +42,7 @@ export type GrantDoorCode =
   | "step-up" // needs a live human — e.g. age-restricted goods are NON-delegable
   | "revoked" // the grant was revoked; nothing spends against it again
   | "expired" // the grant's validity window passed (or hasn't started)
+  | "agent-held-key" // the agent holds this grant's key — it spends with `DelegatedIntent` at the merchant, not here
   | "refused"; // an internal engine refusal (integrity class) — terminal; never a specific lie
 
 /** Engine RefusalCode → the door's vocabulary. EVERY engine code is mapped deliberately
@@ -92,6 +94,19 @@ export interface CreateGrantOptions {
    *  no phone is in the loop. Approving a grant is a signature by default; the weaker door must be
    *  asked for by name. */
   signing?: GrantSigning;
+  /**
+   * The AGENT's public key (spec 014, FR-5) — `agentKey.publicJwk` from the `/agent` entry point.
+   *
+   * Pass it and the gate never generates or holds the agent's key: the person's phone signs a
+   * permission naming THIS key, and once they have, `grant.mandate.intent` is what the agent spends
+   * — with `DelegatedIntent`, at any merchant the permission names, checked there by
+   * `verifyDelegatedPurchase`. Such a grant does not spend through `grant.spend` (it refuses
+   * `agent-held-key`): the gate has no key to spend it with, which is the point.
+   *
+   * Omit it and the gate generates the key and spends server-side, as before. Device signing only —
+   * there is nothing for a page click to bind the key to. A PRIVATE JWK is refused.
+   */
+  agentKey?: DelegateJwk;
 }
 
 export type GrantStatus = "pending" | "authorized" | "denied" | "revoked";
@@ -166,6 +181,12 @@ export interface GrantMandateEvidence {
    * without rebuilding it. Plain JSON. Absent on a grant sealed by a backend that reported none.
    */
   mandates?: Array<Record<string, unknown>>;
+  /**
+   * The signed permission itself — the wallet's presentation and the `delegate` disclosures the
+   * request carried. Exactly `DelegatedIntent.fromWalletPresentation`'s input, so an agent holding
+   * the key it names can spend it. Holding it without that key spends nothing.
+   */
+  intent?: { presentation: string; disclosures: string[] };
 }
 
 /**
@@ -216,6 +237,9 @@ interface GrantRecord {
    *  the engine at authorization, so the key that was authorized is the key that can spend —
    *  minting a fresh one there would seal a grant whose spending authority nobody approved. */
   delegateKeys?: Awaited<ReturnType<typeof generateDelegate>>;
+  /** The key the AGENT holds, when the grant was created with `agentKey` (spec 014, FR-5) — the
+   *  public half only. Present ⇒ `delegateKeys` is absent and no engine is ever sealed. */
+  agentKey?: DelegateJwk;
   /** The age claim the human proved before authorizing, held until the grant seals it into the
    *  intent (#172). Writable ONLY while the grant is pending — see `_recordAgeProof`. */
   ageProof?: SealedAgeProof;
@@ -382,11 +406,13 @@ export class Grants {
    * than one whose horizon the caller can read. A grant that shows the human no expiry and then
    * signs a one-year one is a gap in the approve page, recorded in spec 014.
    */
-  _intentSignInputsFor(id: string): { bounds: IntentBoundsInput; delegate: { kty: "EC"; crv: "P-256"; x: string; y: string }; mandateExp: number; allowedSkus: string[] } | null {
+  _intentSignInputsFor(id: string): { bounds: IntentBoundsInput; delegate: { kty: "EC"; crv: "P-256"; x: string; y: string }; agentHeld: boolean; mandateExp: number; allowedSkus: string[] } | null {
     const bounds = this._boundsInputFor(id);
-    // The key minted at CREATION for a device-mode grant. Not the engine's — the engine does
-    // not exist until the grant is authorized, and by then the human has already signed.
-    const delegate = this.records.get(id)?.delegateKeys?.delegate;
+    // The key minted at CREATION for a device-mode grant — or the agent's own, when it brought one
+    // (FR-5). Not the engine's: the engine does not exist until the grant is authorized, and by
+    // then the human has already signed.
+    const rec = this.records.get(id);
+    const delegate = rec?.delegateKeys?.delegate ?? rec?.agentKey;
     // Both the request and the verify hop take the product list from HERE, so the mandates the
     // wallet is asked to sign and the mandates `/verify` rebuilds can never differ.
     const allowedSkus = this._allowedSkusFor(id);
@@ -396,6 +422,9 @@ export class Grants {
     return {
       bounds,
       delegate,
+      // The agent spends this permission at a merchant, whose chain verifier is strict about how the
+      // wallet typed its hop — so the signing page must be just as strict.
+      agentHeld: rec?.agentKey !== undefined,
       mandateExp: Math.floor((Number.isFinite(expiresAt) ? expiresAt : fallback) / 1000),
       allowedSkus,
     };
@@ -517,6 +546,7 @@ export class Grants {
     // default lives in exactly one place. Sealed with the rest of the bounds: how the human
     // authorizes is part of what they authorize, and is frozen against later widening.
     const sealed: CreateGrantOptions = deepFreeze(structuredClone({ ...opts, signing: opts.signing ?? "device" }));
+    const agentKey = opts.agentKey === undefined ? undefined : agentPublicKey(opts.agentKey, sealed.signing as GrantSigning);
     const rec: GrantRecord = {
       id,
       status: "pending",
@@ -526,8 +556,11 @@ export class Grants {
       // for page mode — it never computes boundsHash).
       createdAt: new Date().toISOString(),
       boundsNonce: globalThis.crypto.randomUUID(),
-      // Device-signed grants only: the key the human signs over (see the field's own note).
-      ...(opts.signing === "device" ? { delegateKeys: await generateDelegate() } : {}),
+      // Device-signed grants only: the key the human signs over (see the field's own note). The
+      // RESOLVED mode, not the raw option — a grant that leaves `signing` out is a device grant too,
+      // and without this key its phone ceremony could never start. When the agent brought
+      // its own key, the gate makes none: it never holds the agent's private half (FR-5).
+      ...(agentKey ? { agentKey } : sealed.signing === "device" ? { delegateKeys: await generateDelegate() } : {}),
       cache: new Map(),
     };
     this.records.set(id, rec);
@@ -654,6 +687,18 @@ export class Grants {
       const signedSkus = signedSkusFrom(evidence.mandates);
       if (!signedSkus || signedSkus.length === 0) return false;
 
+      // The agent holds this grant's key (FR-5): there is nothing for the gate to spend with, so no
+      // engine is sealed. The signed permission is recorded, and the agent spends it — with
+      // `DelegatedIntent`, at the merchant, checked by `verifyDelegatedPurchase`. An engine made here
+      // would need a key, and a key made here is one the person never signed for.
+      if (rec.agentKey) {
+        if (!evidence.intent) return false; // nothing for the agent to spend — fail closed
+        rec.status = "authorized";
+        rec.mandate = evidence;
+        rec.signedSkus = signedSkus;
+        return true;
+      }
+
       rec.engine = await this.engineGate().preApprove({
         merchant: rec.opts.merchant,
         perOrder: toCents(rec.opts.perSpend),
@@ -728,6 +773,9 @@ export class Grants {
         // ledger at settle (revoke-wins, even for an in-flight spend). Deliberately UNCACHED:
         // status legitimately transitions (pending → authorized), so a retry after approval
         // must proceed — unlike engine/bounds refusals, which are final for that key.
+        // A grant whose key the agent holds is never spent here — the gate has no key to spend it
+        // with (FR-5). Said by name, before the status, so an agent learns where to spend it.
+        if (rec.agentKey) return { ok: false, code: "agent-held-key" };
         if (rec.status !== "authorized" || !rec.engine) {
           return { ok: false, code: rec.status === "revoked" ? "revoked" : "not-authorized" };
         }
@@ -773,7 +821,9 @@ export class Grants {
       allow: rec.opts.allow,
       description: rec.opts.description,
       signing: rec.opts.signing as GrantSigning, // resolved + sealed at create()
-      presence: rec.engine?.presence ?? "delegated-demo",
+      // A grant the agent's key spends has no engine; once its human signed, that consent was real.
+      presence: rec.engine?.presence ?? (rec.agentKey && rec.mandate ? "delegated" : "delegated-demo"),
+      ...(rec.agentKey ? { agentKey: rec.agentKey } : {}),
       // Derived HERE, from the products the bounds NAME, read against the live catalog — never
       // reported by the agent (#172). Re-derived per handle read, so a catalog change shows up at
       // the next `retrieve()`. Disclosure, not the control.
@@ -798,6 +848,8 @@ export class Grants {
               // record gained but this projection did not silently never reaches a caller — which
               // is how these were still invisible after `/verify` started passing them on.
               ...(rec.mandate.mandates ? { mandates: rec.mandate.mandates } : {}),
+              // Only for a grant whose key the agent holds — the one case anybody can spend it.
+              ...(rec.agentKey && rec.mandate.intent ? { intent: rec.mandate.intent } : {}),
             },
           }
         : {}),
@@ -871,11 +923,40 @@ export interface Grant {
     credentialType: string;
     verifiedBy: string;
     mandates?: Array<Record<string, unknown>>;
+    /** The signed permission, for a grant created with `agentKey` — pass it to
+     *  `DelegatedIntent.fromWalletPresentation` (from `/agent`) and spend it with that key. */
+    intent?: { presentation: string; disclosures: string[] };
   };
+  /** The agent's public key, when the grant was created with one (spec 014, FR-5). Such a grant
+   *  spends with `DelegatedIntent` at the merchant; `spend()` here refuses `agent-held-key`. */
+  readonly agentKey?: DelegateJwk;
   /** Live money read (dollars) for a display/projection — `{ budget, spent, remaining }`. Async
    *  because the engine's committed-draws ledger is the authority (it may be remote later); a
    *  pending grant reads `{ spent: 0, remaining: budget }`. Feeds {@link grantLifecycle}. */
   usage(): Promise<GrantUsage>;
   spend(input: SpendItems): Promise<SpendDoor>;
   revoke(): Promise<void>;
+}
+
+/**
+ * The agent's PUBLIC key, checked at `create()` — the earliest point a wrong one can be named.
+ *
+ * A private JWK is refused outright: the whole point of `agentKey` is that the gate never holds the
+ * agent's private half (FR-5), and accepting one "just this once" would put it in the merchant's
+ * process. Device signing only — a page click binds nothing to a key.
+ */
+function agentPublicKey(jwk: DelegateJwk, signing: GrantSigning): DelegateJwk {
+  if (signing !== "device") throw new Error('agentKey needs signing: "device" — the person\'s phone signs the permission that names it');
+  if ("d" in (jwk as object)) throw new Error("agentKey must be the agent's PUBLIC key (agentKey.publicJwk) — the gate must never hold its private half");
+  if (jwk?.kty !== "EC" || jwk.crv !== "P-256" || typeof jwk.x !== "string" || typeof jwk.y !== "string") {
+    throw new Error("agentKey must be an EC P-256 public JWK — { kty, crv, x, y }");
+  }
+  try {
+    importVerifyKey(jwk);
+  } catch {
+    throw new Error("agentKey is not a point on P-256");
+  }
+  // Exactly the four members a `cnf` carries, so the mandates the wallet signs are the same bytes
+  // whatever else the caller's object had on it.
+  return { kty: "EC", crv: "P-256", x: jwk.x, y: jwk.y };
 }

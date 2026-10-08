@@ -79,6 +79,8 @@ export interface SdJwtOptions {
   privateKey?: KeyObject;
   /** Present ⇒ this instance can verify an issuer signature. */
   publicJwk?: PublicJwkP256;
+  /** The same, for a key that did not arrive as a JWK — a certificate's, or a chain link's. */
+  publicKey?: KeyObject;
   /** Present ⇒ this instance can append a key-bound delegation hop. */
   holderKey?: KeyObject;
 }
@@ -93,6 +95,7 @@ export function sdJwtInstance(opts: SdJwtOptions): SDJwtInstance<SdJwtPayload> {
     kbSignAlg: "ES256",
     ...(opts.privateKey ? { signer: es256Signer(opts.privateKey) } : {}),
     ...(opts.publicJwk ? { verifier: es256Verifier(opts.publicJwk) } : {}),
+    ...(opts.publicKey ? { verifier: (data: string, sig: string) => es256Verify(opts.publicKey!, data, sig) } : {}),
     ...(opts.holderKey ? { kbSigner: es256Signer(opts.holderKey) } : {}),
     kbVerifier: cnfKbVerifier,
   });
@@ -108,4 +111,22 @@ export function sdJwtInstance(opts: SdJwtOptions): SDJwtInstance<SdJwtPayload> {
  */
 export function digestToken(token: string, alg: string = SD_HASH_ALG): string {
   return Buffer.from(hasher(token, alg)).toString("base64url");
+}
+
+/** What a `@sd-jwt/core` failure was about, read from its message. */
+export type LibraryRefusalCode = "expired" | "not-yet-valid" | "disclosure" | "malformed" | "signature";
+
+/**
+ * Name a `@sd-jwt/core` failure. The library reports every failure as one exception type, so the
+ * message is all there is. `verifyMandate` and the chain verifier both read it through here, and
+ * `sdjwt.test.ts` pins one real failure per message, so a library upgrade that rewords one turns a
+ * test red instead of silently changing the code a caller switches on. Unknown messages fall to
+ * `signature` — a refusal, never a pass.
+ */
+export function libraryRefusal(message: string): LibraryRefusalCode {
+  if (/is expired/i.test(message)) return "expired";
+  if (/not yet valid/i.test(message)) return "not-yet-valid";
+  if (/disclosure|digest/i.test(message)) return "disclosure";
+  if (/must be a number|missing required claim|invalid sd jwt|invalid jwt/i.test(message) && !/signature/i.test(message)) return "malformed";
+  return "signature";
 }

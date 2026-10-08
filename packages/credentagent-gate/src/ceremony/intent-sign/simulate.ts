@@ -14,15 +14,13 @@
 // The `override*` options exist to drive the bypass tests. Each one produces a presentation
 // that a correct verifier MUST refuse; if any of them starts passing, a control has gone.
 import * as jose from "jose";
-import { generateKeyPairSync, webcrypto, type KeyObject } from "node:crypto";
-import * as x509 from "@peculiar/x509";
 import { SDJwtInstance } from "@sd-jwt/core";
-import { es256Signer } from "../../ap2/sdjwt.js";
 import { dcApiAudience, hasher } from "./presentation.js";
 import { PAYMENT_CREDENTIAL_VCTS, PAYMENT_INSTRUMENT_CLAIM } from "./dcql.js";
+import { peekJson } from "../../ap2/jwt.js";
+import { delegateKeyBinding, p256, saltGenerator, selfSignedCert } from "./dev-wallet.js";
+import { es256Signer } from "../../ap2/sdjwt.js";
 import {
-  DELEGATE_KB_TYP,
-  DELEGATE_PAYLOAD_CLAIM,
   arrayDisclosure,
   disclosureDigest,
   isDelegateHashAlg,
@@ -32,44 +30,6 @@ import {
 import type { SignedIntentRequest } from "./request.js";
 
 const utf8 = new TextEncoder();
-
-const saltGenerator = (n: number): string =>
-  Buffer.from(webcrypto.getRandomValues(new Uint8Array(n))).toString("hex").slice(0, n);
-
-/** ES256 over P-256 — the package's own signer, so the wallet signs exactly as the gate verifies. */
-const signer = (key: KeyObject) => es256Signer(key);
-
-function p256() {
-  const { privateKey, publicKey } = generateKeyPairSync("ec", { namedCurve: "P-256" });
-  const { kty, crv, x, y } = publicKey.export({ format: "jwk" }) as { kty: string; crv: string; x: string; y: string };
-  return { privateKey, privateJwk: privateKey.export({ format: "jwk" }), publicJwk: { kty, crv, x, y } };
-}
-
-/**
- * A self-signed certificate for the issuer key, base64 DER for the JWS `x5c`.
- *
- * Not optional: a wallet will not read an SD-JWT VC without one, and neither does this rail's
- * verifier — the issuer key is taken FROM the certificate, so a credential without it has no
- * key to check against. Mirrors `tools/demo-pki/mint/mint-dpc-sdjwt.mjs`.
- */
-async function selfSignedCert(privateJwk: unknown, publicJwk: { kty: string; crv: string; x: string; y: string }): Promise<string> {
-  const alg = { name: "ECDSA", namedCurve: "P-256", hash: "SHA-256" } as const;
-  const priv = await webcrypto.subtle.importKey("jwk", privateJwk as webcrypto.JsonWebKey, alg, false, ["sign"]);
-  const pub = await webcrypto.subtle.importKey("jwk", { ...publicJwk, ext: true } as webcrypto.JsonWebKey, alg, true, ["verify"]);
-  const notBefore = new Date(Date.now() - 60_000);
-  const cert = await x509.X509CertificateGenerator.createSelfSigned(
-    {
-      serialNumber: Buffer.from(webcrypto.getRandomValues(new Uint8Array(8))).toString("hex"),
-      name: "CN=CredentAgent Simulated Wallet Issuer",
-      notBefore,
-      notAfter: new Date(notBefore.getTime() + 365 * 24 * 60 * 60 * 1000),
-      signingAlgorithm: alg,
-      keys: { privateKey: priv, publicKey: pub },
-    },
-    webcrypto as unknown as Parameters<typeof x509.X509CertificateGenerator.createSelfSigned>[1],
-  );
-  return Buffer.from(cert.rawData).toString("base64");
-}
 
 export interface SimulateOptions {
   /** The signed request the gate issued (nonce, response-encryption key, transaction data,
@@ -140,17 +100,7 @@ export async function devSimulateWalletSignature(
   // does. Delegate SD-JWT §7.1 carries ONE array disclosure per entry, and every entry's digest
   // must end up in the signed `delegate_payload` — so this reads them ALL, not just the last.
   const delegateEntries = (payload.transaction_data ?? [])
-    .map((b64) => {
-      try {
-        return JSON.parse(Buffer.from(b64, "base64url").toString("utf-8")) as {
-          type?: string;
-          delegate_payload_disclosure?: string;
-          transaction_data_hashes_alg?: string[];
-        };
-      } catch {
-        return undefined;
-      }
-    })
+    .map((b64) => peekJson<{ type?: string; delegate_payload_disclosure?: string; transaction_data_hashes_alg?: string[] }>(b64))
     .filter((entry): entry is NonNullable<typeof entry> => entry?.type === "delegate");
 
   // The requested algorithm, honoured (#192) — a wallet that always answers in sha-256 makes a
@@ -167,13 +117,13 @@ export async function devSimulateWalletSignature(
 
   // RFC 9901 §4.2.4.2: an array element replaced by a disclosure is `{"...": "<digest>"}`.
   const delegatePayload: unknown[] = opts.plainDelegatePayload
-    ? signedDisclosures.map((d) => JSON.parse(Buffer.from(d, "base64url").toString("utf-8"))[1] as MandateContent)
+    ? signedDisclosures.map((d) => peekJson<[string, MandateContent]>(d)![1])
     : signedDisclosures.map((d) => ({ "...": disclosureDigest(d, hashAlg) }));
 
   // Mint the credential: issuer key + certificate, holder key in `cnf`.
   const issuer = p256();
   const holder = p256();
-  const x5c = await selfSignedCert(issuer.privateJwk, issuer.publicJwk);
+  const x5c = await selfSignedCert(issuer, "CredentAgent Simulated Wallet Issuer");
 
   const claims: Record<string, unknown> = { issuer_name: "Bank of Utopia", masked_account_reference: "•••• 4444" };
   // `forgeRevealedClaim` leaves the real claim OUT of what the issuer signs, so the forged
@@ -186,7 +136,7 @@ export async function devSimulateWalletSignature(
     hashAlg: "sha-256",
     saltGenerator,
     signAlg: "ES256",
-    signer: signer(issuer.privateKey),
+    signer: es256Signer(issuer.privateKey),
   });
   const credential = await issuerInstance.issue(
     {
@@ -213,10 +163,6 @@ export async function devSimulateWalletSignature(
     // that anybody authorized anything.
     presentation = disclosed;
   } else {
-    // THE KEY BINDING IS ASSEMBLED HERE rather than through `SDJwtInstance.present({ kb })`,
-    // because that path hardcodes `typ: "kb+jwt"` (@sd-jwt/core's KB_JWT_TYP) and a Delegate
-    // KB-JWT must be typed `kb+sd-jwt` (Delegate SD-JWT §5.1.4). Everything else is the same
-    // JWS the library would have produced.
     const kbKey = opts.forgeHolderKey ? p256().privateKey : holder.privateKey;
     if (opts.duplicateDisclosure) {
       // `<jwt>~<d1>~…~<dn>~` — repeat the last disclosure before the trailing separator.
@@ -233,22 +179,21 @@ export async function devSimulateWalletSignature(
       ).toString("base64url");
       disclosed = `${disclosed}${forged}~`;
     }
-    // The SHARED hasher, so the wallet hashes exactly the way the verifier does. A private copy
-    // here would let the two drift, and a drift in `sd_hash` reads as a bad signature.
-    const sdHash = (input: string) => Buffer.from(hasher(input, "sha-256")).toString("base64url");
-    const sdHashValue = opts.breakSdHash ? sdHash(`${disclosed}tampered`) : sdHash(disclosed);
-    const kbHeader = { alg: "ES256", typ: opts.overrideKbTyp ?? DELEGATE_KB_TYP[0] };
-    const kbPayload = {
-      iat: Math.floor(Date.now() / 1000),
+    // `kb+sd-jwt+kb`: the payload names the agent's key in `cnf`, so this hop is one the agent
+    // extends — a chain verifier (ours, and the AP2 Python SDK's) refuses it typed terminal, and so
+    // does the rail for a grant whose key the agent holds. A grant whose key the gate holds still
+    // accepts either: the gate spends that one itself.
+    presentation = delegateKeyBinding({
+      presented: disclosed,
+      holderKey: kbKey,
       // The DC API form, per OpenID4VP §B.3.6 — what a real wallet sends.
       aud: dcApiAudience(origin),
       nonce,
-      sd_hash: sdHashValue,
       // Delegate SD-JWT §7.1: the KB-JWT carries the DIGEST of the delegate payload.
-      [DELEGATE_PAYLOAD_CLAIM]: delegatePayload,
-    };
-    const signingInput = `${Buffer.from(JSON.stringify(kbHeader), "utf-8").toString("base64url")}.${Buffer.from(JSON.stringify(kbPayload), "utf-8").toString("base64url")}`;
-    presentation = `${disclosed}${signingInput}.${signer(kbKey)(signingInput)}`;
+      delegatePayload,
+      ...(opts.overrideKbTyp ? { typ: opts.overrideKbTyp } : {}),
+      ...(opts.breakSdHash ? { sdHashOver: `${disclosed}tampered` } : {}),
+    });
   }
 
   const credentialId = (request.dcql_query as unknown as { credentials: { id: string }[] }).credentials[0].id;

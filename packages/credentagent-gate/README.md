@@ -225,6 +225,7 @@ Each finding is `{ level: "error" | "warn", code, message, fix }`. It checks the
 | `in-memory-verification-store` | the default in-memory `store` on a deployment | inject a shared `{ store }` (Redis/Upstash) |
 | `in-memory-order-store` | the default in-memory order stores on a deployment | inject `{ orderStore, completedOrderStore }` |
 | `ephemeral-mandate-key` | no `mandateSigningKey` on a deployment — the AP2 key was generated at boot (**error** on any deployment) | pass a stable private P-256 JWK as `{ mandateSigningKey }` |
+| `ephemeral-checkout-key` | no `checkoutSigningKey` on a deployment — the key carts are quoted with was generated at boot (**warn**) | pass a second, different private P-256 JWK as `{ checkoutSigningKey }` |
 
 In plain local dev — no deployment env signals (`VERCEL`, `AWS_LAMBDA_*`, `NODE_ENV=production`, …) — every
 check stays quiet, so the zero-config quickstart is undisturbed. `ephemeral-mandate-key` is an error even on
@@ -242,13 +243,22 @@ your source:
 const credentagent = new CredentAgent({
   walletOrigin: "https://shop.example",
   mandateSigningKey: JSON.parse(process.env.MANDATE_SIGNING_KEY),   // a PRIVATE P-256 JWK
+  checkoutSigningKey: JSON.parse(process.env.CHECKOUT_SIGNING_KEY), // a DIFFERENT one — signs the carts you quote
 });
-credentagent.mount(app);        // serves GET /.well-known/did.json
+credentagent.mount(app);        // serves GET /.well-known/did.json — both public halves
 ```
 
 `mandateSigningKey` is **not** `gateSecret`. `gateSecret` is a symmetric HMAC secret for challenge
 tokens; this is an asymmetric key whose public half goes to the world. Omit it and the gate generates
 one at boot — fine for a dev server, an error on anything else.
+
+`checkoutSigningKey` signs the carts you quote (`credentagent.ap2.signCheckout`, which also fills in the
+cart's `merchant` — this gate's, the one a permission names — so you never build that identity by hand). It is a separate key
+because a quoted cart and an issued mandate are different statements: each key's `kid` —
+`#merchant-checkout-key` or `#gate-signing-key` — says which one a signature makes, and a cart is only
+ever checked against `credentagent.ap2.checkoutPublicJwk`. Passing the same JWK for both throws. Omit it
+and the gate generates one at boot; `doctor()` warns on a deployment, because a cart quoted before a
+restart, or on another instance, then no longer verifies.
 
 Mint and check:
 
@@ -298,6 +308,96 @@ does **not** mean the amount is right (re-price against your catalog; that is se
 `verifyMandate` will never do it for you), that a human agreed, or that the credential behind it came
 from a real issuer — that last one is
 [#14](https://github.com/openmobilehub/credentagent/issues/14) and still open.
+
+### Delegated purchases — an agent spends a permission the person signed
+
+A person signs one permission on their phone — "this assistant may buy coffee or tea, up to $50 a
+purchase, $200 in total, until December". The assistant keeps it, and at each purchase adds a signed
+note saying exactly what it bought. The merchant checks the note against the permission. The person is
+not there, and the merchant never holds their keys.
+
+On the wire this is an AP2 delegation chain (Delegate SD-JWT, `draft-gco-oauth-delegate-sd-jwt-00`): the
+wallet's credential, the wallet's signature over the open mandates, and the agent's signature over the
+closed ones.
+
+The agent and the merchant run in **different processes, with different imports**. The agent's key —
+the permission's spending power — is generated and kept by the agent, and the merchant only ever sees its
+public half. Nothing the merchant imports from the package root can hold it.
+
+```ts
+// MERCHANT — the package root. Open a grant naming the agent's PUBLIC key; the person signs it.
+const grant = await credentagent.grants.create({
+  merchant: "utopia", budget: 200, perSpend: 50,
+  allow: { skus: ["coffee", "tea"] },
+  agentKey: agentPublicJwk,                    // agentKey.publicJwk, as the agent sent it
+});
+sendToUser(grant.approveUrl);                  // the person signs on their phone
+// …then hand the agent (await credentagent.grants.retrieve(grant.id)).mandate.intent
+```
+
+```ts
+// AGENT — the `/agent` entry point. Its key never leaves this process.
+import { AgentKey, DelegatedIntent } from "@openmobilehub/credentagent-gate/agent";
+
+const agentKey = AgentKey.fromJwk(JSON.parse(process.env.AGENT_KEY));   // or AgentKey.generate()
+const intent = DelegatedIntent.fromWalletPresentation(signedIntent);    // plain JSON — keep it
+const proof = await intent.spend({
+  agentKey,
+  checkoutJwt,                                 // the cart, as the merchant quoted it
+  instrument,                                  // how it pays — the payee and amount are the cart's own
+  audience: "https://shop.example",            // the merchant, and the nonce it issued
+  nonce,
+});
+```
+
+```ts
+// MERCHANT — quote the cart, then one call per purchase.
+import { verifyDelegatedPurchase } from "@openmobilehub/credentagent-gate";
+
+sendToAgent({ checkoutJwt: credentagent.ap2.signCheckout(ucpCheckout), nonce });   // the quote
+
+const verdict = await verifyDelegatedPurchase(proof, {
+  trust: "presence-only-demo",   // REQUIRED: nothing yet proves a person set these limits (#14)
+  audience: "https://shop.example",
+  nonce,
+  checkoutKey: credentagent.ap2.checkoutPublicJwk,   // the key that quoted the cart
+  spent: (permissionId) => ledger.spent(permissionId),   // what THIS store already spent under it
+  price: (cart) => catalogTotal(cart),         // YOUR catalog, in minor units — it decides
+});
+if (verdict.ok) ledger.record(verdict.permissionId, verdict.payment.payment_amount);
+else console.error(verdict.code, verdict.violations);   // "constraint" | "price" | "payee" | "malformed" | …
+```
+
+**`trust: "presence-only-demo"` is required, and it means what it says.** The credential at the root of
+the chain is checked against the certificate it carries itself; nothing anchors that certificate to a
+real issuer yet ([#14](https://github.com/openmobilehub/credentagent/issues/14)). So an agent can mint
+its own "permission", with any limits it likes, and it verifies. Every limit is enforced — but nothing
+yet proves a **person** set them. Use it for demos, never as a real safety control. Leaving the option
+out is a type error, and a refusal (`code: "trust"`) at runtime.
+
+A grant created with `agentKey` is spent this way, **at any merchant its permission names** — not
+through `grant.spend()`, which refuses it with `agent-held-key`: the gate has no key to spend it with,
+which is the point. Leave `agentKey` out and the gate generates the key and spends server-side, as below.
+**Revoking such a grant does not recall it.** The agent already holds the signed permission, and
+`verifyDelegatedPurchase` does not consult the grant, so the permission stays spendable until the
+expiry it was signed with — today a year from creation, because a grant does not yet take its own
+expiry. Bound it with `budget` and `perSpend`, which every merchant enforces.
+
+**What a verified purchase means:** every link of both chains verifies against the key the link before it
+names, both chains rest on the same wallet signature, the cart is the one you signed, the payment pays
+exactly its total, every limit in the permission holds — **a limit this verifier does not recognise, or
+one missing a field, fails** — and your catalog agrees with the price. It does **not** mean a person set
+those limits (see `trust`, above), so `trust_level` is `"presence-only-demo"`.
+
+Two things stay yours: **`spent`** and **consuming the nonce**, which `verifyDelegatedPurchase` checks but
+does not remember.
+
+- **`spent` is looked up by `permissionId`** — a stable id for the permission, the same at every merchant
+  and on the agent's side (`intent.permissionId`). Pass a function and it is called with the id **after**
+  the chains verify, so your ledger is keyed by something the signatures vouch for. Leaving `spent` out
+  refuses any permission that has a budget or a use count.
+- **A budget holds per merchant.** One permission works at every store it names, and each store sees only
+  its own `spent`: a "$200 in total" permission is $200 at each of them. Set `budget` with that in mind.
 
 ### Webhooks — tell a *different* service when an order settles
 

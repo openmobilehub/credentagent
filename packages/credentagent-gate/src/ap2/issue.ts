@@ -8,7 +8,7 @@
 import type { KeyObject } from "node:crypto";
 import { digestToken, sdJwtInstance, SD_HASH_ALG } from "./sdjwt.js";
 import { signCompactJwt } from "./jwt.js";
-import type { GateSigningKey, PublicJwkP256 } from "./keys.js";
+import { CHECKOUT_KEY_FRAGMENT, ephemeralSigningKey, type GateSigningKey, type PublicJwkP256 } from "./keys.js";
 import {
   VCT,
   type Amount,
@@ -75,25 +75,60 @@ export interface IssueOpenPaymentArgs extends IssueOpenArgs<PaymentConstraint> {
   instrument?: PaymentInstrument;
 }
 
+export interface Ap2IssuerOptions {
+  /**
+   * The merchant key carts are quoted with (spec 014, FR-6) — distinct from the mandate key, its
+   * `kid` ending `#merchant-checkout-key`. Absent ⇒ one is generated, flagged `ephemeral`.
+   */
+  checkoutKey?: GateSigningKey;
+  /**
+   * This merchant, as a permission names it — what `signCheckout` puts in a cart that names none.
+   * `CredentAgent` passes the one for its `walletOrigin`, the same identity a grant's mandates carry.
+   */
+  merchant?: Merchant;
+}
+
 /**
- * Mints AP2 mandates with the gate's key.
+ * Mints AP2 mandates with the gate's key, and signs the carts it quotes with the merchant's.
  *
  * ```ts
- * const issuer = new Ap2Issuer(key);
+ * const issuer = new Ap2Issuer(key, { checkoutKey });
  * const checkout = await issuer.checkout({ checkout: ucp });
  * const payment  = await issuer.payment({ transactionId: checkout.checkoutHash, ... });
  * ```
  */
 export class Ap2Issuer {
   readonly #key: GateSigningKey;
+  readonly #checkoutKey: GateSigningKey;
+  readonly #merchant: Merchant | undefined;
 
-  constructor(key: GateSigningKey) {
+  constructor(key: GateSigningKey, opts: Ap2IssuerOptions = {}) {
     this.#key = key;
+    this.#checkoutKey = opts.checkoutKey ?? ephemeralSigningKey(key.issuer, CHECKOUT_KEY_FRAGMENT);
+    this.#merchant = opts.merchant;
+    const [a, b] = [this.#key.publicJwk, this.#checkoutKey.publicJwk];
+    if (a.x === b.x && a.y === b.y) {
+      throw new Error("checkoutKey must be a different key from the mandate key — a quoted cart and an issued mandate are different statements (spec 014, FR-6)");
+    }
   }
 
-  /** The public half — what `mount()` publishes and what a verifier imports. */
+  /** The mandate key's public half — what `mount()` publishes and what `verifyMandate` imports. */
   get publicJwk(): PublicJwkP256 {
     return this.#key.publicJwk;
+  }
+
+  /**
+   * The checkout key's public half — what a cart this merchant quoted verifies against
+   * (`verifyDelegatedPurchase({ checkoutKey })`, `openCheckoutPayload`). Published beside the
+   * mandate key at `/.well-known/did.json`.
+   */
+  get checkoutPublicJwk(): PublicJwkP256 {
+    return this.#checkoutKey.publicJwk;
+  }
+
+  /** This merchant, as a delegated permission names it in `checkout.allowed_merchants`. */
+  get merchant(): Merchant | undefined {
+    return this.#merchant;
   }
 
   get issuer(): string {
@@ -110,10 +145,27 @@ export class Ap2Issuer {
     return { token, digest: digestToken(token, SD_HASH_ALG) };
   }
 
+  /**
+   * The merchant-signed UCP Checkout — what a merchant quotes to an agent, and what the agent's
+   * closed checkout mandate then names by `checkout_jwt` and its hash. Signed with the CHECKOUT
+   * key, never the mandate key: verify it against {@link checkoutPublicJwk}.
+   *
+   * The cart's `merchant` is this merchant. Leave it out and it is filled in. A cart naming
+   * another merchant is refused, because no permission would ever match it.
+   */
+  signCheckout(checkout: UcpCheckout): string {
+    const merchant = checkout.merchant ?? this.#merchant;
+    if (!merchant) throw new Error("the cart names no merchant — pass checkout.merchant, or construct Ap2Issuer with { merchant }");
+    if (this.#merchant && merchant.id !== this.#merchant.id) {
+      throw new Error(`the cart names merchant ${merchant.id}, but this gate signs as ${this.#merchant.id}`);
+    }
+    return signCompactJwt({ ...checkout, merchant }, this.#checkoutKey.privateKey, this.#checkoutKey.kid);
+  }
+
   /** `mandate.checkout.1` — "I authorize THIS checkout." */
   async checkout(args: IssueCheckoutArgs): Promise<IssuedCheckout> {
     const iat = nowSeconds();
-    const checkoutJwt = signCompactJwt(args.checkout, this.#key.privateKey, this.#key.kid);
+    const checkoutJwt = this.signCheckout(args.checkout);
     const checkoutHash = digestToken(checkoutJwt, SD_HASH_ALG);
     // `checkout_jwt` is selectively disclosable per the AP2 schema: the digest alone proves
     // WHICH cart was authorized, so a downstream party can be told the binding without
