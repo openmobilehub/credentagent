@@ -1,5 +1,6 @@
 // The card kit end to end (spec 015 — the surface): configure once, register on a real MCP server,
 // link a tool to the page, and return a grant as a card result.
+import { createHash } from "node:crypto";
 import { describe, it, expect } from "vitest";
 import { McpServer } from "@modelcontextprotocol/server";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
@@ -45,6 +46,22 @@ describe("createCards", () => {
     expect((await client.callTool({ name: "get-grant", arguments: {} })).structuredContent).toEqual(grant);
   });
 
+  it("names the page by a hash of its content, so a changed page is a new URI the hosts fetch afresh", async () => {
+    const cards = createCards();
+    const hash = createHash("sha256").update(cards.html).digest("hex").slice(0, 12);
+    const client = await connect((server) => {
+      cards.register(server);
+      server.registerTool("get-grant", { description: "the grant", _meta: cards.toolMeta() }, async () => cards.grant(grant));
+    });
+    const uris = (await client.listResources()).resources.map((r) => r.uri);
+    expect(uris).toHaveLength(2);
+    expect(uris).toEqual(
+      expect.arrayContaining([`ui://credentagent-cards/cards-${hash}.html`, `ui://credentagent-cards/cards-${hash}.skybridge.html`]),
+    );
+    const [tool] = (await client.listTools()).tools;
+    expect(tool._meta?.["openai/outputTemplate"]).toBe(`ui://credentagent-cards/cards-${hash}.skybridge.html`);
+  });
+
   it("a stateless server registers the same page on every per-request server", async () => {
     const cards = createCards();
     const first = await connect((server) => cards.register(server));
@@ -56,12 +73,13 @@ describe("createCards", () => {
 describe("cards.grant", () => {
   it("tells the model what to do next, then gives it the same data the card shows", () => {
     const [block] = createCards().grant(grant).content;
-    expect(block.text.startsWith("The person sees this grant in a card.")).toBe(true);
+    expect(block.text.startsWith("If the person can see this grant in a card,")).toBe(true);
     expect(block.text).toContain(JSON.stringify(grant, null, 2));
   });
 
   it("a note replaces the default", () => {
     const [block] = createCards().grant(grant, { note: "AUTHORIZED — you can spend now." }).content;
     expect(block.text.startsWith("AUTHORIZED — you can spend now.\n\n")).toBe(true);
+    expect(block.text).not.toContain("this grant in a card");
   });
 });

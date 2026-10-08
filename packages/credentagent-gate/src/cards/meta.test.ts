@@ -3,7 +3,8 @@
 import { describe, it, expect } from "vitest";
 import { McpServer } from "@modelcontextprotocol/server";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
-import { cardToolMeta, cardUris, registerCardResources } from "./meta.js";
+import { RESOURCE_MIME_TYPE } from "@modelcontextprotocol/ext-apps/server";
+import { cardToolMeta, cardUris, MCP_APP_MIME, registerCardResources } from "./meta.js";
 
 const uris = cardUris("0123456789ab");
 // The page is served exactly as built: replacement-string patterns must survive untouched.
@@ -35,8 +36,22 @@ describe("the card page's two resources", () => {
     const client = await connect((server) => registerCardResources(server, html, uris));
     const [claude] = (await client.readResource({ uri: uris.resourceUri })).contents;
     const [chatgpt] = (await client.readResource({ uri: uris.skybridgeUri })).contents;
-    expect(claude).toMatchObject({ text: html, _meta: { ui: { csp: { resourceDomains: ["data:"], connectDomains: [] } } } });
-    expect(chatgpt).toMatchObject({ text: html, _meta: { "openai/widgetCSP": { connect_domains: [], resource_domains: ["data:"] } } });
+    expect(claude).toMatchObject({
+      uri: uris.resourceUri,
+      mimeType: "text/html;profile=mcp-app",
+      text: html,
+      _meta: { ui: { csp: { resourceDomains: ["data:"], connectDomains: [] } } },
+    });
+    expect(chatgpt).toMatchObject({
+      uri: uris.skybridgeUri,
+      mimeType: "text/html+skybridge",
+      text: html,
+      _meta: { "openai/widgetCSP": { connect_domains: [], resource_domains: ["data:"] } },
+    });
+  });
+
+  it("Claude's MIME type is the one the MCP Apps SDK defines", () => {
+    expect(MCP_APP_MIME).toBe(RESOURCE_MIME_TYPE);
   });
 });
 
