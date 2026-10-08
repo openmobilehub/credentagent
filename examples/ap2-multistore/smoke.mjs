@@ -30,7 +30,7 @@ try {
   const tool = async (name, args) => (await mcp.callTool({ name, arguments: args })).structuredContent;
 
   const { stores } = await tool("compare-offers", {});
-  check(stores.length === 3 && stores.every((s) => s.products?.length === 3), "compare-offers reads three catalogs");
+  check(stores.length === 3 && stores.every((s) => s.products?.length >= 3), "compare-offers reads three catalogs");
   const beanbarn = stores.find((s) => s.store === "BeanBarn").url;
   const acme = stores.find((s) => s.store === "Acme Coffee Co").url;
 
@@ -107,6 +107,18 @@ try {
   await signOnPhone(acme, tea);
   const [cardSaw, modelSaw] = await Promise.all([tool("watch-permission", { store: acme, grantId: tea.grantId }), modelWaits]);
   check(modelSaw.status === "authorized" && cardSaw.announce === false && cardSaw.final === true, "the card stays quiet while the model waits for the signature in its turn");
+
+  // Scenario 1, simple: one store sells it, so there is nothing to compare. The agent says so and buys there.
+  const coldBrew = await mcp.callTool({ name: "compare-offers", arguments: { product: "cold brew" } });
+  const only = coldBrew.structuredContent.summary?.sellers;
+  check(only?.join() === "RoastWorks" && coldBrew.content[0].text.startsWith("Only RoastWorks sells it"), `scenario 1: "cold brew" is sold only by ${only?.join(", ")}`);
+  const cb = (await mcp.callTool({ name: "request-permission", arguments: { store: roastworks, skus: ["cold-brew"], budget: 14, perSpend: 14, description: "Cold Brew from RoastWorks, up to $14.", why: "the only store that sells it" } })).structuredContent;
+  await signOnPhone(roastworks, cb);
+  await tool("check-permission", { store: roastworks, grantId: cb.grantId });
+  const cbBought = await tool("buy", { store: roastworks, grantId: cb.grantId, items: [{ sku: "cold-brew" }] });
+  check(cbBought.ok === true && cbBought.order?.amount === 1400, `scenario 1: bought at RoastWorks → ${cbBought.ok ? `$${cbBought.order.amount / 100}` : cbBought.reason}`);
+  const decaf = await mcp.callTool({ name: "compare-offers", arguments: { product: "decaf" } });
+  check(decaf.structuredContent.summary?.sellers.length === 0 && decaf.content[0].text.startsWith('No store sells "decaf"'), "a product no store sells: the agent is told not to ask for a permission");
 
   // The back offices: each store's page renders, and its live feed saw what happened there.
   const page = await (await fetch(`${beanbarn}/`)).text();

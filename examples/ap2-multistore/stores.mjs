@@ -39,11 +39,12 @@ const STORES = [
   },
   {
     key: "roastworks", name: "RoastWorks", port: BASE + 3, url: process.env.ROASTWORKS_URL, accent: "#1d4ed8",
-    products: { "house-blend": [26, 4.6], "espresso-beans": [18, 4.7], "green-tea": [11, 4.0] },
+    // Scenario 1: Cold Brew is sold here only — one store, nothing to compare.
+    products: { "house-blend": [26, 4.6], "espresso-beans": [18, 4.7], "green-tea": [11, 4.0], "cold-brew": [14, 4.8] },
   },
 ];
-const NAMES = { "house-blend": "House Blend, 1 lb bag", "espresso-beans": "Espresso Beans, 1 lb bag", "green-tea": "Green Tea, 50 bags" };
-const CATEGORY = { "house-blend": "Coffee", "espresso-beans": "Coffee", "green-tea": "Tea" };
+const NAMES = { "house-blend": "House Blend, 1 lb bag", "espresso-beans": "Espresso Beans, 1 lb bag", "green-tea": "Green Tea, 50 bags", "cold-brew": "Cold Brew Concentrate, 32 oz" };
+const CATEGORY = { "house-blend": "Coffee", "espresso-beans": "Coffee", "green-tea": "Tea", "cold-brew": "Coffee" };
 const WALL_PORT = BASE + 4;
 
 const minor = (dollars) => Math.round(dollars * 100);
