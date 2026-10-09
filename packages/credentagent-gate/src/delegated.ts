@@ -163,7 +163,7 @@ function loyaltyDiscount(subtotal: number, opts?: RepriceOpts): number {
 /** The fields the engine owns on a priced line: an attribute with one of these names is dropped,
  *  never copied, so a catalog entry can't re-price, rename or re-age the line. Age comes only from
  *  `minAge`, the field the approve page discloses. */
-const ENGINE_LINE_FIELDS = new Set(["price", "minAge", "minimumAge", "id", "unitPrice", "quantity", "lineTotal", "currency"]);
+const ENGINE_LINE_FIELDS: ReadonlySet<string> = new Set(["price", "minAge", "minimumAge", "id", "unitPrice", "quantity", "lineTotal", "currency"]);
 
 /**
  * A product's own attributes (category, requiresRx, any custom field), carried onto its priced line
