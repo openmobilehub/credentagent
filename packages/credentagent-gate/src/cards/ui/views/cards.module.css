@@ -18,3 +18,15 @@
 .button { font: inherit; font-size: 14px; font-weight: 500; color: var(--fg); background: transparent; border: 1px solid var(--line); border-radius: var(--r); padding: 8px 14px; min-height: 40px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
 .button:hover { background: var(--tint); }
 .button:focus-visible { outline: 2px solid var(--info); outline-offset: 2px; }
+
+/* permission */
+.split { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 520px) { .split { grid-template-columns: minmax(0, 1fr) 176px; align-items: start; } }
+.stack { display: grid; gap: 12px; }
+.why { border-left: 3px solid var(--info); padding: 2px 0 2px 10px; color: var(--fg-2); font-size: 14px; }
+.facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px; font-size: 14px; }
+.facts dt { color: var(--fg-2); }
+.facts dd { font-weight: 500; }
+.qr { display: grid; gap: 8px; justify-items: center; text-align: center; font-size: 13px; color: var(--fg-2); }
+.qr img { width: 168px; height: 168px; background: #fff; padding: 8px; border-radius: 8px; border: 1px solid var(--line); image-rendering: pixelated; }
+.signed img { opacity: .25; }
