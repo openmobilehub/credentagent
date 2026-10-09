@@ -28,6 +28,8 @@ const STORES = (process.env.STORES ?? [1, 2, 3].map((n) => `http://localhost:${P
 
 // A real agent loads a stored key: AgentKey.fromJwk(JSON.parse(process.env.AGENT_KEY)).
 const agentKey = process.env.AGENT_KEY ? AgentKey.fromJwk(JSON.parse(process.env.AGENT_KEY)) : AgentKey.generate();
+// The signed permissions the agent holds live as long as the process and nothing empties them — fine for a demo;
+// a real agent would expire them. The other per-grant maps below are the same.
 const permissions = new Map(); // grantId → the signed permission (plain JSON from the phone)
 const widget = createWidget();
 
@@ -53,6 +55,7 @@ const log = (tool, line) => console.log(`  [agent] ${tool.padEnd(18)} ${line}`);
 
 // Grants the MODEL already knows are signed: it saw so itself (check-permission), or the card told the
 // chat. The card announces a signature only for a grant not in here — so it announces each one once.
+// (Never emptied, like `permissions` above — a demo's shortcut.)
 const told = new Set();
 const sleep = (ms) => new Promise((ok) => setTimeout(ok, ms));
 
@@ -61,6 +64,7 @@ const sleep = (ms) => new Promise((ok) => setTimeout(ok, ms));
 // waits it will see the signature itself, so the card must stay quiet — a second "go ahead" in the chat
 // could send the model to buy twice. Past the grace window, the model has ended its turn: the card speaks.
 const GRACE_MS = Number(process.env.AP2_MODEL_GRACE_MS ?? 20_000);
+// Both are per grant and never emptied, like `permissions` above — a demo's shortcut.
 const openChecks = new Map(); // grantId → check-permission calls in flight
 const lastTouch = new Map(); // grantId → when the model last heard "pending" (or got the QR)
 const modelIsWaiting = (grantId) => (openChecks.get(grantId) ?? 0) > 0 || Date.now() - (lastTouch.get(grantId) ?? 0) < GRACE_MS;
@@ -125,7 +129,7 @@ async function purchase(tool, store, grantId, items) {
 // The agent checks the store's price every PRICE_POLL_MS and spends the signed permission once it fits.
 const PRICE_POLL_MS = Number(process.env.AP2_PRICE_POLL_MS ?? 3000);
 const ORDER_TTL_MS = 30 * 60_000;
-const standing = new Map(); // orderId → order
+const standing = new Map(); // orderId → order; finished orders stay listed and are never emptied, like `permissions` above
 const stateOf = (o) => `${o.status}:${o.lastPrice ?? ""}`;
 const publicOrder = ({ timer, ...o }) => o;
 
