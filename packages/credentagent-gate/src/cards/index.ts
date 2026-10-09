@@ -13,7 +13,17 @@ import { cardToolMeta, cardUris, registerCardResources, registerPermissionStatus
 import { cardResult, type CardResult } from "./results.js";
 import { createPermissionWatch, type PermissionStatus, type ReadPermission, type UnknownPermission } from "./permissions.js";
 import { qrDataUrl } from "./qr.js";
-import { PERMISSION_KIND, QR_META_KEY, RECEIPT_KIND, type OffersInput, type PermissionCardData, type PermissionInput, type ReceiptCardData, type ReceiptInput } from "./contract.js";
+import {
+  PERMISSION_KIND,
+  QR_META_KEY,
+  RECEIPT_KIND,
+  type OffersInput,
+  type PaidOrder,
+  type PermissionCardData,
+  type PermissionInput,
+  type ReceiptCardData,
+  type ReceiptInput,
+} from "./contract.js";
 import { offersCard } from "./offers.js";
 import type { GrantViewData } from "./grant-view.js";
 
@@ -62,6 +72,25 @@ const PERMISSION_NOTE =
 
 const RECEIPT_NOTE = "The person sees the store's answer in a card. Summarize it in one sentence.";
 
+const RECEIPT_EXPECTS =
+  "cards.receipt(): expected the store's answer — { ok: true, order: { total, currency, … }, trustLevel } or { ok: false, reason, trustLevel }.";
+
+/** A paid order or a refusal, and nothing in between: the card says "Nothing was charged." for a refusal,
+ *  so an answer without a plain `ok` must never be drawn as one. A currency Intl cannot format would only
+ *  fail later on the page, so it fails here, on the server that can fix it. */
+function isStoreAnswer(answer: ReceiptInput): boolean {
+  if (answer.ok === false) return typeof answer.reason === "string";
+  if (answer.ok !== true) return false;
+  const order: Partial<PaidOrder> | null | undefined = answer.order;
+  if (typeof order !== "object" || order === null || typeof order.total !== "number" || !Number.isFinite(order.total)) return false;
+  try {
+    new Intl.NumberFormat("en-US", { style: "currency", currency: order.currency });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 const NEEDS_READER = "createCards({ readPermission }) is required for permission cards: the card follows the signature through it.";
 
 /** Configure once per process. Reads the built page now, so a missing build fails at startup, not mid-chat. */
@@ -97,6 +126,7 @@ export function createCards<R extends PermissionStatus = PermissionStatus>(confi
       if (typeof answer.trustLevel !== "string" || answer.trustLevel === "") {
         throw new Error('cards.receipt(): trustLevel is required — say out loud what the purchase was verified at (e.g. "presence-only-demo").');
       }
+      if (!isStoreAnswer(answer)) throw new Error(RECEIPT_EXPECTS);
       const data: ReceiptCardData = { kind: RECEIPT_KIND, ...answer };
       return cardResult(data, options?.note ?? RECEIPT_NOTE);
     },

@@ -190,9 +190,37 @@ describe("cards.receipt", () => {
     }
   });
 
-  it("needs a trust level on both answers, said out loud", () => {
+  it("needs a trust level on both answers, said out loud — missing or empty", () => {
     for (const answer of [paid, refused]) {
-      expect(() => createCards().receipt({ ...answer, trustLevel: undefined } as unknown as ReceiptInput)).toThrow(/trustLevel is required/);
+      for (const trustLevel of [undefined, ""]) {
+        expect(() => createCards().receipt({ ...answer, trustLevel } as unknown as ReceiptInput)).toThrow(/trustLevel is required/);
+      }
     }
+  });
+
+  // The card says "Nothing was charged." for a refusal, so an answer that is not plainly a paid order
+  // or a refusal must never get as far as the card.
+  it("refuses an answer that is neither a paid order nor a refusal, and says what it expects", () => {
+    if (!paid.ok) throw new Error("the paid sample is a paid order");
+    const malformed: Array<[string, unknown]> = [
+      ["no ok", { order: paid.order, trustLevel: "presence-only-demo" }],
+      ["a refusal with no reason", { ok: false, trustLevel: "presence-only-demo" }],
+      ["a reason that is not a sentence", { ok: false, reason: 402, trustLevel: "presence-only-demo" }],
+      ["ok that is not true or false", { ...paid, ok: "yes" }],
+      ["a paid answer with no order", { ok: true, trustLevel: "presence-only-demo" }],
+      ["a total that is not a number", { ...paid, order: { ...paid.order, total: "21" } }],
+      ["a total that is not finite", { ...paid, order: { ...paid.order, total: Number.NaN } }],
+      ["a currency Intl does not know", { ...paid, order: { ...paid.order, currency: "$" } }],
+      ["no currency", { ...paid, order: { ...paid.order, currency: undefined } }],
+    ];
+    for (const [what, answer] of malformed) {
+      expect(() => createCards().receipt(answer as ReceiptInput), what).toThrow(/cards\.receipt\(\): expected the store's answer/);
+    }
+  });
+
+  it("a note of your own replaces the default", () => {
+    const result = createCards().receipt(paid, { note: "Mine." });
+    expect(result.content[0].text.startsWith("Mine.\n\n")).toBe(true);
+    expect(result.content[0].text).not.toContain("Summarize it in one sentence");
   });
 });

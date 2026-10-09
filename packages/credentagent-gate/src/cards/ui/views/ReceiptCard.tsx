@@ -12,7 +12,7 @@ const money = (amount: number, currency: string): string => new Intl.NumberForma
 
 export function ReceiptCard({ data, open }: { data: ReceiptCardData; open: (url: string) => Promise<void> }) {
   const [openFailed, setOpenFailed] = useState(false);
-  if (!data.ok) {
+  if (data.ok === false) {
     return (
       <CardFrame trustLevel={data.trustLevel}>
         <div className={`${styles.hero} ${styles.heroBad}`}>
@@ -29,6 +29,7 @@ export function ReceiptCard({ data, open }: { data: ReceiptCardData; open: (url:
       </CardFrame>
     );
   }
+  if (data.ok !== true) return null; // "Nothing was charged." is a claim: only an answer that says `ok: false` makes it
   const { order, receiptUrl } = data;
   return (
     <CardFrame trustLevel={data.trustLevel}>

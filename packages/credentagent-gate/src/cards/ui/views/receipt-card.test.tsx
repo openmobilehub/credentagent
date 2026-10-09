@@ -28,6 +28,31 @@ describe("ReceiptCard", () => {
     expect(html).toMatch(/No real money moves\.<\/p><\/section>$/);
   });
 
+  // The honesty line is built from the answer's own trust level, on both answers. Bypass: hard-code
+  // trustLevel="presence-only-demo" in ReceiptCard's CardFrame and this goes red.
+  it("ends with the honesty line of the answer's own trust level, paid or refused", () => {
+    for (const view of ["receipt", "refused"]) {
+      const data = { ...(previewResult(view)!.structuredContent as ReceiptCardData), trustLevel: "issuer-verified" };
+      const html = renderToStaticMarkup(<ReceiptCard data={data} open={async () => {}} />);
+      expect(html, view).toContain("Trust level: issuer-verified.");
+      expect(html, view).not.toContain("No real money moves");
+    }
+  });
+
+  // "Nothing was charged." is a claim: only an answer that says `ok: false` makes it.
+  it("an answer that is neither paid nor refused is no card — never a refusal", () => {
+    const paid = previewResult("receipt")!.structuredContent as ReceiptCardData & { ok: true };
+    const refused = previewResult("refused")!.structuredContent as ReceiptCardData;
+    for (const [what, answer] of [
+      ["no ok", { kind: paid.kind, order: paid.order, trustLevel: paid.trustLevel }],
+      ["no ok and a reason", { kind: refused.kind, reason: "Declined", trustLevel: refused.trustLevel }],
+      ["ok that is not a boolean", { ...paid, ok: "yes" }],
+    ] as const) {
+      const html = renderToStaticMarkup(<ReceiptCard data={answer as unknown as ReceiptCardData} open={async () => {}} />);
+      expect(html, what).toBe("");
+    }
+  });
+
   it("no receipt link, no button", () => {
     const data = { ...(previewResult("receipt")!.structuredContent as ReceiptCardData) };
     delete (data as { receiptUrl?: string }).receiptUrl;
