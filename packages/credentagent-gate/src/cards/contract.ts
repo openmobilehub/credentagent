@@ -40,3 +40,44 @@ export interface PermissionStatusAnswer {
   announce: boolean;
   final: boolean;
 }
+
+/** The stores' offers side by side (spec 015 FR-8). */
+export const OFFERS_KIND = "credentagent.offers";
+
+export interface Offer {
+  id: string;
+  name: string;
+  /** In dollars. */
+  price: number;
+  rating?: number;
+}
+
+/** One store's catalog as the agent read it — or the error that stopped it. */
+export type StoreOffers = { store: string; url: string; products: Offer[] } | { url: string; error: string };
+
+/** What a server passes to `cards.offers()`. */
+export interface OffersInput {
+  stores: StoreOffers[];
+  /** The product the person named — an id, or words from its name. */
+  product?: string;
+  /** The most the person will pay for one, in dollars. */
+  maxPrice?: number;
+}
+
+/** What the card says plainly when the person named a product. */
+export interface OffersSummary {
+  product: string;
+  /** The stores that sell it. */
+  sellers: string[];
+  maxPrice?: number;
+  /** With a limit: the stores that sell it within it. */
+  within?: string[];
+  /** With a limit: the cheapest offer. */
+  cheapest?: { store: string; price: number };
+}
+
+export interface OffersCardData {
+  kind: typeof OFFERS_KIND;
+  stores: StoreOffers[];
+  summary?: OffersSummary;
+}

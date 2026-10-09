@@ -5,7 +5,7 @@ import { describe, it, expect } from "vitest";
 import { McpServer } from "@modelcontextprotocol/server";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { qrDataUrl } from "./qr.js";
-import { createCards, GRANT_VIEW_KIND, PERMISSION_KIND, PERMISSION_STATUS_TOOL, QR_META_KEY, type GrantViewData, type PermissionInput } from "./index.js";
+import { createCards, GRANT_VIEW_KIND, OFFERS_KIND, PERMISSION_KIND, PERMISSION_STATUS_TOOL, QR_META_KEY, type GrantViewData, type PermissionInput } from "./index.js";
 
 const grant: GrantViewData = {
   kind: GRANT_VIEW_KIND,
@@ -149,5 +149,15 @@ describe("cards.permission", () => {
     const result = await client.callTool({ name: PERMISSION_STATUS_TOOL, arguments: { grantId: "g1", store: "https://evil.example" } });
     expect(result.structuredContent).toEqual({ status: "authorized", trustLevel: "device-signed", announce: true, final: true });
     expect(read[0].store.url).toBe("https://beanbarn.example");
+  });
+});
+
+describe("cards.offers", () => {
+  it("is a card result with the derived note, which a note of your own replaces", () => {
+    const stores = [{ store: "RoastWorks", url: "https://roastworks.example", products: [{ id: "cold-brew", name: "Cold Brew", price: 14 }] }];
+    const result = createCards().offers({ stores, product: "cold brew" });
+    expect(result.structuredContent).toMatchObject({ kind: OFFERS_KIND, summary: { sellers: ["RoastWorks"] } });
+    expect(result.content[0].text.startsWith("Only RoastWorks sells it")).toBe(true);
+    expect(createCards().offers({ stores }, { note: "Mine." }).content[0].text.startsWith("Mine.\n\n")).toBe(true);
   });
 });
