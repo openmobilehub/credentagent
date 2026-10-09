@@ -3,7 +3,7 @@
 // model what to do about it.
 import { describe, it, expect } from "vitest";
 import { offersCard } from "./offers.js";
-import type { StoreOffers } from "./contract.js";
+import type { Offer, StoreOffers } from "./contract.js";
 
 const catalog = (house: number, espresso: number, rating = 4.2) => [
   { id: "house-blend", name: "House Blend, 1 lb bag", price: house, rating },
@@ -123,5 +123,44 @@ describe("offersCard", () => {
     ];
     const { note } = offersCard({ stores: stringPriced, product: "tea", maxPrice: 10 });
     expect(note).toContain("the cheapest is $12.00 at Acme Coffee Co.");
+  });
+
+  it("prices a store sent as numeric strings are compared as numbers, in the data, the summary and the note", () => {
+    const priced = (price: string): Offer => ({ id: "tea", name: "Tea, 20 bags", price: price as unknown as number, rating: "4.5" as unknown as number });
+    const sent: StoreOffers[] = [
+      { store: "Twelve", url: "https://twelve.example", products: [priced("12")] },
+      { store: "Nine", url: "https://nine.example", products: [priced("9")] },
+    ];
+    const { data } = offersCard({ stores: sent, maxPrice: 20 });
+    expect(data.summary?.cheapest).toEqual({ store: "Nine", price: 9 }); // as strings, "9" < "12" is false and $12 would win
+    expect(data.summary?.within).toEqual(["Twelve", "Nine"]);
+    const nine = data.stores[1];
+    expect("products" in nine && nine.products[0]).toEqual({ id: "tea", name: "Tea, 20 bags", price: 9, rating: 4.5 });
+    expect(typeof ("products" in nine && nine.products[0].price)).toBe("number");
+  });
+
+  it("the summary names the product as typed, without the spaces around it", () => {
+    expect(offersCard({ stores, product: "  cold brew " }).data.summary).toEqual({ product: "cold brew", sellers: ["RoastWorks"] });
+  });
+
+  describe("a store that could not be read is never counted as a store that does not sell it", () => {
+    const down: StoreOffers = { url: "https://down.example", error: "fetch failed" };
+
+    it("only one readable seller: the note says it is only among the stores that could be read", () => {
+      const { note } = offersCard({ stores: [stores[2], down], product: "cold brew" });
+      expect(note).toBe(
+        "Only RoastWorks sells it among the stores I could read (1 could not be read) — say so in a sentence, then request the permission there.",
+      );
+    });
+
+    it("no readable seller: the note does not say that no store sells it", () => {
+      const { note } = offersCard({ stores: [stores[0], down, { url: "https://down2.example", error: "timeout" }], product: "matcha" });
+      expect(note).toBe('No store I could read sells "matcha" (2 could not be read). Say so; don\'t request a permission.');
+    });
+
+    it("with every store readable the notes stay as they were", () => {
+      expect(offersCard({ stores: [stores[2]], product: "cold brew" }).note).toBe("Only RoastWorks sells it — no comparison to make. Say so in a sentence, then request the permission there.");
+      expect(offersCard({ stores: [stores[0]], product: "matcha" }).note).toBe('No store sells "matcha". Say so; don\'t request a permission.');
+    });
   });
 });

@@ -514,6 +514,8 @@ server.registerTool("compare-offers", { inputSchema, _meta: cards.toolMeta() }, 
 The card shows each store's offers side by side, and `cards.offers()` derives the plain summary on the card and the
 matching note for the model — who sells the product and what fits the person's price limit, which counts even when no
 product was named.
+A store that could not be read (`{ url, error }`) stays in the data and is left out of the table, and the card and
+the note say so instead of claiming that no store, or only one store, sells the product.
 
 ## Bring your own host — mount on YOUR MCP server
 

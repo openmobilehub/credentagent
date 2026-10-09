@@ -13,7 +13,8 @@ export function OffersCard({ data }: { data: OffersCardData }) {
   const stores = data.stores.filter((s): s is ReadStore => "products" in s);
   const ids = [...new Set(stores.flatMap((s) => s.products.map((p) => p.id)))];
   const over = summary?.within !== undefined && summary.within.length === 0 && summary.sellers.length > 0;
-  const said = summarySentence(summary, stores.length, over);
+  const unread = data.stores.length - stores.length; // stores that came back `{ url, error }`
+  const said = summarySentence(summary, stores.length, over, unread > 0);
   const footer =
     ids.length === 0
       ? "Nothing to buy, so nothing to sign."
@@ -24,10 +25,15 @@ export function OffersCard({ data }: { data: OffersCardData }) {
     <section className={styles.card}>
       <p className={styles.eyebrow}>
         <Icon name="scale" />
-        Compared {stores.length} stores
+        Compared {stores.length} {stores.length === 1 ? "store" : "stores"}
       </p>
       <h1>Offers, read live from each store</h1>
       {said ? <p className={over ? styles.limit : undefined}>{said}</p> : null}
+      {unread > 0 ? (
+        <p className={styles.sub}>
+          Couldn&apos;t read {unread} {unread === 1 ? "store" : "stores"}.
+        </p>
+      ) : null}
       {ids.length > 0 ? (
         <table className={styles.offers}>
           <thead>
@@ -83,11 +89,12 @@ function OfferRow({ id, stores, maxPrice }: { id: string; stores: ReadStore[]; m
 }
 
 /** Say plainly who sells the product, and with a limit what fits it — the table alone makes them work it out.
- *  Words about "it" need a named product; a price limit alone still says how many stores have offers within it. */
-function summarySentence(summary: OffersSummary | undefined, storeCount: number, over: boolean): string | null {
+ *  Words about "it" need a named product; a price limit alone still says how many stores have offers within it.
+ *  `someUnread`: a store could not be read, so "no store sells it" and "only one sells it" speak for the readable ones. */
+function summarySentence(summary: OffersSummary | undefined, storeCount: number, over: boolean, someUnread: boolean): string | null {
   if (!summary) return null;
   const { product, sellers } = summary;
-  if (sellers.length === 0) return product !== undefined ? `No store sells “${product}”.` : null;
+  if (sellers.length === 0) return product !== undefined ? `No store ${someUnread ? "I could read " : ""}sells “${product}”.` : null;
   if (over && summary.cheapest && summary.maxPrice !== undefined) {
     return `None is within your ${usd(summary.maxPrice)} limit. The cheapest is ${usd(summary.cheapest.price)} at ${summary.cheapest.store}.`;
   }
@@ -97,6 +104,6 @@ function summarySentence(summary: OffersSummary | undefined, storeCount: number,
       : `${summary.within.length} of ${sellers.length} ${sellers.length === 1 ? "store has" : "stores have"} offers within your ${usd(summary.maxPrice)} limit.`;
   }
   if (product === undefined) return null;
-  if (sellers.length === 1) return `Only ${sellers[0]} sells it, so there is nothing to compare.`;
+  if (sellers.length === 1) return someUnread ? `Only ${sellers[0]} sells it among the stores I could read.` : `Only ${sellers[0]} sells it, so there is nothing to compare.`;
   return `${sellers.length} of ${storeCount} stores sell it.`;
 }
