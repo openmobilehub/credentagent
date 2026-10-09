@@ -14,8 +14,9 @@ import { devSimulateWalletSignature } from "@openmobilehub/credentagent-gate";
 const here = (f) => new URL(f, import.meta.url).pathname;
 const BASE = Number(process.env.SMOKE_BASE_PORT ?? 4200);
 const local = (n, path = "") => `http://localhost:${BASE + n}${path}`;
-// A short grace window, so "the model stopped waiting" is reached in milliseconds, not the live 20 s.
-const env = { ...process.env, BASE_PORT: String(BASE), AP2_MODEL_GRACE_MS: "300", AP2_PRICE_POLL_MS: "200" };
+// A short grace window, so "the model stopped waiting" is reached in milliseconds, not the live 20 s. CATALOG_LOOKUP_MS
+// gives the stores a slow catalog (as a database would be), so two purchases sent together really do overlap there.
+const env = { ...process.env, BASE_PORT: String(BASE), AP2_MODEL_GRACE_MS: "300", AP2_PRICE_POLL_MS: "200", CATALOG_LOOKUP_MS: "50" };
 for (const k of ["ACME_URL", "BEANBARN_URL", "ROASTWORKS_URL", "STORES"]) delete env[k]; // local origins, never a tunnel's
 const kids = [spawn(process.execPath, [here("./stores.mjs")], { stdio: "inherit", env }), spawn(process.execPath, [here("./agent.mjs")], { stdio: "inherit", env })];
 const up = async (url) => { for (let i = 0; i < 100; i++) { try { await fetch(url); return; } catch { await new Promise((r) => setTimeout(r, 100)); } } throw new Error(`${url} never came up`); };
@@ -89,6 +90,15 @@ try {
   const second = await tool("buy", { store: beanbarn, grantId: grant.grantId, items: [{ sku: "house-blend" }] });
   const third = await tool("buy", { store: beanbarn, grantId: grant.grantId, items: [{ sku: "house-blend" }] });
   check(second.ok === true && third.ok === false, `budget $50: 2nd bag → ${second.ok ? "ok" : second.code}, 3rd → ${third.ok ? "ok (WRONG)" : third.code}`);
+
+  // Two purchases under ONE permission that arrive together (a standing order's tick and a manual buy, say) must
+  // not both pass the budget check: $25 signed, $21 a bag, so exactly one fits (#287).
+  const pair = (await mcp.callTool({ name: "request-permission", arguments: { store: beanbarn, skus: ["house-blend"], budget: 25, perSpend: 25, description: "House Blend from BeanBarn — up to $25, $25 a purchase.", why: "a second permission, to try two purchases at once" } })).structuredContent;
+  await signOnPhone(beanbarn, pair);
+  await tool("check-permission", { store: beanbarn, grantId: pair.grantId });
+  const both = await Promise.all([1, 2].map(() => tool("buy", { store: beanbarn, grantId: pair.grantId, items: [{ sku: "house-blend" }] })));
+  const oneFit = both.filter((b) => b.ok === true).length === 1 && both.filter((b) => b.ok === false).length === 1;
+  check(oneFit, `two purchases at once can't spend past the signed total ($25): one ok, one refused${oneFit ? "" : ` — got ${both.map((b) => (b.ok ? "ok" : b.code)).join(", ")}`}`);
 
   // …and never announces what the model already knows: here it checked first, so the card stays quiet
   // (a second "go ahead" in the chat could send the model to buy twice).

@@ -26,6 +26,9 @@ import { createFeed } from "./console/feed.mjs";
 
 // Ports: the agent takes BASE_PORT, the stores the next three, the wall the one after (default 4100–4104).
 const BASE = Number(process.env.BASE_PORT ?? 4100);
+// Test seam: a real store's catalog is a database, so pricing a cart takes time. smoke.mjs sets this to make two
+// purchases overlap in the store on purpose (#287); a live demo leaves it unset, and pricing is instant.
+const CATALOG_LOOKUP_MS = Number(process.env.CATALOG_LOOKUP_MS ?? 0);
 
 // Same three products everywhere, different prices and ratings — so there is something to compare.
 const STORES = [
@@ -144,8 +147,22 @@ async function startStore({ key, name, port, url, accent, products }) {
     timer.unref();
   }
 
+  // These maps live as long as the process and nothing empties them — fine for a demo; a real store would expire them.
+  // Also: the grant id saved with each purchase code is not checked when the code is used. A real store would check
+  // that the proof is for that grant.
   const nonces = new Map(); // nonce → grantId; single-use, consumed at /purchase (invariant 6)
   const spent = new Map(); // permission root → { amount, uses } in minor units — what THIS store has charged under it
+  // Purchases under ONE permission run one at a time: each reads the total the previous one wrote, so two
+  // purchases arriving together — a standing order's tick and a manual buy, say — can never both pass the
+  // budget check (#287). In-process only, like the rest of this demo store.
+  const queues = new Map(); // permission root → the tail of its purchase queue (removed once it drains)
+  const oneAtATime = (key, fn) => {
+    const run = (queues.get(key) ?? Promise.resolve()).then(fn, fn);
+    const tail = run.then(() => {}, () => {});
+    queues.set(key, tail);
+    void tail.then(() => { if (queues.get(key) === tail) queues.delete(key); });
+    return run;
+  };
   const orders = [];
   const json = express.json({ limit: "1mb" });
 
@@ -265,17 +282,30 @@ async function startStore({ key, name, port, url, accent, products }) {
     // Key the running total by the permission itself (the chain's root, which the verdict checks), never
     // by an id the agent sends — a fresh id must not reset what has been spent under the same permission.
     const root = typeof proof?.payment === "string" ? createHash("sha256").update(proof.payment.split("~")[0]).digest("hex") : "";
-    const before = spent.get(root) ?? { amount: 0, uses: 0 };
-    const verdict = await verifyDelegatedPurchase(proof, {
-      // Said out loud, as the library requires: the demo's payment credential has no issuer trust anchor
-      // yet (#14), so this verifies presence and binding, not that a bank stands behind the card.
-      trust: "presence-only-demo",
-      audience: origin,
-      nonce,
-      checkoutKey: credentagent.ap2.checkoutPublicJwk,
-      spent: before,
-      // The store re-derives the price from its OWN records: the cart it priced from an accepted offer, else the catalog.
-      price: (c) => honoredOffer(c.id)?.total ?? c.line_items.reduce((sum, l) => sum + minor(bySku.get(l.item.id)?.price ?? NaN) * l.quantity, 0),
+    // Read the total, check against it, write the new one — all inside the permission's queue (#287). An accepted
+    // offer is marked used inside the queue too, so two purchases from one offer can't both take it.
+    const { verdict, before, amount, fromOffer } = await oneAtATime(root, async () => {
+      const before = spent.get(root) ?? { amount: 0, uses: 0 };
+      const verdict = await verifyDelegatedPurchase(proof, {
+        // Said out loud, as the library requires: the demo's payment credential has no issuer trust anchor
+        // yet (#14), so this verifies presence and binding, not that a bank stands behind the card.
+        trust: "presence-only-demo",
+        audience: origin,
+        nonce,
+        checkoutKey: credentagent.ap2.checkoutPublicJwk,
+        spent: before,
+        // The store re-derives the price from its OWN records: the cart it priced from an accepted offer, else the catalog.
+        price: async (c) => {
+          if (CATALOG_LOOKUP_MS) await new Promise((ok) => setTimeout(ok, CATALOG_LOOKUP_MS)); // test seam, see the top
+          return honoredOffer(c.id)?.total ?? c.line_items.reduce((sum, l) => sum + minor(bySku.get(l.item.id)?.price ?? NaN) * l.quantity, 0);
+        },
+      });
+      if (!verdict.ok) return { verdict };
+      const amount = verdict.payment.payment_amount.amount;
+      spent.set(root, { amount: before.amount + amount, uses: before.uses + 1 });
+      const fromOffer = honoredOffer(verdict.checkout.id);
+      if (fromOffer) { offers.get(fromOffer.offerId).used = true; quotedFromOffer.delete(verdict.checkout.id); } // an offer buys once
+      return { verdict, before, amount, fromOffer };
     });
     if (!verdict.ok) {
       console.log(`  [${key}] purchase REFUSED: ${verdict.code} — ${verdict.detail}`);
@@ -283,10 +313,6 @@ async function startStore({ key, name, port, url, accent, products }) {
       feed.emit("purchase.refused", { code: verdict.code, reason });
       return res.status(402).json({ ...verdict, store: name, reason });
     }
-    const amount = verdict.payment.payment_amount.amount;
-    spent.set(root, { amount: before.amount + amount, uses: before.uses + 1 });
-    const fromOffer = honoredOffer(verdict.checkout.id);
-    if (fromOffer) { offers.get(fromOffer.offerId).used = true; quotedFromOffer.delete(verdict.checkout.id); } // an offer buys once
     // What verifyDelegatedPurchase just checked — each line is a refusal code it would have returned instead.
     const budget = verdict.open.payment.constraints.find((c) => c.type === "payment.budget");
     const cap = verdict.open.payment.constraints.find((c) => c.type === "payment.amount_range");
