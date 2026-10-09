@@ -22,7 +22,7 @@ node examples/ap2-multistore/up.mjs      # live: 4 tunnels + stores + agent (nee
 
 `up.mjs` prints a connector URL. Add it in **claude.ai → Settings → Connectors → Add custom connector**, then have the conversation above. ChatGPT takes the same URL as a custom connector (it needs developer mode).
 
-The cards are one HTML page (`widget/widget.html`), served the way the storefront package serves its own: as an MCP Apps resource for Claude and as an Apps SDK resource for ChatGPT. They take the chat's theme and fonts. To see them without a chat, open `http://localhost:4100/widget?view=offers` (or `permission`, `receipt`, `refused`). That preview uses sample data.
+The cards come from the SDK's card kit (`@openmobilehub/credentagent-gate/cards`, spec 015): `createCards()` serves them to Claude as an MCP Apps resource and to ChatGPT as an Apps SDK resource. They take the chat's theme and fonts. To see them without a chat, open `http://localhost:4100/widget?view=offers` (or `only-one`, `over-limit`, `permission`, `permission-signed`, `receipt`, `refused`). That preview uses sample data.
 
 ## Scenarios, simplest first
 

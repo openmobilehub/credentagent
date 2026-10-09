@@ -24,6 +24,8 @@ import { createStorefront } from "@openmobilehub/credentagent-storefront/server"
 import { CredentAgent, verifyDelegatedPurchase } from "@openmobilehub/credentagent-gate";
 import { createFeed } from "./console/feed.mjs";
 
+const TRUST = "presence-only-demo"; // what every purchase is verified at — no issuer trust anchor yet
+
 // Ports: the agent takes BASE_PORT, the stores the next three, the wall the one after (default 4100–4104).
 const BASE = Number(process.env.BASE_PORT ?? 4100);
 
@@ -174,7 +176,7 @@ async function startStore({ key, name, port, url, accent, products }) {
         agentKeyX: String(agentKey?.x ?? "").slice(0, 10),
       });
       watchGrant(g.id);
-      res.json({ grantId: g.id, approveUrl: g.approveUrl, status: g.status, store: name, merchantId: host, products: skus.map((s) => bySku.get(s).name) });
+      res.json({ grantId: g.id, approveUrl: g.approveUrl, status: g.status, store: name, merchantId: host, products: skus.map((s) => bySku.get(s).name), trustLevel: TRUST });
     } catch (err) {
       res.status(400).json({ error: err.message });
     }
@@ -210,7 +212,7 @@ async function startStore({ key, name, port, url, accent, products }) {
     const { proof, nonce } = req.body ?? {};
     if (!nonces.has(nonce)) {
       feed.emit("purchase.refused", { code: "nonce", reason: CODES.nonce });
-      return res.status(400).json({ ok: false, store: name, code: "nonce", reason: CODES.nonce, detail: "unknown or already-used nonce" });
+      return res.status(400).json({ ok: false, store: name, code: "nonce", reason: CODES.nonce, detail: "unknown or already-used nonce", trustLevel: TRUST });
     }
     nonces.delete(nonce);
     // Key the running total by the permission itself (the chain's root, which the verdict checks), never
@@ -220,7 +222,7 @@ async function startStore({ key, name, port, url, accent, products }) {
     const verdict = await verifyDelegatedPurchase(proof, {
       // Said out loud, as the library requires: the demo's payment credential has no issuer trust anchor
       // yet (#14), so this verifies presence and binding, not that a bank stands behind the card.
-      trust: "presence-only-demo",
+      trust: TRUST,
       audience: origin,
       nonce,
       checkoutKey: credentagent.ap2.checkoutPublicJwk,
@@ -231,7 +233,7 @@ async function startStore({ key, name, port, url, accent, products }) {
       console.log(`  [${key}] purchase REFUSED: ${verdict.code} — ${verdict.detail}`);
       const reason = explain(verdict);
       feed.emit("purchase.refused", { code: verdict.code, reason });
-      return res.status(402).json({ ...verdict, store: name, reason });
+      return res.status(402).json({ ...verdict, store: name, reason, trustLevel: TRUST });
     }
     const amount = verdict.payment.payment_amount.amount;
     spent.set(root, { amount: before.amount + amount, uses: before.uses + 1 });
@@ -255,7 +257,7 @@ async function startStore({ key, name, port, url, accent, products }) {
     orders.push(order);
     feed.emit("purchase.verified", { orderId: order.id, items: order.items, amount, checks, permission: root.slice(0, 8) });
     console.log(`  [${key}] purchase VERIFIED ✓ ${order.id} · ${usd(amount)} · ${verdict.trust_level}`);
-    res.json({ ok: true, order, receiptUrl: `${origin}/agent/orders/${order.id}` });
+    res.json({ ok: true, order: { ...order, total: amount / 100 }, receiptUrl: `${origin}/agent/orders/${order.id}`, trustLevel: verdict.trust_level });
   });
 
   // What the person opens to see the result.
