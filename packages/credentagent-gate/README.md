@@ -457,9 +457,47 @@ The grant card's **Revoke** button calls your server's `revoke-grant` tool with 
 
 A card only shows; it never decides — every limit must be enforced on your server. Today the page renders
 grants; `/cards` with no `view` lists them all (`?view=grant-pending`, `grant-product`, `grant-category`,
-`grant-open`, `grant-low`, `grant-spent`, `grant-revoked`, `grant-declined`). The
-permission card with a QR code, the offers card and the receipt card are next
-([#256](https://github.com/openmobilehub/credentagent/issues/256)).
+`grant-open`, `grant-low`, `grant-spent`, `grant-revoked`, `grant-declined`). The permission card's view comes
+next, then the offers and receipt cards ([#256](https://github.com/openmobilehub/credentagent/issues/256)).
+
+### A permission to sign on the phone
+
+```js
+const cards = createCards({
+  // How to read a permission's live status — here, from the store that issued it. Answer { status, trustLevel? }
+  // ("pending" until signed); anything else you return (the signed intent) comes back from waitForSignature.
+  readPermission: ({ grantId, store }) => getJson(`${store.url}/agent/grants/${grantId}`),
+});
+
+server.registerTool("request-permission", { inputSchema, _meta: cards.toolMeta() }, async (args) => {
+  // Resolve args.store against your own list of known stores — never fetch a URL the model made up.
+  const grant = await postJson(`${args.store}/agent/grants`, { /* … */ });
+  return cards.permission({
+    grantId: grant.grantId,
+    store: { name: grant.store, url: args.store },
+    approveUrl: grant.approveUrl, // becomes the QR code — it reaches the card in _meta, not the model
+    products: grant.products,
+    limits: { perPurchase: args.perSpend, total: args.budget },
+    why: args.why,
+    trustLevel: grant.trustLevel, // required: what the purchase will be verified at
+  });
+});
+
+server.registerTool("check-permission", { inputSchema }, async ({ grantId }) => {
+  const signed = await cards.waitForSignature(grantId); // holds up to 45 s
+  return reply(signed.status === "authorized" ? "Signed. Call buy now." : `Not signed yet (${signed.status}). Call again.`);
+});
+```
+
+The dependable path is the model waiting in its own turn (`waitForSignature`). `register()` also adds a
+card-only tool, `credentagent-permission-status` — hidden from the model, it takes only a grant id — that
+the card follows the signature through. The kit owns both waits, so it alone decides when the card may
+tell the chat "signed": once per grant, and never while the model is still waiting (two "go ahead"s could
+make it buy twice). It remembers permissions in memory, per process, for an hour after their last use,
+by grant id alone — so grant ids must be unique across the stores your server talks to.
+
+The server half above is in place; the card that shows the QR code and its live status arrives on the card
+page in the next step.
 
 ## Bring your own host — mount on YOUR MCP server
 
@@ -979,8 +1017,9 @@ defineHost({ catalog, orderStore, records | completion, signingKey | allowEpheme
 
 // Cards (spec 015) — one card page any MCP server serves to Claude and ChatGPT (see the Cards section)
 // from "@openmobilehub/credentagent-gate/cards"
-createCards() → { html, register(server), toolMeta(status?), grant(view, { note? }) → CardResult }
-GRANT_VIEW_KIND  ·  GrantViewData / CardResult (types)
+createCards({ readPermission?, holdMs?, modelGraceMs? }) → { html, register(server), toolMeta(status?),
+  grant(view, { note? }) → CardResult, permission(input, { note? }) → CardResult, waitForSignature(grantId) → status | { status: "unknown" } }
+GRANT_VIEW_KIND  ·  PERMISSION_KIND  ·  PERMISSION_STATUS_TOOL  ·  QR_META_KEY  ·  GrantViewData / PermissionInput / PermissionStatus / ReadPermission / CardResult (types)
 
 // Delegated draws (HNP, 005 preview) — the Stripe-grade facade + the underlying seams
 DelegatedGate  ·  gate.preApprove(bounds) → DelegatedGrant  ·  grant.spend(purchase) → SpendResult  ·  grant.revoke()

@@ -93,7 +93,7 @@ imports neither React nor the MCP SDK: it registers through a structural port (t
 `registerResource` / `registerTool` methods of the server object it is handed — principle 6).
 `vite.config.cards.ts` builds `src/cards/ui/cards.html` into `dist/cards/cards.html`; the
 package's `build` script runs it before `tsc`. No new runtime dependency except, from increment
-2, one small dependency-free QR encoder.
+2, `uqr`, a dependency-free QR encoder.
 
 **FR-2 — `createCards(options?)`, once per process.** Reads the built page and a short hash of
 its content at creation, and **fails fast** with a fix-it message if the page is missing (the
@@ -153,9 +153,10 @@ without the frame. The gallery keeps its existing frame and its existing bypass 
 
 **FR-7 — Permission with live status.** `permission(input)` takes `{ grantId, store: { name,
 url?, merchantId? }, approveUrl, products, limits: { perPurchase, total }, why?, trustLevel }`;
-the QR of `approveUrl` (an SVG data URL) rides in `_meta`. The card shows the QR, an "Open link"
-button, the limits, the reason, and a live status: "Waiting for your signature" → "Signed on
-your phone" (or "Not signed · <status>").
+the QR of `approveUrl` (an SVG data URL) rides in `_meta` under the key `credentagent/qr`
+(generated with `uqr`, MIT, no dependencies). The card shows the QR, an "Open link" button, the
+limits, the reason, and a live status: "Waiting for your signature" → "Signed on your phone" (or
+"Not signed · <status>").
 
 - **The kit remembers what it issued**, keyed by grant id (in memory, per process, entries
   expire an hour after their last use; never one shared key — invariant 4). `readPermission`
@@ -217,9 +218,10 @@ and "Open receipt". Refused: who refused, the reason, "Nothing was charged."
      published API), so its widget is unchanged.
    - **1b** — the card page: bridge, redraw guard, theme, preview, and its one-file build.
    - **1c** — the server half: `createCards`, `register`, `toolMeta`, `grant()`.
-2. **Permission card** — FR-6, FR-7: the frame, the QR, live status, the card-only tool,
-   `waitForSignature`, and the announcement rule.
-3. **Offers and receipt cards** — FR-8, FR-9.
+2. **Permission card** — FR-6, FR-7, in four pull requests (plan: `plan-increments-2-3.md`): 2a the
+   permission watch (when the card may say "signed"); 2b the API (`permission()`, `waitForSignature()`,
+   the QR, the card-only tool); 2c the card on the page; 2d its live status.
+3. **Offers and receipt cards** — FR-8 (3a), FR-9 (3b).
 4. **Migrate `examples/ap2-multistore`** to the kit and delete its `widget/`. The demo (#244) is
    not for merge, so this pull request sits on the demo's stack (#254) and its stores answer in
    the FR-7/FR-9 shapes. `examples/hnp-on-claude` has no cards of its own (it uses
