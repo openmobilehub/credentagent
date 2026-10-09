@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { describe, it, expect } from "vitest";
 import { McpServer } from "@modelcontextprotocol/server";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
+import { qrDataUrl } from "./qr.js";
 import { createCards, GRANT_VIEW_KIND, PERMISSION_KIND, PERMISSION_STATUS_TOOL, QR_META_KEY, type GrantViewData, type PermissionInput } from "./index.js";
 
 const grant: GrantViewData = {
@@ -101,6 +102,7 @@ describe("cards.permission", () => {
     const result = createCards({ readPermission: signed }).permission(permission);
     expect(result.structuredContent).toEqual({ kind: PERMISSION_KIND, ...permission });
     expect(String(result._meta?.[QR_META_KEY])).toMatch(/^data:image\/svg\+xml;/);
+    expect(result._meta?.[QR_META_KEY]).toBe(qrDataUrl(permission.approveUrl)); // what the person scans is the signing link
     expect(result.content[0].text).toContain(JSON.stringify({ kind: PERMISSION_KIND, ...permission }, null, 2));
     expect(result.content[0].text).not.toContain("data:image");
   });
@@ -111,9 +113,18 @@ describe("cards.permission", () => {
     await expect(cards.waitForSignature("g1")).rejects.toThrow(/readPermission/);
   });
 
-  it("needs a trust level, said out loud", () => {
-    const withoutTrust = { ...permission, trustLevel: undefined } as unknown as PermissionInput;
-    expect(() => createCards({ readPermission: signed }).permission(withoutTrust)).toThrow(/trustLevel is required/);
+  it("needs a trust level, said out loud — missing or empty", () => {
+    const cards = createCards({ readPermission: signed });
+    for (const trustLevel of [undefined, ""]) {
+      const withoutTrust = { ...permission, trustLevel } as unknown as PermissionInput;
+      expect(() => cards.permission(withoutTrust)).toThrow(/trustLevel is required/);
+    }
+  });
+
+  it("a signing link too long for a QR code throws, and no permission is remembered for it", async () => {
+    const cards = createCards({ readPermission: signed });
+    expect(() => cards.permission({ ...permission, approveUrl: `https://beanbarn.example/${"x".repeat(10_000)}` })).toThrow();
+    expect(await cards.waitForSignature("g1")).toEqual({ status: "unknown" });
   });
 
   it("the model's wait answers what readPermission answered, extra fields included", async () => {

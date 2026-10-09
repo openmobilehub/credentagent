@@ -21,10 +21,10 @@ export interface CardsOptions<R extends PermissionStatus = PermissionStatus> {
    *  signature through it, and `waitForSignature` holds on it. */
   readPermission?: ReadPermission<R>;
   /** How long `waitForSignature` holds before answering "pending" (default 45 000 ms — under claude.ai's
-   *  60 s tool-call limit, like the storefront's `approvalHoldMs`). */
+   *  60 s tool-call limit, like the storefront's `approvalHoldMs`). Only takes effect with `readPermission`. */
   holdMs?: number;
   /** After the model last heard "pending", how long it still counts as waiting in its own turn — the
-   *  card stays quiet meanwhile (default 20 000 ms). */
+   *  card stays quiet meanwhile (default 20 000 ms). Only takes effect with `readPermission`. */
   modelGraceMs?: number;
 }
 
@@ -55,11 +55,11 @@ const PERMISSION_NOTE =
 const NEEDS_READER = "createCards({ readPermission }) is required for permission cards: the card follows the signature through it.";
 
 /** Configure once per process. Reads the built page now, so a missing build fails at startup, not mid-chat. */
-export function createCards<R extends PermissionStatus = PermissionStatus>(options: CardsOptions<R> = {}): Cards<R> {
+export function createCards<R extends PermissionStatus = PermissionStatus>(config: CardsOptions<R> = {}): Cards<R> {
   const page = loadCardsPage();
   const uris = cardUris(page.hash);
-  const watch = options.readPermission
-    ? createPermissionWatch({ read: options.readPermission, holdMs: options.holdMs ?? 45_000, modelGraceMs: options.modelGraceMs ?? 20_000 })
+  const watch = config.readPermission
+    ? createPermissionWatch({ read: config.readPermission, holdMs: config.holdMs ?? 45_000, modelGraceMs: config.modelGraceMs ?? 20_000 })
     : undefined;
   return {
     html: page.html,
@@ -74,9 +74,10 @@ export function createCards<R extends PermissionStatus = PermissionStatus>(optio
       if (typeof input.trustLevel !== "string" || input.trustLevel === "") {
         throw new Error('cards.permission(): trustLevel is required — say out loud what the purchase will be verified at (e.g. "presence-only-demo").');
       }
+      const qr = qrDataUrl(input.approveUrl); // before `issued`: a failed QR must not leave a remembered permission behind
       watch.issued(input);
       const data: PermissionCardData = { kind: PERMISSION_KIND, ...input };
-      return cardResult(data, options?.note ?? PERMISSION_NOTE, { [QR_META_KEY]: qrDataUrl(input.approveUrl) });
+      return cardResult(data, options?.note ?? PERMISSION_NOTE, { [QR_META_KEY]: qr });
     },
     waitForSignature: (grantId) => (watch ? watch.waitForSignature(grantId) : Promise.reject(new Error(NEEDS_READER))),
   };

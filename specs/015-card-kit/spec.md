@@ -153,9 +153,10 @@ without the frame. The gallery keeps its existing frame and its existing bypass 
 
 **FR-7 — Permission with live status.** `permission(input)` takes `{ grantId, store: { name,
 url?, merchantId? }, approveUrl, products, limits: { perPurchase, total }, why?, trustLevel }`;
-the QR of `approveUrl` (an SVG data URL) rides in `_meta` under the key `credentagent/qr` (generated with `uqr`, MIT, no dependencies). The card shows the QR, an "Open link"
-button, the limits, the reason, and a live status: "Waiting for your signature" → "Signed on
-your phone" (or "Not signed · <status>").
+the QR of `approveUrl` (an SVG data URL) rides in `_meta` under the key `credentagent/qr`
+(generated with `uqr`, MIT, no dependencies). The card shows the QR, an "Open link" button, the
+limits, the reason, and a live status: "Waiting for your signature" → "Signed on your phone" (or
+"Not signed · <status>").
 
 - **The kit remembers what it issued**, keyed by grant id (in memory, per process, entries
   expire an hour after their last use; never one shared key — invariant 4). `readPermission`
