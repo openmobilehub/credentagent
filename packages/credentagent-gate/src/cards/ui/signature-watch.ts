@@ -48,7 +48,13 @@ export function createSignatureWatch(
       }
       if (answer.status === "authorized") {
         if (states.get(grantId)?.kind !== "signed") set(grantId, { kind: "signed", ...(answer.trustLevel ? { trustLevel: answer.trustLevel } : {}) });
-        if (answer.announce) await bridge.tell(`I signed the permission for ${storeName} on my phone (${grantId}). Please go ahead with the purchase.`);
+        if (answer.announce) {
+          try {
+            await bridge.tell(`I signed the permission for ${storeName} on my phone (${grantId}). Please go ahead with the purchase.`);
+          } catch {
+            /* a bridge that cannot post must not break the follow — the card's "Signed" is the signal */
+          }
+        }
         if (answer.final) {
           finished.add(grantId);
           return;

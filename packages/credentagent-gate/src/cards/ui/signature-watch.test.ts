@@ -66,6 +66,10 @@ describe("createSignatureWatch", () => {
     const watch = createSignatureWatch(bridge, options);
     watch.follow("g1", "BeanBarn");
     await vi.waitFor(() => expect(watch.state("g1")).toEqual({ kind: "not-signed", status: "denied" }));
+    expect(bridge.call).toHaveBeenCalledTimes(1); // a refusal is final: the loop does not keep asking
+    watch.follow("g1", "BeanBarn"); // the card redraws
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(bridge.call).toHaveBeenCalledTimes(1); // and a redraw never starts another follow
   });
 
   it("in the preview, with no server behind it, it stops quietly", async () => {
@@ -84,6 +88,39 @@ describe("createSignatureWatch", () => {
     watch.follow("g1", "BeanBarn");
     await vi.waitFor(() => expect(watch.state("g1").kind).toBe("signed"));
     expect(sleep).toHaveBeenCalledWith(3_000);
+  });
+
+  it("with no options, a failed call is retried after the default 3 seconds", async () => {
+    const sleep = vi.fn(async () => {});
+    const bridge = fakeBridge([new Error("offline"), authorized(false, true)]);
+    const watch = createSignatureWatch(bridge, { sleep });
+    watch.follow("g1", "BeanBarn");
+    await vi.waitFor(() => expect(watch.state("g1").kind).toBe("signed"));
+    expect(sleep).toHaveBeenCalledWith(3_000);
+  });
+
+  it("says a signature was seen once, however many signed answers follow", async () => {
+    const watch = createSignatureWatch(fakeBridge([authorized(false, false), authorized(false, true)]), options);
+    const listener = vi.fn();
+    watch.subscribe(listener);
+    watch.follow("g1", "BeanBarn");
+    await vi.waitFor(() => expect(watch.state("g1").kind).toBe("signed"));
+    await new Promise((resolve) => setTimeout(resolve, 20)); // let the second, final answer land
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it("a tell that throws never escapes: the card stays signed and the follow still ends", async () => {
+    const bridge = fakeBridge([authorized(true, true)]);
+    bridge.tell = vi.fn(async () => {
+      throw new Error("the host refused");
+    });
+    const watch = createSignatureWatch(bridge, options);
+    watch.follow("g1", "BeanBarn");
+    await vi.waitFor(() => expect(bridge.tell).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(watch.state("g1")).toEqual({ kind: "signed", trustLevel: "device-signed" }));
+    watch.follow("g1", "BeanBarn"); // the card redraws: the finished follow is not started again
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(bridge.call).toHaveBeenCalledTimes(1);
   });
 
   it("tells subscribers when a state changes", async () => {

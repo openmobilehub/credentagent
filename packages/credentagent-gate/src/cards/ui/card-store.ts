@@ -9,7 +9,7 @@ export interface CardData {
   [key: string]: unknown;
 }
 
-/** The card on screen: its data, its card-only extras (`_meta`), and a key that changes with the data. */
+/** The card on screen: its data, its card-only extras (`_meta`), and a key that changes with either. */
 export interface ShownCard {
   data: CardData;
   meta: Record<string, unknown>;

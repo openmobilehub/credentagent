@@ -47,7 +47,8 @@ async function connectMcp(store: CardStore): Promise<Bridge> {
       try {
         await app.sendMessage({ role: "user", content: [{ type: "text", text }] });
       } catch {
-        /* a host that cannot post leaves the card's "Signed" as the signal */
+        // A host that refuses or cannot post leaves the card's "Signed" as the signal. (A refusal comes back
+        // as `{ isError: true }` rather than a throw — the card shows Signed either way.)
       }
     },
   };
