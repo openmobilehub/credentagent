@@ -8,6 +8,7 @@ body {
   font: 15px/1.5 var(--font-sans, system-ui, -apple-system, "Segoe UI", sans-serif);
   color: var(--color-text-primary, light-dark(#1f2328, #e6edf3));
 }
+body[data-preview] { background: var(--color-background-primary, light-dark(#ffffff, #0d1117)); }
 .trouble, .preview { margin: 0; padding: 12px; font-size: 14px; color: var(--color-text-secondary, light-dark(#57606a, #9198a1)); }
 .preview a { color: var(--color-text-info, light-dark(#0969da, #4493f8)); }
 

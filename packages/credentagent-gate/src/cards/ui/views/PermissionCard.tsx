@@ -19,19 +19,27 @@ export interface PermissionCardProps {
   open: (url: string) => Promise<void>;
 }
 
+/** The "Open link" press: clear any old failure, ask the host to open the link, and say if it could not.
+ *  The button handler never awaits the promise, so a rejection must be caught here or it vanishes. */
+export function openOrSay(open: (url: string) => Promise<void>, url: string, failed: (didFail: boolean) => void): void {
+  failed(false);
+  open(url).catch(() => failed(true));
+}
+
+/** What the card says when the link would not open: it points at the QR code only when one is shown. */
+export const openFailedMessage = (qrShown: boolean): string =>
+  qrShown ? "Couldn't open the link — scan the code instead." : "Couldn't open the link.";
+
 export function PermissionCard({ data, qr, state, open }: PermissionCardProps) {
   const [openFailed, setOpenFailed] = useState(false);
   const { store, limits } = data;
   const qrSrc = typeof qr === "string" && qr.startsWith("data:image/") ? qr : null;
-  const openLink = (): void => {
-    setOpenFailed(false);
-    open(data.approveUrl).catch(() => setOpenFailed(true));
-  };
+  const openLink = (): void => openOrSay(open, data.approveUrl, setOpenFailed);
   return (
     <CardFrame
       eyebrow={
         <>
-          <Icon name="phone" className={styles.icon} />
+          <Icon name="phone" />
           Permission request
         </>
       }
@@ -66,10 +74,10 @@ export function PermissionCard({ data, qr, state, open }: PermissionCardProps) {
           {qrSrc ? <img src={qrSrc} alt={`QR code for the signing link at ${store.name}`} /> : null}
           <span>Scan with your phone&apos;s camera</span>
           <button type="button" className={styles.button} onClick={openLink}>
-            <Icon name="link" className={styles.icon} />
+            <Icon name="link" />
             Open link
           </button>
-          {openFailed ? <span>Couldn&apos;t open the link — scan the code instead.</span> : null}
+          {openFailed ? <span>{openFailedMessage(qrSrc !== null)}</span> : null}
         </div>
       </div>
       <p className={styles.sub}>
@@ -83,7 +91,7 @@ function StatusPill({ state }: { state: SignatureState }) {
   if (state.kind === "signed") {
     return (
       <span role="status" className={`${styles.pill} ${styles.ok}`}>
-        <Icon name="check" className={styles.icon} />
+        <Icon name="check" />
         Signed on your phone{state.trustLevel ? ` · ${state.trustLevel}` : ""}
       </span>
     );
@@ -91,7 +99,7 @@ function StatusPill({ state }: { state: SignatureState }) {
   if (state.kind === "not-signed") {
     return (
       <span role="status" className={`${styles.pill} ${styles.bad}`}>
-        <Icon name="x" className={styles.icon} />
+        <Icon name="x" />
         Not signed · {state.status}
       </span>
     );

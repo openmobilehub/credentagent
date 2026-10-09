@@ -74,6 +74,7 @@ function connectPreview(store: CardStore, win: CardWindow): Bridge {
   const params = new URLSearchParams(win.location.search);
   const theme = params.get("theme");
   if (theme === "light" || theme === "dark") setTheme(theme);
+  document.body.dataset.preview = ""; // real hosts paint the page's background; the preview paints its own
   store.show(previewResult(params.get("view")));
   return {
     host: "preview",
