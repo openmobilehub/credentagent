@@ -20,7 +20,8 @@ import { CartFooter } from "./CartFooter";
 import { ProofRows, type WidgetProof } from "./ProofRows";
 import { ShowProducts } from "./ShowProducts";
 import { formatMoney } from "./money";
-import { GrantCard, GRANT_VIEW_KIND, type GrantViewData, type GrantActions } from "./grants";
+// The grant gallery lives in the gate's card kit (spec 015); this widget compiles it from source.
+import { GrantCard, GRANT_VIEW_KIND, type GrantViewData, type GrantActions } from "../../../credentagent-gate/src/cards/ui/grants";
 
 // A grant tool result (create/get/spend/revoke) carries the GrantViewData projection, discriminated
 // by `kind`, on BOTH host channels (Claude's structuredContent / text, ChatGPT's toolOutput). When

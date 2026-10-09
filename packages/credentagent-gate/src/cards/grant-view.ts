@@ -6,12 +6,13 @@
 // display-only BY CONSTRUCTION, not convention). Money arrives computed server-side from the
 // engine (invariant 2 discipline applied to display); the widget never re-derives amounts.
 //
-// This module is a LEAF on purpose: it imports only TYPES from the gate, so the browser widget
-// bundle that imports `GRANT_VIEW_KIND` + the types never pulls the gate's Node runtime in. The
-// projection that BUILDS a GrantViewData (which needs the gate's `grantLifecycle` value + a live
-// grant handle + catalog) lives server-side in `grant-project.ts`.
+// This module is a LEAF on purpose: it imports only TYPES, so the card page that imports
+// `GRANT_VIEW_KIND` + the types never pulls the gate's Node runtime in. It moved here from the
+// storefront (spec 015) so any MCP server can render a grant, not only createStorefront(). The
+// projection that BUILDS a GrantViewData (a live grant handle + the catalog) stays in the
+// storefront's `grant-project.ts`.
 
-import type { GrantLifecycle, GrantStatus } from "@openmobilehub/credentagent-gate";
+import type { GrantLifecycle, GrantStatus } from "../grants.js";
 
 /** Marker discriminating a grant tool result from a shopping (cart/catalog) result, so the widget
  *  dispatch renders the grant view instead of the product picker. */

@@ -23,6 +23,10 @@
     "./agent": {
       "types": "./dist/agent.d.ts",
       "default": "./dist/agent.js"
+    },
+    "./cards": {
+      "types": "./dist/cards/index.d.ts",
+      "default": "./dist/cards/index.js"
     }
   },
   "main": "./dist/index.js",
@@ -36,7 +40,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json && tsc -p tsconfig.test.json",
+    "build": "vite build --config vite.config.cards.ts && tsc -p tsconfig.json && tsc -p tsconfig.test.json",
     "test": "vitest run"
   },
   "keywords": [
@@ -55,11 +59,22 @@
     "@simplewebauthn/browser": "^13.3.0",
     "@simplewebauthn/server": "^13.3.1",
     "cbor-x": "^1.6.4",
-    "jose": "^5.10.0"
+    "jose": "^5.10.0",
+    "uqr": "^0.1.3"
   },
   "devDependencies": {
+    "@modelcontextprotocol/client": "^2.1.0",
+    "@modelcontextprotocol/ext-apps": "^2.0.0",
+    "@modelcontextprotocol/server": "^2.1.0",
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.2",
     "@types/supertest": "^7.2.0",
-    "supertest": "^7.2.2"
+    "@vitejs/plugin-react": "^4.3.4",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "supertest": "^7.2.2",
+    "vite": "^6.0.0",
+    "vite-plugin-singlefile": "^2.3.0"
   },
   "publishConfig": {
     "access": "public"

@@ -66,6 +66,9 @@ The gate is the security surface; the storefront is a reference consumer.
     primitive.
   - `store.ts` — `VerificationStore` (default in-memory; inject a shared store for
     multi-instance deploys).
+  - `cards/` — the card kit (`./cards`, spec 015): `createCards()` serves one card page to Claude and
+    ChatGPT from any MCP server. `ui/` is the page (React, built to `dist/cards/cards.html`),
+    `ui/grants/` the grant gallery. A card only shows; the server enforces.
   - `src/ceremony/` — the authorization gates `mount()` serves, each a self-contained
     rail:
     - `passkey/` — WebAuthn same-device + cross-device (caBLE).
