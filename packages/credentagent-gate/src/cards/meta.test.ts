@@ -4,7 +4,8 @@ import { describe, it, expect } from "vitest";
 import { McpServer } from "@modelcontextprotocol/server";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { RESOURCE_MIME_TYPE } from "@modelcontextprotocol/ext-apps/server";
-import { cardToolMeta, cardUris, MCP_APP_MIME, registerCardResources } from "./meta.js";
+import { cardToolMeta, cardUris, MCP_APP_MIME, registerCardResources, registerPermissionStatusTool } from "./meta.js";
+import { PERMISSION_STATUS_TOOL } from "./contract.js";
 
 const uris = cardUris("0123456789ab");
 // The page is served exactly as built: replacement-string patterns must survive untouched.
@@ -77,5 +78,31 @@ describe("cardToolMeta", () => {
 
   it("defaults the status lines", () => {
     expect(cardToolMeta(uris)["openai/toolInvocation"]).toEqual({ invoking: "Working…", invoked: "Done" });
+  });
+});
+
+describe("the permission card's status tool", () => {
+  const status = { status: "authorized", trustLevel: "device-signed", announce: true, final: true };
+
+  it("is hidden from the model, callable from the card, and takes only a grant id", async () => {
+    const client = await connect((server) => registerPermissionStatusTool(server, async () => status));
+    const [tool] = (await client.listTools()).tools;
+    expect(tool.name).toBe(PERMISSION_STATUS_TOOL);
+    expect(tool._meta).toEqual({ ui: { visibility: ["app"] }, "openai/widgetAccessible": true });
+    expect(tool.inputSchema).toEqual({ type: "object", properties: { grantId: { type: "string" } }, required: ["grantId"], additionalProperties: false });
+  });
+
+  it("answers what the server decided, and never hands a URL from the card to the server", async () => {
+    const asked: string[] = [];
+    const client = await connect((server) => registerPermissionStatusTool(server, async (grantId) => { asked.push(grantId); return status; }));
+    const result = await client.callTool({ name: PERMISSION_STATUS_TOOL, arguments: { grantId: "g1", store: "https://evil.example" } });
+    expect(result.structuredContent).toEqual(status);
+    expect(asked).toEqual(["g1"]);
+  });
+
+  it("refuses a call without a string grant id", async () => {
+    const client = await connect((server) => registerPermissionStatusTool(server, async () => status));
+    const result = await client.callTool({ name: PERMISSION_STATUS_TOOL, arguments: { grantId: 5 } });
+    expect(result.isError).toBe(true);
   });
 });
