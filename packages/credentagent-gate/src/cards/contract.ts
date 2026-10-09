@@ -82,3 +82,26 @@ export interface OffersCardData {
   stores: StoreOffers[];
   summary?: OffersSummary;
 }
+
+/** The store's answer to a purchase (spec 015 FR-9). */
+export const RECEIPT_KIND = "credentagent.receipt";
+
+export interface PaidOrder {
+  id: string;
+  store: string;
+  /** In `currency`'s major unit (dollars). */
+  total: number;
+  currency: string;
+  /** "1 × House Blend, 1 lb bag" */
+  items: string[];
+  /** What the store checked before it accepted the order, one sentence each. */
+  checks: string[];
+}
+
+/** What a server passes to `cards.receipt()`: the store's answer, as-is. `trustLevel` — what the
+ *  purchase was verified at — is required on both answers. */
+export type ReceiptInput =
+  | { ok: true; order: PaidOrder; receiptUrl?: string; trustLevel: string }
+  | { ok: false; store?: string; code?: string; reason: string; trustLevel: string };
+
+export type ReceiptCardData = ReceiptInput & { kind: typeof RECEIPT_KIND };

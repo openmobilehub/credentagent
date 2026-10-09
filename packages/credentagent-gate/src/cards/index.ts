@@ -13,7 +13,17 @@ import { cardToolMeta, cardUris, registerCardResources, registerPermissionStatus
 import { cardResult, type CardResult } from "./results.js";
 import { createPermissionWatch, type PermissionStatus, type ReadPermission, type UnknownPermission } from "./permissions.js";
 import { qrDataUrl } from "./qr.js";
-import { PERMISSION_KIND, QR_META_KEY, type OffersInput, type PermissionCardData, type PermissionInput } from "./contract.js";
+import {
+  PERMISSION_KIND,
+  QR_META_KEY,
+  RECEIPT_KIND,
+  type OffersInput,
+  type PaidOrder,
+  type PermissionCardData,
+  type PermissionInput,
+  type ReceiptCardData,
+  type ReceiptInput,
+} from "./contract.js";
 import { offersCard } from "./offers.js";
 import type { GrantViewData } from "./grant-view.js";
 
@@ -45,6 +55,9 @@ export interface Cards<R extends PermissionStatus = PermissionStatus> {
    *  `maxPrice` when given, with the summary ("only one store sells it", "none is within your limit") and
    *  the matching note for the model derived for you. */
   offers(input: OffersInput, options?: { note?: string }): CardResult;
+  /** A tool result that shows the store's answer to a purchase: what was paid and what the store
+   *  checked, or why it refused (nothing was charged). */
+  receipt(answer: ReceiptInput, options?: { note?: string }): CardResult;
   /** The model's wait for the signature, in its own turn: holds up to `holdMs` and answers what
    *  `readPermission` answered — `{ status: "unknown" }` for a grant this process never issued. */
   waitForSignature(grantId: string): Promise<R | UnknownPermission>;
@@ -56,6 +69,27 @@ const PERMISSION_NOTE =
   "The person sees a card with a QR code for approveUrl. In one short sentence, ask them to scan it with their phone and sign " +
   "(give them the link too). Then, without ending your turn, wait for the signature: call the tool that checks it, and again " +
   "while it says pending. When it says authorized, continue. Don't ask the person to confirm they signed.";
+
+const RECEIPT_NOTE = "The person sees the store's answer in a card. Summarize it in one sentence.";
+
+const RECEIPT_EXPECTS =
+  "cards.receipt(): expected the store's answer — { ok: true, order: { total, currency, … }, trustLevel } or { ok: false, reason, trustLevel }.";
+
+/** A paid order or a refusal, and nothing in between: the card says "Nothing was charged." for a refusal,
+ *  so an answer without a plain `ok` must never be drawn as one. A currency Intl cannot format would only
+ *  fail later on the page, so it fails here, on the server that can fix it. */
+function isStoreAnswer(answer: ReceiptInput): boolean {
+  if (answer.ok === false) return typeof answer.reason === "string";
+  if (answer.ok !== true) return false;
+  const order: Partial<PaidOrder> | null | undefined = answer.order;
+  if (typeof order !== "object" || order === null || typeof order.total !== "number" || !Number.isFinite(order.total)) return false;
+  try {
+    new Intl.NumberFormat("en-US", { style: "currency", currency: order.currency });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 const NEEDS_READER = "createCards({ readPermission }) is required for permission cards: the card follows the signature through it.";
 
@@ -88,15 +122,24 @@ export function createCards<R extends PermissionStatus = PermissionStatus>(confi
       const card = offersCard(input);
       return cardResult(card.data, options?.note ?? card.note);
     },
+    receipt(answer, options) {
+      if (typeof answer.trustLevel !== "string" || answer.trustLevel === "") {
+        throw new Error('cards.receipt(): trustLevel is required — say out loud what the purchase was verified at (e.g. "presence-only-demo").');
+      }
+      if (!isStoreAnswer(answer)) throw new Error(RECEIPT_EXPECTS);
+      const data: ReceiptCardData = { kind: RECEIPT_KIND, ...answer };
+      return cardResult(data, options?.note ?? RECEIPT_NOTE);
+    },
     waitForSignature: (grantId) => (watch ? watch.waitForSignature(grantId) : Promise.reject(new Error(NEEDS_READER))),
   };
 }
 
 export { GRANT_VIEW_KIND } from "./grant-view.js";
 export type { GrantViewData, GrantViewProduct } from "./grant-view.js";
-export { OFFERS_KIND, PERMISSION_KIND, PERMISSION_STATUS_TOOL, QR_META_KEY } from "./contract.js";
+export { OFFERS_KIND, PERMISSION_KIND, PERMISSION_STATUS_TOOL, QR_META_KEY, RECEIPT_KIND } from "./contract.js";
 export type { PermissionCardData, PermissionInput, PermissionStatusAnswer } from "./contract.js";
 export type { Offer, OffersCardData, OffersInput, OffersSummary, StoreOffers } from "./contract.js";
+export type { PaidOrder, ReceiptCardData, ReceiptInput } from "./contract.js";
 export type { PermissionStatus, ReadPermission, UnknownPermission } from "./permissions.js";
 export type { CardsServer, CardToolMeta } from "./meta.js";
 export type { CardResult } from "./results.js";
