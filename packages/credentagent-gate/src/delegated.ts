@@ -17,22 +17,63 @@ import type { CeremonyCatalog, CeremonyOrder, RepriceOpts } from "./ceremony/typ
 import { MemoryVerificationStore } from "./store.js";
 import { MemoryRevocationStore, type RevocationStore } from "./ceremony/revocation.js";
 import { sealIntent, generateDelegate, signDraw, type DelegateJwk, type IntentBounds, type SealedAgeProof, type SealedMembershipProof } from "./ceremony/mandate.js";
-import { completeOrder, type CompletedRecord, type CompletionContext } from "./ceremony/completion.js";
+import { applicableCustomGate, completeOrder, type CompletedRecord, type CompletionContext } from "./ceremony/completion.js";
 import type { RefusalCode, RefusalRetryable } from "./ceremony/refusals.js";
+import type { Credential, GateOrder } from "./types.js";
 
 /** The delegate private key type, without naming the DOM `CryptoKey` global. */
 type DelegateKey = Awaited<ReturnType<typeof generateDelegate>>["privateKey"];
 
 /** A catalog entry: a bare price, or a price plus an age restriction, a category and/or a
  *  display name (categories feed the grants `allow` bounds — what a delegated agent may buy;
- *  `name` is what the approve page calls the product instead of its bare sku id — #172). */
-export type CatalogEntry = number | { price: number; minAge?: number; category?: string; name?: string };
+ *  `name` is what the approve page calls the product instead of its bare sku id — #172). Any other
+ *  attribute (`requiresRx`, a custom field) rides onto the priced line, so a custom gate()'s
+ *  `appliesTo` can read it on a grant draw exactly as at checkout (#139). */
+export type CatalogEntry =
+  | number
+  | { price: number; minAge?: number; category?: string; name?: string; requiresRx?: boolean; [attribute: string]: unknown };
 
 export interface DelegatedGateOptions {
   /** Your priced catalog: item id → price, or → { price, minAge }. */
   catalog: Record<string, CatalogEntry>;
   /** Shared revocation + single-use ledger (defaults to in-memory, single-process). */
   revocation?: RevocationStore;
+  /** The custom credentials every draw must honour — the same list `new CredentAgent({ credentials })`
+   *  takes. An applicable `gate()` with no proof steps the draw up to a human, exactly as checkout
+   *  refuses it (invariant 1, #139). Absent ⇒ no custom gates. */
+  credentials?: readonly Credential[];
+  /** Internal: the client's live registry (`credentagent.grants` wires it). Symbol-keyed so it
+   *  stays off the documented options. */
+  [CREDENTIAL_SOURCE]?: CredentialSource;
+}
+
+/** Internal option key for {@link CredentialSource} — not exported from the package root. */
+export const CREDENTIAL_SOURCE: unique symbol = Symbol("credentagent.credentialSource");
+
+/** Where a draw's custom gates come from: the live registry, and the credentials declared up front. */
+export interface CredentialSource {
+  registry: ReadonlyMap<string, Credential>;
+  declared: ReadonlyMap<string, Credential>;
+}
+
+/**
+ * The custom credentials a DRAW enforces (#139, #59). Checkout scopes its sweep to the order's own
+ * policy; a draw has no per-order policy, so it takes:
+ *  - every credential declared up front — store-wide by construction, applies-to-all included. The
+ *    DECLARED object wins: a later checkout policy that registers something else under the same id
+ *    can't narrow or replace a store-wide rule;
+ *  - any other registry credential that states its own scope (`appliesTo`).
+ * A gate with no `appliesTo` that reached the registry only because SOME checkout's policy named it
+ * is scoped to that policy, not the store — enforcing it here would let one shopper's checkout block
+ * every grant on the instance (the #59 deadlock class).
+ */
+function drawCredentials(source: CredentialSource): Map<string, Credential> {
+  const out = new Map<string, Credential>();
+  for (const c of source.registry.values()) {
+    if (!source.declared.has(c.id) && typeof c.appliesTo === "function") out.set(c.id, c);
+  }
+  for (const c of source.declared.values()) out.set(c.id, c);
+  return out;
 }
 
 export interface PreApproveOptions {
@@ -78,6 +119,9 @@ export interface Purchase {
   merchant?: string;
 }
 
+/** Why a draw stepped up to a human: an age restriction, or a store's custom `gate()` credential. */
+export type StepUpCause = "age" | "custom-gate";
+
 export interface SpendResult {
   /** Did the gate complete the purchase? */
   ok: boolean;
@@ -88,6 +132,9 @@ export interface SpendResult {
   remaining: number;
   /** Why it was refused — present when `!ok` (e.g. "over-cap", "replay", "revoked"). */
   reason?: RefusalCode;
+  /** On a "step-up": what the person must bring — an age proof, or a store's custom credential
+   *  such as a prescription (#139). */
+  stepUp?: StepUpCause;
   /** How to recover from a refusal — the bit an unattended loop branches on:
    *  "needs-human" (surface an approve link), "retry" (transient), "terminal". */
   retryable?: RefusalRetryable;
@@ -113,6 +160,21 @@ function loyaltyDiscount(subtotal: number, opts?: RepriceOpts): number {
   return pct > 0 ? Math.round((subtotal * pct) / 100) : 0;
 }
 
+/** The fields the engine owns on a priced line: an attribute with one of these names is dropped,
+ *  never copied, so a catalog entry can't re-price, rename or re-age the line. Age comes only from
+ *  `minAge`, the field the approve page discloses. */
+const ENGINE_LINE_FIELDS = new Set(["price", "minAge", "minimumAge", "id", "unitPrice", "quantity", "lineTotal", "currency"]);
+
+/**
+ * A product's own attributes (category, requiresRx, any custom field), carried onto its priced line
+ * as the storefront's priceCart does, so a custom gate()'s `appliesTo` reads the same line on a
+ * grant draw as at checkout (#139).
+ */
+function lineAttributes(entry: CatalogEntry): Record<string, unknown> {
+  if (typeof entry === "number") return {};
+  return Object.fromEntries(Object.entries(entry).filter(([k]) => !ENGINE_LINE_FIELDS.has(k)));
+}
+
 function buildCatalog(items: Record<string, CatalogEntry>): CeremonyCatalog {
   return {
     // Must honor the passed orderId — completeOrder re-prices under the SAME id, and its
@@ -127,7 +189,7 @@ function buildCatalog(items: Record<string, CatalogEntry>): CeremonyCatalog {
         }
         const unitPrice = priceOf(entry);
         const minimumAge = minAgeOf(entry);
-        return { id: productId, unitPrice, quantity, lineTotal: unitPrice * quantity, currency: "USD", ...(minimumAge ? { minimumAge } : {}) };
+        return { ...lineAttributes(entry), id: productId, unitPrice, quantity, lineTotal: unitPrice * quantity, currency: "USD", ...(minimumAge ? { minimumAge } : {}) };
       });
       const subtotal = lines.reduce((sum, l) => sum + l.lineTotal, 0);
       // A loyalty discount applies ONLY when the caller opts in AND names the rate — for a grant,
@@ -159,6 +221,22 @@ export class DelegatedGate {
       verificationStore: new MemoryVerificationStore(),
       records: { read: (oid) => records.get(oid), write: (r) => void records.set(r.orderId, r) },
     };
+    const declared = opts.credentials ? new Map(opts.credentials.map((c) => [c.id, c])) : undefined;
+    const source: CredentialSource | undefined = opts[CREDENTIAL_SOURCE] ?? (declared ? { registry: declared, declared } : undefined);
+    if (source) this.customGates = () => drawCredentials(source);
+  }
+
+  /** The custom credentials each draw enforces, read fresh per draw (see `drawCredentials`). */
+  private customGates: () => ReadonlyMap<string, Credential> | undefined = () => undefined;
+
+  /**
+   * Internal: the custom `gate()` credential that would step a purchase of `order` up, if any —
+   * the same rule a draw enforces, for a host that wants to check its LIVE product line before
+   * spending (the storefront does, as it re-checks age and price live).
+   */
+  _customGateFor(order: GateOrder): string | undefined {
+    const gates = this.customGates();
+    return gates ? applicableCustomGate(gates, order)?.id : undefined;
   }
 
   /** Mint ONE grant and hand it back for your agent to hold. */
@@ -184,7 +262,7 @@ export class DelegatedGate {
       presence: opts.presence ?? "delegated-demo",
       trust_level: opts.trustLevel ?? "server-issued-demo",
     });
-    return new DelegatedGrant(grant, privateKey, this.catalog, this.ctx);
+    return new DelegatedGrant(grant, privateKey, this.catalog, this.ctx, () => this.customGates());
   }
 }
 
@@ -198,6 +276,8 @@ export class DelegatedGrant {
     private readonly key: DelegateKey,
     private readonly catalog: CeremonyCatalog,
     private readonly ctx: CompletionContext,
+    /** The custom credentials each draw enforces (see `drawCredentials`); undefined ⇒ none wired. */
+    private readonly customGates: () => ReadonlyMap<string, Credential> | undefined = () => undefined,
   ) {}
 
   /** The grant's content-addressed id (the delegationId written on each draw). */
@@ -275,9 +355,11 @@ export class DelegatedGrant {
       },
       this.key,
     );
+    // This draw's custom gates, resolved now so a gate the store registered since still applies.
+    const credentialRegistry = this.customGates();
     const res = await completeOrder(
       { order, mandateId: idempotencyKey, amount: order.total, currency: "USD", method: "delegated", gates: [], draw: { intent: this.grant, draw } },
-      this.ctx,
+      credentialRegistry ? { ...this.ctx, credentialRegistry } : this.ctx,
     );
     // Headroom AFTER this spend: the store's committed draws now include this one iff it
     // completed, so `total − committed` reflects the draw-down (or is unchanged on refusal).
@@ -285,7 +367,9 @@ export class DelegatedGrant {
     const remaining = this.grant.totalAmount - committed.reduce((sum, d) => sum + d.amount, 0);
     if (res.completed) return { ok: true, amount: order.total, remaining, delegationId: res.delegationId };
     const refusal = res.refusals?.[0];
-    return { ok: false, amount: order.total, remaining, reason: refusal?.code, retryable: refusal?.retryable };
+    const stepUp: StepUpCause | undefined =
+      refusal?.code !== "step-up" ? undefined : refusal.detail?.cause === "custom-gate" ? "custom-gate" : "age";
+    return { ok: false, amount: order.total, remaining, reason: refusal?.code, retryable: refusal?.retryable, ...(stepUp ? { stepUp } : {}) };
   }
 
   /** Live money read for a projection/display: how much this grant has drawn down so far and

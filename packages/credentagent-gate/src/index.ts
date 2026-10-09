@@ -221,7 +221,7 @@ export type { Refusal, RefusalCode, RefusalEnforcer, RefusalRetryable } from "./
 // catalog, preApprove() once, spend()/revoke() — the ceremony (keys, signing, stores,
 // completeOrder) is bundled. Demo-fenced today; stable surface for the wallet-server increment.
 export { DelegatedGate, DelegatedGrant } from "./delegated.js";
-export type { DelegatedGateOptions, PreApproveOptions, Purchase, SpendResult, CatalogEntry } from "./delegated.js";
+export type { DelegatedGateOptions, PreApproveOptions, Purchase, SpendResult, StepUpCause, CatalogEntry } from "./delegated.js";
 // The age claim a human seals into a grant at approval time (#172) + the ONE predicate that
 // answers "does it cover an order demanding N?" — so a host pre-check can ask the same question
 // the gate's completion path asks, rather than inventing a second, drifting rule.

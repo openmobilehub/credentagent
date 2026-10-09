@@ -20,13 +20,13 @@
 // human clicks approve — presence "delegated-demo", trust "server-issued-demo"). The wallet
 // key-signing ceremony is the roadmap (#71/#14); it will call the SAME _authorize seam.
 
-import { DelegatedGate, DelegatedGrant, minAgeOf, type CatalogEntry } from "./delegated.js";
+import { CREDENTIAL_SOURCE, DelegatedGate, DelegatedGrant, minAgeOf, type CatalogEntry, type CredentialSource, type StepUpCause } from "./delegated.js";
 import { ageProofCovers, generateDelegate } from "./ceremony/mandate.js";
 import { serveGrants, type GrantsApp } from "./grants-serve.js";
 import { ageScopeFor, skuAllowed, type GrantAgeScope } from "./grants-age.js";
 import type { DelegateJwk, SealedAgeProof, SealedMembershipProof } from "./ceremony/mandate.js";
 import type { IntentBoundsInput } from "./ceremony/intent-sign/bounds.js";
-import type { Branding, ReaderIdentity, TrustLevel } from "./types.js";
+import type { Branding, GateOrder, ReaderIdentity, TrustLevel } from "./types.js";
 import { AmountError, toMinorUnits } from "./ap2/money.js";
 import { importVerifyKey } from "./ap2/keys.js";
 
@@ -162,7 +162,11 @@ export type SpendDoor =
        *  to the signed authority. */
       mandate?: { id: string; boundsHash: string };
     }
-  | { ok: false; code: GrantDoorCode; remaining?: number; retryable?: string; replayed?: boolean };
+  | {
+      ok: false; code: GrantDoorCode; remaining?: number; retryable?: string; replayed?: boolean;
+      /** On `step-up`: what the person must bring — an age proof, or a store's custom credential (#139). */
+      stepUp?: StepUpCause;
+    };
 
 /** The device-signature evidence recorded when a device-mode grant authorizes (spec 012).
  *  `verifiedBy` + `trustLevel` are the FR-4 provenance: "gate"/"device-signed" for the in-gate
@@ -283,6 +287,9 @@ export interface GrantsDeps {
    *  every grant prices at full catalog price, exactly as before. The rate is SEALED into each
    *  grant when it authorizes, so changing it here never re-prices a grant already authorized. */
   loyaltyDiscountPct?: number;
+  /** The client's live credential registry and the ids it declared up front, so a grant spend
+   *  honours the store's custom `gate()` credentials — the same check checkout runs (invariant 1, #139). */
+  credentialSource?: CredentialSource;
 }
 
 const genGrantId = (): string => `grant_${globalThis.crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
@@ -516,8 +523,22 @@ export class Grants {
     // that re-prices an item in memory is honoured at the next spend and the sealed cap is enforced
     // against the live price (Codex P1). Per-grant caps convert at authorize (the sealed bounds
     // don't move); each spend's amount converts back to dollars for the door.
-    this.gate ??= new DelegatedGate({ catalog: centsCatalogView(this.deps.catalog) });
+    this.gate ??= new DelegatedGate({
+      catalog: centsCatalogView(this.deps.catalog),
+      ...(this.deps.credentialSource ? { [CREDENTIAL_SOURCE]: this.deps.credentialSource } : {}),
+    });
     return this.gate;
+  }
+
+  /**
+   * Internal: the id of the store's custom `gate()` credential that a grant spend of `order` would
+   * step up for, if any (#139). A host whose LIVE catalog can carry fields its grant `catalog`
+   * doesn't — the storefront — checks its live product line with this before spending, exactly as
+   * it re-checks age and price live, so a stale or narrower grant catalog can't let a gated
+   * product through. The draw itself still runs the same check against the grant catalog.
+   */
+  _customGateFor(order: GateOrder): string | undefined {
+    return this.engineGate()._customGateFor(order);
   }
 
   /**
@@ -804,7 +825,10 @@ export class Grants {
               // Trace the spend to the signed Intent Mandate (spec 012, FR-5) — device grants only.
               ...(rec.mandate && rec.mandateId ? { mandate: { id: rec.mandateId, boundsHash: rec.mandate.boundsHash } } : {}),
             }
-          : { ok: false, code: CODE_MAP[r.reason ?? ""] ?? "refused", remaining: r.remaining / 100, ...(r.retryable ? { retryable: r.retryable } : {}) };
+          : {
+              ok: false, code: CODE_MAP[r.reason ?? ""] ?? "refused", remaining: r.remaining / 100,
+              ...(r.retryable ? { retryable: r.retryable } : {}), ...(r.stepUp ? { stepUp: r.stepUp } : {}),
+            };
         rec.cache.set(idempotencyKey, door);
         return door;
       });

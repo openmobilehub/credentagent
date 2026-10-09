@@ -84,6 +84,7 @@ import {
   type Credential,
   type Grant,
   type Grants,
+  type GateOrder,
   type CeremonyCatalog,
   type CeremonyOrder,
   type CeremonyOrderStore,
@@ -1287,8 +1288,9 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
             "Buy ONE product unattended against an authorized grant. The server re-prices from the catalog and enforces " +
             "every sealed rule; a refusal returns a typed code (in the result's `spend`): not-authorized (human never " +
             "approved), not-allowed (outside the allowed products/categories), per-spend-exceeded, budget-exceeded, step-up " +
-            "(age-restricted, and the human proved no age for this grant or proved a lower one — hand back to the human), " +
-            "revoked. Before saying a purchase needs the human present, check the grant's `credentials.ageVerified` — " +
+            "(hand back to the human; `spend.stepUp` says why: \"age\" — the human proved no age for this grant or a lower " +
+            "one — or \"custom-gate\" — the store requires a credential such as a prescription for this product), revoked. " +
+            "Before saying an age-restricted purchase needs the human present, check the grant's `credentials.ageVerified` — " +
             "if they proved an age at or above the product's, this tool completes it unattended. Pass a stable " +
             "idempotencyKey to make retries safe (same key replays the SAME outcome).",
           inputSchema: {
@@ -1321,15 +1323,25 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
           // authorizing it (#172), tested at the LIVE catalog's threshold — so a product newly
           // marked 21+, or raised from 18+ to 21+, still steps up even though the grant's own
           // snapshot predates the change. No proof, or one below the bar ⇒ step-up as before.
-          if (live.minimumAge != null && !ageProofCovers(g.ageProof, live.minimumAge)) return spent({ ok: false, code: "step-up" });
+          if (live.minimumAge != null && !ageProofCovers(g.ageProof, live.minimumAge)) return spent({ ok: false, code: "step-up", stepUp: "age" });
+          // Live price vs the sealed cap (below) is computed in integer CENTS, the units the engine
+          // prices in — rounding the same discount in dollars would land a cent or two off.
+          const cents = (dollars: number) => Math.round(dollars * 100);
+          // A custom gate() the store declared (a prescription, a licence) holds here too (#139),
+          // tested on the LIVE product line with every attribute it carries — the grant engine's own
+          // catalog may be an older or narrower copy that lacks the field the rule reads.
+          const { image: _image, description: _description, price: livePrice, ...liveAttributes } = live;
+          const unit = cents(livePrice);
+          const liveOrder: GateOrder = {
+            id: `spend-${grantId}`, total: unit * qty, currency: "USD",
+            lines: [{ ...liveAttributes, id: productId, quantity: qty, unitPrice: unit, lineTotal: unit * qty, currency: "USD" }],
+          };
+          if (grants._customGateFor(liveOrder)) return spent({ ok: false, code: "step-up", stepUp: "custom-gate" });
           // Live price vs the sealed cap — measured on what the human is actually CHARGED, so the
           // grant's own loyalty discount (#172) is applied here exactly as the engine applies it
           // when it prices and signs the draw. Comparing the list price instead would refuse a
           // purchase the gate would have completed: a discount one path honours and another
-          // refuses is precisely the drift invariant 3 forbids. Computed in integer CENTS, the
-          // units the engine prices in — rounding the same discount in dollars would land a cent
-          // or two off and refuse purchases inside that band.
-          const cents = (dollars: number) => Math.round(dollars * 100);
+          // refuses is precisely the drift invariant 3 forbids.
           const listed = cents(live.price) * qty;
           const pct = g.membershipProof?.discountPct ?? 0;
           const charged = pct > 0 ? listed - Math.round((listed * pct) / 100) : listed;

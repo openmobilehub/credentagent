@@ -542,11 +542,12 @@ its own `request`/`verify`, and `completeOrder` enforces every applicable `gate(
 completion path (a hard block, independent of `required`/`optional`). Worked pack:
 [`examples/professional-license.mjs`](../../examples/professional-license.mjs).
 
-> **Multi-instance / serverless:** register-on-resolve is enough for one long-lived process, but
-> where checkout and completion can land on different instances (serverless, multiple workers) an
-> instance that never ran `requirements()` has a cold registry — its completion sweep would no-op
-> and an applicable `gate()` could complete unproven. Declare your custom credentials up front so
-> every instance enforces them from boot: `new CredentAgent({ credentials: [prescription] })`.
+> **Declare them up front:** register-on-resolve is enough for checkout in one long-lived process,
+> but it is not enough where a purchase can complete without that process having resolved a policy
+> first: another instance (serverless, multiple workers) has a cold registry, and a spending grant
+> never resolves one at all — so an applicable `gate()` could complete unproven. Declare your custom
+> credentials up front so every instance, and every grant, enforces them from boot:
+> `new CredentAgent({ credentials: [prescription] })`.
 
 ## Honest status
 
@@ -715,9 +716,23 @@ if (g.status === "authorized") {
 
 The refusal `code` is a **typed union** (`GrantDoorCode`) — a typo fails to compile. A retried
 `idempotencyKey` replays the ORIGINAL outcome, refusal included, so a key can never be repurposed.
+
 The sealed bounds are **immutable** after create. Try all of it clickable in
 [`examples/demo-hub/`](https://github.com/openmobilehub/credentagent/tree/main/examples/demo-hub)
 (Section 3) or the two-pane [`examples/grants-proto/`](https://github.com/openmobilehub/credentagent/tree/main/examples/grants-proto).
+
+**Your own rules hold on grants too.** If your store requires a credential for a product — a
+prescription, a professional licence — an agent spending a grant can't buy that product: the spend
+refuses `step-up` with `stepUp: "custom-gate"`, and the person has to come back and prove it. (An age
+restriction refuses the same way, with `stepUp: "age"`.) Two things make sure the rule is seen:
+
+- **Declare it up front**, in `new CredentAgent({ credentials: [prescription] })`. Every grant then
+  enforces it from the moment the server starts. A rule you only use inside a checkout's
+  `requirements()` reaches grants after the first checkout uses it, and only if it says which
+  products it covers (`appliesTo`); a declared rule with no `appliesTo` covers every product.
+- **Put every field the rule reads on the `catalog` entry** you give `new CredentAgent`. A grant
+  checks its rules against that catalog, so a rule that reads `requiresRx` needs
+  `{ price: 42, requiresRx: true }` there. (`createStorefront` also checks the live product.)
 
 ### Asking for what's missing first — MRTR (multi round-trip)
 
@@ -896,7 +911,7 @@ See it in every state: [`examples/grants-approve/`](https://github.com/openmobil
 direct use:
 
 ```ts
-const gate  = new DelegatedGate({ catalog: { coffee: 18 } });
+const gate  = new DelegatedGate({ catalog: { coffee: 18 } }); // + credentials: [prescription] to enforce your own gate() rules
 const grant = await gate.preApprove({ merchant: "blue-bottle", perOrder: 30, total: 100 });
 const result = await grant.spend({ idempotencyKey: "order-1", item: "coffee" });
 await grant.revoke();
