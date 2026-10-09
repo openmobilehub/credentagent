@@ -87,6 +87,43 @@ describe("cardStatus — the card follows the signature, and the server decides 
     expect(await watch.cardStatus("g1")).toEqual({ status: "authorized", trustLevel: "device-signed", announce: false, final: true });
   });
 
+  it("re-issuing a permission never lets the card announce twice", async () => {
+    const clock = virtualClock();
+    const watch = watchFor(clock, storeSigningAt(clock, 0).read);
+    watch.issued(permission);
+    expect((await watch.waitForSignature("g1")).status).toBe("authorized"); // the model was told
+    watch.issued(permission); // the same grant is shown again
+    expect(await watch.cardStatus("g1")).toEqual({ status: "authorized", trustLevel: "device-signed", announce: false, final: true });
+  });
+
+  it("stays quiet while the model's wait is still open, even past the grace window", async () => {
+    const clock = virtualClock();
+    // Both waits share the one virtual clock, so each polling round costs 3_000 — the card's 25s hold would
+    // run out before a signature at 30_000. Signing at 22_000 (past the 20s grace) is first seen at t=24_000,
+    // by the card (it polls first), while the model's 45s wait is still open.
+    const watch = watchFor(clock, storeSigningAt(clock, 22_000).read);
+    watch.issued(permission);
+    const card = watch.cardStatus("g1");
+    const model = watch.waitForSignature("g1");
+    expect((await model).status).toBe("authorized");
+    expect(await card).toEqual({ status: "authorized", trustLevel: "device-signed", announce: false, final: true });
+  });
+
+  it("a failed model wait still counts as heard, then the card may speak", async () => {
+    const clock = virtualClock();
+    let calls = 0;
+    const read = async (): Promise<PermissionStatus> => {
+      if (calls++ === 0) throw new Error("store unreachable");
+      return { status: "authorized", trustLevel: "device-signed" };
+    };
+    const watch = watchFor(clock, read);
+    watch.issued(permission);
+    await expect(watch.waitForSignature("g1")).rejects.toThrow("store unreachable");
+    // openWaits went back to 0, so the card waits out the grace window from that failed wait — then tells the chat
+    expect(await watch.cardStatus("g1")).toEqual({ status: "authorized", trustLevel: "device-signed", announce: true, final: true });
+    expect(clock.now()).toBeGreaterThanOrEqual(20_000);
+  });
+
   it("pending is not final; a refusal is final and says nothing", async () => {
     const clock = virtualClock();
     const pending = watchFor(clock, storeSigningAt(clock, Infinity).read);
@@ -102,6 +139,7 @@ describe("cardStatus — the card follows the signature, and the server decides 
     const watch = watchFor(clock, async () => { throw new Error("store unreachable"); });
     watch.issued(permission);
     expect(await watch.cardStatus("g1")).toEqual({ status: "pending", announce: false, final: false });
+    expect(clock.now()).toBeGreaterThanOrEqual(1_500); // it backed off before answering, so the card does not hammer a failing store
   });
 
   it("reads the permission the kit issued — the card supplies only a grant id", async () => {
@@ -118,7 +156,19 @@ describe("cardStatus — the card follows the signature, and the server decides 
     const watch = watchFor(clock, storeSigningAt(clock, 0).read);
     watch.issued(permission);
     clock.advance(3_600_001);
-    watch.issued({ ...permission, grantId: "g2" });
     expect(await watch.waitForSignature("g1")).toEqual({ status: "unknown" });
+    watch.issued(permission);
+    clock.advance(3_600_001);
+    expect(await watch.cardStatus("g1")).toEqual({ status: "unknown", announce: false, final: true }); // the card's lookup forgets it too
+  });
+
+  it("a permission in use is not forgotten", async () => {
+    const clock = virtualClock();
+    const watch = watchFor(clock, storeSigningAt(clock, 0).read);
+    watch.issued(permission);
+    clock.advance(3_000_000);
+    await watch.waitForSignature("g1"); // signed already, so it answers at once — and counts as a use
+    clock.advance(1_000_000);
+    expect((await watch.waitForSignature("g1")).status).not.toBe("unknown");
   });
 });
