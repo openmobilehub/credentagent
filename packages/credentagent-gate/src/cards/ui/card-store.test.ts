@@ -41,6 +41,13 @@ describe("createCardStore", () => {
     expect(listener).toHaveBeenCalledTimes(2);
   });
 
+  it("a change only in the card-only extras (_meta — the QR code) replaces the card", () => {
+    const store = createCardStore();
+    store.show({ structuredContent: grant });
+    expect(store.show({ structuredContent: grant, _meta: { qr: "data:image/svg+xml,x" } })).toBe(true);
+    expect(store.current()?.meta).toEqual({ qr: "data:image/svg+xml,x" });
+  });
+
   it("a result that is not a card leaves the card on screen", () => {
     const store = createCardStore();
     store.show({ structuredContent: grant });

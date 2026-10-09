@@ -1,7 +1,7 @@
 // What the card page shows, kept OUTSIDE the DOM (spec 015 FR-5). ChatGPT re-delivers the tool
 // output on every `openai:set_globals` event, and a host may re-announce a result; re-rendering on
 // each one made the AP2 demo's card flicker and restart its work. The store keeps the card on
-// screen and replaces it only when the result's data actually changed.
+// screen and replaces it only when the result — its data or its card-only extras — actually changed.
 
 /** A card's data: any JSON object marked with a `kind`. */
 export interface CardData {
@@ -9,7 +9,7 @@ export interface CardData {
   [key: string]: unknown;
 }
 
-/** The card on screen: its data, its card-only extras (`_meta`), and a key that changes with the data. */
+/** The card on screen: its data, its card-only extras (`_meta`), and a key that changes with either. */
 export interface ShownCard {
   data: CardData;
   meta: Record<string, unknown>;
@@ -27,7 +27,7 @@ export function readCard(result: HostResult | null | undefined): ShownCard | nul
   const data = result?.structuredContent;
   if (!data || typeof data !== "object" || typeof (data as { kind?: unknown }).kind !== "string") return null;
   const meta = result?._meta && typeof result._meta === "object" ? (result._meta as Record<string, unknown>) : {};
-  return { data: data as CardData, meta, key: JSON.stringify(data) };
+  return { data: data as CardData, meta, key: JSON.stringify([data, meta]) };
 }
 
 export interface CardStore {

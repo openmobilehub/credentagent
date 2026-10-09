@@ -8,28 +8,31 @@ import { connectHost } from "./hosts";
 import { previewViews } from "./preview";
 import type { Bridge } from "./bridge";
 import { CardBoundary, CardView, PreviewIndex, Trouble } from "./CardView";
+import { createSignatureWatch, type SignatureWatch } from "./signature-watch";
 import "./theme.css";
 
 const store = createCardStore();
 const root = createRoot(document.getElementById("root")!);
 
-function Cards({ bridge }: { bridge: Bridge }) {
+function Cards({ bridge, watch }: { bridge: Bridge; watch: SignatureWatch }) {
   const card = useSyncExternalStore(store.subscribe, store.current);
   if (!card && bridge.host === "preview") return <PreviewIndex views={previewViews()} />;
   // Keyed by the card, so a card that failed to render never hides the next one.
   return (
     <CardBoundary key={card?.key ?? "none"}>
-      <CardView card={card} bridge={bridge} show={store.show} />
+      <CardView card={card} bridge={bridge} watch={watch} show={store.show} />
     </CardBoundary>
   );
 }
 
 connectHost(store).then(
-  (bridge) =>
+  (bridge) => {
+    const watch = createSignatureWatch(bridge); // one per page: it follows each grant once, however often a host redraws
     root.render(
       <StrictMode>
-        <Cards bridge={bridge} />
+        <Cards bridge={bridge} watch={watch} />
       </StrictMode>,
-    ),
+    );
+  },
   (error: unknown) => root.render(<Trouble what="connect to the chat" error={error} />),
 );

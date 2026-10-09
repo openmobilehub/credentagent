@@ -10,6 +10,9 @@ export interface Bridge {
   call(name: string, args: Record<string, unknown>): Promise<unknown>;
   /** Open a link through the host — a sandboxed card cannot open one itself. */
   open(url: string): Promise<void>;
+  /** Post a message to the chat as the person — MCP Apps' `ui/message`; in ChatGPT, the follow-up
+   *  message, a fallback only: it did not post in real ChatGPT. Never throws. */
+  tell(text: string): Promise<void>;
 }
 
 /** ChatGPT injects `window.openai`; any other frame is an MCP Apps host (Claude); a top-level tab is the preview. */
