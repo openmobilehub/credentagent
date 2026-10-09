@@ -5,7 +5,18 @@ import { describe, it, expect } from "vitest";
 import { McpServer } from "@modelcontextprotocol/server";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { qrDataUrl } from "./qr.js";
-import { createCards, GRANT_VIEW_KIND, OFFERS_KIND, PERMISSION_KIND, PERMISSION_STATUS_TOOL, QR_META_KEY, type GrantViewData, type PermissionInput } from "./index.js";
+import {
+  createCards,
+  GRANT_VIEW_KIND,
+  OFFERS_KIND,
+  PERMISSION_KIND,
+  PERMISSION_STATUS_TOOL,
+  QR_META_KEY,
+  RECEIPT_KIND,
+  type GrantViewData,
+  type PermissionInput,
+  type ReceiptInput,
+} from "./index.js";
 
 const grant: GrantViewData = {
   kind: GRANT_VIEW_KIND,
@@ -159,5 +170,29 @@ describe("cards.offers", () => {
     expect(result.structuredContent).toMatchObject({ kind: OFFERS_KIND, summary: { sellers: ["RoastWorks"] } });
     expect(result.content[0].text.startsWith("Only RoastWorks sells it")).toBe(true);
     expect(createCards().offers({ stores }, { note: "Mine." }).content[0].text.startsWith("Mine.\n\n")).toBe(true);
+  });
+});
+
+describe("cards.receipt", () => {
+  const paid: ReceiptInput = {
+    ok: true,
+    order: { id: "ord_1", store: "BeanBarn", total: 21, currency: "USD", items: ["1 × House Blend, 1 lb bag"], checks: ["The permission's wallet signature verifies"] },
+    receiptUrl: "https://beanbarn.example/agent/orders/ord_1",
+    trustLevel: "presence-only-demo",
+  };
+  const refused: ReceiptInput = { ok: false, store: "Acme Coffee Co", code: "constraint", reason: "This permission was signed for another store", trustLevel: "presence-only-demo" };
+
+  it("shows the store's answer as-is, paid or refused, and asks the model for one sentence", () => {
+    for (const answer of [paid, refused]) {
+      const result = createCards().receipt(answer);
+      expect(result.structuredContent).toEqual({ kind: RECEIPT_KIND, ...answer });
+      expect(result.content[0].text.startsWith("The person sees the store's answer in a card. Summarize it in one sentence.")).toBe(true);
+    }
+  });
+
+  it("needs a trust level on both answers, said out loud", () => {
+    for (const answer of [paid, refused]) {
+      expect(() => createCards().receipt({ ...answer, trustLevel: undefined } as unknown as ReceiptInput)).toThrow(/trustLevel is required/);
+    }
   });
 });

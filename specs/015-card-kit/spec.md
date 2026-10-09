@@ -187,10 +187,11 @@ example: over the limit → do not request a permission, do not buy). "Lowest pr
 rated" tags appear only when two or more stores sell the product; prices over `maxPrice` are
 tagged.
 
-**FR-9 — Receipt.** `receipt(answer)` takes the store's answer as-is: `{ ok: true, store?,
-order: { id, store, total, currency, items, checks, trustLevel }, receiptUrl? }` or `{ ok:
-false, store?, code?, reason }`. Paid: the total, the items, the list of what the store checked,
-and "Open receipt". Refused: who refused, the reason, "Nothing was charged."
+**FR-9 — Receipt.** `receipt(answer)` takes the store's answer as-is: `{ ok: true, order: { id,
+store, total, currency, items, checks }, receiptUrl?, trustLevel }` or `{ ok: false, store?,
+code?, reason, trustLevel }` — `trustLevel` required on both. Paid: the total, the items, the
+list of what the store checked, and "Open receipt". Refused: who refused, the reason, "Nothing
+was charged."
 
 ## Security and honesty
 
