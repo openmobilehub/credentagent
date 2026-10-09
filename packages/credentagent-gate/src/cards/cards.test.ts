@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { describe, it, expect } from "vitest";
 import { McpServer } from "@modelcontextprotocol/server";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
-import { createCards, GRANT_VIEW_KIND, type GrantViewData } from "./index.js";
+import { createCards, GRANT_VIEW_KIND, PERMISSION_KIND, PERMISSION_STATUS_TOOL, QR_META_KEY, type GrantViewData, type PermissionInput } from "./index.js";
 
 const grant: GrantViewData = {
   kind: GRANT_VIEW_KIND,
@@ -81,5 +81,62 @@ describe("cards.grant", () => {
     const [block] = createCards().grant(grant, { note: "AUTHORIZED — you can spend now." }).content;
     expect(block.text.startsWith("AUTHORIZED — you can spend now.\n\n")).toBe(true);
     expect(block.text).not.toContain("this grant in a card");
+  });
+});
+
+const permission: PermissionInput = {
+  grantId: "g1",
+  store: { name: "BeanBarn", url: "https://beanbarn.example", merchantId: "beanbarn.example" },
+  approveUrl: "https://beanbarn.example/credentagent/grants/g1",
+  products: ["House Blend, 1 lb bag"],
+  limits: { perPurchase: 25, total: 50 },
+  why: "lowest price for House Blend",
+  trustLevel: "presence-only-demo",
+};
+
+describe("cards.permission", () => {
+  const signed = async () => ({ status: "authorized", trustLevel: "device-signed", intent: "signed-intent" });
+
+  it("shows the permission; its QR code reaches the card in _meta and costs the model no context", () => {
+    const result = createCards({ readPermission: signed }).permission(permission);
+    expect(result.structuredContent).toEqual({ kind: PERMISSION_KIND, ...permission });
+    expect(String(result._meta?.[QR_META_KEY])).toMatch(/^data:image\/svg\+xml;/);
+    expect(result.content[0].text).toContain(JSON.stringify({ kind: PERMISSION_KIND, ...permission }, null, 2));
+    expect(result.content[0].text).not.toContain("data:image");
+  });
+
+  it("needs readPermission — without it the card could never learn the permission was signed", async () => {
+    const cards = createCards();
+    expect(() => cards.permission(permission)).toThrow(/readPermission/);
+    await expect(cards.waitForSignature("g1")).rejects.toThrow(/readPermission/);
+  });
+
+  it("needs a trust level, said out loud", () => {
+    const withoutTrust = { ...permission, trustLevel: undefined } as unknown as PermissionInput;
+    expect(() => createCards({ readPermission: signed }).permission(withoutTrust)).toThrow(/trustLevel is required/);
+  });
+
+  it("the model's wait answers what readPermission answered, extra fields included", async () => {
+    const cards = createCards({ readPermission: signed });
+    cards.permission(permission);
+    expect(await cards.waitForSignature("g1")).toEqual({ status: "authorized", trustLevel: "device-signed", intent: "signed-intent" });
+  });
+
+  it("register adds the card-only status tool when readPermission is set, and only then", async () => {
+    // One ordinary tool on both servers, so tools/list exists either way.
+    const names = async (cards: ReturnType<typeof createCards>) =>
+      (await (await connect((s) => { cards.register(s); s.registerTool("other", { description: "another tool" }, async () => ({ content: [] })); })).listTools()).tools.map((t) => t.name).sort();
+    expect(await names(createCards({ readPermission: signed }))).toEqual([PERMISSION_STATUS_TOOL, "other"].sort());
+    expect(await names(createCards())).toEqual(["other"]);
+  });
+
+  it("over MCP, the card learns it was signed — from the permission the kit issued, not from the card", async () => {
+    const read: PermissionInput[] = [];
+    const cards = createCards({ readPermission: async (p) => { read.push(p); return { status: "authorized", trustLevel: "device-signed" }; }, modelGraceMs: 0 });
+    const client = await connect((server) => cards.register(server));
+    cards.permission(permission);
+    const result = await client.callTool({ name: PERMISSION_STATUS_TOOL, arguments: { grantId: "g1", store: "https://evil.example" } });
+    expect(result.structuredContent).toEqual({ status: "authorized", trustLevel: "device-signed", announce: true, final: true });
+    expect(read[0].store.url).toBe("https://beanbarn.example");
   });
 });
