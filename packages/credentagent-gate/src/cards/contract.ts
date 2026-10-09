@@ -64,10 +64,11 @@ export interface OffersInput {
   maxPrice?: number;
 }
 
-/** What the card says plainly when the person named a product. */
+/** What the card says plainly: who sells the product, and with a limit, what fits it. */
 export interface OffersSummary {
-  product: string;
-  /** The stores that sell it. */
+  /** The product the person named, when they named one. */
+  product?: string;
+  /** The stores that sell it (with no product named: the stores that have any product). */
   sellers: string[];
   maxPrice?: number;
   /** With a limit: the stores that sell it within it. */

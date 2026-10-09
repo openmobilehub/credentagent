@@ -15,6 +15,9 @@ const stores: StoreOffers[] = [
   { store: "RoastWorks", url: "https://roastworks.example", products: [...catalog(26, 18, 4.6), { id: "cold-brew", name: "Cold Brew Concentrate, 32 oz", price: 14, rating: 4.8 }] },
 ];
 
+const sideBySide =
+  "The person sees these offers side by side in a card. Don't re-list them; say which store you pick and why, in a sentence or two.";
+
 describe("offersCard", () => {
   it("without a product: the whole catalogs, no summary, and the model is told not to re-list them", () => {
     const { data, note } = offersCard({ stores });
@@ -66,5 +69,59 @@ describe("offersCard", () => {
     const { data } = offersCard({ stores: [...stores, { url: "https://down.example", error: "fetch failed" }], product: "house" });
     expect(data.stores.at(-1)).toEqual({ url: "https://down.example", error: "fetch failed" });
     expect(data.summary?.sellers).toEqual(["Acme Coffee Co", "BeanBarn", "RoastWorks"]);
+  });
+
+  it("a limit without a product still says nothing fits, and asks for no permission", () => {
+    const { data, note } = offersCard({ stores, maxPrice: 10 });
+    expect(data.summary?.product).toBeUndefined();
+    expect(data.summary?.within).toEqual([]);
+    expect(data.summary?.cheapest).toEqual({ store: "RoastWorks", price: 14 });
+    expect(note).toBe(
+      "No offer is within the person's maximum of $10.00: the cheapest is $14.00 at RoastWorks. Don't request a permission and don't buy. " +
+        "Tell them that, and that buying it would need a higher limit, which means signing a new permission on their phone.",
+    );
+  });
+
+  it("a limit without a product that some offers fit: those stores are listed, and the note is the default", () => {
+    const { data, note } = offersCard({ stores, maxPrice: 19 });
+    expect(data.summary?.within).toEqual(["Acme Coffee Co", "RoastWorks"]);
+    expect(data.summary?.cheapest).toEqual({ store: "RoastWorks", price: 14 });
+    expect(note).toBe(sideBySide);
+  });
+
+  it("a limit without a product, one store only: the note does not say 'only X sells it', since no product was named", () => {
+    const { note } = offersCard({ stores: [stores[2]], maxPrice: 25 });
+    expect(note).toBe(sideBySide);
+  });
+
+  it("a limit without a product and no catalog at all: no 'no store sells' note, since no product was named", () => {
+    const { note } = offersCard({ stores: [{ store: "Empty", url: "https://empty.example", products: [] }], maxPrice: 10 });
+    expect(note).toBe(sideBySide);
+  });
+
+  it("within lists each store once, even when two of its offers fit the limit", () => {
+    expect(offersCard({ stores, maxPrice: 25 }).data.summary?.within).toEqual(["Acme Coffee Co", "BeanBarn", "RoastWorks"]);
+  });
+
+  it("a product of only spaces names nothing: no product summary, and the catalogs are not narrowed", () => {
+    const { data } = offersCard({ stores, product: "  " });
+    expect(data.summary).toBeUndefined();
+    expect(data.stores).toEqual(stores);
+  });
+
+  it("a tie for cheapest keeps the first store", () => {
+    const tied: StoreOffers[] = [
+      { store: "First", url: "https://first.example", products: [{ id: "tea", name: "Tea, 20 bags", price: 5 }] },
+      { store: "Second", url: "https://second.example", products: [{ id: "tea", name: "Tea, 20 bags", price: 5 }] },
+    ];
+    expect(offersCard({ stores: tied, product: "tea", maxPrice: 10 }).data.summary?.cheapest).toEqual({ store: "First", price: 5 });
+  });
+
+  it("a price the store sent as a numeric string is shown in dollars", () => {
+    const stringPriced: StoreOffers[] = [
+      { store: "Acme Coffee Co", url: "https://acme.example", products: [{ id: "tea", name: "Tea, 20 bags", price: "12" as unknown as number }] },
+    ];
+    const { note } = offersCard({ stores: stringPriced, product: "tea", maxPrice: 10 });
+    expect(note).toContain("the cheapest is $12.00 at Acme Coffee Co.");
   });
 });
