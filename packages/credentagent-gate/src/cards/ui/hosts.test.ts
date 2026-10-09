@@ -2,7 +2,7 @@
 // keeps holding the result that opened the card. A card the person changed themselves (a Revoke)
 // must stay changed. These tests go red if `connectChatGpt` stops comparing the host's result with
 // the one it last delivered and falls back to comparing it with the card on screen.
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { connectHost } from "./hosts";
 import { createCardStore } from "./card-store";
 
@@ -15,6 +15,7 @@ function chatGptWindow(toolOutput: unknown) {
     toolOutput,
     toolResponseMetadata: {},
     callTool: async () => ({ structuredContent: revoked }),
+    sendFollowUpMessage: vi.fn(async () => {}),
   };
   const win = Object.assign(new EventTarget(), { openai, self: {}, top: {} });
   return { win: win as unknown as Parameters<typeof connectHost>[1], openai, redeliver: () => win.dispatchEvent(new Event("openai:set_globals")) };
@@ -39,6 +40,22 @@ describe("connectHost in ChatGPT", () => {
 
     redeliver(); // the host still holds the active grant as `toolOutput`
     expect(store.current()?.data).toEqual(revoked);
+  });
+
+  it("in ChatGPT, tell posts the follow-up message (a fallback: it did not post in real ChatGPT)", async () => {
+    const store = createCardStore();
+    const { win, openai } = chatGptWindow(active);
+    const bridge = await connectHost(store, win);
+    await bridge.tell("I signed the permission");
+    expect(openai.sendFollowUpMessage).toHaveBeenCalledWith({ prompt: "I signed the permission" });
+  });
+
+  it("a ChatGPT that cannot post the follow-up message leaves tell quiet, not thrown", async () => {
+    const store = createCardStore();
+    const { win, openai } = chatGptWindow(active);
+    openai.sendFollowUpMessage.mockRejectedValueOnce(new Error("not allowed"));
+    const bridge = await connectHost(store, win);
+    await expect(bridge.tell("I signed the permission")).resolves.toBeUndefined();
   });
 
   it("a new result from ChatGPT still replaces the card", async () => {

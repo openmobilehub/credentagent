@@ -9,7 +9,7 @@ import { previewResult, previewViews } from "./preview";
 import { PERMISSION_KIND } from "../contract";
 import type { Bridge } from "./bridge";
 
-const bridge: Bridge = { host: "preview", call: async () => null, open: async () => {} };
+const bridge: Bridge = { host: "preview", call: async () => null, open: async () => {}, tell: async () => {} };
 const render = (result: { structuredContent: unknown; _meta?: Record<string, unknown> } | null): string =>
   renderToStaticMarkup(<CardView card={readCard(result)} bridge={bridge} show={() => false} />);
 
@@ -58,7 +58,7 @@ describe("grantActions: a failed button says so instead of failing silently", ()
     const openLink = vi.fn(open);
     const shown = vi.fn(() => true);
     const fail = vi.fn();
-    const actions = grantActions({ host: "preview", call, open: openLink }, shown, fail);
+    const actions = grantActions({ host: "preview", call, open: openLink, tell: async () => {} }, shown, fail);
     return { call, openLink, shown, fail, actions };
   }
 

@@ -17,6 +17,7 @@ interface OpenAiGlobals {
   theme?: "light" | "dark";
   callTool?: (name: string, args: Record<string, unknown>) => Promise<unknown>;
   openExternal?: (options: { href: string }) => void | Promise<void>;
+  sendFollowUpMessage?: (options: { prompt: string }) => Promise<void>;
 }
 type CardWindow = Window & { openai?: OpenAiGlobals };
 
@@ -41,6 +42,13 @@ async function connectMcp(store: CardStore): Promise<Bridge> {
     call: async (name, args) => (await app.callServerTool({ name, arguments: args })).structuredContent ?? null,
     open: async (url) => {
       await app.openLink({ url });
+    },
+    tell: async (text) => {
+      try {
+        await app.sendMessage({ role: "user", content: [{ type: "text", text }] });
+      } catch {
+        /* a host that cannot post leaves the card's "Signed" as the signal */
+      }
     },
   };
 }
@@ -67,6 +75,13 @@ function connectChatGpt(store: CardStore, win: CardWindow, openai: OpenAiGlobals
     open: async (url) => {
       await openai.openExternal?.({ href: url });
     },
+    tell: async (text) => {
+      try {
+        await openai.sendFollowUpMessage?.({ prompt: text });
+      } catch {
+        /* same */
+      }
+    },
   };
 }
 
@@ -82,6 +97,7 @@ function connectPreview(store: CardStore, win: CardWindow): Bridge {
     open: async (url) => {
       win.open(url, "_blank", "noopener");
     },
+    tell: async () => {},
   };
 }
 
