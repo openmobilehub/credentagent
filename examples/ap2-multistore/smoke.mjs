@@ -6,16 +6,16 @@
 //
 // It runs on ports 4200–4204 (SMOKE_BASE_PORT), so it never collides with a live demo on 4100–4104.
 import { spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
-import vm from "node:vm";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { devSimulateWalletSignature } from "@openmobilehub/credentagent-gate";
 
 const here = (f) => new URL(f, import.meta.url).pathname;
 const BASE = Number(process.env.SMOKE_BASE_PORT ?? 4200);
 const local = (n, path = "") => `http://localhost:${BASE + n}${path}`;
-// A short grace window, so "the model stopped waiting" is reached in milliseconds, not the live 20 s.
-const env = { ...process.env, BASE_PORT: String(BASE), AP2_MODEL_GRACE_MS: "300" };
+// A short grace window, so "the model stopped waiting" is reached in seconds, not the live 20 s. The card waits up
+// to this window for the model to notice the signature, and the model re-checks every 1.5 s, so the window must be
+// longer than one poll; 3 s keeps the run short.
+const env = { ...process.env, BASE_PORT: String(BASE), AP2_MODEL_GRACE_MS: "3000" };
 for (const k of ["ACME_URL", "BEANBARN_URL", "ROASTWORKS_URL", "STORES"]) delete env[k]; // local origins, never a tunnel's
 const kids = [spawn(process.execPath, [here("./stores.mjs")], { stdio: "inherit", env }), spawn(process.execPath, [here("./agent.mjs")], { stdio: "inherit", env })];
 const up = async (url) => { for (let i = 0; i < 100; i++) { try { await fetch(url); return; } catch { await new Promise((r) => setTimeout(r, 100)); } } throw new Error(`${url} never came up`); };
@@ -34,28 +34,22 @@ try {
   const beanbarn = stores.find((s) => s.store === "BeanBarn").url;
   const acme = stores.find((s) => s.store === "Acme Coffee Co").url;
 
-  // The chat cards: three tools render the widget, served as one resource per host (Claude, ChatGPT).
+  // The chat cards: three tools render the SDK's card page, served as one resource per host (Claude, ChatGPT).
   const { tools } = await mcp.listTools();
   const carded = tools.filter((t) => t._meta?.ui?.resourceUri).map((t) => t.name).sort();
   check(carded.join() === "buy,compare-offers,request-permission", `tools with a chat card → ${carded.join(", ")}`);
-  const watcher = tools.find((t) => t.name === "watch-permission")?._meta;
-  check(watcher?.ui?.visibility?.join() === "app" && watcher["openai/widgetAccessible"] === true, "watch-permission is the card's: callable by it, hidden from the model");
+  const watcher = tools.find((t) => t.name === "credentagent-permission-status")?._meta;
+  check(watcher?.ui?.visibility?.join() === "app" && watcher["openai/widgetAccessible"] === true, "credentagent-permission-status is the card's: callable by it, hidden from the model");
   const cardUri = tools.find((t) => t.name === "buy")._meta.ui.resourceUri;
   const card = (await mcp.readResource({ uri: cardUri })).contents[0];
-  const tags = (re) => (card.text.match(re) ?? []).length; // a raw "</script" inside the inlined client would close its tag early
-  check(card.text.includes("globalThis.ExtApps=") && tags(/<script\b/gi) === tags(/<\/script/gi), `card resource ${cardUri.split("/").pop()} inlines the MCP Apps client`);
-  // Inlined byte for byte, and still valid JavaScript. A host reports any script error in a card as
-  // "Runtime error" (ChatGPT did, when a string replace() expanded the bundle's "$&" and "$`").
-  const inlined = card.text.match(/<script type="module">([\s\S]*?)<\/script>/)[1];
-  const bundle = readFileSync(new URL(import.meta.resolve("@modelcontextprotocol/ext-apps/app-with-deps")), "utf8");
-  let compiles = true;
-  try { new vm.Script(inlined); } catch { compiles = false; }
-  check(compiles && inlined.startsWith(bundle.slice(0, 2000)) && inlined.includes(bundle.slice(-6000, bundle.lastIndexOf("export"))), "the inlined MCP Apps client is intact and compiles");
+  // The resource is the kit's page, served as built; the kit's own tests pin the page's integrity.
+  const preview = await (await fetch(local(0, "/widget"))).text();
+  check(card.text === preview && card.text.includes("ui/initialize"), `card resource ${cardUri.split("/").pop()} is the kit's card page, the one /widget previews`);
 
   const asked = await mcp.callTool({ name: "request-permission", arguments: { store: beanbarn, skus: ["house-blend"], budget: 50, perSpend: 25, description: "House Blend from BeanBarn — up to $50, $25 a purchase.", why: "lowest price for House Blend with a 4.4 rating" } });
   const grant = asked.structuredContent;
-  check(grant.approveUrl?.startsWith(beanbarn) && grant.store === "BeanBarn", `request-permission → approveUrl ${grant.approveUrl}`);
-  check(asked._meta?.["ap2/qr"]?.startsWith("data:image/svg+xml;base64,") && !asked.content[0].text.includes("data:image"), "the QR code reaches the card, not the model's text");
+  check(grant.approveUrl?.startsWith(beanbarn) && grant.store?.name === "BeanBarn", `request-permission → approveUrl ${grant.approveUrl}`);
+  check(asked._meta?.["credentagent/qr"]?.startsWith("data:image/svg+xml") && !asked.content[0].text.includes("data:image"), "the QR code reaches the card, not the model's text");
 
   // The phone, simulated: it opens the link, then the real signing endpoints, a real P-256 signature.
   const signOnPhone = async (store, g) => {
@@ -67,15 +61,15 @@ try {
   await signOnPhone(beanbarn, grant);
 
   // The card follows the signature and tells the chat ONCE, however often it redraws or reloads.
-  const seen = await tool("watch-permission", { store: beanbarn, grantId: grant.grantId });
-  const again = await tool("watch-permission", { store: beanbarn, grantId: grant.grantId });
+  const seen = await tool("credentagent-permission-status", { grantId: grant.grantId });
+  const again = await tool("credentagent-permission-status", { grantId: grant.grantId });
   check(seen.status === "authorized" && seen.announce === true && again.announce === false, "the card announces the signature exactly once");
 
   const held = await tool("check-permission", { store: beanbarn, grantId: grant.grantId });
   check(held.status === "authorized", `check-permission → ${held.status} (${held.trustLevel})`);
 
   const bought = await tool("buy", { store: beanbarn, grantId: grant.grantId, items: [{ sku: "house-blend" }] });
-  check(bought.ok === true && bought.order?.amount === 2100, `buy at BeanBarn → ${bought.ok ? `verified, $${bought.order.amount / 100}, ${bought.order.trust_level}` : JSON.stringify(bought)}`);
+  check(bought.ok === true && bought.order?.total === 21, `buy at BeanBarn → ${bought.ok ? `verified, $${bought.order.total}, ${bought.trustLevel}` : JSON.stringify(bought)}`);
 
   // The permission names BeanBarn. Acme must refuse it, even though the agent's signature is valid.
   const elsewhere = await tool("buy", { store: acme, grantId: grant.grantId, items: [{ sku: "house-blend" }] });
@@ -96,7 +90,7 @@ try {
   const espresso = (await mcp.callTool({ name: "request-permission", arguments: { store: roastworks, skus: ["espresso-beans"], budget: 20, perSpend: 20, description: "Espresso Beans from RoastWorks.", why: "top-rated espresso, and the cheapest" } })).structuredContent;
   await signOnPhone(roastworks, espresso);
   await tool("check-permission", { store: roastworks, grantId: espresso.grantId });
-  const quiet = await tool("watch-permission", { store: roastworks, grantId: espresso.grantId });
+  const quiet = await tool("credentagent-permission-status", { grantId: espresso.grantId });
   check(quiet.status === "authorized" && quiet.announce === false, "the card stays quiet when the model already knows it is signed");
 
   // …and while the model is waiting for the signature in its own turn (the normal path): it will see the
@@ -105,8 +99,17 @@ try {
   const modelWaits = tool("check-permission", { store: acme, grantId: tea.grantId }); // open, holding for the signature
   await new Promise((ok) => setTimeout(ok, 200));
   await signOnPhone(acme, tea);
-  const [cardSaw, modelSaw] = await Promise.all([tool("watch-permission", { store: acme, grantId: tea.grantId }), modelWaits]);
+  const [cardSaw, modelSaw] = await Promise.all([tool("credentagent-permission-status", { grantId: tea.grantId }), modelWaits]);
   check(modelSaw.status === "authorized" && cardSaw.announce === false && cardSaw.final === true, "the card stays quiet while the model waits for the signature in its turn");
+
+  // …and when the model ended its turn instead of waiting, only the card follows the signature. The agent must
+  // still hold the signed permission, or the card's "go ahead" would send the model to a buy that fails.
+  const fallback = (await mcp.callTool({ name: "request-permission", arguments: { store: roastworks, skus: ["green-tea"], budget: 20, perSpend: 20, description: "Green Tea from RoastWorks.", why: "a fresh permission for the card's fallback path" } })).structuredContent;
+  await signOnPhone(roastworks, fallback);
+  let announced;
+  for (let i = 0; i < 4 && !announced?.announce; i++) announced = await tool("credentagent-permission-status", { grantId: fallback.grantId });
+  const afterCard = await tool("buy", { store: roastworks, grantId: fallback.grantId, items: [{ sku: "green-tea" }] }); // no check-permission first
+  check(announced?.announce === true && afterCard.ok === true, `the card announced the signature, and buy works without check-permission → ${afterCard.ok ? `$${afterCard.order.total}` : afterCard.error ?? afterCard.reason}`);
 
   // Scenario 1, simple: one store sells it, so there is nothing to compare. The agent says so and buys there.
   const coldBrew = await mcp.callTool({ name: "compare-offers", arguments: { product: "cold brew" } });
@@ -116,7 +119,7 @@ try {
   await signOnPhone(roastworks, cb);
   await tool("check-permission", { store: roastworks, grantId: cb.grantId });
   const cbBought = await tool("buy", { store: roastworks, grantId: cb.grantId, items: [{ sku: "cold-brew" }] });
-  check(cbBought.ok === true && cbBought.order?.amount === 1400, `scenario 1: bought at RoastWorks → ${cbBought.ok ? `$${cbBought.order.amount / 100}` : cbBought.reason}`);
+  check(cbBought.ok === true && cbBought.order?.total === 14, `scenario 1: bought at RoastWorks → ${cbBought.ok ? `$${cbBought.order.total}` : cbBought.reason}`);
   const decaf = await mcp.callTool({ name: "compare-offers", arguments: { product: "decaf" } });
   check(decaf.structuredContent.summary?.sellers.length === 0 && decaf.content[0].text.startsWith('No store sells "decaf"'), "a product no store sells: the agent is told not to ask for a permission");
 

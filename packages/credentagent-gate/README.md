@@ -427,6 +427,115 @@ redirects are never followed, and each attempt is bounded by a timeout (`timeout
 `verifyEvent(...)` is the never-throws verdict door if you prefer a result to a try/catch. Runnable:
 [`examples/order-webhooks/`](https://github.com/openmobilehub/credentagent/tree/main/examples/order-webhooks).
 
+## Cards — show the moment in the chat (`/cards`)
+
+Claude and ChatGPT can show a small interactive card inside the conversation instead of a wall of
+text. `@openmobilehub/credentagent-gate/cards` is one card page that **any** MCP server serves — a
+storefront or an agent — with no widget code of its own:
+
+```js
+import { McpServer } from "@modelcontextprotocol/server";
+import { createCards } from "@openmobilehub/credentagent-gate/cards";
+
+const cards = createCards(); // once per process — fails at startup if the package was built without its page
+
+function buildServer() {
+  const server = new McpServer({ name: "my-server", version: "1.0.0" });
+  cards.register(server); // the page for Claude (MCP Apps) and ChatGPT (skybridge), with its CSP
+  server.registerTool("get-grant", { inputSchema, _meta: cards.toolMeta() }, async ({ grantId }) =>
+    cards.grant(await viewOf(grantId)), // takes a GrantViewData: the grant card's plain data (kind: GRANT_VIEW_KIND), money already computed on the server
+  );
+  return server;
+}
+
+app.get("/cards", (_req, res) => res.type("html").send(cards.html)); // your Express app · preview: /cards?view=grant-product
+```
+
+`createStorefront()` builds this data from a live grant for its own grant tools; another server passes its own `GrantViewData` (the type and `GRANT_VIEW_KIND` are exported from `@openmobilehub/credentagent-gate/cards`).
+
+The grant card's **Revoke** button calls your server's `revoke-grant` tool with `{ grantId }` — register it with `_meta: cards.toolMeta()` (ChatGPT needs that to let the card call it) and return `cards.grant(view)`; without that tool, Revoke shows "This card couldn't complete that action".
+
+A card only shows; it never decides — every limit must be enforced on your server. The page renders grants, the
+permission card (which follows the signature live), the offers card and the receipt card. Preview them all at
+`/cards`: with no `view` it lists every sample (`?view=offers`, `only-one`, `over-limit`, `permission`,
+`permission-signed`, `receipt`, `refused`, `grant-pending`, `grant-product`, `grant-category`, `grant-open`,
+`grant-low`, `grant-spent`, `grant-revoked`, `grant-declined`).
+
+### A permission to sign on the phone
+
+```js
+const cards = createCards({
+  // How to read a permission's live status — here, from the store that issued it. Answer { status, trustLevel? }
+  // ("pending" until signed); anything else you return (the signed intent) comes back from waitForSignature.
+  readPermission: ({ grantId, store }) => getJson(`${store.url}/agent/grants/${grantId}`),
+});
+
+server.registerTool("request-permission", { inputSchema, _meta: cards.toolMeta() }, async (args) => {
+  // Resolve args.store against your own list of known stores — never fetch a URL the model made up.
+  const grant = await postJson(`${args.store}/agent/grants`, { /* … */ });
+  return cards.permission({
+    grantId: grant.grantId,
+    store: { name: grant.store, url: args.store },
+    approveUrl: grant.approveUrl, // becomes the QR code — it reaches the card in _meta, not the model
+    products: grant.products,
+    limits: { perPurchase: args.perSpend, total: args.budget },
+    why: args.why,
+    trustLevel: grant.trustLevel, // required: what the purchase will be verified at
+  });
+});
+
+server.registerTool("check-permission", { inputSchema }, async ({ grantId }) => {
+  const signed = await cards.waitForSignature(grantId); // holds up to 45 s
+  return reply(signed.status === "authorized" ? "Signed. Call buy now." : `Not signed yet (${signed.status}). Call again.`);
+});
+```
+
+The dependable path is the model waiting in its own turn (`waitForSignature`). `register()` also adds a
+card-only tool, `credentagent-permission-status` — hidden from the model, it takes only a grant id — that
+the card follows the signature through. The kit owns both waits, so it alone decides when the card may
+tell the chat "signed": once per grant, and never while the model is still waiting (two "go ahead"s could
+make it buy twice). It remembers permissions in memory, per process, for an hour after their last use,
+by grant id alone — so grant ids must be unique across the stores your server talks to.
+
+The card shows the QR code, the limits and the reason, and follows the signature live: "Waiting for your
+signature" turns to "Signed on your phone" (`/cards?view=permission-signed`). When the server says so, the card
+posts "I signed the permission…" to the chat — MCP Apps' `ui/message`; ChatGPT's follow-up message is wired as a
+fallback only, because it did not post in real ChatGPT.
+
+### Offers side by side
+
+```js
+server.registerTool("compare-offers", { inputSchema, _meta: cards.toolMeta() }, async ({ product, maxPrice }) => {
+  const stores = await readEachStore(); // [{ store, url, products: [{ id, name, price, rating? }] } | { url, error }]
+  return cards.offers({ stores, product, maxPrice });
+});
+```
+
+The card shows each store's offers side by side, and `cards.offers()` derives the plain summary on the card and the
+matching note for the model — who sells the product and what fits the person's price limit, which counts even when no
+product was named.
+A store that could not be read (`{ url, error }`) stays in the data and is left out of the table, and the card and
+the note say so instead of claiming that no store, or only one store, sells the product.
+
+### The store's answer
+
+```js
+server.registerTool("buy", { inputSchema, _meta: cards.toolMeta() }, async (args) => {
+  return cards.receipt(await purchase(args)); // { ok: true, order, receiptUrl?, trustLevel } or { ok: false, reason, trustLevel }
+});
+```
+
+`cards.receipt()` shows the store's answer as-is, paid or refused. Paid is `{ ok: true, order: { id, store, total,
+currency, items, checks }, receiptUrl?, trustLevel }`: the card says "Paid $21.00 at BeanBarn" (`total` is in the
+currency's major unit, dollars), lists the items and what the store checked before it accepted the order (`checks`,
+one sentence each), and offers "Open receipt" when you pass `receiptUrl`. Refused is `{ ok: false, store?, code?,
+reason, trustLevel }`: the card says who refused, gives the `reason` (and the `code`, in small type) and that
+"Nothing was charged." — so answer `ok: false` only when that is true.
+
+`trustLevel` is required on both answers — what the purchase was verified at — and is never defaulted: the card ends
+with the honesty line built from it, and `cards.receipt()` throws without it. The note for the model asks for one
+sentence; pass `{ note }` to replace it.
+
 ## Bring your own host — mount on YOUR MCP server
 
 `createStorefront()` is one host; the product promise is "mount the gate on **any** app." If you
@@ -942,6 +1051,12 @@ MemoryVerificationStore  ·  completeOrder(input, ctx)
 // Bring your own host — the typed seam contract (builds completion + publishes the seams)
 defineHost({ catalog, orderStore, records | completion, signingKey | allowEphemeralKey })
   → { verificationStore, publish(app), complete(input) → { completed, reason? } }
+
+// Cards (spec 015) — one card page any MCP server serves to Claude and ChatGPT (see the Cards section)
+// from "@openmobilehub/credentagent-gate/cards"
+createCards({ readPermission?, holdMs?, modelGraceMs? }) → { html, register(server), toolMeta(status?),
+  grant(view, { note? }) → CardResult, permission(input, { note? }) → CardResult, waitForSignature(grantId) → status | { status: "unknown" } }
+GRANT_VIEW_KIND  ·  PERMISSION_KIND  ·  PERMISSION_STATUS_TOOL  ·  QR_META_KEY  ·  GrantViewData / PermissionInput / PermissionStatus / ReadPermission / CardResult (types)
 
 // Delegated draws (HNP, 005 preview) — the Stripe-grade facade + the underlying seams
 DelegatedGate  ·  gate.preApprove(bounds) → DelegatedGrant  ·  grant.spend(purchase) → SpendResult  ·  grant.revoke()
