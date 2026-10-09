@@ -3,7 +3,7 @@
 // sample is shaped exactly like a tool result, so the preview runs the same code path as a chat.
 
 import { GRANT_VIEW_KIND, type GrantViewData } from "../grant-view";
-import { PERMISSION_KIND, PERMISSION_STATUS_TOOL, QR_META_KEY, type PermissionCardData } from "../contract";
+import { PERMISSION_KIND, PERMISSION_STATUS_TOOL, QR_META_KEY, RECEIPT_KIND, type PermissionCardData } from "../contract";
 import { offersCard } from "../offers";
 import { qrDataUrl } from "../qr";
 
@@ -58,6 +58,33 @@ const SAMPLES: Readonly<Record<string, PreviewResult>> = {
   "over-limit": { structuredContent: offersCard({ stores: threeStores, product: "espresso", maxPrice: 15 }).data },
   permission: { structuredContent: permission, _meta: { [QR_META_KEY]: qrDataUrl(permission.approveUrl) } },
   "permission-signed": { structuredContent: { ...permission, grantId: "grant_preview_signed" }, _meta: { [QR_META_KEY]: qrDataUrl(permission.approveUrl) } },
+  receipt: {
+    structuredContent: {
+      kind: RECEIPT_KIND,
+      ok: true,
+      order: {
+        id: "ord_preview",
+        store: "BeanBarn",
+        total: 21,
+        currency: "USD",
+        items: ["1 × House Blend, 1 lb bag"],
+        checks: [
+          "The permission's wallet signature verifies",
+          "The agent signed with the key that permission names",
+          "The cart is the one we quoted and signed",
+          "The permission allows this store",
+          "Within the signed limits: $21.00 of $50.00, max $25.00 a purchase",
+          "Our catalog prices it at $21.00",
+          "Fresh purchase code, addressed to us (no replay)",
+        ],
+      },
+      receiptUrl: "https://beanbarn.example/agent/orders/ord_preview",
+      trustLevel: "presence-only-demo",
+    },
+  },
+  refused: {
+    structuredContent: { kind: RECEIPT_KIND, ok: false, store: "Acme Coffee Co", code: "constraint", reason: "This permission was signed for another store", trustLevel: "presence-only-demo" },
+  },
   "grant-pending": { structuredContent: grant({ status: "pending", lifecycle: "pending", spent: 0, remaining: 200, allow: { skus: [whiskey.id], categories: [] }, product: whiskey }) },
   "grant-product": { structuredContent: grant({ allow: { skus: [whiskey.id], categories: [] }, product: whiskey }) },
   "grant-category": { structuredContent: grant({ allow: { skus: ["drift-mouse"], categories: ["Beverages", "Electronics"] } }) },

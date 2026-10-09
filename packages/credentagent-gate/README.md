@@ -455,11 +455,11 @@ app.get("/cards", (_req, res) => res.type("html").send(cards.html)); // your Exp
 
 The grant card's **Revoke** button calls your server's `revoke-grant` tool with `{ grantId }` — register it with `_meta: cards.toolMeta()` (ChatGPT needs that to let the card call it) and return `cards.grant(view)`; without that tool, Revoke shows "This card couldn't complete that action".
 
-A card only shows; it never decides — every limit must be enforced on your server. Today the page renders
-grants, the permission card (which follows the signature live) and the offers card; `/cards` with no `view`
-lists every sample (`?view=offers`, `only-one`, `over-limit`, `permission`, `permission-signed`, `grant-pending`,
-`grant-product`, `grant-category`, `grant-open`, `grant-low`, `grant-spent`, `grant-revoked`, `grant-declined`).
-The receipt card comes next ([#256](https://github.com/openmobilehub/credentagent/issues/256)).
+A card only shows; it never decides — every limit must be enforced on your server. The page renders grants, the
+permission card (which follows the signature live), the offers card and the receipt card. Preview them all at
+`/cards`: with no `view` it lists every sample (`?view=offers`, `only-one`, `over-limit`, `permission`,
+`permission-signed`, `receipt`, `refused`, `grant-pending`, `grant-product`, `grant-category`, `grant-open`,
+`grant-low`, `grant-spent`, `grant-revoked`, `grant-declined`).
 
 ### A permission to sign on the phone
 
@@ -516,6 +516,25 @@ matching note for the model — who sells the product and what fits the person's
 product was named.
 A store that could not be read (`{ url, error }`) stays in the data and is left out of the table, and the card and
 the note say so instead of claiming that no store, or only one store, sells the product.
+
+### The store's answer
+
+```js
+server.registerTool("buy", { inputSchema, _meta: cards.toolMeta() }, async (args) => {
+  return cards.receipt(await purchase(args)); // { ok: true, order, receiptUrl?, trustLevel } or { ok: false, reason, trustLevel }
+});
+```
+
+`cards.receipt()` shows the store's answer as-is, paid or refused. Paid is `{ ok: true, order: { id, store, total,
+currency, items, checks }, receiptUrl?, trustLevel }`: the card says "Paid $21.00 at BeanBarn" (`total` is in the
+currency's major unit, dollars), lists the items and what the store checked before it accepted the order (`checks`,
+one sentence each), and offers "Open receipt" when you pass `receiptUrl`. Refused is `{ ok: false, store?, code?,
+reason, trustLevel }`: the card says who refused, gives the `reason` (and the `code`, in small type) and that
+"Nothing was charged." — so answer `ok: false` only when that is true.
+
+`trustLevel` is required on both answers — what the purchase was verified at — and is never defaulted: the card ends
+with the honesty line built from it, and `cards.receipt()` throws without it. The note for the model asks for one
+sentence; pass `{ note }` to replace it.
 
 ## Bring your own host — mount on YOUR MCP server
 

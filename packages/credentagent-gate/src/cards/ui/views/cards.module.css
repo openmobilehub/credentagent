@@ -43,3 +43,16 @@
 .tagTop { background: var(--tint); color: var(--info); border: 1px solid var(--line); }
 .tagOver { background: var(--bad-bg); color: var(--bad); }
 .limit { border-left: 3px solid var(--bad); padding: 2px 0 2px 10px; }
+
+/* receipt */
+.hero { display: flex; gap: 12px; align-items: flex-start; }
+.badge { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; flex: none; }
+.heroOk .badge { background: var(--ok-bg); color: var(--ok); }
+.heroBad .badge { background: var(--bad-bg); color: var(--bad); }
+.badge .icon { width: 22px; height: 22px; }
+.lines { display: grid; gap: 4px; }
+.checks { list-style: none; padding: 0; display: grid; gap: 4px; font-size: 14px; }
+.checks li { display: flex; gap: 8px; align-items: flex-start; }
+.checks .icon { width: 16px; height: 16px; margin-top: 3px; color: var(--ok); }
+.row { display: flex; justify-content: space-between; gap: 12px; font-size: 14px; }
+.total { font-weight: 600; font-size: 16px; border-top: 1px solid var(--line); padding-top: 8px; }
