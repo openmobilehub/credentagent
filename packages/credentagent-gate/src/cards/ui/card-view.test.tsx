@@ -7,7 +7,7 @@ import { readCard } from "./card-store";
 import { GRANT_VIEW_KIND } from "./grants";
 import { previewCall, previewResult, previewViews } from "./preview";
 import { createSignatureWatch, type SignatureWatch } from "./signature-watch";
-import { PERMISSION_KIND, PERMISSION_STATUS_TOOL } from "../contract";
+import { OFFERS_KIND, PERMISSION_KIND, PERMISSION_STATUS_TOOL } from "../contract";
 import type { Bridge } from "./bridge";
 
 const bridge: Bridge = { host: "preview", call: async () => null, open: async () => {}, tell: async () => {} };
@@ -32,6 +32,7 @@ describe("CardView", () => {
       const kind = readCard(result)!.data.kind;
       if (kind === GRANT_VIEW_KIND) expect(html, view).toContain("limits enforced server-side");
       else if (kind === PERMISSION_KIND) expect(html, view).toContain("No real money moves");
+      else if (kind === OFFERS_KIND) expect(html, view).toContain("Offers, read live from each store"); // no trust claim to make
       else throw new Error(`no honesty expectation for ${kind} (${view})`);
     }
   });

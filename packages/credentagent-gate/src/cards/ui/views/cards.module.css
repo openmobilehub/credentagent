@@ -30,3 +30,16 @@
 .qr { display: grid; gap: 8px; justify-items: center; text-align: center; font-size: 13px; color: var(--fg-2); }
 .qr img { width: 168px; height: 168px; background: #fff; padding: 8px; border-radius: 8px; border: 1px solid var(--line); image-rendering: pixelated; }
 .signed img { opacity: .25; }
+
+/* offers */
+.offers { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 14px; }
+.offers th, .offers td { padding: 8px 6px; text-align: left; border-top: 1px solid var(--line); vertical-align: top; }
+.offers thead th { border-top: 0; font-size: 13px; font-weight: 600; }
+.offers tbody th { font-weight: 500; }
+.price { font-weight: 600; font-variant-numeric: tabular-nums; }
+.rate { color: var(--fg-2); font-size: 13px; }
+.tag { display: inline-block; margin-top: 3px; font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 999px; }
+.tagLow { background: var(--ok-bg); color: var(--ok); }
+.tagTop { background: var(--tint); color: var(--info); border: 1px solid var(--line); }
+.tagOver { background: var(--bad-bg); color: var(--bad); }
+.limit { border-left: 3px solid var(--bad); padding: 2px 0 2px 10px; }
