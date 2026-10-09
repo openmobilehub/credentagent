@@ -8,14 +8,20 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500&family=Fira+Sans:wght@400;500;600&display=swap">
 <style>
-  :root { --bg: #f8fafc; --fg: #0f172a; --fg-2: #475569; --border: #e2e8f0; color-scheme: light dark; }
-  @media (prefers-color-scheme: dark) { :root { --bg: #0b1120; --fg: #f8fafc; --fg-2: #94a3b8; --border: #334155; } }
+  :root { --bg: #f8fafc; --fg: #0f172a; --fg-2: #475569; --border: #e2e8f0; --field: #ffffff; color-scheme: light dark; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #0b1120; --fg: #f8fafc; --fg-2: #94a3b8; --border: #334155; --field: #1b2336; } }
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; }
   body { background: var(--bg); color: var(--fg); font: 15px/1.5 "Fira Sans", system-ui, sans-serif; display: flex; flex-direction: column; }
-  header { padding: 12px 16px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; border-bottom: 1px solid var(--border); }
+  header { padding: 12px 16px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; border-bottom: 1px solid var(--border); }
   h1 { margin: 0; font-size: 17px; font-weight: 600; }
-  header p { margin: 0; color: var(--fg-2); font-size: 14px; }
+  header p { margin: 0; color: var(--fg-2); font-size: 14px; flex: 1; min-width: 240px; }
+  form { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 14px; }
+  select, input, button { font: inherit; font-size: 14px; color: var(--fg); background: var(--field); border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; min-height: 36px; }
+  input { width: 90px; }
+  button { cursor: pointer; font-weight: 500; }
+  button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid #2563eb; outline-offset: 1px; }
+  #said { color: var(--fg-2); font-size: 13px; min-width: 120px; }
   main { flex: 1; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; background: var(--border); min-height: 0; }
   iframe { width: 100%; height: 100%; border: 0; background: var(--bg); min-height: 600px; }
   @media (max-width: 1000px) { main { grid-template-columns: 1fr; } iframe { height: 90vh; } }
@@ -25,14 +31,49 @@
 <header>
   <h1>Three independent stores</h1>
   <p>Each has its own origin, its own keys and its own grants. Each verifies the agent's purchase for itself.</p>
+  <!-- Scenario 2(b): the store owner drops a price, and an agent waiting for it buys. Local only: never tunneled. -->
+  <form id="price" aria-label="Change a price as the store owner">
+    <label for="store">Store owner:</label>
+    <select id="store"></select>
+    <select id="sku" aria-label="Product"></select>
+    <label for="to">new price $</label>
+    <input id="to" type="number" min="0.01" step="0.01" required>
+    <button type="submit">Set price</button>
+    <span id="said" role="status"></span>
+  </form>
 </header>
 <main id="stores"></main>
 <script type="application/json" id="cfg">/*CONFIG*/</script>
 <script>
-  for (const s of JSON.parse(document.getElementById("cfg").textContent)) {
-    const f = Object.assign(document.createElement("iframe"), { src: s.url, title: `${s.name} back office` });
-    document.getElementById("stores").append(f);
+  const stores = JSON.parse(document.getElementById("cfg").textContent);
+  const $ = (id) => document.getElementById(id);
+  for (const s of stores) {
+    $("stores").append(Object.assign(document.createElement("iframe"), { src: s.url, title: `${s.name} back office` }));
+    $("store").append(new Option(s.name, s.key));
   }
+  function products() {
+    const s = stores.find((x) => x.key === $("store").value);
+    $("sku").replaceChildren(...s.products.map((p) => new Option(`${p.name.split(",")[0]} ($${p.price.toFixed(2)})`, p.id)));
+    syncPrice();
+  }
+  function syncPrice() {
+    const p = stores.find((x) => x.key === $("store").value).products.find((x) => x.id === $("sku").value);
+    $("to").value = p.price.toFixed(2);
+  }
+  $("store").addEventListener("change", products);
+  $("sku").addEventListener("change", syncPrice);
+  $("price").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const body = { store: $("store").value, sku: $("sku").value, price: Number($("to").value) };
+    const r = await fetch("price", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    $("said").textContent = r.ok ? "Price set — watch the store's back office." : "Could not set that price.";
+    if (r.ok) {
+      const p = stores.find((x) => x.key === body.store).products.find((x) => x.id === body.sku);
+      p.price = body.price;
+      const keep = $("sku").value; products(); $("sku").value = keep; syncPrice();
+    }
+  });
+  products();
 </script>
 </body>
 </html>

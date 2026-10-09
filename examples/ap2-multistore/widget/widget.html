@@ -257,6 +257,68 @@
     return card;
   }
 
+  // Scenario 2(b): a standing order — the agent buys once the price drops, with the person gone. The card
+  // follows it through the agent's card-only tool, keeping what it knows outside the DOM like the permission card.
+  const orders = new Map(); // orderId → the latest order the agent reported
+  const following = new Set();
+  const stateKey = (o) => `${o.status}:${o.lastPrice ?? ""}`;
+
+  function paintOrder(id) {
+    const o = orders.get(id);
+    if (!o) return;
+    for (const node of document.querySelectorAll("[data-order-now]")) if (node.dataset.orderNow === id) node.textContent = o.lastPrice == null ? "—" : usd(o.lastPrice);
+    for (const pill of document.querySelectorAll("[data-order-status]")) {
+      if (pill.dataset.orderStatus !== id) continue;
+      if (o.status === "bought") { pill.className = "pill ok"; pill.replaceChildren(icon("check"), `Bought at ${usd(o.receipt.order.amount / 100)} · verified by ${o.storeName}`); }
+      else if (o.status === "refused") { pill.className = "pill bad"; pill.replaceChildren(icon("x"), `Not bought · ${o.reason}`); }
+      else if (o.status === "expired") { pill.className = "pill bad"; pill.replaceChildren(icon("x"), "Stopped watching: the order expired"); }
+      else { pill.className = "pill warn"; pill.replaceChildren(el("span", { className: "dot" }), o.status === "buying" ? "Price dropped — buying" : "Watching the price"); }
+    }
+    for (const box of document.querySelectorAll("[data-order-receipt]")) {
+      if (box.dataset.orderReceipt !== id) continue;
+      const url = o.status === "bought" ? o.receipt?.receiptUrl : null;
+      box.replaceChildren(url ? el("button", { type: "button", onclick: () => bridge.open(url) }, icon("link"), "Open receipt") : "");
+    }
+  }
+
+  async function follow(id) {
+    if (following.has(id)) return;
+    following.add(id);
+    try {
+      for (let i = 0; i < 120; i++) {
+        const o = orders.get(id);
+        if (!["watching", "buying"].includes(o.status)) return;
+        let r;
+        try { r = await bridge.call("watch-standing-order", { orderId: id, seen: stateKey(o) }); } catch { r = null; }
+        if (!r || r.error) { if (host === "preview") return; await new Promise((ok) => setTimeout(ok, 3000)); continue; }
+        orders.set(id, r);
+        paintOrder(id);
+      }
+    } finally {
+      following.delete(id);
+    }
+  }
+
+  function standingOrder(d) {
+    if (!orders.has(d.orderId)) orders.set(d.orderId, d); // after this, what the agent reports wins over the original result
+    const now = el("dd", {}); now.dataset.orderNow = d.orderId;
+    const status = el("span", { role: "status" }); status.dataset.orderStatus = d.orderId;
+    const receiptBox = el("div", {}); receiptBox.dataset.orderReceipt = d.orderId;
+    const card = el("section", { className: "card" },
+      el("p", { className: "eyebrow" }, icon("store"), "Standing order"),
+      el("h1", {}, `Buys at ${d.storeName} once the price drops`),
+      el("dl", {},
+        el("dt", {}, "Product"), el("dd", {}, short(d.product)),
+        el("dt", {}, "Buys at"), el("dd", {}, `${usd(d.maxPrice)} or less`),
+        el("dt", {}, "Price now"), now),
+      el("div", {}, status),
+      receiptBox,
+      el("p", { className: "sub" }, "You can leave: the agent buys under the permission you signed, and the store checks it like any other purchase."),
+      demo());
+    queueMicrotask(() => { paintOrder(d.orderId); void follow(d.orderId); });
+    return card;
+  }
+
   function receipt(d) {
     if (!d.ok) {
       return el("section", { className: "card" },
@@ -290,7 +352,7 @@
     if (key === shown) return;
     shown = key;
     try {
-      const view = d.view === "offers" ? offers(d) : d.view === "permission" ? permission(d, meta["ap2/qr"]) : d.view === "receipt" ? receipt(d) : null;
+      const view = d.view === "offers" ? offers(d) : d.view === "permission" ? permission(d, meta["ap2/qr"]) : d.view === "receipt" ? receipt(d) : d.view === "standing-order" ? standingOrder(d) : null;
       if (view) root.replaceChildren(view);
     } catch (err) {
       trouble("render", err);

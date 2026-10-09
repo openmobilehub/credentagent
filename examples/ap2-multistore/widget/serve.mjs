@@ -56,7 +56,7 @@ export async function qrDataUrl(url) {
   return `data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}`;
 }
 
-/** Sample results for the local preview (`/widget?view=offers|only-one|over-limit|permission|receipt|refused`), shaped exactly like the tools' results. */
+/** Sample results for the local preview (`/widget?view=offers|only-one|over-limit|standing-order|standing-order-bought|permission|receipt|refused`), shaped exactly like the tools' results. */
 export async function previewResult(view) {
   const products = (h, e, t) => [
     { id: "house-blend", name: "House Blend, 1 lb bag", price: h[0], rating: h[1] },
@@ -97,6 +97,10 @@ export async function previewResult(view) {
       { store: "BeanBarn", url: "https://beanbarn.example", products: [{ id: "espresso-beans", name: "Espresso Beans, 1 lb bag", price: 22, rating: 4.2 }] },
       { store: "RoastWorks", url: "https://roastworks.example", products: [{ id: "espresso-beans", name: "Espresso Beans, 1 lb bag", price: 18, rating: 4.7 }] },
     ] },
+    // Scenario 2(b): a standing order, while watching and once it bought.
+    "standing-order": { view: "standing-order", orderId: "so_preview", storeName: "RoastWorks", product: "Espresso Beans, 1 lb bag", maxPrice: 15, lastPrice: 18, status: "watching" },
+    "standing-order-bought": { view: "standing-order", orderId: "so_preview_b", storeName: "RoastWorks", product: "Espresso Beans, 1 lb bag", maxPrice: 15, lastPrice: 15, status: "bought",
+      receipt: { ok: true, receiptUrl: "https://roastworks.example/agent/orders/ord_preview", order: { id: "ord_preview", store: "RoastWorks", amount: 1500 } } },
     // Scenario 1: the person named a product only one store sells.
     "only-one": { view: "offers", summary: { product: "cold brew", sellers: ["RoastWorks"] }, stores: [
       { store: "Acme Coffee Co", url: "https://acme.example", products: [] },

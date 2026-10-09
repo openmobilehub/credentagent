@@ -33,7 +33,9 @@ Ask Claude (or ChatGPT) for each one in a new chat.
 
 3. **Above your limit.** *"Buy a bag of Espresso Beans, but don't pay more than $15."* Every store sells it for more (the cheapest is $18 at RoastWorks). The agent doesn't ask you to sign anything and doesn't buy. It tells you the cheapest offer, and that a higher limit means signing a new permission on your phone. If it asked anyway, the store would refuse to open a permission nothing fits, and its back office would say why.
 
-Coming next: waiting for the price to drop, offering your maximum to the store, and stores bidding against each other (tracked in #252).
+4. **Buy when the price drops, with you gone.** After scenario 3, say *"Buy it automatically when it drops to $15."* The agent asks for a permission that waits for the price; you sign it on your phone and can leave. It leaves a standing order and watches the price. On the wall (`localhost:4104`), play the store owner: set RoastWorks' Espresso Beans to $15. The agent buys on its own, and RoastWorks verifies it like any other purchase. The standing-order card shows the price live, then "Bought at $15.00".
+
+Coming next: offering your maximum to the store, and stores bidding against each other (tracked in #252).
 
 ## What the stores see
 
