@@ -161,6 +161,16 @@ async function leaveStandingOrder(store, grantId, sku, maxPrice) {
   return publicOrder(order);
 }
 
+/** Every store's catalog, read live. A store that does not answer keeps its place, with the error. */
+async function readStores() {
+  const stores = await Promise.all(STORES.map(async (url) => {
+    try { return { url, ...(await call(`${url}/agent/catalog`)).body }; } catch (err) { return { url, error: err.message }; }
+  }));
+  for (const s of stores) if (s.store) names.set(s.url, s.store);
+  return stores;
+}
+const matching = (wanted) => (p) => p.id === wanted || p.name.toLowerCase().includes(wanted);
+
 function buildServer() {
   const server = new McpServer({ name: "credentagent-ap2-agent", version: "0.0.0" });
   widget.register(server);
@@ -177,16 +187,12 @@ function buildServer() {
     annotations: { readOnlyHint: true },
     _meta: widget.meta("Reading the stores…", "Compared the stores"),
   }, async ({ product, maxPrice }) => {
-    let stores = await Promise.all(STORES.map(async (url) => {
-      try { return { url, ...(await call(`${url}/agent/catalog`)).body }; } catch (err) { return { url, error: err.message }; }
-    }));
-    for (const s of stores) if (s.store) names.set(s.url, s.store);
+    let stores = await readStores();
     const down = stores.filter((s) => !s.store).map((s) => s.url);
     // A named product narrows every catalog to it. A store that does not sell it keeps its column, empty —
     // "only one store sells this" is something the person should see, not infer.
     const wanted = product?.trim().toLowerCase();
-    const matches = (p) => p.id === wanted || p.name.toLowerCase().includes(wanted);
-    if (wanted) stores = stores.map((s) => (s.products ? { ...s, products: s.products.filter(matches) } : s));
+    if (wanted) stores = stores.map((s) => (s.products ? { ...s, products: s.products.filter(matching(wanted)) } : s));
     const sellers = stores.filter((s) => s.products?.length).map((s) => s.store);
     // Scenario 2(a): with a limit, say which offers fit it — and, when none does, what the cheapest costs.
     const offers = stores.flatMap((s) => (s.products ?? []).map((p) => ({ store: s.store, price: p.price })));
@@ -198,11 +204,48 @@ function buildServer() {
       wanted && sellers.length === 0 ? `No store sells "${product}". Say so; don't request a permission.`
       : within && within.length === 0
         ? `No offer is within the person's maximum of ${usd(maxPrice)}: the cheapest is ${usd(cheapest.price)} at ${cheapest.store}. Don't request a permission ` +
-          "and don't buy now. Tell them that, and offer two options: a higher limit (a new permission they sign on their phone), or " +
-          "buying it automatically once the price drops to their limit (request-permission with waitForPrice: true, then buy-when-price-drops)."
+          "and don't buy now. Tell them that, and offer three options: a higher limit (a new permission they sign on their phone), " +
+          "buying it automatically once the price drops to their limit (request-permission with waitForPrice: true, then buy-when-price-drops), " +
+          "or offering their limit to the stores (make-offer) — a store may accept less than its list price."
       : wanted && sellers.length === 1 ? `Only ${sellers[0]} sells it — no comparison to make. Say so in a sentence, then request the permission there.`
       : "The person sees these offers side by side in a card. Don't re-list them; say which store you pick and why, in a sentence or two.";
     return result({ view: "offers", stores, ...(summary ? { summary } : {}) }, { note });
+  });
+
+  // Scenario 2(c): offer the person's limit. Each store answers for itself, against a floor it never shows. An
+  // accepted offer is the STORE's record — it prices the cart from it — so the agent cannot claim one it lacks.
+  registerAppTool(server, "make-offer", {
+    title: "Offer a price",
+    description:
+      "Offer the person's limit to every store that sells the product above it. Each store accepts or declines on its own; a declined " +
+      "offer says the lowest that store would take. An accepted offer is held by that store for 10 minutes and buys once: call " +
+      "request-permission at that store with its offerId and perSpend set to the accepted price.",
+    inputSchema: {
+      product: z.string().describe("a product id or words from its name, as for compare-offers"),
+      price: z.number().positive().describe("the person's limit for one, in USD"),
+    },
+    _meta: widget.meta("Making the offer…", "The stores answered"),
+  }, async ({ product, price }) => {
+    const wanted = product.trim().toLowerCase();
+    const stores = await readStores();
+    // A store already at or under the limit needs no offer — compare-offers would have said it fits.
+    const asked = stores.flatMap((s) => (s.products ?? []).filter(matching(wanted)).filter((p) => p.price > price).map((p) => ({ s, p })));
+    const answers = await Promise.all(asked.map(async ({ s, p }) => {
+      const r = await call(`${s.url}/agent/offer`, { sku: p.id, price });
+      return { store: s.store, storeUrl: s.url, sku: p.id, product: p.name, rating: p.rating, list: p.price, accepted: r.body.accepted === true, ...(r.body.offerId ? { offerId: r.body.offerId } : {}), ...(r.body.counter ? { counter: r.body.counter } : {}), ...(r.body.error ? { error: r.body.error } : {}) };
+    }));
+    const yes = answers.filter((a) => a.accepted);
+    const lowest = answers.filter((a) => a.counter).reduce((a, b) => (b.counter < (a?.counter ?? Infinity) ? b : a), undefined);
+    log("make-offer", `${usd(price)} for "${product}" → ${answers.map((a) => `${a.store} ${a.accepted ? "accepted" : a.counter ? `declined (takes ${usd(a.counter)})` : "declined"}`).join(", ") || "no store sells it above that"}`);
+    const note =
+      !answers.length ? `No store sells "${product}" above ${usd(price)}, so there is nothing to offer. Run compare-offers instead.`
+      : yes.length
+        ? `${yes.map((a) => a.store).join(" and ")} accepted ${usd(price)}. The person sees each store's answer in a card; don't re-list them. ` +
+          `Say which store you pick (all accepted the same price, so prefer the better rating) and what they save off the list price, then ` +
+          `call request-permission there with its offerId and perSpend ${price} — the store charges the offer price, once, within 10 minutes.`
+        : `No store accepted ${usd(price)}.${lowest ? ` The lowest any would take is ${usd(lowest.counter)} at ${lowest.store}.` : ""} Don't request a ` +
+          "permission. Tell the person, and offer the other two options: a higher limit, or buying once the price drops to theirs.";
+    return result({ view: "offer", product, price, answers }, { note });
   });
 
   registerAppTool(server, "request-permission", {
@@ -219,10 +262,11 @@ function buildServer() {
       description: z.string().describe("one plain sentence the person will see before signing"),
       why: z.string().describe("one sentence: why this store won the comparison (shown to the person)"),
       waitForPrice: z.boolean().optional().describe("true when the person asked to buy once the price drops to their limit (then call buy-when-price-drops)"),
+      offerId: z.string().optional().describe("the offerId a store accepted (make-offer): that store then charges the offer price, once"),
     },
     _meta: widget.meta("Preparing the permission…", "Waiting for your signature"),
-  }, async ({ store, skus, budget, perSpend, description, why, waitForPrice }) => {
-    const r = await call(`${store}/agent/grants`, { agentKey: agentKey.publicJwk, skus, budget, perSpend, description, waitForPrice });
+  }, async ({ store, skus, budget, perSpend, description, why, waitForPrice, offerId }) => {
+    const r = await call(`${store}/agent/grants`, { agentKey: agentKey.publicJwk, skus, budget, perSpend, description, waitForPrice, offerId });
     if (r.status !== 200) {
       log("request-permission", `✗ ${nameOf(store)}: ${r.body.error ?? r.status}`);
       return result(r.body, { isError: true });

@@ -299,6 +299,24 @@
     }
   }
 
+  // Scenario 2(c): what each store answered to the person's limit. The floor behind a "no" stays the store's.
+  function offer({ product, price, answers }) {
+    const yes = answers.filter((a) => a.accepted);
+    const rows = answers.map((a) => el("tr", {},
+      el("th", { scope: "row" }, a.store),
+      el("td", {}, el("span", { className: "price" }, usd(a.list))),
+      el("td", {}, a.accepted
+        ? el("span", { className: "tag low" }, `Accepted ${usd(price)}`)
+        : el("div", {}, el("span", { className: "tag over" }, "Declined"), a.counter ? el("div", { className: "rate" }, `Takes ${usd(a.counter)} or more`) : null))));
+    return el("section", { className: "card" },
+      el("p", { className: "eyebrow" }, icon("store"), `Offered ${usd(price)} for ${short(answers[0]?.product ?? product)}`),
+      el("h1", {}, !answers.length ? "No store to make an offer to" : yes.length ? `${yes.length} of ${answers.length} ${answers.length === 1 ? "store" : "stores"} accepted your ${usd(price)}` : `No store accepted ${usd(price)}`),
+      answers.length ? el("table", {}, el("thead", {}, el("tr", {}, el("th", {}, el("span", { className: "sub" }, "Store")), el("th", {}, "List price"), el("th", {}, "Answer"))), el("tbody", {}, ...rows)) : null,
+      el("p", { className: "sub" }, yes.length
+        ? "Each store holds an accepted offer for 10 minutes, for one purchase. The agent asks you to sign a permission at that price."
+        : "Nothing accepted, so nothing to sign."));
+  }
+
   function standingOrder(d) {
     if (!orders.has(d.orderId)) orders.set(d.orderId, d); // after this, what the agent reports wins over the original result
     const now = el("dd", {}); now.dataset.orderNow = d.orderId;
@@ -352,7 +370,7 @@
     if (key === shown) return;
     shown = key;
     try {
-      const view = d.view === "offers" ? offers(d) : d.view === "permission" ? permission(d, meta["ap2/qr"]) : d.view === "receipt" ? receipt(d) : d.view === "standing-order" ? standingOrder(d) : null;
+      const view = d.view === "offers" ? offers(d) : d.view === "permission" ? permission(d, meta["ap2/qr"]) : d.view === "receipt" ? receipt(d) : d.view === "standing-order" ? standingOrder(d) : d.view === "offer" ? offer(d) : null;
       if (view) root.replaceChildren(view);
     } catch (err) {
       trouble("render", err);

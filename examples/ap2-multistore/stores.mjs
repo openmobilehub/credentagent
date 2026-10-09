@@ -34,16 +34,17 @@ const CATALOG_LOOKUP_MS = Number(process.env.CATALOG_LOOKUP_MS ?? 0);
 const STORES = [
   {
     key: "acme", name: "Acme Coffee Co", port: BASE + 1, url: process.env.ACME_URL, accent: "#c2410c",
-    products: { "house-blend": [24, 4.1], "espresso-beans": [19, 4.0], "green-tea": [9, 3.8] },
+    // Scenario 2(c): a third number is the store's private floor — the lowest it will accept if the agent offers less.
+    products: { "house-blend": [24, 4.1, 22], "espresso-beans": [19, 4.0], "green-tea": [9, 3.8] },
   },
   {
     key: "beanbarn", name: "BeanBarn", port: BASE + 2, url: process.env.BEANBARN_URL, accent: "#6d28d9",
-    products: { "house-blend": [21, 4.4], "espresso-beans": [22, 4.2], "green-tea": [8, 4.5] },
+    products: { "house-blend": [21, 4.4, 19], "espresso-beans": [22, 4.2], "green-tea": [8, 4.5] },
   },
   {
     key: "roastworks", name: "RoastWorks", port: BASE + 3, url: process.env.ROASTWORKS_URL, accent: "#1d4ed8",
     // Scenario 1: Cold Brew is sold here only — one store, nothing to compare.
-    products: { "house-blend": [26, 4.6], "espresso-beans": [18, 4.7], "green-tea": [11, 4.0], "cold-brew": [14, 4.8] },
+    products: { "house-blend": [26, 4.6], "espresso-beans": [18, 4.7], "green-tea": [11, 4.0], "cold-brew": [14, 4.8] }, // no floor: list price only
   },
 ];
 const NAMES = { "house-blend": "House Blend, 1 lb bag", "espresso-beans": "Espresso Beans, 1 lb bag", "green-tea": "Green Tea, 50 bags", "cold-brew": "Cold Brew Concentrate, 32 oz" };
@@ -70,7 +71,7 @@ const LIMITS = {
   "payment.amount_range": "Over the per-purchase limit the person signed",
 };
 const CODES = {
-  price: "The cart's price doesn't match our catalog",
+  price: "The cart's price doesn't match our catalog or an offer we still honor",
   "checkout-unbound": "The cart isn't one we quoted and signed",
   unbound: "The payment is for a different cart",
   payee: "The payment pays someone other than us",
@@ -94,9 +95,9 @@ async function startStore({ key, name, port, url, accent, products }) {
   const host = new URL(origin).host;
   const me = { id: host, name: key, origin }; // how a grant names this store: merchantFor(origin, key)
 
-  const catalog = Object.entries(products).map(([id, [price, rating]]) => ({
+  const catalog = Object.entries(products).map(([id, [price, rating, floor]]) => ({
     id, name: NAMES[id], price, currency: "USD", image: "", category: CATEGORY[id],
-    description: `${NAMES[id]} — rated ${rating}★ at ${name}.`, rating,
+    description: `${NAMES[id]} — rated ${rating}★ at ${name}.`, rating, floor: floor ?? price, // floor: never sent to the agent
   }));
   const bySku = new Map(catalog.map((p) => [p.id, p]));
 
@@ -165,6 +166,40 @@ async function startStore({ key, name, port, url, accent, products }) {
   const orders = [];
   const json = express.json({ limit: "1mb" });
 
+  // Scenario 2(c): offers. The agent may offer a price; the store accepts at or above its private floor. An
+  // accepted offer lives HERE — the store's own record sets the price (invariant 2), never the agent. It
+  // expires, is tied to the permission it is signed into, and buys once.
+  const OFFER_TTL_MS = 10 * 60_000;
+  const offers = new Map(); // offerId → { sku, price, expiresAt, used }
+  const grantOffer = new Map(); // grantId → the offer that permission was signed for
+  const quotedFromOffer = new Map(); // cartId → { total, offerId }: a cart this store priced from an accepted offer
+  const liveOffer = (offerId, sku) => {
+    const o = offers.get(offerId);
+    return o && !o.used && o.sku === sku && Date.now() < o.expiresAt ? o : null;
+  };
+  // The offer price a cart was quoted at, while that offer can still be honored — once one cart buys with it
+  // (or it expires), any other cart quoted from it falls back to the catalog price and no longer matches.
+  const honoredOffer = (cartId) => {
+    const q = quotedFromOffer.get(cartId);
+    const o = q && offers.get(q.offerId);
+    return o && !o.used && Date.now() < o.expiresAt ? q : null;
+  };
+
+  store.app.post("/agent/offer", json, (req, res) => {
+    const { sku, price } = req.body ?? {};
+    const p = bySku.get(sku);
+    if (!p || !(price > 0)) return res.status(400).json({ error: "an offer needs a sku from this store's catalog and a positive price" });
+    if (price >= p.price) return res.json({ accepted: true, price: p.price, list: p.price, note: "that is at or above our price, so no offer is needed" });
+    if (price < p.floor) {
+      feed.emit("offer.declined", { product: p.name, offered: minor(price), counter: minor(p.floor) });
+      return res.json({ accepted: false, list: p.price, counter: p.floor });
+    }
+    const offerId = `of_${randomUUID().slice(0, 8)}`;
+    offers.set(offerId, { sku, price, expiresAt: Date.now() + OFFER_TTL_MS, used: false });
+    feed.emit("offer.accepted", { product: p.name, offered: minor(price), list: minor(p.price) });
+    res.json({ accepted: true, offerId, price, list: p.price, expiresInMinutes: OFFER_TTL_MS / 60_000 });
+  });
+
   store.app.get("/agent/catalog", (_req, res) => {
     feed.emit("catalog.read");
     res.json({ store: name, merchant: me, products: catalog.map(({ id, name, price, rating }) => ({ id, name, price, currency: "USD", rating })) });
@@ -180,14 +215,15 @@ async function startStore({ key, name, port, url, accent, products }) {
 
   // Open a grant naming the AGENT's public key. The gate generates no key for it and refuses a private one.
   store.app.post("/agent/grants", json, async (req, res) => {
-    const { agentKey, skus, budget, perSpend, description, waitForPrice } = req.body ?? {};
+    const { agentKey, skus, budget, perSpend, description, waitForPrice, offerId } = req.body ?? {};
     try {
       const unknown = (skus ?? []).filter((s) => !bySku.has(s));
       if (!skus?.length || unknown.length) return res.status(400).json({ error: `unknown or missing skus: ${unknown.join(", ") || "none given"}` });
       // Scenario 2(a): never ask the person to sign a permission nothing can be bought with. If every product
       // costs more than the per-purchase limit, refuse now — at the phone it would be a signature for nothing.
       // Scenario 2(b) is the one exception: the person asked to buy WHEN the price drops, so it is not for nothing.
-      const cheapest = skus.map((s) => bySku.get(s)).reduce((a, b) => (b.price < a.price ? b : a));
+      // An accepted offer (scenario 2(c)) is the price the permission will actually be spent at.
+      const cheapest = skus.map((s) => ({ ...bySku.get(s), price: liveOffer(offerId, s)?.price ?? bySku.get(s).price })).reduce((a, b) => (b.price < a.price ? b : a));
       if (cheapest.price > perSpend && !waitForPrice) {
         const reason = `${cheapest.name} costs $${cheapest.price.toFixed(2)}, above the $${Number(perSpend).toFixed(2)} per-purchase limit`;
         feed.emit("permission.refused", { products: skus.map((s) => bySku.get(s).name), reason });
@@ -195,6 +231,7 @@ async function startStore({ key, name, port, url, accent, products }) {
       }
       const g = await credentagent.grants.create({ merchant: key, budget, perSpend, allow: { skus }, agentKey, description });
       grantIds.add(g.id);
+      if (skus.some((s) => liveOffer(offerId, s))) grantOffer.set(g.id, offerId);
       feed.emit("permission.requested", {
         grantId: g.id, products: skus.map((s) => bySku.get(s).name), budget: minor(budget), perSpend: minor(perSpend),
         agentKeyX: String(agentKey?.x ?? "").slice(0, 10), ...(cheapest.price > perSpend ? { waitsForPrice: true } : {}),
@@ -218,13 +255,16 @@ async function startStore({ key, name, port, url, accent, products }) {
   store.app.post("/agent/quote", json, (req, res) => {
     const { grantId, items } = req.body ?? {};
     if (!items?.length || items.some((i) => !bySku.has(i.sku))) return res.status(400).json({ error: "every item needs a sku from this store's catalog" });
+    const offerId = grantOffer.get(grantId);
     const line_items = items.map((i, n) => {
       const p = bySku.get(i.sku);
       const quantity = i.quantity ?? 1;
-      return { id: `li_${n + 1}`, item: { id: p.id, title: p.name, price: minor(p.price) }, quantity, totals: [{ type: "total", amount: minor(p.price) * quantity }] };
+      const unit = liveOffer(offerId, i.sku)?.price ?? p.price; // the store's own record of an accepted offer, or its list price
+      return { id: `li_${n + 1}`, item: { id: p.id, title: p.name, price: minor(unit) }, quantity, totals: [{ type: "total", amount: minor(unit) * quantity }] };
     });
     const total = line_items.reduce((s, l) => s + l.totals[0].amount, 0);
     const cart = { id: `ord_${randomUUID().slice(0, 8)}`, merchant: me, status: "ready_for_complete", currency: "USD", links: [], line_items, totals: [{ type: "total", amount: total }] };
+    if (items.some((i) => liveOffer(offerId, i.sku))) quotedFromOffer.set(cart.id, { total, offerId });
     const nonce = randomUUID();
     nonces.set(nonce, grantId);
     feed.emit("cart.quoted", { cartId: cart.id, items: line_items.map((l) => `${l.quantity} × ${l.item.title}`), total });
@@ -242,8 +282,9 @@ async function startStore({ key, name, port, url, accent, products }) {
     // Key the running total by the permission itself (the chain's root, which the verdict checks), never
     // by an id the agent sends — a fresh id must not reset what has been spent under the same permission.
     const root = typeof proof?.payment === "string" ? createHash("sha256").update(proof.payment.split("~")[0]).digest("hex") : "";
-    // Read the total, check against it, write the new one — all inside the permission's queue (#287).
-    const { verdict, before, amount } = await oneAtATime(root, async () => {
+    // Read the total, check against it, write the new one — all inside the permission's queue (#287). An accepted
+    // offer is marked used inside the queue too, so two purchases from one offer can't both take it.
+    const { verdict, before, amount, fromOffer } = await oneAtATime(root, async () => {
       const before = spent.get(root) ?? { amount: 0, uses: 0 };
       const verdict = await verifyDelegatedPurchase(proof, {
         // Said out loud, as the library requires: the demo's payment credential has no issuer trust anchor
@@ -253,15 +294,18 @@ async function startStore({ key, name, port, url, accent, products }) {
         nonce,
         checkoutKey: credentagent.ap2.checkoutPublicJwk,
         spent: before,
+        // The store re-derives the price from its OWN records: the cart it priced from an accepted offer, else the catalog.
         price: async (c) => {
           if (CATALOG_LOOKUP_MS) await new Promise((ok) => setTimeout(ok, CATALOG_LOOKUP_MS)); // test seam, see the top
-          return c.line_items.reduce((sum, l) => sum + minor(bySku.get(l.item.id)?.price ?? NaN) * l.quantity, 0);
+          return honoredOffer(c.id)?.total ?? c.line_items.reduce((sum, l) => sum + minor(bySku.get(l.item.id)?.price ?? NaN) * l.quantity, 0);
         },
       });
       if (!verdict.ok) return { verdict };
       const amount = verdict.payment.payment_amount.amount;
       spent.set(root, { amount: before.amount + amount, uses: before.uses + 1 });
-      return { verdict, before, amount };
+      const fromOffer = honoredOffer(verdict.checkout.id);
+      if (fromOffer) { offers.get(fromOffer.offerId).used = true; quotedFromOffer.delete(verdict.checkout.id); } // an offer buys once
+      return { verdict, before, amount, fromOffer };
     });
     if (!verdict.ok) {
       console.log(`  [${key}] purchase REFUSED: ${verdict.code} — ${verdict.detail}`);
@@ -278,7 +322,7 @@ async function startStore({ key, name, port, url, accent, products }) {
       "The cart is the one we quoted and signed",
       "The permission allows this store",
       `Within the signed limits: ${usd(before.amount + amount)}${budget ? ` of ${usd(budget.max)}` : ""}${cap ? `, max ${usd(cap.max)} a purchase` : ""}`,
-      `Our catalog prices it at ${usd(amount)}`,
+      fromOffer ? `Our record of the offer we accepted prices it at ${usd(amount)}` : `Our catalog prices it at ${usd(amount)}`,
       "Fresh purchase code, addressed to us (no replay)",
     ];
     const order = {

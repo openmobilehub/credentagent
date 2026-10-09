@@ -31,11 +31,13 @@ Ask Claude (or ChatGPT) for each one in a new chat.
 1. **Simple: one store has it.** *"Buy me a Cold Brew Concentrate, up to $20."* Only RoastWorks sells it, so the offers card says there is nothing to compare. The agent asks for a permission at RoastWorks; you sign on your phone; it buys.
 2. **More stores, one choice.** The conversation at the top of this page: three stores sell House Blend, and the agent picks one and says why.
 
-3. **Above your limit.** *"Buy a bag of Espresso Beans, but don't pay more than $15."* Every store sells it for more (the cheapest is $18 at RoastWorks). The agent doesn't ask you to sign anything and doesn't buy. It tells you the cheapest offer, and that a higher limit means signing a new permission on your phone. If it asked anyway, the store would refuse to open a permission nothing fits, and its back office would say why.
+3. **Above your limit.** *"Buy a bag of Espresso Beans, but don't pay more than $15."* Every store sells it for more (the cheapest is $18 at RoastWorks). The agent doesn't ask you to sign anything and doesn't buy. It tells you the cheapest offer and your options: a higher limit (a new permission, signed on your phone), waiting for the price to drop (scenario 4), or offering your limit to the stores (scenario 5). If it asked anyway, the store would refuse to open a permission nothing fits, and its back office would say why.
 
 4. **Buy when the price drops, with you gone.** After scenario 3, say *"Buy it automatically when it drops to $15."* The agent asks for a permission that waits for the price; you sign it on your phone and can leave. It leaves a standing order and watches the price. On the wall (`localhost:4104`), play the store owner: set RoastWorks' Espresso Beans to $15. The agent buys on its own, and RoastWorks verifies it like any other purchase. The standing-order card shows the price live, then "Bought at $15.00".
 
-Coming next: offering your maximum to the store, and stores bidding against each other (tracked in #252).
+5. **Offer your limit to the stores.** *"Buy a bag of House Blend, but I'll pay $20 at most."* Every store sells it for more (the cheapest is $21 at BeanBarn), so the agent offers you the options above. Say *"Offer them my $20."* Each store answers on its own, against a lowest price it never shows the agent: Acme declines and says it takes $22, RoastWorks declines, BeanBarn accepts. The agent asks you to sign a permission at BeanBarn for $20; it buys at $20. BeanBarn keeps the accepted offer itself and prices the cart from it, so the agent can't claim a deal it wasn't given. The offer lasts 10 minutes and buys once. Both back offices show the offer: accepted at BeanBarn, declined at Acme with the lowest it takes.
+
+Coming next: stores bidding against each other (tracked in #252).
 
 ## What the stores see
 
