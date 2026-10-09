@@ -3,6 +3,8 @@
 
 import { Component, useState, type ReactNode } from "react";
 import { GrantCard, GRANT_VIEW_KIND, type GrantActions, type GrantViewData } from "./grants";
+import { PermissionCard, WAITING } from "./views/PermissionCard";
+import { PERMISSION_KIND, QR_META_KEY, type PermissionCardData } from "../contract";
 import type { Bridge } from "./bridge";
 import { readCard, type CardStore, type ShownCard } from "./card-store";
 
@@ -16,6 +18,10 @@ export function CardView({ card, bridge, show }: CardViewProps) {
   // The last failed button press, if any. Held as `{ error }` so a thrown null or undefined still counts.
   const [trouble, setTrouble] = useState<{ error: unknown } | null>(null);
   if (!card) return null;
+  if (card.data.kind === PERMISSION_KIND) {
+    // The live status lands with the page's signature watch (next pull request); until then it shows waiting.
+    return <PermissionCard data={card.data as unknown as PermissionCardData} qr={card.meta[QR_META_KEY]} state={WAITING} open={bridge.open} />;
+  }
   if (card.data.kind === GRANT_VIEW_KIND) {
     const actions = grantActions(
       bridge,

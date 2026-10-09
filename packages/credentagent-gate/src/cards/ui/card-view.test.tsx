@@ -4,11 +4,13 @@ import { describe, it, expect, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { CardView, CardBoundary, grantActions } from "./CardView";
 import { readCard } from "./card-store";
+import { GRANT_VIEW_KIND } from "./grants";
 import { previewResult, previewViews } from "./preview";
+import { PERMISSION_KIND } from "../contract";
 import type { Bridge } from "./bridge";
 
 const bridge: Bridge = { host: "preview", call: async () => null, open: async () => {} };
-const render = (result: { structuredContent: unknown } | null): string =>
+const render = (result: { structuredContent: unknown; _meta?: Record<string, unknown> } | null): string =>
   renderToStaticMarkup(<CardView card={readCard(result)} bridge={bridge} show={() => false} />);
 
 describe("CardView", () => {
@@ -22,13 +24,21 @@ describe("CardView", () => {
     expect(render({ structuredContent: { kind: "someone.else" } })).toBe("");
   });
 
-  it("every preview sample is a card that carries the trust line", () => {
-    expect(previewViews().length).toBe(8);
+  it("every preview sample renders its card, with the honesty its kind requires", () => {
     for (const view of previewViews()) {
-      const html = render(previewResult(view));
-      expect(html, view).toContain("limits enforced server-side");
-      expect(html, view).toContain("delegated-demo");
+      const result = previewResult(view)!;
+      const html = render(result);
+      const kind = readCard(result)!.data.kind;
+      if (kind === GRANT_VIEW_KIND) expect(html, view).toContain("limits enforced server-side");
+      else if (kind === PERMISSION_KIND) expect(html, view).toContain("No real money moves");
+      else throw new Error(`no honesty expectation for ${kind} (${view})`);
     }
+  });
+
+  it("renders a permission result as the permission card, with its QR code", () => {
+    const html = render(previewResult("permission"));
+    expect(html).toContain("Sign on your phone to let the agent buy at BeanBarn");
+    expect(html).toContain('src="data:image/svg+xml');
   });
 
   it("an unknown or missing preview name is no card", () => {

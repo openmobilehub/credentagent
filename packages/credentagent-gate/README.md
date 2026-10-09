@@ -456,9 +456,10 @@ app.get("/cards", (_req, res) => res.type("html").send(cards.html)); // your Exp
 The grant card's **Revoke** button calls your server's `revoke-grant` tool with `{ grantId }` — register it with `_meta: cards.toolMeta()` (ChatGPT needs that to let the card call it) and return `cards.grant(view)`; without that tool, Revoke shows "This card couldn't complete that action".
 
 A card only shows; it never decides — every limit must be enforced on your server. Today the page renders
-grants; `/cards` with no `view` lists them all (`?view=grant-pending`, `grant-product`, `grant-category`,
-`grant-open`, `grant-low`, `grant-spent`, `grant-revoked`, `grant-declined`). The permission card's view comes
-next, then the offers and receipt cards ([#256](https://github.com/openmobilehub/credentagent/issues/256)).
+grants and the permission card; `/cards` with no `view` lists every sample (`?view=permission`, `grant-pending`,
+`grant-product`, `grant-category`, `grant-open`, `grant-low`, `grant-spent`, `grant-revoked`, `grant-declined`).
+The permission card shows the QR code; its live status, then the offers and receipt cards, come next
+([#256](https://github.com/openmobilehub/credentagent/issues/256)).
 
 ### A permission to sign on the phone
 
@@ -496,8 +497,8 @@ tell the chat "signed": once per grant, and never while the model is still waiti
 make it buy twice). It remembers permissions in memory, per process, for an hour after their last use,
 by grant id alone — so grant ids must be unique across the stores your server talks to.
 
-The server half above is in place; the card that shows the QR code and its live status arrives on the card
-page in the next step.
+The card shows the QR code, the limits and the reason (`/cards?view=permission`); following the signature live
+arrives in the next step.
 
 ## Bring your own host — mount on YOUR MCP server
 

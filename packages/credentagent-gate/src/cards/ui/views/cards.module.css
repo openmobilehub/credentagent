@@ -1,0 +1,32 @@
+/* The kit's own cards (spec 015), ported from the AP2 demo's designs. Colors come from the page tokens
+   (theme.css), which follow the host's MCP Apps style variables with light and dark fallbacks. */
+.card { border: 1px solid var(--line); border-radius: var(--r); padding: 16px; display: grid; gap: 14px; color: var(--fg); font: 15px/1.5 var(--sans); margin: 2px; }
+.card p, .card h1, .card ul, .card dl, .card dd { margin: 0; }
+.card h1 { font-size: 18px; font-weight: 600; line-height: 1.35; }
+.eyebrow { font-size: 12px; font-weight: 600; letter-spacing: .02em; color: var(--fg-2); display: flex; align-items: center; gap: 6px; }
+.sub { color: var(--fg-2); font-size: 14px; }
+.mono { font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
+.icon { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; font-size: 13px; font-weight: 500; }
+.pill.ok { background: var(--ok-bg); color: var(--ok); }
+.pill.warn { background: var(--warn-bg); color: var(--warn); }
+.pill.bad { background: var(--bad-bg); color: var(--bad); }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+@media (prefers-reduced-motion: no-preference) { .pill.warn .dot { animation: pulse 1.4s ease-in-out infinite; } }
+@keyframes pulse { 50% { opacity: .35; } }
+.honesty { font-size: 12px; color: var(--fg-2); border-top: 1px solid var(--line); padding-top: 10px; }
+.button { font: inherit; font-size: 14px; font-weight: 500; color: var(--fg); background: transparent; border: 1px solid var(--line); border-radius: var(--r); padding: 8px 14px; min-height: 40px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+.button:hover { background: var(--tint); }
+.button:focus-visible { outline: 2px solid var(--info); outline-offset: 2px; }
+
+/* permission */
+.split { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 520px) { .split { grid-template-columns: minmax(0, 1fr) 176px; align-items: start; } }
+.stack { display: grid; gap: 12px; }
+.why { border-left: 3px solid var(--info); padding: 2px 0 2px 10px; color: var(--fg-2); font-size: 14px; }
+.facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px; font-size: 14px; }
+.facts dt { color: var(--fg-2); }
+.facts dd { font-weight: 500; }
+.qr { display: grid; gap: 8px; justify-items: center; text-align: center; font-size: 13px; color: var(--fg-2); }
+.qr img { width: 168px; height: 168px; background: #fff; padding: 8px; border-radius: 8px; border: 1px solid var(--line); image-rendering: pixelated; }
+.signed img { opacity: .25; }

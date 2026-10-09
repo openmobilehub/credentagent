@@ -8,5 +8,38 @@ body {
   font: 15px/1.5 var(--font-sans, system-ui, -apple-system, "Segoe UI", sans-serif);
   color: var(--color-text-primary, light-dark(#1f2328, #e6edf3));
 }
+body[data-preview] { background: var(--color-background-primary, light-dark(#ffffff, #0d1117)); }
 .trouble, .preview { margin: 0; padding: 12px; font-size: 14px; color: var(--color-text-secondary, light-dark(#57606a, #9198a1)); }
 .preview a { color: var(--color-text-info, light-dark(#0969da, #4493f8)); }
+
+/* The kit's card tokens (ported from the AP2 demo). Host-first: Claude passes its MCP Apps variables and
+   fonts; ChatGPT and the preview fall back to these. Light by default, dark from data-theme or the OS. */
+:root {
+  --fg: var(--color-text-primary, #1f2328); --fg-2: var(--color-text-secondary, #57606a);
+  --line: var(--color-border-secondary, #d8dee4); --tint: var(--color-background-secondary, #f6f8fa);
+  --ok: var(--color-text-success, #1a7f37); --ok-bg: var(--color-background-success, #dafbe1);
+  --bad: var(--color-text-danger, #cf222e); --bad-bg: var(--color-background-danger, #ffebe9);
+  --warn: var(--color-text-warning, #9a6700); --warn-bg: var(--color-background-warning, #fff8c5);
+  --info: var(--color-text-info, #0969da);
+  --sans: var(--font-sans, system-ui, -apple-system, "Segoe UI", sans-serif);
+  --mono: var(--font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+  --r: var(--border-radius-md, 10px);
+}
+:root[data-theme="dark"] {
+  --fg: var(--color-text-primary, #e6edf3); --fg-2: var(--color-text-secondary, #9198a1);
+  --line: var(--color-border-secondary, #3d444d); --tint: var(--color-background-secondary, #151b23);
+  --ok: var(--color-text-success, #3fb950); --ok-bg: var(--color-background-success, #12261e);
+  --bad: var(--color-text-danger, #f85149); --bad-bg: var(--color-background-danger, #25171c);
+  --warn: var(--color-text-warning, #d29922); --warn-bg: var(--color-background-warning, #272115);
+  --info: var(--color-text-info, #4493f8);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --fg: var(--color-text-primary, #e6edf3); --fg-2: var(--color-text-secondary, #9198a1);
+    --line: var(--color-border-secondary, #3d444d); --tint: var(--color-background-secondary, #151b23);
+    --ok: var(--color-text-success, #3fb950); --ok-bg: var(--color-background-success, #12261e);
+    --bad: var(--color-text-danger, #f85149); --bad-bg: var(--color-background-danger, #25171c);
+    --warn: var(--color-text-warning, #d29922); --warn-bg: var(--color-background-warning, #272115);
+    --info: var(--color-text-info, #4493f8);
+  }
+}
