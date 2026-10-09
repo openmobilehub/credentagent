@@ -13,7 +13,8 @@ import { cardToolMeta, cardUris, registerCardResources, registerPermissionStatus
 import { cardResult, type CardResult } from "./results.js";
 import { createPermissionWatch, type PermissionStatus, type ReadPermission, type UnknownPermission } from "./permissions.js";
 import { qrDataUrl } from "./qr.js";
-import { PERMISSION_KIND, QR_META_KEY, type PermissionCardData, type PermissionInput } from "./contract.js";
+import { PERMISSION_KIND, QR_META_KEY, type OffersInput, type PermissionCardData, type PermissionInput } from "./contract.js";
+import { offersCard } from "./offers.js";
 import type { GrantViewData } from "./grant-view.js";
 
 export interface CardsOptions<R extends PermissionStatus = PermissionStatus> {
@@ -40,6 +41,10 @@ export interface Cards<R extends PermissionStatus = PermissionStatus> {
   /** A tool result that asks the person to sign a permission on their phone: the card shows a QR code
    *  of `approveUrl` and follows the signature live. Requires `readPermission`. */
   permission(input: PermissionInput, options?: { note?: string }): CardResult;
+  /** A tool result that shows the stores' offers side by side — narrowed to `product` and checked against
+   *  `maxPrice` when given, with the summary ("only one store sells it", "none is within your limit") and
+   *  the matching note for the model derived for you. */
+  offers(input: OffersInput, options?: { note?: string }): CardResult;
   /** The model's wait for the signature, in its own turn: holds up to `holdMs` and answers what
    *  `readPermission` answered — `{ status: "unknown" }` for a grant this process never issued. */
   waitForSignature(grantId: string): Promise<R | UnknownPermission>;
@@ -79,14 +84,19 @@ export function createCards<R extends PermissionStatus = PermissionStatus>(confi
       const data: PermissionCardData = { kind: PERMISSION_KIND, ...input };
       return cardResult(data, options?.note ?? PERMISSION_NOTE, { [QR_META_KEY]: qr });
     },
+    offers(input, options) {
+      const card = offersCard(input);
+      return cardResult(card.data, options?.note ?? card.note);
+    },
     waitForSignature: (grantId) => (watch ? watch.waitForSignature(grantId) : Promise.reject(new Error(NEEDS_READER))),
   };
 }
 
 export { GRANT_VIEW_KIND } from "./grant-view.js";
 export type { GrantViewData, GrantViewProduct } from "./grant-view.js";
-export { PERMISSION_KIND, PERMISSION_STATUS_TOOL, QR_META_KEY } from "./contract.js";
+export { OFFERS_KIND, PERMISSION_KIND, PERMISSION_STATUS_TOOL, QR_META_KEY } from "./contract.js";
 export type { PermissionCardData, PermissionInput, PermissionStatusAnswer } from "./contract.js";
+export type { Offer, OffersCardData, OffersInput, OffersSummary, StoreOffers } from "./contract.js";
 export type { PermissionStatus, ReadPermission, UnknownPermission } from "./permissions.js";
 export type { CardsServer, CardToolMeta } from "./meta.js";
 export type { CardResult } from "./results.js";

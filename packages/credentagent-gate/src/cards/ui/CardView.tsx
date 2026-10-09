@@ -4,7 +4,8 @@
 import { Component, useState, type ReactNode } from "react";
 import { GrantCard, GRANT_VIEW_KIND, type GrantActions, type GrantViewData } from "./grants";
 import { LivePermissionCard } from "./views/LivePermissionCard";
-import { PERMISSION_KIND, QR_META_KEY, type PermissionCardData } from "../contract";
+import { OffersCard } from "./views/OffersCard";
+import { OFFERS_KIND, PERMISSION_KIND, QR_META_KEY, type OffersCardData, type PermissionCardData } from "../contract";
 import type { Bridge } from "./bridge";
 import { readCard, type CardStore, type ShownCard } from "./card-store";
 import type { SignatureWatch } from "./signature-watch";
@@ -23,6 +24,7 @@ export function CardView({ card, bridge, watch, show }: CardViewProps) {
   if (card.data.kind === PERMISSION_KIND) {
     return <LivePermissionCard data={card.data as unknown as PermissionCardData} qr={card.meta[QR_META_KEY]} watch={watch} open={bridge.open} />;
   }
+  if (card.data.kind === OFFERS_KIND) return <OffersCard data={card.data as unknown as OffersCardData} />;
   if (card.data.kind === GRANT_VIEW_KIND) {
     const actions = grantActions(
       bridge,

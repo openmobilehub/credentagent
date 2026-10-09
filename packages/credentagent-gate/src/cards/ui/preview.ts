@@ -4,6 +4,7 @@
 
 import { GRANT_VIEW_KIND, type GrantViewData } from "../grant-view";
 import { PERMISSION_KIND, PERMISSION_STATUS_TOOL, QR_META_KEY, type PermissionCardData } from "../contract";
+import { offersCard } from "../offers";
 import { qrDataUrl } from "../qr";
 
 const grant = (over: Partial<GrantViewData>): GrantViewData => ({
@@ -37,10 +38,24 @@ const permission: PermissionCardData = {
   trustLevel: "presence-only-demo",
 };
 
+const coffee = (house: [number, number], espresso: [number, number], tea: [number, number]) => [
+  { id: "house-blend", name: "House Blend, 1 lb bag", price: house[0], rating: house[1] },
+  { id: "espresso-beans", name: "Espresso Beans, 1 lb bag", price: espresso[0], rating: espresso[1] },
+  { id: "green-tea", name: "Green Tea, 50 bags", price: tea[0], rating: tea[1] },
+];
+const threeStores = [
+  { store: "Acme Coffee Co", url: "https://acme.example", products: coffee([24, 4.1], [19, 4.0], [9, 3.8]) },
+  { store: "BeanBarn", url: "https://beanbarn.example", products: coffee([21, 4.4], [22, 4.2], [8, 4.5]) },
+  { store: "RoastWorks", url: "https://roastworks.example", products: [...coffee([26, 4.6], [18, 4.7], [11, 4.0]), { id: "cold-brew", name: "Cold Brew Concentrate, 32 oz", price: 14, rating: 4.8 }] },
+];
+
 /** A sample tool result: the card's data, plus the card-only `_meta` a host delivers beside it. */
 export type PreviewResult = { structuredContent: object; _meta?: Record<string, unknown> };
 
 const SAMPLES: Readonly<Record<string, PreviewResult>> = {
+  offers: { structuredContent: offersCard({ stores: threeStores }).data },
+  "only-one": { structuredContent: offersCard({ stores: threeStores, product: "cold brew" }).data },
+  "over-limit": { structuredContent: offersCard({ stores: threeStores, product: "espresso", maxPrice: 15 }).data },
   permission: { structuredContent: permission, _meta: { [QR_META_KEY]: qrDataUrl(permission.approveUrl) } },
   "permission-signed": { structuredContent: { ...permission, grantId: "grant_preview_signed" }, _meta: { [QR_META_KEY]: qrDataUrl(permission.approveUrl) } },
   "grant-pending": { structuredContent: grant({ status: "pending", lifecycle: "pending", spent: 0, remaining: 200, allow: { skus: [whiskey.id], categories: [] }, product: whiskey }) },

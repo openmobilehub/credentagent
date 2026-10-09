@@ -456,10 +456,10 @@ app.get("/cards", (_req, res) => res.type("html").send(cards.html)); // your Exp
 The grant card's **Revoke** button calls your server's `revoke-grant` tool with `{ grantId }` — register it with `_meta: cards.toolMeta()` (ChatGPT needs that to let the card call it) and return `cards.grant(view)`; without that tool, Revoke shows "This card couldn't complete that action".
 
 A card only shows; it never decides — every limit must be enforced on your server. Today the page renders
-grants and the permission card, which follows the signature live; `/cards` with no `view` lists every sample
-(`?view=permission`, `permission-signed`, `grant-pending`, `grant-product`, `grant-category`, `grant-open`,
-`grant-low`, `grant-spent`, `grant-revoked`, `grant-declined`). The offers and receipt cards come next
-([#256](https://github.com/openmobilehub/credentagent/issues/256)).
+grants, the permission card (which follows the signature live) and the offers card; `/cards` with no `view`
+lists every sample (`?view=offers`, `only-one`, `over-limit`, `permission`, `permission-signed`, `grant-pending`,
+`grant-product`, `grant-category`, `grant-open`, `grant-low`, `grant-spent`, `grant-revoked`, `grant-declined`).
+The receipt card comes next ([#256](https://github.com/openmobilehub/credentagent/issues/256)).
 
 ### A permission to sign on the phone
 
@@ -501,6 +501,21 @@ The card shows the QR code, the limits and the reason, and follows the signature
 signature" turns to "Signed on your phone" (`/cards?view=permission-signed`). When the server says so, the card
 posts "I signed the permission…" to the chat — MCP Apps' `ui/message`; ChatGPT's follow-up message is wired as a
 fallback only, because it did not post in real ChatGPT.
+
+### Offers side by side
+
+```js
+server.registerTool("compare-offers", { inputSchema, _meta: cards.toolMeta() }, async ({ product, maxPrice }) => {
+  const stores = await readEachStore(); // [{ store, url, products: [{ id, name, price, rating? }] } | { url, error }]
+  return cards.offers({ stores, product, maxPrice });
+});
+```
+
+The card shows each store's offers side by side, and `cards.offers()` derives the plain summary on the card and the
+matching note for the model — who sells the product and what fits the person's price limit, which counts even when no
+product was named.
+A store that could not be read (`{ url, error }`) stays in the data and is left out of the table, and the card and
+the note say so instead of claiming that no store, or only one store, sells the product.
 
 ## Bring your own host — mount on YOUR MCP server
 
