@@ -149,11 +149,26 @@ function hasUnprovenCustomGate(
     lines: repriced.lines.map((l) => ({ ...l })),
   };
   const verifiedGates = (verification as { verifiedGates?: Record<string, true> } | undefined)?.verifiedGates ?? {};
-  for (const cred of customGates) {
-    const applies = cred.appliesTo ? cred.appliesTo(gateOrder) : true;
-    if (applies && verifiedGates[cred.id] !== true) return true;
+  return applicableCustomGate(customGates, gateOrder, verifiedGates) !== undefined;
+}
+
+/**
+ * The first custom `gate()` credential that applies to `order` with no proof in `verified` — the one
+ * predicate checkout, a grant draw and the storefront's live pre-check share, so they can't drift
+ * (invariant 1, #139). Reserved built-ins (age, membership, payment) keep their own enforcement.
+ */
+export function applicableCustomGate(
+  credentials: Iterable<Credential> | ReadonlyMap<string, Credential>,
+  order: GateOrder,
+  verified: Readonly<Record<string, true>> = {},
+): Credential | undefined {
+  const list = credentials instanceof Map ? credentials.values() : (credentials as Iterable<Credential>);
+  for (const cred of list) {
+    if (RESERVED_CREDENTIAL_IDS.has(cred.id) || cred.effect.kind !== "gate") continue;
+    const applies = cred.appliesTo ? cred.appliesTo(order) : true;
+    if (applies && verified[cred.id] !== true) return cred;
   }
-  return false;
+  return undefined;
 }
 
 export function completeOrder(input: CompletionInput, ctx: CompletionContext): Promise<CompletionResult> {

@@ -183,6 +183,9 @@ export class CredentAgent {
       ...(opts.readerIdentity ? { readerIdentity: opts.readerIdentity } : {}),
       ...(opts.branding ? { branding: opts.branding } : {}),
       ...(opts.loyaltyDiscountPct != null ? { loyaltyDiscountPct: opts.loyaltyDiscountPct } : {}),
+      // The SAME live registry checkout reads, so a grant spend can't skip a custom gate() (#139),
+      // plus the credentials declared up front, which a draw always enforces as declared.
+      credentialSource: { registry: this.registry, declared: new Map((opts.credentials ?? []).map((c) => [c.id, c])) },
     });
     this.orders = new Orders({
       walletOrigin: this.walletOrigin,

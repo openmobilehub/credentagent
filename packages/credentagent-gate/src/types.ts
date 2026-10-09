@@ -302,9 +302,10 @@ export interface CredentAgentOptions {
    * is enough for a single long-lived process. But in a serverless / multi-worker deploy the
    * instance that COMPLETES an order is often not the one that ran checkout, so its registry is
    * empty and the completion sweep would no-op — an applicable `gate()` checking out UNPROVEN
-   * (fail-open). Declare your custom credentials here and every instance enforces them.
+   * (fail-open). Declare your custom credentials here and every instance enforces them — at
+   * checkout and on every grant spend (#139), which never resolves a policy of its own.
    */
-  credentials?: Credential[];
+  credentials?: readonly Credential[];
   /** Persist created orders (`orders.create`); default in-memory, inject a shared store for multi-instance. */
   orderStore?: OrderStore<CreatedOrder>;
   /** Persist completed orders (its `write()` fires `order.settled`); default in-memory, injectable. */
@@ -352,7 +353,9 @@ export interface CredentAgentOptions {
    * the ONE price source (invariant 2: a caller never passes an amount). Entries may carry
    * `minAge` (age-restricted — the human unlocks these by proving their age when they approve a
    * grant), `category` (feeds a grant's `allow` bounds) and `name` (what the approve page calls
-   * the product). Omit if you don't use `grants`.
+   * the product). Any other field (`requiresRx`, a custom attribute) rides onto the line a grant
+   * spend checks your `gate()` rules against — so put every field a rule's `appliesTo` reads here
+   * (#139). Omit if you don't use `grants`.
    */
   catalog?: Record<string, CatalogEntry>;
   /**

@@ -13,7 +13,7 @@ import { createStorefront } from "./server.js";
 import type { Product } from "./index.js";
 import { SAMPLE_CATALOG } from "./index.js";
 import { projectGrantView } from "./grant-project.js";
-import { CredentAgent } from "@openmobilehub/credentagent-gate";
+import { CredentAgent, defineCredential, dcql, gate } from "@openmobilehub/credentagent-gate";
 
 // The gate's priced catalog (dollars): whiskey is age-restricted → non-delegable. Ids/prices match
 // the storefront's SAMPLE_CATALOG so the two agree (the grant tools re-price against the storefront).
@@ -421,5 +421,47 @@ describe("grant tools — merchant config & live-catalog re-pricing (Codex #118)
     await ca.grants._authorize(g.id);
     const s = await c.callTool({ name: "spend-from-grant", arguments: { grantId: g.id, productId: "widget", idempotencyKey: "w1" } });
     expect(door(s)).toMatchObject({ ok: true, amount: 20, remaining: 80 });
+  });
+});
+
+// #139 — a store's custom gate() credential (a prescription) must hold on spend-from-grant, read
+// from the LIVE product, not the grant engine's catalog: the examples build that catalog as
+// { price, category, minAge } and drop `requiresRx`, and a dynamic source can add the flag later.
+describe("grant tools — custom gate() credentials hold on spend-from-grant (#139)", () => {
+  const wallet = "http://localhost:3005";
+  const prescription = defineCredential({
+    id: "prescription",
+    request: dcql({ docType: "org.hl7.prescription.1", claims: ["rx_valid"] }),
+    verify: (c) => c.rx_valid === true,
+    effect: gate(),
+    appliesTo: (o) => o.lines.some((l) => l.requiresRx === true),
+    ui: { label: "Prescription", action: "Verify prescription" },
+  });
+  // The grant engine's catalog, built the way the examples build it: no `requiresRx`.
+  const lossy = { amoxicillin: { price: 42, category: "Pharmacy" }, ibuprofen: { price: 8, category: "Pharmacy" } };
+  const live = [
+    prod({ id: "amoxicillin", price: 42, category: "Pharmacy", requiresRx: true }),
+    prod({ id: "ibuprofen", price: 8, category: "Pharmacy" }),
+  ];
+
+  async function pharmacy() {
+    const ca = new CredentAgent({ walletOrigin: wallet, catalog: lossy, credentials: [prescription] });
+    const c = await connect(createStorefront({ grants: ca.grants, catalog: live }));
+    const g = sc(await c.callTool({ name: "create-spending-grant", arguments: { budget: 100, perSpend: 50, categories: ["Pharmacy"], signing: "page" } }));
+    await ca.grants._authorize(g.id);
+    return { ca, c, g };
+  }
+
+  it("BYPASS: refuses a product the LIVE catalog marks requiresRx, though the grant catalog lacks the flag", async () => {
+    const { ca, c, g } = await pharmacy();
+    const s = await c.callTool({ name: "spend-from-grant", arguments: { grantId: g.id, productId: "amoxicillin", idempotencyKey: "rx-1" } });
+    expect(door(s)).toMatchObject({ ok: false, code: "step-up", stepUp: "custom-gate" });
+    expect(await (await ca.grants.retrieve(g.id))!.usage()).toMatchObject({ spent: 0 }); // nothing drawn
+  });
+
+  it("still buys a product the prescription rule does not cover", async () => {
+    const { c, g } = await pharmacy();
+    const s = await c.callTool({ name: "spend-from-grant", arguments: { grantId: g.id, productId: "ibuprofen", idempotencyKey: "otc-1" } });
+    expect(door(s)).toMatchObject({ ok: true, amount: 8 });
   });
 });
