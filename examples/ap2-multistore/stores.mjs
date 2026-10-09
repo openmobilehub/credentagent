@@ -25,6 +25,8 @@ import { CredentAgent, verifyDelegatedPurchase } from "@openmobilehub/credentage
 import { createFeed } from "./console/feed.mjs";
 
 const TRUST = "presence-only-demo"; // what every purchase is verified at — no issuer trust anchor yet
+// `trustLevel` on POST /agent/grants (and on every purchase answer) is TRUST: what purchases are verified at.
+// On GET /agent/grants/:id it is the signature's own level (how the phone signed) — the card shows both.
 
 // Ports: the agent takes BASE_PORT, the stores the next three, the wall the one after (default 4100–4104).
 const BASE = Number(process.env.BASE_PORT ?? 4100);

@@ -102,6 +102,15 @@ try {
   const [cardSaw, modelSaw] = await Promise.all([tool("credentagent-permission-status", { grantId: tea.grantId }), modelWaits]);
   check(modelSaw.status === "authorized" && cardSaw.announce === false && cardSaw.final === true, "the card stays quiet while the model waits for the signature in its turn");
 
+  // …and when the model ended its turn instead of waiting, only the card follows the signature. The agent must
+  // still hold the signed permission, or the card's "go ahead" would send the model to a buy that fails.
+  const fallback = (await mcp.callTool({ name: "request-permission", arguments: { store: roastworks, skus: ["green-tea"], budget: 20, perSpend: 20, description: "Green Tea from RoastWorks.", why: "a fresh permission for the card's fallback path" } })).structuredContent;
+  await signOnPhone(roastworks, fallback);
+  let announced;
+  for (let i = 0; i < 4 && !announced?.announce; i++) announced = await tool("credentagent-permission-status", { grantId: fallback.grantId });
+  const afterCard = await tool("buy", { store: roastworks, grantId: fallback.grantId, items: [{ sku: "green-tea" }] }); // no check-permission first
+  check(announced?.announce === true && afterCard.ok === true, `the card announced the signature, and buy works without check-permission → ${afterCard.ok ? `$${afterCard.order.total}` : afterCard.error ?? afterCard.reason}`);
+
   // Scenario 1, simple: one store sells it, so there is nothing to compare. The agent says so and buys there.
   const coldBrew = await mcp.callTool({ name: "compare-offers", arguments: { product: "cold brew" } });
   const only = coldBrew.structuredContent.summary?.sellers;

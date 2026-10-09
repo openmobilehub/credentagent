@@ -37,12 +37,21 @@ const call = async (url, body) => {
 };
 
 // The chat cards come from the SDK's card kit: the offers, the permission with its QR code and live
-// status, and the receipt. The kit reads a permission's status from the store that issued it.
+// status, and the receipt. The kit reads a permission's status from the store that issued it, for both
+// waits on the signature: the model's (check-permission) and the card's. Whichever wait sees the signature
+// first keeps the signed permission here, so a `buy` after the card's "go ahead" works even when the model
+// ended its turn and never called check-permission again. (The `trustLevel` of this answer is the
+// signature's; the one that purchases are verified at came with the grant, in request-permission.)
 const cards = createCards({
   readPermission: async ({ grantId, store }) => {
     const r = await call(`${store.url}/agent/grants/${encodeURIComponent(grantId)}`);
     if (r.status !== 200) throw new Error(r.body.error ?? `HTTP ${r.status}`);
-    return r.body; // { status, trustLevel, intent? } — the signed intent comes back from waitForSignature
+    if (r.body.status === "authorized" && r.body.intent && !permissions.has(grantId)) {
+      // The signed permission is public data the agent can carry — it spends only with its own key.
+      permissions.set(grantId, r.body.intent);
+      log("permission", `${nameOf(store.url)} ${grantId} signed on the phone (${r.body.trustLevel}) — the agent now holds it`);
+    }
+    return r.body; // { status, trustLevel, intent? }
   },
   modelGraceMs: Number(process.env.AP2_MODEL_GRACE_MS ?? 20_000),
 });
@@ -147,9 +156,7 @@ function buildServer() {
     }
     if (r.status === "unknown") return result({ error: "Unknown permission — call request-permission first." }, { isError: true });
     if (r.status === "authorized") {
-      // The signed permission is public data the agent can carry — it spends only with its own key.
-      if (!permissions.has(grantId)) log("check-permission", `${nameOf(store)} ${grantId} signed on the phone (${r.trustLevel}) — the agent now holds it`);
-      permissions.set(grantId, r.intent);
+      // readPermission already kept the signed permission; this only answers the model.
       return result({ status: r.status, trustLevel: r.trustLevel }, { note: "Signed on the phone. The agent now holds this permission: call buy now." });
     }
     if (r.status !== "pending") log("check-permission", `✗ ${nameOf(store)} ${grantId}: ${r.status}`);
