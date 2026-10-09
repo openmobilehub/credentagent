@@ -8,11 +8,11 @@
 .mono { font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
 .icon { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; font-size: 13px; font-weight: 500; }
-.ok { background: var(--ok-bg); color: var(--ok); }
-.warn { background: var(--warn-bg); color: var(--warn); }
-.bad { background: var(--bad-bg); color: var(--bad); }
+.pill.ok { background: var(--ok-bg); color: var(--ok); }
+.pill.warn { background: var(--warn-bg); color: var(--warn); }
+.pill.bad { background: var(--bad-bg); color: var(--bad); }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
-@media (prefers-reduced-motion: no-preference) { .warn .dot { animation: pulse 1.4s ease-in-out infinite; } }
+@media (prefers-reduced-motion: no-preference) { .pill.warn .dot { animation: pulse 1.4s ease-in-out infinite; } }
 @keyframes pulse { 50% { opacity: .35; } }
 .honesty { font-size: 12px; color: var(--fg-2); border-top: 1px solid var(--line); padding-top: 10px; }
 .button { font: inherit; font-size: 14px; font-weight: 500; color: var(--fg); background: transparent; border: 1px solid var(--line); border-radius: var(--r); padding: 8px 14px; min-height: 40px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }

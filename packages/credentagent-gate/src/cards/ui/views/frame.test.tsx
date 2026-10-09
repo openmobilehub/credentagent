@@ -21,4 +21,11 @@ describe("the honesty line", () => {
     expect(html.indexOf("No real money moves")).toBeGreaterThan(html.indexOf("the body"));
     expect(html).toMatch(/data-trust-level="presence-only-demo"[^>]*>[^<]*No real money moves[^<]*<\/p><\/section>$/);
   });
+
+  it("is built from the card's own trust level, whatever it is", () => {
+    const html = renderToStaticMarkup(<CardFrame trustLevel="issuer-verified"><p>the body</p></CardFrame>);
+    expect(html).toContain('data-trust-level="issuer-verified"');
+    expect(html).toMatch(/Trust level: issuer-verified\.<\/p><\/section>$/);
+    expect(html).not.toContain("No real money moves");
+  });
 });

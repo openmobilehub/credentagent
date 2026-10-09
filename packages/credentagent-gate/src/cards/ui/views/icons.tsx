@@ -1,5 +1,6 @@
 // The cards' line icons (from the AP2 demo's sprite), inline so the page stays one self-contained file.
 import type { ReactNode } from "react";
+import styles from "./cards.module.css";
 
 const PATHS: Readonly<Record<IconName, ReactNode>> = {
   scale: <path d="M12 3v18M7 21h10M5 7h14M5 7l-3 7a3 3 0 0 0 6 0zM19 7l-3 7a3 3 0 0 0 6 0z" />,
@@ -19,7 +20,7 @@ export type IconName = "scale" | "phone" | "check" | "x" | "link" | "store";
 
 export function Icon({ name, className }: { name: IconName; className?: string }) {
   return (
-    <svg className={className} viewBox="0 0 24 24" aria-hidden="true">
+    <svg className={className ? `${styles.icon} ${className}` : styles.icon} viewBox="0 0 24 24" aria-hidden="true">
       {PATHS[name]}
     </svg>
   );
