@@ -61,9 +61,19 @@ export function createPermissionWatch<R extends PermissionStatus>(options: {
   sleep?: (ms: number) => Promise<void>;
 }): PermissionWatch<R> {
   const { read, holdMs, modelGraceMs } = options;
-  const now = options.now ?? Date.now;
+  const now = options.now ?? (() => performance.now()); // monotonic: a wall-clock step must not age `lastHeard`
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const entries = new Map<string, Entry>();
+
+  /** The entry for a grant, forgetting it first if it was last used more than an hour ago. */
+  function lookup(grantId: string): Entry | undefined {
+    const entry = entries.get(grantId);
+    if (entry && now() - entry.lastUsed > FORGET_AFTER_MS) {
+      entries.delete(grantId);
+      return undefined;
+    }
+    return entry;
+  }
 
   const modelIsWaiting = (entry: Entry): boolean => entry.openWaits > 0 || now() - entry.lastHeard < modelGraceMs;
 
@@ -80,11 +90,20 @@ export function createPermissionWatch<R extends PermissionStatus>(options: {
   return {
     issued(permission) {
       for (const [grantId, entry] of entries) if (now() - entry.lastUsed > FORGET_AFTER_MS) entries.delete(grantId);
-      entries.set(permission.grantId, { permission, told: false, openWaits: 0, lastHeard: now(), lastUsed: now() });
+      // Showing the same grant again must not forget what the model was already told (nor its open waits):
+      // update the entry in place, or a re-issued permission could be announced a second time.
+      const existing = entries.get(permission.grantId);
+      if (existing) {
+        existing.permission = permission;
+        existing.lastHeard = now();
+        existing.lastUsed = now();
+      } else {
+        entries.set(permission.grantId, { permission, told: false, openWaits: 0, lastHeard: now(), lastUsed: now() });
+      }
     },
 
     async waitForSignature(grantId) {
-      const entry = entries.get(grantId);
+      const entry = lookup(grantId);
       if (!entry) return { status: "unknown" };
       entry.openWaits += 1;
       try {
@@ -99,14 +118,15 @@ export function createPermissionWatch<R extends PermissionStatus>(options: {
     },
 
     async cardStatus(grantId) {
-      const entry = entries.get(grantId);
+      const entry = lookup(grantId);
       if (!entry) return { status: "unknown", announce: false, final: true };
       entry.lastUsed = now();
       let answer: R;
       try {
         answer = await hold(entry, CARD_HOLD_MS);
       } catch {
-        return { status: "pending", announce: false, final: false }; // a failed read: the card asks again
+        await sleep(POLL_MS); // a failed read: back off, so the card does not hammer a failing store
+        return { status: "pending", announce: false, final: false };
       }
       const status = { status: answer.status, ...(answer.trustLevel ? { trustLevel: answer.trustLevel } : {}) };
       if (answer.status !== "authorized") return { ...status, announce: false, final: answer.status !== "pending" };
