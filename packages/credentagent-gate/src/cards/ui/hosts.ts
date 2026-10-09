@@ -8,7 +8,7 @@
 import { App, applyDocumentTheme, applyHostFonts, applyHostStyleVariables, type McpUiHostContext } from "@modelcontextprotocol/ext-apps";
 import { detectHost, type Bridge } from "./bridge";
 import type { CardStore } from "./card-store";
-import { previewResult } from "./preview";
+import { previewCall, previewResult } from "./preview";
 
 /** The part of ChatGPT's `window.openai` the page uses (the surface evolves, so every call is optional). */
 interface OpenAiGlobals {
@@ -91,10 +91,11 @@ function connectPreview(store: CardStore, win: CardWindow): Bridge {
   const theme = params.get("theme");
   if (theme === "light" || theme === "dark") setTheme(theme);
   document.body.dataset.preview = ""; // real hosts paint the page's background; the preview paints its own
-  store.show(previewResult(params.get("view")));
+  const view = params.get("view");
+  store.show(previewResult(view));
   return {
     host: "preview",
-    call: async () => null,
+    call: async (name) => previewCall(view, name),
     open: async (url) => {
       win.open(url, "_blank", "noopener");
     },

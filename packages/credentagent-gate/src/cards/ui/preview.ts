@@ -3,7 +3,7 @@
 // sample is shaped exactly like a tool result, so the preview runs the same code path as a chat.
 
 import { GRANT_VIEW_KIND, type GrantViewData } from "../grant-view";
-import { PERMISSION_KIND, QR_META_KEY, type PermissionCardData } from "../contract";
+import { PERMISSION_KIND, PERMISSION_STATUS_TOOL, QR_META_KEY, type PermissionCardData } from "../contract";
 import { qrDataUrl } from "../qr";
 
 const grant = (over: Partial<GrantViewData>): GrantViewData => ({
@@ -42,6 +42,7 @@ export type PreviewResult = { structuredContent: object; _meta?: Record<string, 
 
 const SAMPLES: Readonly<Record<string, PreviewResult>> = {
   permission: { structuredContent: permission, _meta: { [QR_META_KEY]: qrDataUrl(permission.approveUrl) } },
+  "permission-signed": { structuredContent: { ...permission, grantId: "grant_preview_signed" }, _meta: { [QR_META_KEY]: qrDataUrl(permission.approveUrl) } },
   "grant-pending": { structuredContent: grant({ status: "pending", lifecycle: "pending", spent: 0, remaining: 200, allow: { skus: [whiskey.id], categories: [] }, product: whiskey }) },
   "grant-product": { structuredContent: grant({ allow: { skus: [whiskey.id], categories: [] }, product: whiskey }) },
   "grant-category": { structuredContent: grant({ allow: { skus: ["drift-mouse"], categories: ["Beverages", "Electronics"] } }) },
@@ -58,4 +59,9 @@ export const previewViews = (): string[] => Object.keys(SAMPLES);
 /** A sample tool result for a view name, or null for an unknown or missing name. */
 export function previewResult(view: string | null): PreviewResult | null {
   return view !== null && Object.hasOwn(SAMPLES, view) ? SAMPLES[view] : null;
+}
+
+/** What a preview card's tool call answers — only the signed permission's status tool, so its card shows "Signed". */
+export function previewCall(view: string | null, tool: string): unknown {
+  return view === "permission-signed" && tool === PERMISSION_STATUS_TOOL ? { status: "authorized", trustLevel: "device-signed", announce: false, final: true } : null;
 }

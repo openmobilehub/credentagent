@@ -5,13 +5,14 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { CardView, CardBoundary, grantActions } from "./CardView";
 import { readCard } from "./card-store";
 import { GRANT_VIEW_KIND } from "./grants";
-import { previewResult, previewViews } from "./preview";
-import { PERMISSION_KIND } from "../contract";
+import { previewCall, previewResult, previewViews } from "./preview";
+import { createSignatureWatch, type SignatureWatch } from "./signature-watch";
+import { PERMISSION_KIND, PERMISSION_STATUS_TOOL } from "../contract";
 import type { Bridge } from "./bridge";
 
 const bridge: Bridge = { host: "preview", call: async () => null, open: async () => {}, tell: async () => {} };
 const render = (result: { structuredContent: unknown; _meta?: Record<string, unknown> } | null): string =>
-  renderToStaticMarkup(<CardView card={readCard(result)} bridge={bridge} show={() => false} />);
+  renderToStaticMarkup(<CardView card={readCard(result)} bridge={bridge} watch={createSignatureWatch(bridge)} show={() => false} />);
 
 describe("CardView", () => {
   it("renders a grant result as the gallery's card", () => {
@@ -41,9 +42,25 @@ describe("CardView", () => {
     expect(html).toContain('src="data:image/svg+xml');
   });
 
+  it("the permission card draws the watch's state for its own grant", () => {
+    const watch: SignatureWatch = {
+      follow: () => {}, // renderToStaticMarkup runs no effects; the follow itself is covered by signature-watch.test.ts
+      state: (grantId) => (grantId === "grant_preview" ? { kind: "signed", trustLevel: "device-signed" } : { kind: "waiting" }),
+      subscribe: () => () => {},
+    };
+    const html = renderToStaticMarkup(<CardView card={readCard(previewResult("permission"))} bridge={bridge} watch={watch} show={() => false} />);
+    expect(html).toContain("Signed on your phone · device-signed");
+    expect(html).not.toContain("Waiting for your signature");
+  });
+
   it("an unknown or missing preview name is no card", () => {
     expect(previewResult("constructor")).toBeNull();
     expect(previewResult(null)).toBeNull();
+  });
+
+  it("the preview's signed permission answers its own status tool", () => {
+    expect(previewCall("permission-signed", PERMISSION_STATUS_TOOL)).toEqual({ status: "authorized", trustLevel: "device-signed", announce: false, final: true });
+    expect(previewCall("permission", PERMISSION_STATUS_TOOL)).toBeNull();
   });
 });
 
