@@ -427,6 +427,40 @@ redirects are never followed, and each attempt is bounded by a timeout (`timeout
 `verifyEvent(...)` is the never-throws verdict door if you prefer a result to a try/catch. Runnable:
 [`examples/order-webhooks/`](https://github.com/openmobilehub/credentagent/tree/main/examples/order-webhooks).
 
+## Cards — show the moment in the chat (`/cards`)
+
+Claude and ChatGPT can show a small interactive card inside the conversation instead of a wall of
+text. `@openmobilehub/credentagent-gate/cards` is one card page that **any** MCP server serves — a
+storefront or an agent — with no widget code of its own:
+
+```js
+import { McpServer } from "@modelcontextprotocol/server";
+import { createCards } from "@openmobilehub/credentagent-gate/cards";
+
+const cards = createCards(); // once per process — fails at startup if the package was built without its page
+
+function buildServer() {
+  const server = new McpServer({ name: "my-server", version: "1.0.0" });
+  cards.register(server); // the page for Claude (MCP Apps) and ChatGPT (skybridge), with its CSP
+  server.registerTool("get-grant", { inputSchema, _meta: cards.toolMeta() }, async ({ grantId }) =>
+    cards.grant(await viewOf(grantId)), // takes a GrantViewData: the grant card's plain data (kind: GRANT_VIEW_KIND), money already computed on the server
+  );
+  return server;
+}
+
+app.get("/cards", (_req, res) => res.type("html").send(cards.html)); // your Express app · preview: /cards?view=grant-product
+```
+
+`createStorefront()` builds this data from a live grant for its own grant tools; another server passes its own `GrantViewData` (the type and `GRANT_VIEW_KIND` are exported from `@openmobilehub/credentagent-gate/cards`).
+
+The grant card's **Revoke** button calls your server's `revoke-grant` tool with `{ grantId }` — register it with `_meta: cards.toolMeta()` (ChatGPT needs that to let the card call it) and return `cards.grant(view)`; without that tool, Revoke shows "This card couldn't complete that action".
+
+A card only shows; it never decides — every limit must be enforced on your server. Today the page renders
+grants; `/cards` with no `view` lists them all (`?view=grant-pending`, `grant-product`, `grant-category`,
+`grant-open`, `grant-low`, `grant-spent`, `grant-revoked`, `grant-declined`). The
+permission card with a QR code, the offers card and the receipt card are next
+([#256](https://github.com/openmobilehub/credentagent/issues/256)).
+
 ## Bring your own host — mount on YOUR MCP server
 
 `createStorefront()` is one host; the product promise is "mount the gate on **any** app." If you
@@ -942,6 +976,11 @@ MemoryVerificationStore  ·  completeOrder(input, ctx)
 // Bring your own host — the typed seam contract (builds completion + publishes the seams)
 defineHost({ catalog, orderStore, records | completion, signingKey | allowEphemeralKey })
   → { verificationStore, publish(app), complete(input) → { completed, reason? } }
+
+// Cards (spec 015) — one card page any MCP server serves to Claude and ChatGPT (see the Cards section)
+// from "@openmobilehub/credentagent-gate/cards"
+createCards() → { html, register(server), toolMeta(status?), grant(view, { note? }) → CardResult }
+GRANT_VIEW_KIND  ·  GrantViewData / CardResult (types)
 
 // Delegated draws (HNP, 005 preview) — the Stripe-grade facade + the underlying seams
 DelegatedGate  ·  gate.preApprove(bounds) → DelegatedGrant  ·  grant.spend(purchase) → SpendResult  ·  grant.revoke()
