@@ -1,0 +1,12 @@
+/* The card page's base (spec 015 FR-5). Light by default; dark from the host's theme (data-theme and
+   color-scheme, set by hosts.ts) or the OS. The host's MCP Apps style variables land on :root, and
+   every color here falls back to a light/dark pair when a host sends none. */
+:root { color-scheme: light dark; }
+* { box-sizing: border-box; }
+html, body { margin: 0; background: transparent; }
+body {
+  font: 15px/1.5 var(--font-sans, system-ui, -apple-system, "Segoe UI", sans-serif);
+  color: var(--color-text-primary, light-dark(#1f2328, #e6edf3));
+}
+.trouble, .preview { margin: 0; padding: 12px; font-size: 14px; color: var(--color-text-secondary, light-dark(#57606a, #9198a1)); }
+.preview a { color: var(--color-text-info, light-dark(#0969da, #4493f8)); }
