@@ -8,7 +8,7 @@
 import { grantLifecycle } from "@openmobilehub/credentagent-gate";
 import type { Grant } from "@openmobilehub/credentagent-gate";
 import type { Product } from "./index.js";
-import { GRANT_VIEW_KIND, type GrantViewData, type GrantViewProduct } from "./grant-view.js";
+import { GRANT_VIEW_KIND, type GrantViewData, type GrantViewProduct } from "@openmobilehub/credentagent-gate/cards";
 
 /** Build the inert {@link GrantViewData} projection from a live grant handle + the live catalog. */
 export async function projectGrantView(grant: Grant, opts: { catalog: Product[] }): Promise<GrantViewData> {

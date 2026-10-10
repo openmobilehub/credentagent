@@ -294,10 +294,12 @@ server-side (the widget only ever *shows* the server's state, so a stale card ca
 anything), and every card — stock or custom — carries the honest trust line through a frame the public
 API cannot omit.
 
-Inside the widget (own-the-code, `src/ui/grants/` — the gallery is **not yet a package
+Inside the widget (own-the-code — the gallery's source now lives in the gate's card kit,
+`packages/credentagent-gate/src/cards/ui/grants/`, the card kit of
+[#256](https://github.com/openmobilehub/credentagent/issues/256); it is **not yet a package
 export**: today a custom view means building your own widget from this source; publishing the
-components + a supported custom-bundle seam is
-[#176](https://github.com/openmobilehub/credentagent/issues/176)):
+components and a custom-page option is the kit's follow-up in
+[#292](https://github.com/openmobilehub/credentagent/issues/292)):
 
 ```tsx
 import { GrantCard, grantViews, defineGrantView, BudgetMeter } from "./grants";
