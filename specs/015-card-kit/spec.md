@@ -21,7 +21,7 @@ Three rules shape everything below:
    invariant 1). A stale or tampered card can unlock nothing.
 2. **A card never overclaims.** Every card about a permission, a payment or a grant ends with an
    honesty line the kit writes itself, from a fixed list of trust levels — never from a store's
-   own words.
+   own words — and it says the level is what the store reports, since the kit cannot check it yet.
 3. **A store is another party.** What a store says (its name, its links, its trust claims, its
    answers) is data. It never becomes an instruction to the model, a sentence written as the
    person, a link the card opens without a check, or an address the server calls.
@@ -30,7 +30,7 @@ Three rules shape everything below:
 
 - A **grant** is the gate's spending permission: a budget and a per-purchase limit, at one store,
   with a status (`pending`, `authorized`, `denied`, `revoked`). It is the gate's object.
-- A **permission card** is the moment a person is asked to sign a grant on their phone: the QR
+- A **permission card** is the moment a person is asked to approve a grant from their phone: the QR
   code, the limits, the live status. `cards.permission(…)` shows it; `cards.grant(view)` shows a
   grant's state afterwards (budget left, running low, revoked).
 - The kit calls the store's grant a **permission** in the cards and the notes, because that is the
@@ -42,15 +42,19 @@ An agent server (the shape `examples/ap2-multistore/agent.mjs` takes):
 
 ```js
 import { McpServer } from "@modelcontextprotocol/server";
+import { z } from "zod";
 import { createCards } from "@openmobilehub/credentagent-gate/cards";
 
-// The stores this agent buys from — the only addresses it ever calls. The model names a store by id.
+// The stores this agent buys from — the only addresses it ever calls. The model names a store by id,
+// and the input schema accepts only these ids: the SDK refuses any other before a handler runs.
 const STORES = new Map([["beanbarn", "https://beanbarn.example"], ["acme", "https://acme.example"]]);
+const storeId = z.enum([...STORES.keys()]);
 
 // Once per process.
 const cards = createCards({
   // How to read a grant's live status from the store that issued it. Answers { status, trustLevel?, signed? }:
   // `status` is the gate's GrantStatus; `signed` is what the store hands over once the person signed.
+  // `store` is what the kit remembered from `permission()` — its id came through `storeId`.
   readPermission: ({ store, grantId }) => getJson(`${STORES.get(store.id)}/agent/grants/${grantId}`),
   tools: { buy: "buy" }, // the tool the model calls once the person signed — the kit's notes name it
 });
@@ -63,7 +67,11 @@ function buildServer() {
     cards.offers({ stores: await readCatalogs(STORES), product, maxPrice, currency: "USD" }),
   );
 
-  server.registerTool("request-permission", { inputSchema, _meta: cards.toolMeta() }, async ({ store, skus, perSpend, budget, why }) => {
+  const permissionInput = z.object({
+    store: storeId, perSpend: z.number().positive(), budget: z.number().positive(),
+    skus: z.array(z.string()), why: z.string().optional(),
+  });
+  server.registerTool("request-permission", { inputSchema: permissionInput, _meta: cards.toolMeta() }, async ({ store, skus, perSpend, budget, why }) => {
     const grant = await postJson(`${STORES.get(store)}/agent/grants`, { skus, perSpend, budget });
     return cards.permission({
       store: { id: store, name: grant.store },
@@ -72,7 +80,7 @@ function buildServer() {
       products: grant.products,
       limits: { perSpend, budget, currency: "USD" },
       why,
-      trustLevel: grant.trustLevel, // shown through the kit's fixed list; an unknown level says so
+      trustLevel: grant.trustLevel, // the store's claim: shown through the kit's fixed list, as reported
     }); // the result carries the kit's own permissionId — the model and the card use it from here on
   });
 
@@ -165,13 +173,14 @@ top-level window, `?view=` renders bundled samples of every card and state (for 
 states), and `&theme=dark` forces dark.
 
 **FR-6 — Trust levels and the honesty line.** The kit knows a fixed list of levels, each with a
-sentence the kit wrote:
+sentence the kit wrote. **The level is the store's claim** — the store returns it, and the kit cannot
+check it today — so every sentence says so:
 
 | Level | Produced by | The honesty line says |
 | --- | --- | --- |
-| `presence-only-demo` | a payment credential with no issuer trust anchor yet | "Demo: the signatures are real, but the payment credential is not checked against its issuer yet. No real money moves." |
-| `device-signed` | a grant the person signed with their phone's wallet | "Signed on the person's phone; the credential is not checked against its issuer yet." |
-| `server-issued-demo` | a grant approved with a click on a page | "Demo: approved with a click on a page — nothing was signed on a phone. No real money moves." |
+| `presence-only-demo` | a payment credential with no issuer trust anchor yet | "As the store reports it: a demo — the signatures are real, but the payment credential is not checked against its issuer yet. No real money moves." |
+| `device-signed` | a grant the person signed with their phone's wallet | "As the store reports it: signed on the person's phone. This card did not check that signature, and the credential is not checked against its issuer yet." |
+| `server-issued-demo` | a grant approved with a click on a page | "As the store reports it: a demo, approved with a click on a page — nothing was signed on a phone. No real money moves." |
 | anything else | — | "Trust level not recognised by this card; treat it as unverified." |
 
 - A store's own text is never shown as a trust level — not in the honesty line, not in a status
@@ -180,14 +189,20 @@ sentence the kit wrote:
 - The permission, receipt and grant cards render inside a frame whose last line is the honesty line;
   there is no public way to render them without it. `trustLevel` is required in `permission()` and in
   the `receipt()` types — said out loud, never defaulted.
-- **"Signed on your phone" is said only for `device-signed`.** A grant approved with a click shows
-  "Approved on the approval page"; an unknown level shows "Approved (trust level not recognised)".
+- **The status label never says how a permission was approved.** An `authorized` permission shows
+  "Approved", whatever its level; how it was approved is only in the honesty line, attributed to the
+  store. A store that claims `device-signed` therefore gets the attributed sentence, never an
+  unattributed "Signed on your phone".
+- When the kit can check a signature itself (for example, an agent verifying the signed permission
+  it holds), it may drop the attribution for the levels it checked. That is a later step, not this spec.
 
 **FR-7 — Links and addresses.** `approveUrl` is checked where it enters, in `permission()` and
 `grant()`: it must be an absolute `https:` URL (`http:` only for `localhost`, `127.0.0.1` or `[::1]`,
 for local development). Anything else — `javascript:`, `data:`, a relative path — throws a fix-it
 error to the developer before a card or a note is built. The card's status tool takes only the kit's
-`permissionId`, never an address. The surface example calls only stores from a list the server knows.
+`permissionId`, never an address. The surface example calls only stores from a list the server knows:
+the tool's input schema accepts only those ids, so the SDK refuses any other before a handler runs,
+and `readPermission` and `buy` use the id the kit remembered, which came through that schema.
 
 **FR-8 — The permission card and the wait for the signature.** `permission(input)` takes
 `{ store: { id, name, url?, merchantId? }, grantId, approveUrl, products, limits: { perSpend, budget,
@@ -223,7 +238,8 @@ signed". The card may tell the chat "signed" **once per permission, decided on t
 the model is still waiting in its own turn** (a wait call is open, or one — or `permission()` —
 returned less than `modelGraceMs` ago). If the model already saw the signature, nothing is said; a
 redrawn, reloaded or duplicated card never announces twice. The announced sentence is fixed text carrying only the
-kit's `permissionId`: "I signed the permission on my phone ({permissionId}). Please go ahead." This
+kit's `permissionId`, and does not say how it was approved: "I approved the permission
+({permissionId}). Please go ahead." This
 rule removes one cause of a double purchase (the card and the model both going ahead); it is not the
 protection against one — FR-9 is. How long the card waits for the model to notice a signature is its
 own bound (20 s), not `modelGraceMs`. Announcing uses MCP Apps `ui/message`; ChatGPT's follow-up
@@ -276,7 +292,8 @@ recognised" honesty sentence, and the note tells the model the same and not to b
 - The card's status tool is read-only and takes only the kit's id — never an address from the card.
 - What a store says is data (rule 3): fixed sentences (FR-4), checked links (FR-7), known stores in
   the example, the kit's own ids (FR-8).
-- The honesty line comes from the kit's fixed list (FR-6); the store's own trust words are never shown.
+- The honesty line comes from the kit's fixed list (FR-6) and presents the level as the store's claim;
+  the store's own trust words are never shown.
 - Nothing here changes a ceremony rail, a completion path or a verifier.
 
 ## Constraints (for every step)
@@ -314,10 +331,10 @@ spec first. The steps already open, and what each takes from this spec:
 | 4 | #273 — the server's "signed" rule | FR-8: the kit's `permissionId`, the six outcomes, the card's own notice bound; FR-2 / FR-8 names (`perSpend`, `budget`, `currency`, `approvalHoldMs`) |
 | 5 | #274 — `permission()` and the wait | FR-7, FR-8, FR-6 (`trustLevel` list); `perSpend` / `budget` / `currency`; the wait tool registered |
 | 6 | #275 — the permission card | FR-6 (honesty line, status label); `perSpend` / `budget` and currency formatting |
-| 7 | #276 — the live status | FR-6 ("Signed on your phone" only for `device-signed`), FR-8 (`unknown`, fixed announcement) |
+| 7 | #276 — the live status | FR-6 (the label says "Approved"; the level is attributed to the store), FR-8 (`unknown`, fixed announcement) |
 | 8 | #277 — the offers card | FR-4 (fixed notes), FR-11 (matching, currency) |
 | 9 | #278 — the receipt card | FR-6 (the receipt's honesty line), FR-9, FR-10 (`buy()`, the unreadable state) |
-| — | #279 — the AP2 demo on the kit (not for merge) | known stores, `cards.buy()`, the store's idempotency key |
+| — | #279 — the AP2 demo on the kit (not for merge) | known stores in the input schema, `cards.buy()`, the store's idempotency key |
 
 ## Acceptance
 
@@ -332,7 +349,9 @@ spec first. The steps already open, and what each takes from this spec:
   - a call to the card's status tool that passes an address is refused;
   - `approveUrl` other than `https:` (or local `http:`) is refused, in `permission()` and `grant()`;
   - an unknown trust level, including a store's `issuer-verified`, shows the "not recognised" sentence;
-  - "Signed on your phone" never shows for `server-issued-demo`;
+  - a store that claims `device-signed` gets the attributed sentence, and no status label says
+    "Signed on your phone";
+  - the example's `request-permission` refuses a store id outside its list, before any network call;
   - two stores with the same `grantId` are never mixed up;
   - an unknown `permissionId` never shows as "not signed";
   - a `status` outside `GrantStatus` is a failed read;
