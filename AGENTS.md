@@ -89,29 +89,58 @@ required(c)  ·  optional(c)  ·  .when((order) => boolean)
 // Any credential, no registration step
 defineCredential({ id, request, verify, effect, appliesTo?, ui })
 dcql({ docType, claims })          // sugar for a single-mdoc DCQL query
-gate()  ·  discount({ percent })  ·  authorize()   // the only effects the resolver interprets
+gate()                             // the only effect a custom credential supports
 ```
+
+`defineCredential` throws for `discount(...)` or `authorize()`: those effects belong to the
+built-ins (`membership.discount(n)`, `payment.in(currency)`).
 
 On multi-instance / serverless deploys declare custom credentials up front —
 `new CredentAgent({ credentials: [myCredential] })` — so every instance enforces them
 from boot. Run `credentagent.doctor()` at startup: a typed, network-free preflight that
-flags an ephemeral gate secret, a missing `mandateSigningKey`, a localhost
-`walletOrigin`, or in-memory stores on a deployment.
+flags an ephemeral gate secret, a missing `mandateSigningKey` or `checkoutSigningKey`,
+a localhost `walletOrigin`, or in-memory stores on a deployment.
+
+### Enforcement is yours on the completion path
+
+- Enforce the gate on your own completion path (the tool or route that places the order),
+  not by hiding a button in the checkout page.
+- Never trust amounts or flags carried in the order token — it is unsigned and
+  hand-editable. Re-derive them from your cart and catalog on the server.
 
 ### AP2 mandates
 
-The gate records what a buyer authorized as an AP2 mandate (an SD-JWT signed ES256).
-Pass a stable private P-256 JWK as `new CredentAgent({ mandateSigningKey })`; without
-one the key is generated at boot, every signed mandate stops verifying at the next
-restart, and `doctor()` reports it as an error on a deployment. Anyone can check a
-mandate with `verifyMandate(token, { publicJwk })`, fetching the public key from the
-host's `/.well-known/did.json`. A verified mandate proves the gate's key signed those
+> **Not released yet.** This section and the `/.well-known/did.json` route are on `main`
+> but not in the published `0.5.0` package; following them against `0.5.0` fails with a
+> missing export.
+
+A spending grant signed on a phone is recorded as an AP2 mandate (an SD-JWT signed
+ES256), and you can mint and check mandates with `credentagent.ap2`. A checkout still
+records the older dev-signed mandate.
+
+The gate signs with two keys, each a stable private P-256 JWK from your secret manager:
+`mandateSigningKey` (mandates) and `checkoutSigningKey` (the merchant checkout key carts
+are quoted with — a second, different key). Without them the keys are generated at boot
+and everything signed stops verifying at the next restart; `doctor()` reports a missing
+`mandateSigningKey` as an error and a missing `checkoutSigningKey` as a warning on a
+deployment.
+
+Anyone can check a mandate from the host's `/.well-known/did.json`, which publishes both
+public keys:
+
+```ts
+const doc = await (await fetch("https://shop.example/.well-known/did.json")).json();
+const verdict = await verifyMandate(token, { publicJwk: publicJwkFromDidDocument(doc) });
+```
+
+`publicJwkFromDidDocument(doc)` picks the mandate key; pass the key's id as a second
+argument (`publicJwkFromDidDocument(doc, kid)`) to pick the checkout key. A verified mandate proves the gate's key signed those
 bytes — not that the amount is right (re-price server-side) or that any credential
 behind it came from a real issuer.
 
 ### Runtime endpoints
 
-Routes are registered by three different calls — call the ones you need. There is no
+Routes are registered by four different calls — call the ones you need. There is no
 `llms.txt` discovery document; this file and the manifest that `requirements()`
 returns are the discovery surface.
 
@@ -119,7 +148,7 @@ returns are the discovery surface.
 
 | Route | What it is |
 | --- | --- |
-| `GET /.well-known/did.json` | the gate's public mandate-signing key as a DID document. Taken at the **root** of the host app, not under `/credentagent/*` — a proxy or route allowlist must pass it, or nobody can check the mandates the gate signs |
+| `GET /.well-known/did.json` | the gate's two public keys (the mandate key and the merchant checkout key) as a DID document. Taken at the **root** of the host app, not under `/credentagent/*` — a proxy or route allowlist must pass it, or nobody can check the mandates the gate signs |
 
 **`credentagent.mount(app, seams)`** (or a host such as the storefront that supplies the
 seams) — the ceremony rails. On a bare Express app with no seams, `mount(app)` attaches
@@ -130,9 +159,10 @@ seams) — the ceremony rails. On a bare Express app with no seams, `mount(app)`
 | `/credentagent/passkey` (+ `/options`, `/verify`) | WebAuthn, same-device + cross-device (caBLE) — real cryptography |
 | `/credentagent/credential` (+ `/request`, `/verify`) | age / loyalty / custom credentials via OpenID4VP |
 | `/credentagent/dc-payment` (+ `/request`, `/verify`) | Digital Credentials API + OpenID4VP, amount-bound (mdoc) |
-| `/credentagent/delegated` (+ `/request`, `/verify`) | opt-in (`mount({ verifier })`): external issuer-trust verifier |
+| `/credentagent/delegated` (+ `/request`, `/verify`) | opt-in (`mount(app, { verifier })`): external issuer-trust verifier |
 
-**`credentagent.orders.serve(app)`** — checkout without a storefront:
+**`credentagent.orders.serve(app)`** — checkout without a storefront. It also registers
+the passkey, credential, and dc-payment rails above, plus:
 
 | Route | What it is |
 | --- | --- |
