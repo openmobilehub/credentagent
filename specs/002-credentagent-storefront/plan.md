@@ -2,7 +2,7 @@
 
 **Branch**: `feat/attesto-gate-v0.1` (continues v0.1) | **Date**: 2026-06-26 | **Spec**: [spec.md](./spec.md)
 
-**Input**: Feature specification from `specs/002-attesto-storefront/spec.md`; governance from `.specify/memory/constitution.md` (v1.0.0)
+**Input**: Feature specification from `specs/002-credentagent-storefront/spec.md`; governance from `.specify/memory/constitution.md` (v1.0.0)
 
 ## Summary
 
@@ -70,13 +70,13 @@ move; `payment-gate/` (~28 source files, 56 incl. tests/READMEs) does NOT move.
 ### Documentation (this feature)
 
 ```text
-specs/002-attesto-storefront/
+specs/002-credentagent-storefront/
 ├── plan.md              # This file
 ├── research.md          # Phase 0 — extraction decisions
 ├── data-model.md        # Phase 1 — entities (storefront handle, tools, catalog, state, widget bundle)
 ├── quickstart.md        # Phase 1 — runnable validation (npm-install adopter flow + the demo)
 ├── contracts/
-│   └── attesto-storefront.api.md   # Phase 1 — createStorefront + the 9 tools + the UI resource
+│   └── credentagent-storefront.api.md   # Phase 1 — createStorefront + the 9 tools + the UI resource
 └── tasks.md             # Phase 2 — /speckit-tasks (NOT created here)
 ```
 

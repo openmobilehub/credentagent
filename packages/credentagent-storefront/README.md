@@ -265,7 +265,7 @@ own `requestState` + `answers` arguments, so the round trip completes either way
 ## The three execution contexts
 
 `createStorefront()` is built around the split the gate enforces — conflating these is forbidden
-([spec §0](https://github.com/openmobilehub/credentagent/blob/main/specs/001-attesto-sdk/spec.md)):
+([spec §0](https://github.com/openmobilehub/credentagent/blob/main/specs/001-credentagent-sdk/spec.md)):
 
 1. **Tool — mints the link + reports requirements.** The `checkout` tool snapshots the cart into an
    order, returns `{ orderId, checkoutUrl, requires }`, and runs **no ceremony** (no phone in the loop).

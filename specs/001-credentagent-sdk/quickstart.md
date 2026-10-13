@@ -2,7 +2,7 @@
 
 The gate is only useful gating a real **storefront**, so this shows the two components **together**: a
 storefront (a catalog + a `checkout` MCP tool + a checkout page) with the gate wrapped around its checkout.
-API source of truth: [`contracts/attesto-gate.api.md`](./contracts/attesto-gate.api.md); shapes in
+API source of truth: [`contracts/credentagent-gate.api.md`](./contracts/credentagent-gate.api.md); shapes in
 [`data-model.md`](./data-model.md).
 
 ## 1 · Run a minimal storefront and see the gate fire (Goose, ~2 min)
@@ -135,7 +135,7 @@ the same `npm run build`, so green here ⇒ deploy-safe.)
 npx vitest run packages/attesto-gate --exclude '**/.worktrees/**'
 ```
 
-**Expected**: green, covering the 7 contract tests in `contracts/attesto-gate.api.md` — notably
+**Expected**: green, covering the 7 contract tests in `contracts/credentagent-gate.api.md` — notably
 serialization round-trip (no functions on the wire), conditional drop, payment-last ordering, and the
 prescription `appliesTo` example.
 

@@ -256,7 +256,7 @@ Two orthogonal typed axes, surfaced (never silent):
   v0.1 ships the three built-ins + the extension point + one worked example; arbitrary `discount()`
   generalization is roadmap.
 - **Storefront testing:** v0.1 uses the storefront as the integration **harness** (the gate is proven by
-  running it in the real checkout); the storefront gets its own `specs/002-attesto-storefront` later.
+  running it in the real checkout); the storefront gets its own `specs/002-credentagent-storefront` later.
 - **GateOrder contract:** the order's lines carry whatever your conditional predicates read — `category` /
   flags / `requiresRx` / `minimumAge` — so `.when()` and `appliesTo` resolve straight from the order, no
   extra callback. Re-derived server-side (invariant #2).
