@@ -348,6 +348,7 @@ export async function decryptDeviceResponse(args: {
 }
 
 // ── Decrypted DeviceResponse → disclosed claims (reuses ./mdoc.ts) ────────────
+// Raw decrypted bytes in → a ONE-entry list out (id "mdoc"), the shape decodeVpToken returns.
 export function disclosedFromDeviceResponse(deviceResponse: Uint8Array): DisclosedEntry[] {
   return [disclosedFromResponse(decodeDeviceResponse(deviceResponse), "mdoc")];
 }

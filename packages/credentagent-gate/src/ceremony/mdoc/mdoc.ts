@@ -46,6 +46,10 @@ export interface DisclosedEntry {
   claims: { label: string; value: any }[];
 }
 
+// A structural VIEW of untrusted CBOR, not a validated ISO 18013-5 structure:
+// decodeDeviceResponse casts whatever the wallet sent, so a field can hold any CBOR
+// value at runtime (a numeric docType comes out as `type: 7`). Shape validation is
+// tracked in #305.
 export interface MdocDocument {
   docType?: string;
   issuerSigned?: { nameSpaces?: Record<string, unknown[]>; issuerAuth?: unknown };
@@ -56,11 +60,14 @@ export interface DeviceResponse {
   documents?: MdocDocument[];
 }
 
+// Raw bytes or a base64url string in → the parsed (unvalidated) response out. Decode
+// once here and pass the result to the helpers below.
 export function decodeDeviceResponse(input: Uint8Array | string): DeviceResponse {
   return decode(input instanceof Uint8Array ? input : b64urlToBytes(input)) as DeviceResponse;
 }
 
-export function disclosedFromDocument(doc: MdocDocument): DisclosedEntry["claims"] {
+// One document in → its issuer-signed claims out, labelled "<namespace> / <element>".
+function disclosedFromDocument(doc: MdocDocument): DisclosedEntry["claims"] {
   const claims: DisclosedEntry["claims"] = [];
   for (const [ns, items] of Object.entries(doc.issuerSigned?.nameSpaces ?? {})) {
     for (const raw of items) {
@@ -71,6 +78,9 @@ export function disclosedFromDocument(doc: MdocDocument): DisclosedEntry["claims
   return claims;
 }
 
+// A parsed response in → ONE entry out. Inherited behaviour, not a design: every
+// document's claims are merged into that entry under the LAST document's docType.
+// Reading a presentation from a single document is tracked in #305.
 export function disclosedFromResponse(response: DeviceResponse, id: string): DisclosedEntry {
   const documents = response.documents ?? [];
   return { id, format: "mso_mdoc", type: documents.at(-1)?.docType, claims: documents.flatMap(disclosedFromDocument) };
