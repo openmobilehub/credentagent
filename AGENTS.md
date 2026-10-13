@@ -223,9 +223,20 @@ fencing, DX rubric, review process. The load-bearing minimum:
   ([docs/reference/architecture-principles.md](docs/reference/architecture-principles.md)).
   Write the caller-side example first — if it needs a plumbing block, fix the API, never
   dress up the example.
-- **Conventions:** every commit carries a DCO `Signed-off-by:` line (`git commit -s`).
-  PR descriptions follow [.github/pull_request_template.md](.github/pull_request_template.md)
-  — plain language first, technical detail below the divider. Reviews run against
-  [REVIEW.md](REVIEW.md).
+- **Conventions:** when you write a commit, sign it off (`git commit -s`) so it carries a
+  DCO `Signed-off-by:` line. PR descriptions follow
+  [.github/pull_request_template.md](.github/pull_request_template.md) — plain language
+  first, technical detail below the divider.
+
+## Review guidelines
+
+For any agent reviewing a pull request in this repo.
+
+- Review against [REVIEW.md](REVIEW.md): the security invariants, the bypass-test
+  expectation, and the DX rubric above.
+- **Do not flag a missing `Signed-off-by:` line.** The DCO check on the pull request
+  inspects every commit and is the authority; if it is green, sign-off is fine. A commit
+  in your own working copy of the PR is not the PR's commit — it has a different hash and
+  may lack the trailer even when the real commit has it.
 
 Apache-2.0 · part of [Open Mobile Hub](https://openmobilehub.org) (Linux Foundation).
