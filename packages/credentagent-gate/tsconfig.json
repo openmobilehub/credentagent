@@ -16,6 +16,7 @@
   "include": [
     "src/index.ts",
     "src/agent.ts",
+    "src/cards/index.ts",
     "src/ceremony/mount.ts",
     "src/ceremony/types.ts",
     "src/ceremony/origin.ts",

@@ -3,7 +3,7 @@
 // (design §5): the LIMITS are genuinely enforced server-side; the CONSENT is dev-sealed, not
 // wallet-signed. Built from `presence`/`trustLevel` so it stays truthful if those ever change.
 
-import type { GrantLifecycle } from "@openmobilehub/credentagent-gate";
+import type { GrantLifecycle } from "../../../grants.js";
 import type { GrantTokens, GrantViewData } from "./types";
 
 /** The token role set as CSS custom-property references (resolved in grants.module.css). Only

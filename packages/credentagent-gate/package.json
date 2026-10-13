@@ -23,6 +23,10 @@
     "./agent": {
       "types": "./dist/agent.d.ts",
       "default": "./dist/agent.js"
+    },
+    "./cards": {
+      "types": "./dist/cards/index.d.ts",
+      "default": "./dist/cards/index.js"
     }
   },
   "main": "./dist/index.js",
@@ -58,7 +62,11 @@
     "jose": "^5.10.0"
   },
   "devDependencies": {
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.2",
     "@types/supertest": "^7.2.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
     "supertest": "^7.2.2"
   },
   "publishConfig": {
