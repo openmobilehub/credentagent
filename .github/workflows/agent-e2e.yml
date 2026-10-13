@@ -6,9 +6,12 @@ name: agent-e2e
 # order completed. Catches the failure class the deterministic smokes can't: "an agent can no longer
 # figure out our tools."
 #
-# Runs on the Claude Agent SDK and signs in with the CLAUDE_CODE_OAUTH_TOKEN secret (the same one the
-# automated PR review uses) — no separate API key or bill. With no token the step SKIPS (green, with a
-# notice).
+# Runs on the Claude Agent SDK and signs in the same way the automated PR review does. Which account
+# pays is the repo variable CLAUDE_AUTH (CLAUDE.md, "Code review"):
+#   unset  — the CLAUDE_CODE_OAUTH_TOKEN secret (the Claude subscription login). With no token the step
+#            SKIPS (green, with a notice).
+#   "api"  — the ANTHROPIC_API_KEY secret. With no key the step FAILS: asking for the API and not
+#            having a key is a misconfiguration, not a reason to go quietly green.
 
 on:
   schedule:
@@ -31,10 +34,24 @@ jobs:
 
       - name: Claude agent E2E
         env:
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          CLAUDE_AUTH: ${{ vars.CLAUDE_AUTH }}
+          API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: |
-          if [ -z "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
-            echo "::notice::CLAUDE_CODE_OAUTH_TOKEN not configured — skipping the Claude agent run."
-            exit 0
+          # Export only the chosen credential, so the SDK can never pick the other one.
+          if [ "$CLAUDE_AUTH" = "api" ]; then
+            if [ -z "$API_KEY" ]; then
+              echo "::error::CLAUDE_AUTH is \"api\" but the ANTHROPIC_API_KEY secret is not set."
+              exit 1
+            fi
+            export ANTHROPIC_API_KEY="$API_KEY"
+            echo "::notice::Signing in with the API key (CLAUDE_AUTH=api)."
+          else
+            if [ -z "$OAUTH_TOKEN" ]; then
+              echo "::notice::CLAUDE_CODE_OAUTH_TOKEN not configured — skipping the Claude agent run."
+              exit 0
+            fi
+            export CLAUDE_CODE_OAUTH_TOKEN="$OAUTH_TOKEN"
+            echo "::notice::Signing in with the Claude subscription login (CLAUDE_AUTH is not \"api\")."
           fi
           node agent-e2e.mjs
