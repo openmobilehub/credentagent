@@ -5,10 +5,9 @@ from the user's phone wallet before a consequential MCP tool completes. **Identi
 leads; payments is one application** — `age.over(21)`, a loyalty membership, a
 prescription, and `payment.in("usd")` are all just credentials in the same policy.
 
-> **Design preview / v0.1.** This package is real and tested, but the broader CredentAgent
-> SDK is still being extracted from the reference server
-> ([mcp-apps-shopping-demo](https://github.com/openmobilehub/mcp-apps-shopping-demo)).
-> See the repo's `ROADMAP.md` for what's shipping vs. next.
+> **Design preview.** This package is real and tested, and its API can still change before 1.0.
+> See the repo's [`ROADMAP.md`](https://github.com/openmobilehub/credentagent/blob/main/ROADMAP.md) for what's shipping vs. next. For a
+> storefront running it end to end, see the [Utopia Marketplace MCP server](https://github.com/TheBlackBit/multipaz-utopia/tree/main/organizations/marketplace/mcp).
 
 ## Install
 
@@ -25,8 +24,8 @@ Express-shaped host.
 The whole flow in ≤ 10 lines — a credential-gated agentic storefront. `createStorefront()`
 publishes the ceremony seams; `new CredentAgent().mount(store.app)` wires the real `/credentagent/*`
 ceremony rails; `store.gate()` resolves your policy on every `checkout` call (copied from
-[`examples/storefront.mjs`](https://github.com/openmobilehub/mcp-apps-shopping-demo/blob/main/examples/storefront.mjs) /
-[`storefront-gate.test.ts`](https://github.com/openmobilehub/mcp-apps-shopping-demo/blob/main/storefront-gate.test.ts)):
+[`examples/storefront.mjs`](https://github.com/openmobilehub/credentagent/blob/main/examples/storefront.mjs) /
+[`storefront-gate.test.ts`](https://github.com/openmobilehub/credentagent/blob/main/storefront-gate.test.ts)):
 
 ```ts
 import { createStorefront } from "@openmobilehub/credentagent-storefront/server";
@@ -485,7 +484,7 @@ app.post("/checkout/:id", async (req, res) => {
 ## The three execution contexts
 
 The split is load-bearing — conflating them is the documented root cause of confusion
-([spec §0](https://github.com/openmobilehub/mcp-apps-shopping-demo/blob/main/specs/001-attesto-sdk/spec.md)). v0.1 is consolidated **Mode A**:
+([spec §0](https://github.com/openmobilehub/credentagent/blob/main/specs/001-attesto-sdk/spec.md)). v0.1 is consolidated **Mode A**:
 
 1. **Tool — mints the link + reports requirements.** Your `checkout` handler runs once when
    checkout is requested. There is no phone in the loop, so it does **not** run a ceremony — it
@@ -514,7 +513,7 @@ conditional with `.when((order) => boolean)` — it returns a fresh `Credential`
 predicate is AND-ed onto any existing `appliesTo`.
 
 **Gate any credential** with `defineCredential` — no registration step, usable by object
-(from [`specs/001-attesto-sdk/quickstart.md`](https://github.com/openmobilehub/mcp-apps-shopping-demo/blob/main/specs/001-attesto-sdk/quickstart.md)):
+(from [`specs/001-attesto-sdk/quickstart.md`](https://github.com/openmobilehub/credentagent/blob/main/specs/001-attesto-sdk/quickstart.md)):
 
 ```ts
 import { defineCredential, dcql, gate } from "@openmobilehub/credentagent-gate";
@@ -962,8 +961,8 @@ ageDcql()  ·  ENVELOPE_VERSION  ·  ENVELOPE_SENTINEL
 //        DelegatedVerifier / DelegatedVerdict / DelegatedHandoff / SettlementRecordLike (delegated seam)
 ```
 
-Full, compiler-checked contract: [`specs/001-attesto-sdk/`](https://github.com/openmobilehub/mcp-apps-shopping-demo/tree/main/specs/001-attesto-sdk/) (the
-[quickstart](https://github.com/openmobilehub/mcp-apps-shopping-demo/blob/main/specs/001-attesto-sdk/quickstart.md), [`spec.md`](https://github.com/openmobilehub/mcp-apps-shopping-demo/blob/main/specs/001-attesto-sdk/spec.md),
-and the [mount contract](https://github.com/openmobilehub/mcp-apps-shopping-demo/blob/main/specs/003-gate-ceremony-extraction/contracts/attesto-mount.api.md)).
+Full, compiler-checked contract: [`specs/001-attesto-sdk/`](https://github.com/openmobilehub/credentagent/tree/main/specs/001-attesto-sdk/) (the
+[quickstart](https://github.com/openmobilehub/credentagent/blob/main/specs/001-attesto-sdk/quickstart.md), [`spec.md`](https://github.com/openmobilehub/credentagent/blob/main/specs/001-attesto-sdk/spec.md),
+and the [mount contract](https://github.com/openmobilehub/credentagent/blob/main/specs/003-gate-ceremony-extraction/contracts/attesto-mount.api.md)).
 
 Apache-2.0 · part of [Open Mobile Hub](https://openmobilehub.org) (Linux Foundation).

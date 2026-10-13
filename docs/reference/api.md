@@ -18,9 +18,8 @@ age gate, an access grant — completes. **Identity leads; payments is one appli
 > mdoc would pass. **Never present a presence-only gate as a real safety control.**
 > Issuer-verified trust (`trust_level: "issuer-verified"`) is the v0.2 line.
 >
-> The runnable end-to-end reference lives in the separate
-> [mcp-apps-shopping-demo](https://github.com/openmobilehub/mcp-apps-shopping-demo)
-> repo.
+> For a storefront running both packages end to end, see the
+> [Utopia Marketplace MCP server](https://github.com/TheBlackBit/multipaz-utopia/tree/main/organizations/marketplace/mcp) (a separate repo).
 
 ---
 

@@ -13,9 +13,9 @@ CredentAgent is part of [Open Mobile Hub](https://openmobilehub.org) under the O
 Linux Foundation, and the contribution rules below reflect that posture — most importantly the
 **DCO sign-off** and the **security-test bar**. Please read this file before opening a PR.
 
-The runnable end-to-end reference — a credential-gated agentic shopping app on every MCP surface —
-lives in a separate repo, [`mcp-apps-shopping-demo`](https://github.com/openmobilehub/mcp-apps-shopping-demo).
-Use it to see the packages in action; contribute library changes here.
+To see the packages in action, run [`examples/quickstart`](./examples/quickstart) here, or look at
+the [Utopia Marketplace MCP server](https://github.com/TheBlackBit/multipaz-utopia/tree/main/organizations/marketplace/mcp), a separate repo that runs both
+packages end to end. Contribute library changes here.
 
 ## Dev setup
 

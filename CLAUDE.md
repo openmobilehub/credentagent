@@ -25,10 +25,10 @@ This repo (`openmobilehub/credentagent`) is the **library**: two npm workspaces 
 Tests run with **`npm test` from the repo root** (vitest) — that is the authoritative run,
 and the only one that includes the cross-package integration suite (see *Testing
 expectations*). `npm run test:workspaces` is the faster inner loop and skips it.
-`npm run build` typechecks + builds each package. The end-to-end reference DEMO lives in a
-**separate** repo,
-[`openmobilehub/mcp-apps-shopping-demo`](https://github.com/openmobilehub/mcp-apps-shopping-demo),
-which consumes these packages — link to it, don't describe it as part of this repo.
+`npm run build` typechecks + builds each package. The end-to-end DEMO is the
+**Utopia Marketplace MCP server** in a **separate** repo,
+[`TheBlackBit/multipaz-utopia`](https://github.com/TheBlackBit/multipaz-utopia/tree/main/organizations/marketplace/mcp),
+which consumes these packages from npm — link to it, don't describe it as part of this repo.
 
 ## Status & decisions — GitHub is the source of truth
 
