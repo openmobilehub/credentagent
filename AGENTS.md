@@ -110,9 +110,8 @@ a localhost `walletOrigin`, or in-memory stores on a deployment.
 
 ### AP2 mandates
 
-> **Not released yet.** This section and the `/.well-known/did.json` route are on `main`
-> but not in the published `0.5.0` package; following them against `0.5.0` fails with a
-> missing export.
+> **Since 0.6.0.** This section and the `/.well-known/did.json` route are not in `0.5.0`;
+> following them against `0.5.0` fails with a missing export.
 
 A spending grant signed on a phone is recorded as an AP2 mandate (an SD-JWT signed
 ES256), and you can mint and check mandates with `credentagent.ap2`. A checkout still
