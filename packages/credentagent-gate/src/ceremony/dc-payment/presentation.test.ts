@@ -20,8 +20,8 @@ import { verifyDcPresentation } from "./verify.js";
 import type { CeremonyCatalog, CeremonyOrder } from "../types.js";
 import type { Origin } from "../origin.js";
 
-const encoderOptions = { useRecords: false, variableMapSize: true, useTag259ForMaps: false };
-const enc = new Encoder(encoderOptions);
+// The cast: cbor-x's Options type omits useTag259ForMaps (same idiom as mdoc/mdoc-iso.ts).
+const enc = new Encoder({ useRecords: false, variableMapSize: true, useTag259ForMaps: false } as ConstructorParameters<typeof Encoder>[0]);
 const cbor = (v: unknown): Buffer => enc.encode(v);
 
 const SECRET = "stable-test-secret";

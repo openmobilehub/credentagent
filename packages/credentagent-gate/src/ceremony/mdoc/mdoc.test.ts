@@ -17,8 +17,8 @@ vi.mock("cbor-x", async (importOriginal) => {
   return { ...actual, decode: vi.fn(actual.decode) };
 });
 
-const encoderOptions = { useRecords: false, variableMapSize: true, useTag259ForMaps: false };
-const encoder = new Encoder(encoderOptions);
+// The cast: cbor-x's Options type omits useTag259ForMaps (same idiom as mdoc-iso.ts).
+const encoder = new Encoder({ useRecords: false, variableMapSize: true, useTag259ForMaps: false } as ConstructorParameters<typeof Encoder>[0]);
 const cbor = (value: unknown): Buffer => encoder.encode(value);
 const response = (documents: MdocDocument[]): Buffer => cbor({ version: "1.0", documents, status: 0 });
 
@@ -36,6 +36,10 @@ function document(docType: string, values: Record<string, unknown> = {}): MdocDo
 
 beforeEach(() => { vi.mocked(decode).mockClear(); });
 
+// These tests record what the parser did BEFORE the parse-once refactor (#304), to show
+// the refactor changed nothing. They do not say the behaviour is right: reading claims,
+// auth blocks and hashes from different documents is tracked in #305, and the
+// multi-document cases below are expected to change with that fix.
 describe("shared mdoc parsing", () => {
   it("keeps all documents' claims in order and reports the last document's type", () => {
     const bytes = response([document("first", { value: true }), document("second", { value: false })]);

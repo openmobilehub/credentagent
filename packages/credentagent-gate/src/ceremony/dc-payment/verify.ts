@@ -251,7 +251,7 @@ export function buildDcMandateFromPresentation(args: {
   const { order, vpStr, transactionDataB64 } = args;
   const now = new Date();
   const expires = new Date(now.getTime() + 5 * 60_000);
-  const parsed = decodeDeviceResponse(Array.isArray(vpStr) ? vpStr[0] : vpStr);
+  const parsed = decodeDeviceResponse(vpStr);
   const claims = disclosedClaims(parsed);
   const instrument: DcInstrument = {
     issuer: claimText(claims["issuer_name"]),
