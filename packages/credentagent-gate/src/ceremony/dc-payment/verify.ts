@@ -24,7 +24,14 @@ import type { CeremonyOrder } from "../types.js";
 import type { Origin } from "../origin.js";
 import { buildTransactionData, decodeTransactionData, encodeTransactionData, hashTransactionData, txHashNameFromCose } from "./txData.js";
 import { openReaderContext } from "../mdoc/readerContext.js";
-import { decodeVpToken, extractTransactionDataHash, extractTransactionDataHashAlg, inspectAuthBlocks } from "../mdoc/mdoc.js";
+import {
+  decodeDeviceResponse,
+  disclosedFromResponse,
+  extractTransactionDataHash,
+  extractTransactionDataHashAlg,
+  inspectAuthBlocks,
+  type DeviceResponse,
+} from "../mdoc/mdoc.js";
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
@@ -223,9 +230,8 @@ export function runDcGates(mandate: DcMandate, origin: Origin, opts: { loyaltyDi
 
 // ── REAL OpenID4VP path ───────────────────────────────────────────────────────
 // Disclosed mdoc claim values can be {_tag, value} (e.g. tag-1004 dates) or raw.
-function disclosedClaims(vpStr: string): Record<string, unknown> {
-  const disclosed = decodeVpToken({ dpc: vpStr });
-  return Object.fromEntries((disclosed[0]?.claims ?? []).map((c) => [c.label.split(" / ").pop()!, c.value]));
+function disclosedClaims(response: DeviceResponse): Record<string, unknown> {
+  return Object.fromEntries(disclosedFromResponse(response, "dpc").claims.map((c) => [c.label.split(" / ").pop()!, c.value]));
 }
 
 /**
@@ -245,7 +251,8 @@ export function buildDcMandateFromPresentation(args: {
   const { order, vpStr, transactionDataB64 } = args;
   const now = new Date();
   const expires = new Date(now.getTime() + 5 * 60_000);
-  const claims = disclosedClaims(vpStr);
+  const parsed = decodeDeviceResponse(Array.isArray(vpStr) ? vpStr[0] : vpStr);
+  const claims = disclosedClaims(parsed);
   const instrument: DcInstrument = {
     issuer: claimText(claims["issuer_name"]),
     instrumentId: claimText(claims["payment_instrument_id"]),
@@ -253,7 +260,7 @@ export function buildDcMandateFromPresentation(args: {
     holder: claimText(claims["holder_name"]),
     expiry: claimText(claims["expiry_date"]),
   };
-  const blocks = inspectAuthBlocks(vpStr);
+  const blocks = inspectAuthBlocks(parsed);
   return {
     type: "ap2.PaymentMandate",
     version: "0.1-dc-demo",
@@ -268,9 +275,9 @@ export function buildDcMandateFromPresentation(args: {
       type: "openid4vp-dc-api",
       transactionData: transactionDataB64,
       // The wallet's signed hash — re-checked in Gate 1 against our recomputed hash.
-      transactionDataHash: extractTransactionDataHash(vpStr),
+      transactionDataHash: extractTransactionDataHash(parsed),
       // The algorithm the wallet used, so Gate 1 recomputes with it (null ⇒ SHA-256).
-      transactionDataHashAlg: extractTransactionDataHashAlg(vpStr),
+      transactionDataHashAlg: extractTransactionDataHashAlg(parsed),
       presented: true,
       vpToken: vpStr,
       authBlocks: { hasIssuerAuth: blocks.hasIssuerAuth, hasDeviceAuth: blocks.hasDeviceAuth },

@@ -46,6 +46,36 @@ export interface DisclosedEntry {
   claims: { label: string; value: any }[];
 }
 
+export interface MdocDocument {
+  docType?: string;
+  issuerSigned?: { nameSpaces?: Record<string, unknown[]>; issuerAuth?: unknown };
+  deviceSigned?: { nameSpaces?: unknown; deviceAuth?: { deviceSignature?: unknown; deviceMac?: unknown } };
+}
+
+export interface DeviceResponse {
+  documents?: MdocDocument[];
+}
+
+export function decodeDeviceResponse(input: Uint8Array | string): DeviceResponse {
+  return decode(input instanceof Uint8Array ? input : b64urlToBytes(input)) as DeviceResponse;
+}
+
+export function disclosedFromDocument(doc: MdocDocument): DisclosedEntry["claims"] {
+  const claims: DisclosedEntry["claims"] = [];
+  for (const [ns, items] of Object.entries(doc.issuerSigned?.nameSpaces ?? {})) {
+    for (const raw of items) {
+      const isi = decodeTagged(raw);
+      claims.push({ label: `${ns} / ${isi.elementIdentifier}`, value: sanitize(isi.elementValue) });
+    }
+  }
+  return claims;
+}
+
+export function disclosedFromResponse(response: DeviceResponse, id: string): DisclosedEntry {
+  const documents = response.documents ?? [];
+  return { id, format: "mso_mdoc", type: documents.at(-1)?.docType, claims: documents.flatMap(disclosedFromDocument) };
+}
+
 // vp_token from OpenID4VP DC API: { "<dcql-id>": "<base64url DeviceResponse>" }
 // (older shape: an array, or a wrapping array per id). Returns a flattened shape.
 export function decodeVpToken(vpToken: unknown): DisclosedEntry[] {
@@ -54,33 +84,18 @@ export function decodeVpToken(vpToken: unknown): DisclosedEntry[] {
     : Object.entries((vpToken as Record<string, unknown>) ?? {});
   return entries.map(([id, token]) => {
     const str = Array.isArray(token) ? token[0] : token;
-    const dr = decode(b64urlToBytes(str as string)) as any;
-    const flat: { label: string; value: any }[] = [];
-    let type: string | undefined;
-    for (const doc of dr.documents ?? []) {
-      type = doc.docType;
-      const nameSpaces = doc.issuerSigned?.nameSpaces ?? {};
-      for (const [ns, items] of Object.entries(nameSpaces)) {
-        for (const raw of items as unknown[]) {
-          const isi = decodeTagged(raw);
-          flat.push({ label: `${ns} / ${isi.elementIdentifier}`, value: sanitize(isi.elementValue) });
-        }
-      }
-    }
-    return { id, format: "mso_mdoc", type, claims: flat };
+    return disclosedFromResponse(decodeDeviceResponse(str as string), id);
   });
 }
 
 // The payment binding lives in deviceSigned, not issuerSigned. Returns the
 // transaction_data_hash bytes as base64url, or null.
 export function extractTransactionDataHash(
-  vpStr: string | string[],
+  response: DeviceResponse,
   namespace = "urn:eudi:sca:payment:1",
   element = "transaction_data_hash",
 ): string | null {
-  const str = Array.isArray(vpStr) ? vpStr[0] : vpStr;
-  const dr = decode(b64urlToBytes(str)) as any;
-  for (const doc of dr.documents ?? []) {
+  for (const doc of response.documents ?? []) {
     const ns = decodeTagged(doc.deviceSigned?.nameSpaces);
     const val = ns?.[namespace]?.[element];
     if (val instanceof Uint8Array) return Buffer.from(val).toString("base64url");
@@ -94,13 +109,11 @@ export function extractTransactionDataHash(
 // "SHA-256"; otherwise it is the raw COSE integer (e.g. -43 for SHA-384) that verify
 // maps to a hash function.
 export function extractTransactionDataHashAlg(
-  vpStr: string | string[],
+  response: DeviceResponse,
   namespace = "urn:eudi:sca:payment:1",
   element = "transaction_data_hash_alg",
 ): number | null {
-  const str = Array.isArray(vpStr) ? vpStr[0] : vpStr;
-  const dr = decode(b64urlToBytes(str)) as any;
-  for (const doc of dr.documents ?? []) {
+  for (const doc of response.documents ?? []) {
     const ns = decodeTagged(doc.deviceSigned?.nameSpaces);
     const val = ns?.[namespace]?.[element];
     if (typeof val === "number") return val;
@@ -114,10 +127,8 @@ export interface AuthBlocks {
   docType: string | null;
 }
 
-export function inspectAuthBlocks(vpStr: string | string[]): AuthBlocks {
-  const str = Array.isArray(vpStr) ? vpStr[0] : vpStr;
-  const dr = decode(b64urlToBytes(str)) as any;
-  const doc = (dr.documents ?? [])[0] ?? {};
+export function inspectAuthBlocks(response: DeviceResponse): AuthBlocks {
+  const doc = (response.documents ?? [])[0] ?? {};
   const issuerAuth = doc.issuerSigned?.issuerAuth;
   const deviceAuth = doc.deviceSigned?.deviceAuth;
   return {

@@ -20,7 +20,8 @@ import { verifyDcPresentation } from "./verify.js";
 import type { CeremonyCatalog, CeremonyOrder } from "../types.js";
 import type { Origin } from "../origin.js";
 
-const enc = new Encoder({ useRecords: false, variableMapSize: true, useTag259ForMaps: false });
+const encoderOptions = { useRecords: false, variableMapSize: true, useTag259ForMaps: false };
+const enc = new Encoder(encoderOptions);
 const cbor = (v: unknown): Buffer => enc.encode(v);
 
 const SECRET = "stable-test-secret";
@@ -84,9 +85,9 @@ function paymentDeviceResponseB64(transactionDataHashHex: string | null, coseAlg
   return Buffer.from(dr).toString("base64url");
 }
 
-async function walletEncrypt(encJwk: jose.JWK, dpc: string): Promise<string> {
+async function walletEncrypt(encJwk: jose.JWK, dpc: string | string[]): Promise<string> {
   const pub = await jose.importJWK(encJwk, "ECDH-ES");
-  return await new jose.CompactEncrypt(new TextEncoder().encode(JSON.stringify({ vp_token: { dpc: [dpc] } })))
+  return await new jose.CompactEncrypt(new TextEncoder().encode(JSON.stringify({ vp_token: { dpc: Array.isArray(dpc) ? dpc : [dpc] } })))
     .setProtectedHeader({ alg: "ECDH-ES", enc: "A128GCM" })
     .encrypt(pub);
 }
@@ -110,6 +111,20 @@ function txHashHexWith(alg: "sha256" | "sha384" | "sha512", transactionDataB64: 
 }
 
 describe("dc-payment REAL OpenID4VP presentation", () => {
+  it.each([true, false])("uses only the first dpc entry (first hash matches=%s)", async (matches) => {
+    const order: CeremonyOrder = catalog.createOrder([{ productId: "aurora-headphones", quantity: 1 }], "ORD-FIRST");
+    const req = await buildDcPaymentRequest(order, ORIGIN, SECRET);
+    const valid = paymentDeviceResponseB64(txHashHex(req.transaction_data[0]));
+    const invalid = paymentDeviceResponseB64(txHashHex("a-different-transaction-data-string"));
+    const entries = matches ? [valid, invalid] : [invalid, valid];
+    const response = await walletEncrypt(encJwkOf(req.request), entries);
+    const out = await verifyDcPresentation({ order, origin: ORIGIN, result: { data: { response } }, readerContextToken: req.readerContextToken, secret: SECRET });
+    expect(out.mandate.userAuthorization.vpToken).toBe(entries[0]);
+    expect(out.gates.find((g) => g.gate === "Amount binding")?.pass).toBe(matches);
+    expect(out.gates.every((g) => g.pass)).toBe(matches);
+    expect(out.mandate.trust_level).toBe("presence-only-demo");
+  });
+
   it("decrypts the wallet response, re-derives the transaction_data hash, and passes all four gates", async () => {
     const order: CeremonyOrder = catalog.createOrder([{ productId: "aurora-headphones", quantity: 1 }], "ORD-RP1");
     const req = await buildDcPaymentRequest(order, ORIGIN, SECRET);
