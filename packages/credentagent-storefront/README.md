@@ -375,11 +375,11 @@ leaves the cart intact.
 
 Pass a `verifier` and the **same** `store.gate(...)` policy runs a real, issuer-trust-verified,
 amount-bound payment through an external verifier/processor — only the backend moves in. The first real
-adapter lives host-side in [`openwallet-foundation/multipaz-utopia`](https://github.com/openwallet-foundation/multipaz-utopia)
-(tracked in [multipaz-utopia#16](https://github.com/openwallet-foundation/multipaz-utopia/issues/16)):
+adapter lives host-side in the [Utopia Marketplace MCP server](https://github.com/openwallet-foundation/multipaz-utopia/tree/main/organizations/marketplace/mcp)
+([`src/verifier.ts`](https://github.com/openwallet-foundation/multipaz-utopia/blob/main/organizations/marketplace/mcp/src/verifier.ts)):
 
 ```ts
-const store = createStorefront({ verifier });   // e.g. the multipaz-utopia adapter, once it lands
+const store = createStorefront({ verifier });   // e.g. Utopia's multipazUpayVerifier(...)
 new CredentAgent().mount(store.app);             // zero-arg — picks the verifier up from app.locals
 ```
 

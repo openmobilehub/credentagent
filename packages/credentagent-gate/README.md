@@ -663,10 +663,10 @@ The one rule that makes delegation safe: **trust is delegable, binding is not.**
 
 The concrete verifier is a **host-side adapter** — no processor-specific symbol lives in this package.
 
-> **No real adapter ships yet.** This package defines the *interface*; the first real adapter lives
-> host-side in [`openwallet-foundation/multipaz-utopia`](https://github.com/openwallet-foundation/multipaz-utopia)
-> (**S6**, tracked in [multipaz-utopia#16](https://github.com/openwallet-foundation/multipaz-utopia/issues/16)).
-> Today the only way to run the delegated rail is a **stand-in** like the scripted verifier in
+> **No adapter ships in this package.** This package defines the *interface*; the first real adapter
+> lives host-side in the [Utopia Marketplace MCP server](https://github.com/openwallet-foundation/multipaz-utopia/tree/main/organizations/marketplace/mcp) —
+> [`src/verifier.ts`](https://github.com/openwallet-foundation/multipaz-utopia/blob/main/organizations/marketplace/mcp/src/verifier.ts), which hands verification and settlement to Multipaz and UPay.
+> Without a host like that, the way to run the delegated rail is a **stand-in** like the scripted verifier in
 > [`examples/delegated-verifier/`](../../examples/delegated-verifier) — a test double, never shipped, and
 > deliberately kept out of the runnable `run-storefront` example. Stating this plainly is the honesty
 > fence working, not a gap.
