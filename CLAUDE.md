@@ -196,7 +196,8 @@ anticipate it when authoring:
   Stripe-grade ergonomics (the example-is-the-test rule, above) alongside the security invariants.
   `claude-review` is **opt-in and currently ON** (re-enabled 2026-09-29): the job only runs when
   the repo variable `ENABLE_CLAUDE_REVIEW` is `"true"`, and it posts its findings to the PR
-  (`--comment`). It is not a required check, so **human review is still the gate**. To pause it,
+  (`--comment`). It runs Opus at `--effort high`, or `max` for `release/*` branches and any
+  change under `packages/credentagent-gate/src/`. It is not a required check, so **human review is still the gate**. To pause it,
   `gh variable set ENABLE_CLAUDE_REVIEW --body false` — the job is then **skipped**. The
   `CLAUDE_CODE_OAUTH_TOKEN` secret must come from an account that can use Claude Code
   (`claude setup-token`); an unusable token errors on every PR.
