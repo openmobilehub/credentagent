@@ -21,6 +21,7 @@
 import type { Branding } from "../types.js";
 import type { CompletionRefusalReason } from "./types.js";
 import { INSPECTOR_URL, VERIFIER_URL, X509_URL } from "./inspect.js";
+import { scriptJson } from "./script-json.js";
 
 function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -586,7 +587,7 @@ export function inspectLinkScript(): string {
 export function recordLinkScript(statusUrl: string | undefined): string {
   const safe = typeof statusUrl === "string" && (/^\/(?!\/)/.test(statusUrl) || /^https:\/\//i.test(statusUrl));
   if (!safe) return "function showRecordLink(){}";
-  return `function showRecordLink(){if(document.getElementById("record-link"))return;var c=document.getElementById("receipt")||document.body;var d=document.createElement("div");d.id="record-link";d.className="inspect";d.style.cssText="margin-top:12px;padding:10px 12px;border:1px solid var(--hairline);border-radius:10px";var a=document.createElement("a");a.href=${JSON.stringify(statusUrl).replace(/</g, "\\u003c")};a.target="_blank";a.rel="noopener noreferrer";a.style.fontWeight="600";a.textContent="Order record ›";var n=document.createElement("div");n.className="small";n.textContent="The store's order-status record (JSON): the completed order and what was proven for it, each with its trust level.";d.appendChild(a);d.appendChild(n);c.appendChild(d);}`;
+  return `function showRecordLink(){if(document.getElementById("record-link"))return;var c=document.getElementById("receipt")||document.body;var d=document.createElement("div");d.id="record-link";d.className="inspect";d.style.cssText="margin-top:12px;padding:10px 12px;border:1px solid var(--hairline);border-radius:10px";var a=document.createElement("a");a.href=${scriptJson(statusUrl).replace(/</g, "\\u003c")};a.target="_blank";a.rel="noopener noreferrer";a.style.fontWeight="600";a.textContent="Order record ›";var n=document.createElement("div");n.className="small";n.textContent="The store's order-status record (JSON): the completed order and what was proven for it, each with its trust level.";d.appendChild(a);d.appendChild(n);c.appendChild(d);}`;
 }
 
 /**
