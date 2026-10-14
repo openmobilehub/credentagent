@@ -41,7 +41,7 @@ import type { webcrypto as NodeWebCrypto } from "node:crypto";
 import { CipherSuite, DhkemP256HkdfSha256, HkdfSha256, Aes128Gcm } from "@hpke/core";
 import * as jose from "jose";
 import * as x509 from "@peculiar/x509";
-import { decodeVpToken, type DisclosedEntry } from "./mdoc.js";
+import { decodeDeviceResponse, disclosedFromResponse, type DisclosedEntry } from "./mdoc.js";
 import type { ReaderIdentity } from "../../types.js";
 
 x509.cryptoProvider.set(globalThis.crypto);
@@ -348,8 +348,9 @@ export async function decryptDeviceResponse(args: {
 }
 
 // ── Decrypted DeviceResponse → disclosed claims (reuses ./mdoc.ts) ────────────
+// Raw decrypted bytes in → a ONE-entry list out (id "mdoc"), the shape decodeVpToken returns.
 export function disclosedFromDeviceResponse(deviceResponse: Uint8Array): DisclosedEntry[] {
-  return decodeVpToken({ mdoc: bytesToB64url(deviceResponse) });
+  return [disclosedFromResponse(decodeDeviceResponse(deviceResponse), "mdoc")];
 }
 
 // ── Stateless reader context (carries the reader key + encryptionInfo from

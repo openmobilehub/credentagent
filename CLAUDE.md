@@ -200,6 +200,17 @@ anticipate it when authoring:
   `gh variable set ENABLE_CLAUDE_REVIEW --body false` — the job is then **skipped**. The
   `CLAUDE_CODE_OAUTH_TOKEN` secret must come from an account that can use Claude Code
   (`claude setup-token`); an unusable token errors on every PR.
+- **Which account pays for Claude in CI** — one repo variable, `CLAUDE_AUTH`, switches all three
+  Claude workflows (the PR review, `@claude` replies, and the nightly `agent-e2e`) together:
+  - unset, or anything but `api` — the Claude **subscription** login (`CLAUDE_CODE_OAUTH_TOKEN`
+    secret). This is the default. Runs count against that subscription's usage limits.
+  - `api` — an **API key** (`ANTHROPIC_API_KEY` secret), billed to that key's Console
+    organization. If the secret is missing, or its credit runs out, the runs **fail** until you
+    switch back.
+
+  Switch with `gh variable set CLAUDE_AUTH --body api` and back with
+  `gh variable set CLAUDE_AUTH --body subscription`. No PR is needed, and it takes effect on the
+  next run. Set the secrets in the GitHub web UI, not through a piped shell.
 - **Fork / external-contributor PRs** — the automated job is **skipped** (fork runs can't
   read the `CLAUDE_CODE_OAUTH_TOKEN` secret), so it never blocks you. A skipped required
   check counts as passing. Those PRs are reviewed by one of:

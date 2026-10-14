@@ -6,6 +6,10 @@ live in `assertions.mjs`. It signs in like Claude Code does: in CI with the `CLA
 secret (create one with `claude setup-token`; the nightly workflow skips cleanly without it), and
 locally with your existing Claude Code login.
 
+To bill the nightly run to an API key instead of the subscription, set the repo variable
+`CLAUDE_AUTH` to `api` (it then uses the `ANTHROPIC_API_KEY` secret and fails if that is missing).
+The same variable switches the PR review — see "Code review" in the root `CLAUDE.md`.
+
 **Target the deployed store with `E2E_MCP_URL`** — defaults to the prod demo
 (`https://credentagent.ai/marketplace/mcp`), so the nightly workflow needs no env. Set it to the
 dev twin `https://credentagent.ai/marketplace-dev/mcp` (which runs `main`'s unpublished source) to

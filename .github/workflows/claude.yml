@@ -34,7 +34,10 @@ jobs:
         id: claude
         uses: anthropics/claude-code-action@v1
         with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Which account pays is the repo variable CLAUDE_AUTH (CLAUDE.md, "Code review"):
+          # unset = the Claude subscription login; "api" = an API key. Exactly one is passed.
+          anthropic_api_key: ${{ vars.CLAUDE_AUTH == 'api' && secrets.ANTHROPIC_API_KEY || '' }}
+          claude_code_oauth_token: ${{ vars.CLAUDE_AUTH != 'api' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
 
           # This is an optional setting that allows Claude to read CI results on PRs
           additional_permissions: |
