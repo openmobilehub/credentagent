@@ -193,7 +193,7 @@ export function runDoctor(input: DoctorInput): DoctorReport {
       code: "ephemeral-checkout-key",
       message:
         "The merchant's checkout key was generated at boot. A cart quoted before a restart, or on another instance, no longer verifies — that delegated purchase is refused.",
-      fix: "Pass `new CredentAgent({ checkoutSigningKey })` with a stable private P-256 JWK from your secret manager — a different one from mandateSigningKey, and one per store: two stores on one host that share it accept each other's carts (#335).",
+      fix: "Pass `new CredentAgent({ checkoutSigningKey })` with a stable private P-256 JWK from your secret manager — a different one from mandateSigningKey, and one per store: two stores on one host that share it accept each other's carts (https://github.com/openmobilehub/credentagent/issues/335).",
     });
   }
 
