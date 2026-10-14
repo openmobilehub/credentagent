@@ -468,3 +468,21 @@ describe("a malformed disclosure set is refused, not unpacked", () => {
     if (!out.ok) expect(out.reason).toMatch(/disclosure/i);
   });
 });
+
+// #331: merchantOrigin names the merchant the person signs for. It is required, and checked at
+// runtime too — these functions are exported, and a JavaScript caller that leaves it out must be
+// refused, not handed a permission naming no store (or, before #331, the host root's store).
+describe("merchantOrigin is required (#331)", () => {
+  const base = { bounds: bounds(), origin: ORIGIN, secret: SECRET, delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS };
+
+  it("REFUSES to build a signing request without a merchantOrigin (bypass)", async () => {
+    await expect(buildIntentSignRequest({ ...base } as never)).rejects.toThrow(/merchantOrigin is required/);
+    await expect(buildIntentSignRequest({ ...base, merchantOrigin: "/coffee" })).rejects.toThrow(/absolute http\(s\) URL/);
+  });
+
+  it("REFUSES to verify without a merchantOrigin — a refusal, never a throw (bypass)", async () => {
+    const { req, result } = await signFor(bounds());
+    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: bounds(), origin: ORIGIN, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS } as never);
+    expect(out).toMatchObject({ ok: false, reason: expect.stringMatching(/merchantOrigin is required/) });
+  });
+});

@@ -31,13 +31,12 @@ function store(walletOrigin: string) {
   return { credentagent, app };
 }
 
-/** `host` is the host the phone reaches the signing page on — the wallet binds to it. */
-async function signOnPhone(app: Express, id: string, host = HOST) {
-  const req = await request(app).get(`/credentagent/grants/${id}/sign/request`).set("Host", host);
+async function signOnPhone(app: Express, id: string) {
+  const req = await request(app).get(`/credentagent/grants/${id}/sign/request`).set("Host", HOST);
   expect(req.status).toBe(200);
   const oid = req.body as { requests: { data: { request: string } }[]; dcql_query: unknown; readerContextToken: string };
-  const result = await devSimulateWalletSignature({ request: { request: oid.requests[0].data.request, dcql_query: oid.dcql_query as never }, origin: `http://${host}` });
-  return request(app).post(`/credentagent/grants/${id}/sign/verify`).set("Host", host).send({ readerContextToken: oid.readerContextToken, result });
+  const result = await devSimulateWalletSignature({ request: { request: oid.requests[0].data.request, dcql_query: oid.dcql_query as never }, origin: ORIGIN });
+  return request(app).post(`/credentagent/grants/${id}/sign/verify`).set("Host", HOST).send({ readerContextToken: oid.readerContextToken, result });
 }
 
 const cartAt = (origin: string): UcpCheckout => ({
@@ -51,14 +50,18 @@ const cartAt = (origin: string): UcpCheckout => ({
 });
 
 /** The coffee store's permission, signed on the phone, spent by the agent at `at`. */
-async function spendCoffeePermissionAt(atOrigin: string, at?: ReturnType<typeof store>, signingHost = HOST) {
+/** The coffee store's permission, signed on the phone — what the agent holds. */
+async function coffeePermission() {
   const agentKey = AgentKey.generate();
   const coffee = store(COFFEE);
   const created = await coffee.credentagent.grants.create({ merchant: "coffee", budget: 200, perSpend: 30, allow: { skus: ["coffee"] }, agentKey: agentKey.publicJwk });
-  expect((await signOnPhone(coffee.app, created.id, signingHost)).body).toMatchObject({ ok: true, status: "authorized" });
+  expect((await signOnPhone(coffee.app, created.id)).body).toMatchObject({ ok: true, status: "authorized" });
   const grant = (await coffee.credentagent.grants.retrieve(created.id))!;
+  return { agentKey, coffee, intent: DelegatedIntent.fromWalletPresentation(grant.mandate!.intent!) };
+}
 
-  const intent = DelegatedIntent.fromWalletPresentation(grant.mandate!.intent!);
+async function spendCoffeePermissionAt(atOrigin: string, at?: ReturnType<typeof store>) {
+  const { agentKey, coffee, intent } = await coffeePermission();
   const target = at ?? coffee;
   const proof = await intent.spend({
     agentKey,
@@ -92,11 +95,18 @@ describe("#331 — a store's identity includes its base path", () => {
     expect(verdict).toMatchObject({ ok: true });
   });
 
-  it("names the store from its configured walletOrigin, never from the request's host", async () => {
-    // The phone reaches the signing page on another host (a CDN edge, an alias). The merchant
-    // the permission names must still be the configured store — so the store accepts it.
-    const verdict = await spendCoffeePermissionAt(COFFEE, undefined, "edge.example");
-    expect(verdict).toMatchObject({ ok: true });
+  it("the permission the person signs names the store with its path", async () => {
+    const { intent } = await coffeePermission();
+    type Allowed = { type: string; allowed?: { id: string }[] };
+    const ids = (m: { constraints: unknown[] }, type: string) =>
+      (m.constraints as Allowed[]).find((c) => c.type === type)?.allowed?.map((x) => x.id);
+    expect(ids(intent.openCheckout as never, "checkout.allowed_merchants")).toEqual(["shop.example/coffee"]);
+    expect(ids(intent.openPayment as never, "payment.allowed_payees")).toEqual(["shop.example/coffee"]);
+  });
+
+  it("REFUSES the coffee store's permission at the store at the host's root (bypass)", async () => {
+    const verdict = await spendCoffeePermissionAt(ORIGIN, store(ORIGIN));
+    expect(verdict).toMatchObject({ ok: false, code: "constraint" });
   });
 
   it("REFUSES the coffee store's permission at the wine store on the same host (bypass)", async () => {

@@ -56,6 +56,23 @@ export type DelegateHashAlg = keyof typeof HASH_ALGS;
 export const DEFAULT_HASH_ALG: DelegateHashAlg = "sha-256";
 
 /** Is `alg` one this rail can actually compute? A wallet asked for anything else cannot answer. */
+/**
+ * Why `merchantOrigin` can't name a merchant, or null when it can. It must be an absolute
+ * http(s) URL: the store's `walletOrigin`. Checked at runtime because the intent-sign
+ * functions are exported, and a JavaScript caller that leaves it out would otherwise name no
+ * merchant at all (or, before #331, the host root — a sibling store's id).
+ */
+export function merchantOriginProblem(v: unknown): string | null {
+  if (typeof v !== "string" || v.length === 0) return "merchantOrigin is required: the store's public URL (walletOrigin), path included";
+  try {
+    const u = new URL(v);
+    if (u.protocol === "https:" || u.protocol === "http:") return null;
+  } catch {
+    // fall through
+  }
+  return `merchantOrigin must be an absolute http(s) URL, got ${JSON.stringify(v)}`;
+}
+
 export function isDelegateHashAlg(alg: string): alg is DelegateHashAlg {
   return alg in HASH_ALGS;
 }

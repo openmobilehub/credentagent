@@ -61,7 +61,7 @@ the widget shows the confirmation. Add the headphones instead and the age gate d
 > The path is also part of the store's identity: a spending permission signed at
 > `shop.example/store` names that store, so another store on the same host (`shop.example/other`,
 > or the root) refuses it — provided each store signs its carts with its own
-> `checkoutSigningKey` (#335). For the same reason, give every deployment its own `walletOrigin`:
+> `checkoutSigningKey` ([#335](https://github.com/openmobilehub/credentagent/issues/335)). For the same reason, give every deployment its own `walletOrigin`:
 > two that share one (say, a preview copying production's) are one merchant.
 
 ### Branding the ceremony pages
@@ -266,6 +266,9 @@ because a quoted cart and an issued mandate are different statements: each key's
 ever checked against `credentagent.ap2.checkoutPublicJwk`. Passing the same JWK for both throws. Omit it
 and the gate generates one at boot; `doctor()` warns on a deployment, because a cart quoted before a
 restart, or on another instance, then no longer verifies.
+Give each store its **own** checkout key, even two stores on one host: a store accepts any cart its
+key signed, so stores that share one would accept each other's carts
+([#335](https://github.com/openmobilehub/credentagent/issues/335)).
 
 Mint and check:
 

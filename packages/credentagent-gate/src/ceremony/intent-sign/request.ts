@@ -20,7 +20,7 @@ import { makeReaderCert, makeEncryptionKey } from "../mdoc/reader.js";
 import { sealReaderContext } from "../mdoc/readerContext.js";
 import { buildIntentSignDcql, PAYMENT_CREDENTIAL_ID } from "./dcql.js";
 import { boundsHash, deriveNonce, type IntentBoundsInput } from "./bounds.js";
-import { delegateEntries, openMandatesForGrant, type DelegateHashAlg, type DelegateJwk, type MandateContent } from "./mandates.js";
+import { delegateEntries, merchantOriginProblem, openMandatesForGrant, type DelegateHashAlg, type DelegateJwk, type MandateContent } from "./mandates.js";
 import type { DcqlQuery, ReaderIdentity } from "../../types.js";
 
 export interface SignedIntentRequest {
@@ -68,6 +68,8 @@ export async function buildIntentSignRequest(args: {
    *  know the path, and guessing the root would let a sibling store accept the permission. */
   merchantOrigin: string;
 }): Promise<SignedIntentRequest> {
+  const merchantProblem = merchantOriginProblem(args.merchantOrigin);
+  if (merchantProblem) throw new TypeError(merchantProblem);
   const { bounds, origin, secret } = args;
   const dcql = buildIntentSignDcql();
   const { x5c, privateKey } = await makeReaderCert(origin.rpID, args.readerIdentity);

@@ -33,6 +33,7 @@ import { dcApiAudience, verifyDelegatedPresentation } from "./presentation.js";
 import {
   delegateEntries,
   delegatePayloadMatches,
+  merchantOriginProblem,
   openMandatesForGrant,
   type DelegateHashAlg,
   type DelegateJwk,
@@ -182,6 +183,8 @@ export async function verifyIntentPresentation(args: {
   /** Trust backend (FR-4). Defaults to the in-gate key-binding check. */
   backend?: IntentVerifyBackend;
 }): Promise<IntentVerifyResult> {
+  const merchantProblem = merchantOriginProblem(args.merchantOrigin);
+  if (merchantProblem) return { ok: false, reason: merchantProblem };
   const { result, readerContextToken, secret, bounds, origin, nonceGuard } = args;
   const backend = args.backend ?? inGateBackend;
 
