@@ -196,21 +196,30 @@ anticipate it when authoring:
   Stripe-grade ergonomics (the example-is-the-test rule, above) alongside the security invariants.
   `claude-review` is **opt-in and currently ON** (re-enabled 2026-09-29): the job only runs when
   the repo variable `ENABLE_CLAUDE_REVIEW` is `"true"`, and it posts its findings to the PR
-  (`--comment`). It is not a required check, so **human review is still the gate**. To pause it,
+  (`--comment`). It runs Opus at `--effort high`, or `max` for `release/*` branches and any
+  change under `packages/credentagent-gate/src/`. It is not a required check, so **human review is still the gate**. To pause it,
   `gh variable set ENABLE_CLAUDE_REVIEW --body false` — the job is then **skipped**. The
   `CLAUDE_CODE_OAUTH_TOKEN` secret must come from an account that can use Claude Code
   (`claude setup-token`); an unusable token errors on every PR.
-- **Which account pays for Claude in CI** — one repo variable, `CLAUDE_AUTH`, switches all three
-  Claude workflows (the PR review, `@claude` replies, and the nightly `agent-e2e`) together:
-  - unset, or anything but `api` — the Claude **subscription** login (`CLAUDE_CODE_OAUTH_TOKEN`
-    secret). This is the default. Runs count against that subscription's usage limits.
+- **Which account pays for Claude in CI** — the PR review and `@claude` replies **always** use the
+  Claude **subscription** login (`CLAUDE_CODE_OAUTH_TOKEN` secret). The nightly `agent-e2e` alone
+  follows one repo variable, `CLAUDE_AUTH`:
+  - unset, or anything but `api` — the subscription login too. This is the default. Runs count
+    against that subscription's usage limits.
   - `api` — an **API key** (`ANTHROPIC_API_KEY` secret), billed to that key's Console
-    organization. If the secret is missing, or its credit runs out, the runs **fail** until you
+    organization. If the secret is missing, or its credit runs out, the run **fails** until you
     switch back.
 
   Switch with `gh variable set CLAUDE_AUTH --body api` and back with
   `gh variable set CLAUDE_AUTH --body subscription`. No PR is needed, and it takes effect on the
   next run. Set the secrets in the GitHub web UI, not through a piped shell.
+
+  Why the review is not switchable: on 2026-10-13 `CLAUDE_AUTH=api` also moved the review onto
+  the key, and every review failed in under a second with "Credit balance is too low". The key's
+  only funding is the Max plan's included API credit, and the API refuses that credit for requests
+  from `anthropics/claude-code-action`, while accepting the same key from the Agent SDK (what
+  `agent-e2e` uses) and from `claude -p`. The action hides this message; a review that dies
+  instantly with `is_error: true` and `total_cost_usd: 0` is the signature.
 - **Fork / external-contributor PRs** — the automated job is **skipped** (fork runs can't
   read the `CLAUDE_CODE_OAUTH_TOKEN` secret), so it never blocks you. A skipped required
   check counts as passing. Those PRs are reviewed by one of:
