@@ -404,7 +404,7 @@ function homeRequires(requires: unknown[], base: string, cart?: string | null): 
     const entry = e as { approveUrl?: unknown };
     if (typeof entry.approveUrl !== "string") return e;
     let approveUrl = homeApproveUrl(entry.approveUrl, base);
-    if (cart) approveUrl += `${approveUrl.includes("?") ? "&" : "?"}cart=${cart}`;
+    if (cart) approveUrl += `${approveUrl.includes("?") ? "&" : "?"}cart=${encodeURIComponent(cart)}`;
     return { ...entry, approveUrl };
   });
 }
@@ -539,7 +539,7 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
     return Buffer.from(JSON.stringify(mandate)).toString("base64url");
   };
   const withCart = (url: string, cart?: string | null): string =>
-    cart ? `${url}${url.includes("?") ? "&" : "?"}cart=${cart}` : url;
+    cart ? `${url}${url.includes("?") ? "&" : "?"}cart=${encodeURIComponent(cart)}` : url;
 
   // Resolve a created order by id: from a VERIFIED cart mandate (statelessOrders, no store
   // read) or the createdOrderStore. Fails closed — a forged/tampered/expired mandate → null.

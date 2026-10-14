@@ -780,6 +780,19 @@ describe("statelessOrders — the cart mandate is the order transport (FR-007)",
     const res = await request(store.app).get(url.pathname + "?" + url.searchParams.toString());
     expect(res.status).toBe(404); // verifyCartMandate refuses the edited cart → resolveCreated null
   });
+
+  // #330: a VALID mandate with a tail after `=` still decodes (base64url stops there), so the
+  // page renders — and each link it builds from `cart` must carry it encoded, or the tail
+  // becomes extra query parameters on the gate links.
+  it("BYPASS: a tailed cart cannot add query parameters to the page's links", async () => {
+    const store = makeStateless();
+    const url = await checkoutUrl(store);
+    url.searchParams.set("cart", `${url.searchParams.get("cart")}=&injected=1`);
+    const res = await request(store.app).get(url.pathname + "?" + url.searchParams.toString());
+    expect(res.status).toBe(200);
+    expect(res.text).toContain("%26injected%3D1"); // the tail rides inside cart=, encoded
+    expect(res.text).not.toMatch(/(&|&amp;|\\u0026)injected=1/); // never as its own parameter
+  });
 });
 
 // Full checkout walk in BOTH custody modes — the regression Diego hit: after the age

@@ -41,6 +41,10 @@ Read the closest existing rail end-to-end before writing anything.
    `cart`/`cartMandate` in the verify POST body, carry it in the page's `returnUrl`
    and any device toggle. Dropping it 404s the store-less checkout. (This is the
    exact bug class that bit dc-payment's ungated place-order and the passkey toggle.)
+   It arrives from the URL, so it is attacker-controlled: join it as
+   `cart=${encodeURIComponent(cart)}`, and drop any value into the page's `<script>` with
+   `scriptJson()` (`ceremony/script-json.ts`), never a bare `JSON.stringify` — that does not
+   escape `</script>` (#330; the lint rule enforces it).
 6. **Honor the invariants** (`SECURITY-INVARIANTS.md`) — the load-bearing ones for a rail:
    - #1 enforce server-side in `/verify` **AND** the shared `completeOrder` — hiding a button is not enforcement.
    - #2 re-derive amounts from the catalog; never trust the order token.
