@@ -204,7 +204,7 @@ export interface StorefrontOptions {
   /**
    * Optional label for THIS deployment — e.g. `"dev.3f9c2a1"` (where + which commit) — so two
    * deployments of the same package version can be told apart. Reported next to the version by
-   * `GET /version`, and to MCP clients as semver build metadata (`0.5.0+dev.3f9c2a1`).
+   * `GET /version`, and to MCP clients as semver build metadata (`<version>+dev.3f9c2a1`).
    * Characters outside `[0-9A-Za-z.-]` become `-`.
    */
   build?: string;

@@ -525,7 +525,7 @@ const prescription = defineCredential({
   id: "prescription",
   request: dcql({ docType: "org.hl7.prescription.1", claims: ["rx_valid"] }),
   verify: (c) => c.rx_valid === true,
-  effect: gate(),                                   // or discount({ percent }) / authorize()
+  effect: gate(),                                   // the only effect a custom credential supports today
   appliesTo: (order) => order.lines.some((l) => l.requiresRx),  // definition-time conditional
   ui: { label: "Prescription", action: "Verify prescription" },
 });
@@ -536,7 +536,10 @@ const prescription = defineCredential({
 never-retain by default). The credential id defaults to a stable, unique derivation from the full
 doctype (`org.openwallet.payment.1` → `org_openwallet_payment_1`); pass `dcql({ docType, claims, id })`
 to name it yourself. The three effect builders — `gate()`, `discount({ percent })`, `authorize()` —
-are the only effects the resolver interprets.
+are the only effects the resolver interprets. A **custom** credential takes `gate()` only:
+`defineCredential` throws on `discount()` or `authorize()`, because neither would be enforced for it
+yet (a custom `authorize` would complete unproven). The built-ins that use them (`membership`,
+`payment`) keep their own paths.
 
 A custom credential is **served by the mounted ceremony and enforced end-to-end** — no new code
 path: `requirements()` registers it by id, the credential-gate rail builds the wallet request from
@@ -832,8 +835,10 @@ is the fast-follow, and the gate **relays** that level verbatim with the attesto
 Test the whole flow **with no phone** using the exported simulated wallet — see
 [`examples/device-signed-grants.mjs`](https://github.com/openmobilehub/credentagent/blob/main/examples/device-signed-grants.mjs)
 (`devSimulateWalletSignature` produces a real device signature the way Stripe's test cards stand in
-for a real card). The **on-device** path — import `payment.mpzpass` into Multipaz and sign on a
-phone — is verified separately.
+for a real card). The **on-device** path is verified separately: the grant asks the wallet for an
+**SD-JWT** payment credential (`vct` `urn:emvco:dpc:card:1` or `com.emvco.dpc`), so mint one with
+`node tools/demo-pki/mint/mint-dpc-sdjwt.mjs --mpzpass`, import the resulting `dpc.mpzpass` into
+Multipaz, and sign on the phone. The mdoc `payment.mpzpass` from the demo set no longer matches.
 
 ### Credentials on a grant — presented before you authorize, or not at all
 
@@ -921,15 +926,23 @@ effectively a bearer instrument, fenced as a demo. A *real* HNP control requires
 "delegated"` **and** `trust_level: "issuer-verified"`; the HTTP intent rail + the wallet server that
 provide those are later increments.
 
-## API surface (v0.1)
+## API surface
 
 ```ts
 // Client (configure once, then declarative calls)
 class CredentAgent {
-  constructor(opts?: { walletOrigin?: string; store?: VerificationStore; credentials?: Credential[]; branding?: Branding; inspectPresentations?: boolean });
+  constructor(opts?: CredentAgentOptions);   // walletOrigin, store, credentials, branding, inspectPresentations,
+                                             // readerIdentity, orderStore, completedOrderStore, gateSecret, webhooks,
+                                             // catalog, loyaltyDiscountPct, mandateSigningKey, checkoutSigningKey
+                                             // (the two keys: stable private P-256 JWKs from your secret manager)
   requirements(order: GateOrder, policy: Step[]): VerificationManifestEntry[];   // Context 1
-  mount(app: ExpressApp, ceremony?: MountCeremony): void;                        // Context 2
+  mount(app: ExpressApp, ceremony?: MountCeremony): void;                        // Context 2 (+ /.well-known/did.json)
   doctor(opts?: { print?: boolean }): DoctorReport;                              // config preflight (#25)
+  readonly orders: Orders;     // orders.create / retrieve / serve
+  readonly grants: Grants;     // spending grants
+  readonly webhooks: Webhooks;
+  readonly ap2: Ap2Issuer;     // AP2 mandates signed with mandateSigningKey
+  on(event: "order.settled", handler): void;
 }
 
 // Policy builders + extensibility
@@ -953,6 +966,17 @@ sealIntent  ·  checkDraw  ·  signDraw  ·  MemoryRevocationStore  ·  Draw / I
 // signingKey-gated check in completeOrder + the opt-in `statelessOrders` transport
 issueCartMandate(args, secret)  ·  verifyCartMandate(mandate, orderId, secret)  ·  DEFAULT_CART_MANDATE_TTL_MS
 
+// AP2 mandates (SD-JWT, ES256) — the store's own, and checking any
+credentagent.ap2.checkout(args) · .payment(args) · .openCheckout(args) · .openPayment(args) · .signCheckout(checkout)
+verifyMandate(token, { publicJwk, … })  ·  didWebFor(origin)  ·  didDocument(...)  ·  resolveSigningKey(...)
+
+// Agent purchases — the store's side (the agent's side is the /agent entry point below)
+verifyDelegatedPurchase(proof, { trust: "presence-only-demo", audience, nonce, checkoutKey, spent?, price?, nowMs? })
+  → PurchaseVerdict | PurchaseRefusal   // { ok: false, code, detail }
+
+// Money — whole minor units (cents), never floats
+amountFrom · amountOfMinor · amountsEqual · formatAmount · sumAmounts · toMajorUnits · toMinorUnits · exponentFor
+
 // Retained Mode-B / roadmap blocking primitive
 gated()  ·  buildVerificationRequired()  ·  isVerificationRequired()  ·  envelopeInstruction()
 ageDcql()  ·  ENVELOPE_VERSION  ·  ENVELOPE_SENTINEL
@@ -962,6 +986,12 @@ ageDcql()  ·  ENVELOPE_VERSION  ·  ENVELOPE_SENTINEL
 //        TrustLevel, DcqlQuery, DcqlClaim, DcqlCredentialOption, ExpressApp,
 //        CompletionSeam / SettlementSeam / CeremonyOrder (host composition)
 //        DelegatedVerifier / DelegatedVerdict / DelegatedHandoff / SettlementRecordLike (delegated seam)
+
+// Entry points besides the root
+"@openmobilehub/credentagent-gate/agent"   // the AGENT's side; holds its private key, so never imported by a store
+  AgentKey.generate() · AgentKey.fromJwk(jwk) · DelegatedIntent.fromWalletPresentation({ presentation, disclosures }) · intent.spend(args) → DelegatedPurchaseProof
+"@openmobilehub/credentagent-gate/cards"   // the card kit, first slice: the permission card's data contract
+  GRANT_VIEW_KIND · GrantViewData · GrantViewProduct
 ```
 
 Full, compiler-checked contract: [`specs/001-attesto-sdk/`](https://github.com/openmobilehub/mcp-apps-shopping-demo/tree/main/specs/001-attesto-sdk/) (the

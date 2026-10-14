@@ -349,7 +349,7 @@ order.total;                                      // 124
 Pure functions — no globals — so the same code serves any storefront. Pass your own `Product[]` as
 the catalog; unknown ids are collected (`unknownIds`), not thrown.
 
-## What's real in v0.1
+## What's in the package
 
 - `createStorefront(opts)` → `{ app, catalog, gate, listen, mcpServer }` — the runnable MCP server
   (ten tools, widget resource, checkout page) over HTTP, catalog-injected, gate-ready.
@@ -364,7 +364,10 @@ the catalog; unknown ids are collected (`unknownIds`), not thrown.
   edit products with no redeploy; loaded + cached server-side, fail-closed.
 
 `createStorefront()` accepts `{ catalog, reviews, baseUrl, cartStore, orderStore, createdOrderStore,
-verificationStore, storage, signingKey, allowEphemeralKey, settle, verifier }`. `catalog` is a
+orderCartStore, verificationStore, storage, signingKey, allowEphemeralKey, statelessOrders, statelessMcp,
+build, settle, verifier, grants, merchant, approvalHoldMs }`. `orderCartStore` remembers which cart each
+order came from, so completion empties that cart; share it on a multi-instance deployment. `build`
+labels a deployment (see [`GET /version`](#which-version-is-live--get-version)). `catalog` is a
 `Product[]` (static) or a `CatalogSource` (dynamic, e.g. `firestoreCatalog(...)`). `baseUrl` is the
 public URL checkout links start from (default: the first request's origin); behind a proxy that serves
 the store under a path, include it (`https://shop.example/store`) and give the gate the same
