@@ -567,7 +567,7 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
 
   // Prime the catalog before EVERY route runs — including the `/credentagent/*` ceremony
   // rails a consumer mounts later (registered after this middleware, so this runs first).
-  // Awaiting the TTL-cached load means every synchronous `source.current()` below reads a
+  // Awaiting the load (any caching is the source's own) means every synchronous `source.current()` below reads a
   // warm, server-side re-derived snapshot. A cold/unreachable load FAILS CLOSED (503, no
   // handler runs) rather than serving an empty catalog (Security invariant 2). The static
   // default resolves instantly and never fails, so the zero-config path is unchanged.

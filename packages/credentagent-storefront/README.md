@@ -143,7 +143,7 @@ serves — the same version MCP clients see in the protocol's server info:
 and which commit), so two deployments of the same version can be told apart. MCP clients then see
 `0.5.0+dev.3f9c2a1`.
 
-## Live catalog — one option, no loader
+## Live catalog — one option over your own database
 
 `createStorefront({ catalog })` takes a static `Product[]` by default — perfect for the quickstart.
 A real merchant wants to edit products **without a redeploy**, i.e. a **dynamic catalog source**.
