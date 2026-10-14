@@ -10,7 +10,6 @@ import type { AddressInfo } from "node:net";
 import { readFileSync } from "node:fs";
 import { createStorefront, originFromRequest, verificationRevision, bundleVersion, type Storefront, type CompletedOrderRecord } from "./server.js";
 import { redisStorage, type RedisLike } from "./redis.js";
-import { firestoreCatalog, type FirestoreLike } from "./firestore.js";
 import { MemoryOrderStore } from "./state.js";
 import { SAMPLE_CATALOG, type CatalogSource, type Order, type Product } from "./index.js";
 import { CredentAgent, age, membership, payment, required, optional, defineCredential, dcql, gate, MemoryVerificationStore } from "@openmobilehub/credentagent-gate";
@@ -39,21 +38,21 @@ function fakeRedis(): RedisLike & { store: Map<string, unknown> } {
 const mockReq = (headers: Record<string, string>, protocol = "http"): Request =>
   ({ headers, protocol } as unknown as Request);
 
-// A fake Firestore so a `firestoreCatalog(...)` source can be driven through createStorefront
-// with no live Firebase. `fail(true)` simulates an unreachable backend.
-function fakeFirestore(
-  docs: Array<{ id: string; data: Record<string, unknown> }>,
-): FirestoreLike & { fail: (v: boolean) => void } {
+// A dynamic CatalogSource double so the storefront's dynamic-catalog paths can be driven with
+// no backend. `fail(true)` simulates an unreachable backend: `load()` rejects.
+function fakeCatalogSource(products: Product[]): CatalogSource & { fail: (v: boolean) => void } {
   let failing = false;
+  let lastGood: Product[] | undefined;
   return {
     fail: (v: boolean) => { failing = v; },
-    collection() {
-      return {
-        async get() {
-          if (failing) throw new Error("firestore unreachable");
-          return { docs: docs.map((d) => ({ id: d.id, data: () => d.data })) };
-        },
-      };
+    async load() {
+      if (failing) throw new Error("catalog backend unreachable");
+      lastGood = products;
+      return products;
+    },
+    current() {
+      if (!lastGood) throw new Error("catalog not loaded yet");
+      return lastGood;
     },
   };
 }
@@ -556,17 +555,17 @@ describe("cold-instance custom-gate enforcement (item 5 — register-on-resolve 
   });
 });
 
-describe("dynamic catalog source (spec 006) — createStorefront({ catalog: firestoreCatalog(...) })", () => {
-  const DOCS = [
-    { id: "oak-whiskey", data: { name: "Oak Reserve", price: 124, currency: "USD", category: "Beverages", minimumAge: 21 } },
-    { id: "drift-mouse", data: { name: "Drift Mouse", price: 49, currency: "USD", category: "Electronics" } },
+describe("dynamic catalog source (spec 006) — createStorefront({ catalog: <CatalogSource> })", () => {
+  const DOCS: Product[] = [
+    { id: "oak-whiskey", name: "Oak Reserve", price: 124, currency: "USD", image: "", category: "Beverages", description: "", minimumAge: 21 },
+    { id: "drift-mouse", name: "Drift Mouse", price: 49, currency: "USD", image: "", category: "Electronics", description: "" },
   ];
 
   const checkoutId = async (c: Client, productId: string): Promise<string> =>
     ((await c.callTool({ name: "checkout", arguments: { items: [{ productId, quantity: 1 }] } })).structuredContent as any).orderId;
 
-  function gatedDynamicStore(fs: FirestoreLike): Storefront {
-    const store = createStorefront({ catalog: firestoreCatalog({ client: fs }) });
+  function gatedDynamicStore(catalog: CatalogSource): Storefront {
+    const store = createStorefront({ catalog });
     const credentagent = new CredentAgent();
     credentagent.mount(store.app);
     store.gate((order) =>
@@ -578,26 +577,26 @@ describe("dynamic catalog source (spec 006) — createStorefront({ catalog: fire
     return store;
   }
 
-  it("serves the Firestore-loaded catalog through the tools (incl. the doc's age threshold)", async () => {
-    const c = await connect(createStorefront({ catalog: firestoreCatalog({ client: fakeFirestore(DOCS) }) }));
+  it("serves the source-loaded catalog through the tools (incl. the product's age threshold)", async () => {
+    const c = await connect(createStorefront({ catalog: fakeCatalogSource(DOCS) }));
     const res = (await c.callTool({ name: "browse-products", arguments: {} })).structuredContent as any;
     expect(res.products.map((p: any) => p.id).sort()).toEqual(["drift-mouse", "oak-whiskey"]);
     expect(res.products.find((p: any) => p.id === "oak-whiskey").minimumAge).toBe(21);
   });
 
   it("re-derives the age gate from the LIVE catalog on the checkout path (invariant 2)", async () => {
-    const store = gatedDynamicStore(fakeFirestore(DOCS));
+    const store = gatedDynamicStore(fakeCatalogSource(DOCS));
     const orderId = await checkoutId(await connect(store), "oak-whiskey");
     const res = await request(store.app).get(`/checkout?order=${orderId}`);
     expect(res.status).toBe(200);
-    expect(res.text).toContain("cred=age"); // the age gate, derived from the doc's minimumAge
+    expect(res.text).toContain("cred=age"); // the age gate, derived from the product's minimumAge
     expect(res.text).toContain("Payment is locked"); // withheld until age is proven
   });
 
   // BYPASS (Security invariant 1): a gated dynamic-catalog order POSTed straight to the
   // instant-demo path is refused server-side, exactly like a static-catalog gated order.
   it("BYPASS: a gated order over a dynamic catalog is refused at place-order (403)", async () => {
-    const store = gatedDynamicStore(fakeFirestore(DOCS));
+    const store = gatedDynamicStore(fakeCatalogSource(DOCS));
     const orderId = await checkoutId(await connect(store), "oak-whiskey");
     await request(store.app).post("/checkout/place-order").type("form").send({ order: orderId }).expect(403);
     const status = await request(store.app).get(`/checkout/order-status?orderId=${orderId}`);
@@ -608,9 +607,9 @@ describe("dynamic catalog source (spec 006) — createStorefront({ catalog: fire
   // every request (503) rather than serve an empty catalog. FAILS if the prime middleware /
   // fail-closed path is removed (the request would proceed against an absent catalog).
   it("FAIL-CLOSED: an unreachable cold catalog load makes requests 503", async () => {
-    const fs = fakeFirestore(DOCS);
-    fs.fail(true); // down on the FIRST (cold) load — no last-known-good
-    const store = createStorefront({ catalog: firestoreCatalog({ client: fs }) });
+    const catalog = fakeCatalogSource(DOCS);
+    catalog.fail(true); // down on the FIRST (cold) load — no last-known-good
+    const store = createStorefront({ catalog });
     const res = await request(store.app).get(`/checkout/order-status?orderId=whatever`);
     expect(res.status).toBe(503);
   });
@@ -1194,12 +1193,12 @@ describe("list-products — the catalog as plain data (no widget)", () => {
     }
   });
 
-  it("reads through a dynamic CatalogSource (firestoreCatalog) unchanged", async () => {
-    const docs = [
-      { id: "oak-whiskey", data: { name: "Oak Reserve", price: 124, currency: "USD", category: "Beverages", minimumAge: 21 } },
-      { id: "drift-mouse", data: { name: "Drift Mouse", price: 49, currency: "USD", category: "Electronics" } },
+  it("reads through a dynamic CatalogSource unchanged", async () => {
+    const docs: Product[] = [
+      { id: "oak-whiskey", name: "Oak Reserve", price: 124, currency: "USD", image: "", category: "Beverages", description: "", minimumAge: 21 },
+      { id: "drift-mouse", name: "Drift Mouse", price: 49, currency: "USD", image: "", category: "Electronics", description: "" },
     ];
-    const c = await connect(createStorefront({ catalog: firestoreCatalog({ client: fakeFirestore(docs) }) }));
+    const c = await connect(createStorefront({ catalog: fakeCatalogSource(docs) }));
     const sc = (await list(c, { category: "Beverages", fields: ["price", "minimumAge"] })).structuredContent as any;
     expect(sc.products).toEqual([{ id: "oak-whiskey", price: 124, minimumAge: 21 }]);
   });
