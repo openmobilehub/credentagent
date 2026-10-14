@@ -7,7 +7,7 @@ Each is runnable against the two `@openmobilehub/credentagent-*` packages (build
 - [`storefront.mjs`](#storefrontmjs--a-credential-gated-storefront-in-8-lines) — a credential-gated storefront in ~8 lines
 - [`custom-credential.mjs`](#custom-credentialmjs--gate-any-action-with-any-credential) — gate any action with **any** credential (Principle V)
 - [`with-x402-settlement.mjs`](#with-x402-settlementmjs--settle-payment-on-chain-via-the-settle-seam) — settle payment on-chain via the `settle` seam
-- [`storefront-redis.mjs`](storefront-redis.mjs) / [`storefront-firestore.mjs`](storefront-firestore.mjs) — injectable persistence (Upstash Redis stores / Firestore catalog source)
+- [`storefront-redis.mjs`](storefront-redis.mjs) — injectable persistence (Upstash Redis stores)
 - [`run-storefront/`](run-storefront/) — run THIS repo's storefront directly (stateful + stateless side by side)
 - [`delegated-verifier/`](delegated-verifier/) — the delegated-payment rail end-to-end with a LOCAL stand-in verifier (008): click a real delegated checkout, or boot with `VERDICT=wrong-amount|underage|declined` to watch the gate refuse a misbehaving verifier
 
