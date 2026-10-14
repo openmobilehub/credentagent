@@ -44,7 +44,9 @@ Read the closest existing rail end-to-end before writing anything.
    It arrives from the URL, so it is attacker-controlled: join it as
    `cart=${encodeURIComponent(cart)}`, and drop any value into the page's `<script>` with
    `scriptJson()` (`ceremony/script-json.ts`), never a bare `JSON.stringify` — that does not
-   escape `</script>` (#330; the lint rule enforces it).
+   escape `</script>` (#330). Lint catches only a `JSON.stringify(…)` written directly in a
+   page template under `ceremony/`; the `cart` encoding and any other value you put in a
+   script are on you — pin them with a bypass test.
 6. **Honor the invariants** (`SECURITY-INVARIANTS.md`) — the load-bearing ones for a rail:
    - #1 enforce server-side in `/verify` **AND** the shared `completeOrder` — hiding a button is not enforcement.
    - #2 re-derive amounts from the catalog; never trust the order token.

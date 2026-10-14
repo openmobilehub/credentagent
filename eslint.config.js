@@ -89,7 +89,7 @@ export default [
         {
           selector: "TemplateLiteral > CallExpression[callee.object.name='JSON'][callee.property.name='stringify']",
           message:
-            "Interpolating JSON.stringify into a page template can close its <script> (#330): use scriptJson() from ceremony/script-json.ts.",
+            "Interpolating JSON.stringify into a page template can close its <script> — page integrity on the consent pages (SECURITY-INVARIANTS.md #6-adjacent, #330): use scriptJson() from ceremony/script-json.ts.",
         },
       ],
     },
