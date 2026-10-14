@@ -276,9 +276,8 @@ export function projectProduct(product: Product, fields: readonly string[]): Pro
 
 /**
  * A source of products for `createStorefront({ catalog })`. The static-array default is
- * wrapped in `staticCatalog(...)`; a DYNAMIC source (e.g. `firestoreCatalog(...)` from
- * `@openmobilehub/credentagent-storefront/firestore`) loads products server-side with a TTL
- * cache so a merchant edits the catalog without a redeploy.
+ * wrapped in `staticCatalog(...)`; a DYNAMIC source (one you write over your own database)
+ * loads products server-side, cached, so a merchant edits the catalog without a redeploy.
  *
  * Two methods so an async source can feed the gate's SYNCHRONOUS ceremony re-price:
  * `load()` refreshes (fail-closed on a cold/empty load); `current()` returns the
