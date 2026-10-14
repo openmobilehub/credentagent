@@ -64,9 +64,9 @@ export async function buildIntentSignRequest(args: {
   /** The store's public URL — `walletOrigin`, path included — which names the merchant the
    *  mandates bind to (`merchantFor`, the same id the store's own checkouts carry). Separate
    *  from `origin`, the bare origin the wallet presentation is bound to: a store served under
-   *  a path is a different merchant from its host's root (#331). Defaults to `origin.origin`,
-   *  right only for a store at the root. */
-  merchantOrigin?: string;
+   *  a path is a different merchant from its host's root (#331). Required — no default could
+   *  know the path, and guessing the root would let a sibling store accept the permission. */
+  merchantOrigin: string;
 }): Promise<SignedIntentRequest> {
   const { bounds, origin, secret } = args;
   const dcql = buildIntentSignDcql();
@@ -83,7 +83,7 @@ export async function buildIntentSignRequest(args: {
   // what came back to be identical.
   const mandates = openMandatesForGrant({
     bounds,
-    origin: args.merchantOrigin ?? origin.origin,
+    origin: args.merchantOrigin,
     delegate: args.delegate,
     exp: args.mandateExp,
     allowedSkus: args.allowedSkus,

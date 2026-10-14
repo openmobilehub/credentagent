@@ -60,7 +60,9 @@ the widget shows the confirmation. Add the headphones instead and the age gate d
 > fetch and redirect carries `/store`. The wallet still binds to the page's origin.
 > The path is also part of the store's identity: a spending permission signed at
 > `shop.example/store` names that store, so another store on the same host (`shop.example/other`,
-> or the root) refuses it.
+> or the root) refuses it — provided each store signs its carts with its own
+> `checkoutSigningKey` (#335). For the same reason, give every deployment its own `walletOrigin`:
+> two that share one (say, a preview copying production's) are one merchant.
 
 ### Branding the ceremony pages
 

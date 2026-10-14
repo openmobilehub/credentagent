@@ -163,9 +163,9 @@ export async function verifyIntentPresentation(args: {
   /** The store's public URL — `walletOrigin`, path included — which names the merchant the
    *  mandates bind to (`merchantFor`, the same id the store's own checkouts carry). Separate
    *  from `origin`, the bare origin the wallet presentation is bound to: a store served under
-   *  a path is a different merchant from its host's root (#331). Defaults to `origin.origin`,
-   *  right only for a store at the root. */
-  merchantOrigin?: string;
+   *  a path is a different merchant from its host's root (#331). Required — no default could
+   *  know the path, and guessing the root would let a sibling store accept the permission. */
+  merchantOrigin: string;
   nonceGuard: NonceGuard;
   /** The agent's public key, from the SERVER's grant record — the `cnf` the mandates name. */
   delegate: DelegateJwk;
@@ -258,7 +258,7 @@ export async function verifyIntentPresentation(args: {
   // with the same deterministic salts `/request` used, and re-hashed. Identical input ⇒ identical
   // digest, so this refuses for exactly the same reasons the old byte comparison did — and it
   // additionally catches a wallet that signed only some of the `delegate` entries.
-  const expected = openMandatesForGrant({ bounds, origin: args.merchantOrigin ?? origin.origin, delegate: args.delegate, exp: args.mandateExp, allowedSkus: args.allowedSkus });
+  const expected = openMandatesForGrant({ bounds, origin: args.merchantOrigin, delegate: args.delegate, exp: args.mandateExp, allowedSkus: args.allowedSkus });
   const { digests, disclosures } = delegateEntries({
     mandates: expected,
     credentialId: PAYMENT_CREDENTIAL_ID,
