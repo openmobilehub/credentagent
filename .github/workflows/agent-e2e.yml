@@ -6,8 +6,9 @@ name: agent-e2e
 # order completed. Catches the failure class the deterministic smokes can't: "an agent can no longer
 # figure out our tools."
 #
-# Runs on the Claude Agent SDK and signs in the same way the automated PR review does. Which account
-# pays is the repo variable CLAUDE_AUTH (CLAUDE.md, "Code review"):
+# Runs on the Claude Agent SDK. Which account pays is the repo variable CLAUDE_AUTH (CLAUDE.md,
+# "Code review"); it applies to this workflow only — the PR review and @claude always use the
+# subscription login:
 #   unset  — the CLAUDE_CODE_OAUTH_TOKEN secret (the Claude subscription login). With no token the step
 #            SKIPS (green, with a notice).
 #   "api"  — the ANTHROPIC_API_KEY secret. With no key the step FAILS: asking for the API and not
