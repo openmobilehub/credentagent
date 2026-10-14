@@ -2,7 +2,7 @@
 
 **Branch**: `feat/attesto-gate-v0.1` | **Date**: 2026-06-25 | **Spec**: [spec.md](./spec.md)
 
-**Input**: Feature specification from `specs/001-attesto-sdk/spec.md`; governance from `.specify/memory/constitution.md` (v1.0.0)
+**Input**: Feature specification from `specs/001-credentagent-sdk/spec.md`; governance from `.specify/memory/constitution.md` (v1.0.0)
 
 ## Summary
 
@@ -67,13 +67,13 @@ consolidated (Mode A) only; DCO sign-off; presence-only trust (real verifier def
 ### Documentation (this feature)
 
 ```text
-specs/001-attesto-sdk/
+specs/001-credentagent-sdk/
 ├── plan.md              # This file
 ├── research.md          # Phase 0 — design decisions
 ├── data-model.md        # Phase 1 — entities (client, policy, credential, manifest, store)
 ├── quickstart.md        # Phase 1 — runnable validation (build + bypass test + demo)
 ├── contracts/
-│   └── attesto-gate.api.md   # Phase 1 — the public API surface (the contract)
+│   └── credentagent-gate.api.md   # Phase 1 — the public API surface (the contract)
 └── tasks.md             # Phase 2 — /speckit-tasks (NOT created here)
 ```
 

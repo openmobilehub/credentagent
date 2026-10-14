@@ -484,7 +484,7 @@ app.post("/checkout/:id", async (req, res) => {
 ## The three execution contexts
 
 The split is load-bearing — conflating them is the documented root cause of confusion
-([spec §0](https://github.com/openmobilehub/credentagent/blob/main/specs/001-attesto-sdk/spec.md)). v0.1 is consolidated **Mode A**:
+([spec §0](https://github.com/openmobilehub/credentagent/blob/main/specs/001-credentagent-sdk/spec.md)). v0.1 is consolidated **Mode A**:
 
 1. **Tool — mints the link + reports requirements.** Your `checkout` handler runs once when
    checkout is requested. There is no phone in the loop, so it does **not** run a ceremony — it
@@ -513,7 +513,7 @@ conditional with `.when((order) => boolean)` — it returns a fresh `Credential`
 predicate is AND-ed onto any existing `appliesTo`.
 
 **Gate any credential** with `defineCredential` — no registration step, usable by object
-(from [`specs/001-attesto-sdk/quickstart.md`](https://github.com/openmobilehub/credentagent/blob/main/specs/001-attesto-sdk/quickstart.md)):
+(from [`specs/001-credentagent-sdk/quickstart.md`](https://github.com/openmobilehub/credentagent/blob/main/specs/001-credentagent-sdk/quickstart.md)):
 
 ```ts
 import { defineCredential, dcql, gate } from "@openmobilehub/credentagent-gate";
@@ -961,8 +961,8 @@ ageDcql()  ·  ENVELOPE_VERSION  ·  ENVELOPE_SENTINEL
 //        DelegatedVerifier / DelegatedVerdict / DelegatedHandoff / SettlementRecordLike (delegated seam)
 ```
 
-Full, compiler-checked contract: [`specs/001-attesto-sdk/`](https://github.com/openmobilehub/credentagent/tree/main/specs/001-attesto-sdk/) (the
-[quickstart](https://github.com/openmobilehub/credentagent/blob/main/specs/001-attesto-sdk/quickstart.md), [`spec.md`](https://github.com/openmobilehub/credentagent/blob/main/specs/001-attesto-sdk/spec.md),
-and the [mount contract](https://github.com/openmobilehub/credentagent/blob/main/specs/003-gate-ceremony-extraction/contracts/attesto-mount.api.md)).
+Full, compiler-checked contract: [`specs/001-credentagent-sdk/`](https://github.com/openmobilehub/credentagent/tree/main/specs/001-credentagent-sdk/) (the
+[quickstart](https://github.com/openmobilehub/credentagent/blob/main/specs/001-credentagent-sdk/quickstart.md), [`spec.md`](https://github.com/openmobilehub/credentagent/blob/main/specs/001-credentagent-sdk/spec.md),
+and the [mount contract](https://github.com/openmobilehub/credentagent/blob/main/specs/003-gate-ceremony-extraction/contracts/credentagent-mount.api.md)).
 
 Apache-2.0 · part of [Open Mobile Hub](https://openmobilehub.org) (Linux Foundation).
