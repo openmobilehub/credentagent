@@ -58,6 +58,9 @@ the widget shows the confirmation. Add the headphones instead and the age gate d
 > Behind a proxy that serves your app under a path (`https://shop.example/store/*` → your `/*`),
 > include the path — `walletOrigin: "https://shop.example/store"` — and every approve link, page
 > fetch and redirect carries `/store`. The wallet still binds to the page's origin.
+> The path is also part of the store's identity: a spending permission signed at
+> `shop.example/store` names that store, so another store on the same host (`shop.example/other`,
+> or the root) refuses it.
 
 ### Branding the ceremony pages
 

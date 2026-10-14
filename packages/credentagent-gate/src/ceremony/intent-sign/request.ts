@@ -61,10 +61,12 @@ export async function buildIntentSignRequest(args: {
   /** The digest algorithm the `delegate` entries ask for. Defaults to `sha-256` (RFC 9901's). */
   hashAlg?: DelegateHashAlg;
   readerIdentity?: ReaderIdentity;
-  /** The gate's base path (`basePathOf(walletOrigin)`), when it is served under one. It is
-   *  part of the merchant identity the mandates name (#331); `origin` stays the bare origin
-   *  the presentation is bound to. */
-  basePath?: string;
+  /** The store's public URL — `walletOrigin`, path included — which names the merchant the
+   *  mandates bind to (`merchantFor`, the same id the store's own checkouts carry). Separate
+   *  from `origin`, the bare origin the wallet presentation is bound to: a store served under
+   *  a path is a different merchant from its host's root (#331). Defaults to `origin.origin`,
+   *  right only for a store at the root. */
+  merchantOrigin?: string;
 }): Promise<SignedIntentRequest> {
   const { bounds, origin, secret } = args;
   const dcql = buildIntentSignDcql();
@@ -81,7 +83,7 @@ export async function buildIntentSignRequest(args: {
   // what came back to be identical.
   const mandates = openMandatesForGrant({
     bounds,
-    origin: `${origin.origin}${args.basePath ?? ""}`,
+    origin: args.merchantOrigin ?? origin.origin,
     delegate: args.delegate,
     exp: args.mandateExp,
     allowedSkus: args.allowedSkus,
