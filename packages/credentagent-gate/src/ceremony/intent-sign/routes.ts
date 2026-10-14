@@ -12,7 +12,7 @@
 // Every endpoint re-derives the grant's bounds from the SERVER's record and refuses if the
 // grant is unknown, page-mode, or no longer pending. The verify handler re-derives boundsHash
 // server-side and requires equality (verify.ts) before authorizing.
-import { deriveOrigin, type Origin, type RequestLike } from "../origin.js";
+import { basePathOf, deriveOrigin, type Origin, type RequestLike } from "../origin.js";
 import { buildIntentSignRequest } from "./request.js";
 import { verifyIntentPresentation, memoryNonceGuard } from "./verify.js";
 import type { Grants } from "../../grants.js";
@@ -101,6 +101,7 @@ export function registerIntentSignRail(app: RailApp, grants: Grants): void {
         mandateExp,
         allowedSkus,
         origin: originOf(req),
+        basePath: basePathOf(cfg.walletOrigin),
         secret: cfg.secret,
         ...(cfg.readerIdentity ? { readerIdentity: cfg.readerIdentity } : {}),
       });
@@ -141,6 +142,7 @@ export function registerIntentSignRail(app: RailApp, grants: Grants): void {
         secret: cfg.secret,
         bounds,
         origin: originOf(req),
+        basePath: basePathOf(cfg.walletOrigin),
         nonceGuard,
       });
       if (!out.ok) { res.status(400).json({ ok: false, reason: out.reason }); return; }

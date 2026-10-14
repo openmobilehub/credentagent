@@ -160,6 +160,10 @@ export async function verifyIntentPresentation(args: {
   /** The grant's bounds from the SERVER's record (never the client). */
   bounds: IntentBoundsInput;
   origin: { origin: string };
+  /** The gate's base path (`basePathOf(walletOrigin)`), when it is served under one. It is
+   *  part of the merchant identity the mandates name (#331); `origin` stays the bare origin
+   *  the presentation is bound to. */
+  basePath?: string;
   nonceGuard: NonceGuard;
   /** The agent's public key, from the SERVER's grant record — the `cnf` the mandates name. */
   delegate: DelegateJwk;
@@ -252,7 +256,7 @@ export async function verifyIntentPresentation(args: {
   // with the same deterministic salts `/request` used, and re-hashed. Identical input ⇒ identical
   // digest, so this refuses for exactly the same reasons the old byte comparison did — and it
   // additionally catches a wallet that signed only some of the `delegate` entries.
-  const expected = openMandatesForGrant({ bounds, origin: origin.origin, delegate: args.delegate, exp: args.mandateExp, allowedSkus: args.allowedSkus });
+  const expected = openMandatesForGrant({ bounds, origin: `${origin.origin}${args.basePath ?? ""}`, delegate: args.delegate, exp: args.mandateExp, allowedSkus: args.allowedSkus });
   const { digests, disclosures } = delegateEntries({
     mandates: expected,
     credentialId: PAYMENT_CREDENTIAL_ID,
