@@ -10,7 +10,7 @@ of the same gate, not the point** — `minimumAge` on a product is all it takes 
 > **Design preview.** The pure pricing/order model (`@openmobilehub/credentagent-storefront`)
 > and the runnable MCP server (`@openmobilehub/credentagent-storefront/server`) are real and tested,
 > and the API can still change before 1.0. See the repo's [`ROADMAP.md`](https://github.com/openmobilehub/credentagent/blob/main/ROADMAP.md).
-> For a storefront running it end to end, see the [Utopia Marketplace MCP server](https://github.com/TheBlackBit/multipaz-utopia/tree/main/organizations/marketplace/mcp).
+> For a storefront running it end to end, see the [Utopia Marketplace MCP server](https://github.com/openwallet-foundation/multipaz-utopia/tree/main/organizations/marketplace/mcp).
 
 ## Install
 

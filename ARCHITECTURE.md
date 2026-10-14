@@ -13,7 +13,7 @@ This repo is two npm packages:
 | [`@openmobilehub/credentagent-storefront`](../../packages/credentagent-storefront) | The agentic storefront core — a runnable MCP shopping server (cart → priced cart → order, ten tools, a widget, a checkout page), catalog-injected. | `createStorefront()` |
 
 The end-to-end DEMO that runs both packages (Claude, ChatGPT, Goose) is the
-[Utopia Marketplace MCP server](https://github.com/TheBlackBit/multipaz-utopia/tree/main/organizations/marketplace/mcp) in the separate
+[Utopia Marketplace MCP server](https://github.com/openwallet-foundation/multipaz-utopia/tree/main/organizations/marketplace/mcp) in the separate
 `multipaz-utopia` repo — linked, not duplicated here. The runnable reference in this repo is
 `examples/quickstart`.
 

@@ -27,7 +27,7 @@ and the only one that includes the cross-package integration suite (see *Testing
 expectations*). `npm run test:workspaces` is the faster inner loop and skips it.
 `npm run build` typechecks + builds each package. The end-to-end DEMO is the
 **Utopia Marketplace MCP server** in a **separate** repo,
-[`TheBlackBit/multipaz-utopia`](https://github.com/TheBlackBit/multipaz-utopia/tree/main/organizations/marketplace/mcp),
+[`openwallet-foundation/multipaz-utopia`](https://github.com/openwallet-foundation/multipaz-utopia/tree/main/organizations/marketplace/mcp),
 which consumes these packages from npm — link to it, don't describe it as part of this repo.
 
 ## Status & decisions — GitHub is the source of truth

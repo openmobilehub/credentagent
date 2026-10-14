@@ -125,7 +125,7 @@ settlement flow, including the passkey (same-device + cross-device caBLE) and
 Digital-Credentials payment rails and an x402 → Hedera on-chain settlement lab.
 
 To see both packages in a real deployment, look at the
-[Utopia Marketplace MCP server](https://github.com/TheBlackBit/multipaz-utopia/tree/main/organizations/marketplace/mcp): an AI agent shops its
+[Utopia Marketplace MCP server](https://github.com/openwallet-foundation/multipaz-utopia/tree/main/organizations/marketplace/mcp): an AI agent shops its
 catalog, and verification and settlement are delegated to Multipaz and UPay through the gate's
 `verifier` seam.
 

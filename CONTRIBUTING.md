@@ -14,7 +14,7 @@ Linux Foundation, and the contribution rules below reflect that posture — most
 **DCO sign-off** and the **security-test bar**. Please read this file before opening a PR.
 
 To see the packages in action, run [`examples/quickstart`](./examples/quickstart) here, or look at
-the [Utopia Marketplace MCP server](https://github.com/TheBlackBit/multipaz-utopia/tree/main/organizations/marketplace/mcp), a separate repo that runs both
+the [Utopia Marketplace MCP server](https://github.com/openwallet-foundation/multipaz-utopia/tree/main/organizations/marketplace/mcp), a separate repo that runs both
 packages end to end. Contribute library changes here.
 
 ## Dev setup

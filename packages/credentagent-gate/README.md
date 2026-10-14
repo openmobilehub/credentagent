@@ -7,7 +7,7 @@ prescription, and `payment.in("usd")` are all just credentials in the same polic
 
 > **Design preview.** This package is real and tested, and its API can still change before 1.0.
 > See the repo's [`ROADMAP.md`](https://github.com/openmobilehub/credentagent/blob/main/ROADMAP.md) for what's shipping vs. next. For a
-> storefront running it end to end, see the [Utopia Marketplace MCP server](https://github.com/TheBlackBit/multipaz-utopia/tree/main/organizations/marketplace/mcp).
+> storefront running it end to end, see the [Utopia Marketplace MCP server](https://github.com/openwallet-foundation/multipaz-utopia/tree/main/organizations/marketplace/mcp).
 
 ## Install
 
