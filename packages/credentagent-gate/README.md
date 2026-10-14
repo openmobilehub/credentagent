@@ -114,9 +114,13 @@ the verify response for your own tooling:
 ```
 
 - **Off by default.** A DeviceResponse from a real ID can carry personal data (the disclosed claims,
-  the issuer's certificate chain, a device public key). With the option on, it goes back only to the
-  browser that just presented it — it is never stored, logged, or put in a webhook. The payload
-  rides in the link's `#fragment`, which the browser never sends to the inspector's server. (One
+  the issuer's certificate chain, a device public key). With the option on, it goes back to the
+  browser that just presented it, and stays on the order's verification record (your
+  `VerificationStore`) only until the order completes, so the receipt that browser gets can still
+  link it. The **completed order never carries it**, so nothing read by order id returns it:
+  not `orders.retrieve()`, the status routes, `get-order-status`, or the `order.settled` webhook.
+  It is never logged. The payload rides in the link's `#fragment`, which the browser never sends
+  to the inspector's server. (One
   pre-existing exception: the dc-payment verify response has always carried the same bytes inside
   `mandate.userAuthorization.vpToken`; the option adds only the `presentation` block and the link.)
 - **A refused proof is returned too** — the moment you most want to look at what came back.
@@ -138,16 +142,16 @@ already read (`orders.retrieve()`, `GET /credentagent/orders/:id/status`, and th
 "proofs": [
   { "gate": "Age 21+", "rail": "credential", "trust_level": "presence-only-demo",
     "checks": [{ "gate": "Age over 21", "pass": true, "detail": "age_over_21 disclosed true" }],
-    "presentedAt": "2026-09-27T18:52:10.000Z",
-    "presentation": { "format": "mso_mdoc", "deviceResponse": "o2d2…", "inspectUrl": "https://tools.multipaz.org/mdocDeviceResponse#o2d2…" } },
+    "presentedAt": "2026-09-27T18:52:10.000Z" },
   { "gate": "Pay (USD)", "rail": "instant-demo", "trust_level": "presence-only-demo", "checks": [ … ], "presentedAt": "…" } ]
 ```
 
-- The storefront widget lists each proof on the confirmed order, with an **Inspect ↗** link when
-  `presentation` is there.
-- `presentation` appears only when the store set `inspectPresentations`; without it nothing is stored
-  but the gate, the checks, and the trust level.
-- The **`order.settled` webhook never carries `presentation`** — it goes to another service.
+- The storefront widget lists each proof on the confirmed order.
+- The completed order keeps the gate, the rail, the checks and the trust level — **never the
+  wallet's raw answer (`presentation`), even with `inspectPresentations` on**, because anyone who
+  knows the order id can read it. The **Inspect** link lives on the consent page and on the receipt
+  the presenting browser gets when it completes the order.
+- The `order.settled` webhook carries the same proofs.
 - `rail: "instant-demo"` marks a demo tap, never a wallet proof. Each proof states its own `trust_level`.
 
 ## Orders — a checkout without a storefront

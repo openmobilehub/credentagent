@@ -16,7 +16,8 @@ export interface ProofEntry {
   /** What the gate checked, as the rail reported it. */
   checks: { gate: string; pass: boolean; detail: string }[];
   presentedAt: string;
-  /** The wallet's DeviceResponse + inspector link — only with `inspectPresentations` on. */
+  /** The wallet's DeviceResponse + inspector link — only with `inspectPresentations` on, and only
+   *  until the order completes: the completed order never carries it (#320). */
   presentation?: InspectablePresentation;
 }
 
@@ -25,7 +26,7 @@ export function upsertProof(proofs: readonly ProofEntry[] | undefined, entry: Pr
   return [...(proofs ?? []).filter((p) => p.gate !== entry.gate), entry];
 }
 
-/** The proofs without credential bytes — for payloads that leave the store (webhooks). */
+/** The proofs without credential bytes — for the completed order and everything read from it. */
 export function withoutPresentations(proofs: readonly ProofEntry[] | undefined): ProofEntry[] | undefined {
   return proofs?.map(({ presentation: _drop, ...rest }) => rest);
 }

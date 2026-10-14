@@ -131,13 +131,15 @@ export class Orders {
 
   /** Called by the completion path when an order finishes — records it and emits the
    *  in-process `order.settled` event (see `CredentAgent.on` — a local listener, not a webhook). */
-  async _complete(record: CompletedOrder): Promise<void> {
+  async _complete(completion: CompletedOrder): Promise<void> {
+    // Never the wallet's raw answer (#320): the stored order is served by id to anyone (the
+    // status route, orders.retrieve), and the webhook goes to ANOTHER service. The receipt —
+    // gate, rail, checks, trust level — stays; inspectPresentations is for the presenting browser.
+    const record = completion.proofs ? { ...completion, proofs: withoutPresentations(completion.proofs) } : completion;
     await this.deps.completed.write(record.orderId, record);
     // One completion choke point feeds both signals: the in-process listener AND the HTTP
     // webhook fan-out. Delivery is fire-and-forget — it never blocks or rolls back completion.
     this.deps.emit("order.settled", { id: record.orderId });
-    // The webhook goes to ANOTHER service: it gets the proofs, never the credential bytes
-    // (inspectPresentations keeps those for the buyer's own inspect link only).
-    this.deps.deliverWebhook?.("order.settled", record.proofs ? { ...record, proofs: withoutPresentations(record.proofs) } : record);
+    this.deps.deliverWebhook?.("order.settled", record);
   }
 }

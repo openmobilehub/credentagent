@@ -2,7 +2,8 @@
 // completion and shows up wherever the completed order is read (the order-status endpoints,
 // orders.retrieve, get-order-status). These pin:
 //   • re-proving a gate replaces its entry; webhooks get the proofs without credential bytes;
-//   • completeOrder copies the order's proofs (then the payment's) onto the completed record;
+//   • completeOrder copies the order's proofs (then the payment's) onto the completed record,
+//     WITHOUT the wallet's raw answer — every read of that record is public by order id (#320);
 //   • the credential rail records wallet proofs (bytes only with inspectPresentations) and
 //     labels the instant demo as instant-demo; a proof on one order never reaches another.
 import { describe, it, expect } from "vitest";
@@ -120,7 +121,7 @@ describe("payment rails add their proof", () => {
     expect(pay.body.completed).toBe(true);
     const proofs = h.records.get("W1")!.proofs!;
     expect(proofs.map((p) => [p.gate, p.rail])).toEqual([["Age 21+", "credential"], ["Pay (USD)", "instant-demo"]]);
-    expect(proofs[0].presentation).toBeDefined();
+    expect(proofs[0]).not.toHaveProperty("presentation"); // #320: the completed order never keeps the bytes
     expect(proofs[1]).not.toHaveProperty("presentation");
     expect(proofs[1].checks.length).toBeGreaterThan(0);
   });
@@ -146,6 +147,21 @@ describe("payment rails add their proof", () => {
 });
 
 describe("completeOrder keeps the proofs", () => {
+  it("REFUSES to copy the wallet's raw answer onto the completed record (#320)", async () => {
+    const verificationStore = new MemoryVerificationStore();
+    const presentation = { format: "mso_mdoc" as const, deviceResponse: "RAW", inspectUrl: `${INSPECTOR_URL}#RAW` };
+    await verificationStore.write("O3", { proofs: [entry("Age 21+", { presentation })] });
+    const records = new Map<string, CompletedRecord>();
+    const order = catalog.createOrder([{ productId: "mug", quantity: 1 }], "O3");
+    const out = await completeOrder(
+      { order, mandateId: "m3", amount: 10, currency: "USD", method: "dc-payment", gates: [], proof: entry("Pay (USD)", { rail: "dc-payment", presentation }) },
+      { catalog, verificationStore, records: { read: (id) => records.get(id), write: (r) => void records.set(r.orderId, r) } },
+    );
+    expect(out.completed).toBe(true);
+    expect(records.get("O3")?.proofs).toEqual([entry("Age 21+"), entry("Pay (USD)", { rail: "dc-payment" })]);
+    expect(JSON.stringify(records.get("O3"))).not.toContain("RAW");
+  });
+
   it("copies the order's credential proofs + the payment proof into the completed record, then clears verification", async () => {
     const verificationStore = new MemoryVerificationStore();
     await verificationStore.write("O1", { proofs: [entry("Membership")] });

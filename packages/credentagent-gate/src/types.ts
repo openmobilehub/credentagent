@@ -281,9 +281,11 @@ export interface CredentAgentOptions {
    * "Inspect this presentation" link. A refused proof is returned too.
    *
    * Default `false`: a DeviceResponse from a real ID can hold personal data (the disclosed
-   * claims, the issuer chain, a device public key). It only ever goes back to the browser
-   * that presented it — it is never stored. This verifies nothing new: `trust_level` is
-   * unchanged, and the page says the gate does not check the issuer signature.
+   * claims, the issuer chain, a device public key). It goes back to the browser that
+   * presented it and stays on the order's verification record only until the order
+   * completes; the completed order — and so every status route, `get-order-status` and the
+   * webhook — never carries it. This verifies nothing new: `trust_level` is unchanged, and
+   * the page says the gate does not check the issuer signature.
    */
   inspectPresentations?: boolean;
   /** Per-order verification state; default in-memory, pluggable (Redis). */
