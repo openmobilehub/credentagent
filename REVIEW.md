@@ -93,8 +93,43 @@ is never presented as a real safety control.
 - **Fix it or flag it:** anything broken the PR author must have seen is either
   fixed inline (small and safe) or filed as an issue — never silently ignored.
 
+## 6. Scope: review what ships, not just the diff
+
+The diff is where a review starts, not where it ends.
+
+- **Release / version-bump PRs** ship every change since the previous tag to npm.
+  Review `git diff <previous tag>..HEAD` (`git tag --sort=-v:refname`), and check
+  the release notes (often drafted as a PR comment) against that code: every
+  feature they name exists and works as described, the `trust_level` fencing is
+  intact, and the known-issues list is complete. A bump-only diff is never
+  "nothing to review".
+- **A changed public API, README, or dependency range** puts its callers,
+  `examples/`, and docs in scope. Grep for them; stale ones are findings.
+- **A changed control** puts its other completion paths in scope (invariant 1):
+  find every path that reaches the same outcome and check that each one enforces it.
+
+## 7. Rigor: how deep the review goes
+
+A local review and the automated one must reach the same findings. Shallow
+approvals are the failure mode this section exists to prevent.
+
+- Read every changed file **in full**, plus the callers and callees a finding
+  depends on, not just the hunks.
+- Cover each dimension separately (security + bypass tests, correctness and edge
+  cases, DX + docs truthfulness, honesty fencing + PR text). Parallel sub-agents
+  are the expected way to do it.
+- Verify before reporting, and label each finding **CONFIRMED** (traced end to end)
+  or **PLAUSIBLE** (strong evidence, one named step unproven). Drop a finding
+  only when you can disprove it, not because you're unsure. A labelled PLAUSIBLE
+  finding costs the author a minute; a missed bug costs a release.
+- State the coverage: the scope (`base..head` or `tag..HEAD`), the files read in
+  full, and the dimensions checked. An approval without stated coverage is not an
+  approval.
+
 ## Output contract (automated review)
 
-Report a verdict plus findings, each anchored to `file:line` and naming the
-invariant or principle it violates. Findings that map to §1–§4 are
-request-changes; §5 findings are comments unless they compound.
+Report a verdict plus findings, each anchored to `file:line`, naming the
+invariant or principle it violates, and labelled CONFIRMED or PLAUSIBLE.
+Findings that map to §1–§4 (or a release claim the code does not back, §6) are
+request-changes; §5 findings are comments unless they compound. End with the
+coverage line from §7.
