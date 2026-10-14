@@ -53,6 +53,11 @@ jobs:
       - name: Run Claude Code Review
         id: claude-review
         uses: anthropics/claude-code-action@v1
+        env:
+          # Sub-agents must block until they return. By default they run as background
+          # tasks; on PR #309 the reviewer launched three, ended its turn to wait for them,
+          # and the headless run stopped there, posting nothing.
+          CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
         with:
           # Always the Claude subscription login — the CLAUDE_AUTH variable does NOT apply here.
           # On 2026-10-13 it sent this action to our API key and every review failed in under a
@@ -108,9 +113,14 @@ jobs:
             Shell rules (refused calls are wasted turns): run ONE plain command per Bash
             call. Pipes, `&&`, `;`, `$(...)` and heredocs are refused unless every part is
             on the allowed list, so prefer the Read/Grep/Glob tools for files and run
-            `git`/`gh` commands bare. Post the summary with a single
+            `git`/`gh` commands bare from the working directory (never `git -C <path>`: it
+            does not match the allowed `git diff`/`git log`/... rules). Pass these shell rules
+            on to every sub-agent you launch. Post the summary with a single
             `gh pr comment <n> --body "<markdown>"` call: a plain double-quoted string,
             no `$(cat ...)`, no heredoc, no `--body-file -`.
+
+            This is a single headless run: nobody will resume you. Wait for every sub-agent's
+            result, then post; never end your turn before the summary comment is posted.
 
             Posting (REQUIRED — the job fails if you post nothing):
             - For each finding, post an inline comment on the exact line with
