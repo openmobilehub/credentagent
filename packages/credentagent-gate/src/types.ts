@@ -339,6 +339,9 @@ export interface CredentAgentOptions {
    *
    * Omit for local dev and the gate generates one at boot; `doctor()` warns on a deployment,
    * because a cart quoted before a restart, or on another instance, then no longer verifies.
+   *
+   * Use one per store. Two stores on one host that share it accept each other's carts — the
+   * key id names only the host (#335).
    */
   checkoutSigningKey?: PrivateJwkP256;
   /**

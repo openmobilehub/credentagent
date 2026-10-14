@@ -49,7 +49,6 @@ const cartAt = (origin: string): UcpCheckout => ({
   links: [],
 });
 
-/** The coffee store's permission, signed on the phone, spent by the agent at `at`. */
 /** The coffee store's permission, signed on the phone — what the agent holds. */
 async function coffeePermission() {
   const agentKey = AgentKey.generate();
@@ -60,6 +59,7 @@ async function coffeePermission() {
   return { agentKey, coffee, intent: DelegatedIntent.fromWalletPresentation(grant.mandate!.intent!) };
 }
 
+/** The coffee store's permission, signed on the phone, spent by the agent at `atOrigin`. */
 async function spendCoffeePermissionAt(atOrigin: string, at?: ReturnType<typeof store>) {
   const { agentKey, coffee, intent } = await coffeePermission();
   const target = at ?? coffee;
@@ -102,6 +102,20 @@ describe("#331 — a store's identity includes its base path", () => {
       (m.constraints as Allowed[]).find((c) => c.type === type)?.allowed?.map((x) => x.id);
     expect(ids(intent.openCheckout as never, "checkout.allowed_merchants")).toEqual(["shop.example/coffee"]);
     expect(ids(intent.openPayment as never, "payment.allowed_payees")).toEqual(["shop.example/coffee"]);
+  });
+
+  // Request only — no /sign/verify — so this pins where the merchant id comes from without
+  // depending on how the presentation is bound to the request's host (#229).
+  it("names the store from its configured walletOrigin, not the host the request arrived on", async () => {
+    const coffee = store(COFFEE);
+    const g = await coffee.credentagent.grants.create({ merchant: "coffee", budget: 200, perSpend: 30, allow: { skus: ["coffee"] }, agentKey: AgentKey.generate().publicJwk });
+    const res = await request(coffee.app).get(`/credentagent/grants/${g.id}/sign/request`).set("Host", "edge.example");
+    expect(res.status).toBe(200);
+    const b64 = (x: string) => JSON.parse(Buffer.from(x, "base64url").toString()) as unknown;
+    const claims = b64(res.body.requests[0].data.request.split(".")[1]) as { transaction_data: string[] };
+    const entry = b64(claims.transaction_data[0]) as { delegate_payload_disclosure: string };
+    const [, checkout] = b64(entry.delegate_payload_disclosure) as [string, { constraints: { type: string; allowed?: { id: string }[] }[] }];
+    expect(checkout.constraints.find((c) => c.type === "checkout.allowed_merchants")?.allowed?.map((m) => m.id)).toEqual(["shop.example/coffee"]);
   });
 
   it("REFUSES the coffee store's permission at the store at the host's root (bypass)", async () => {

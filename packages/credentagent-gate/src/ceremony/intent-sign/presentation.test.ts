@@ -470,14 +470,18 @@ describe("a malformed disclosure set is refused, not unpacked", () => {
 });
 
 // #331: merchantOrigin names the merchant the person signs for. It is required, and checked at
-// runtime too — these functions are exported, and a JavaScript caller that leaves it out must be
-// refused, not handed a permission naming no store (or, before #331, the host root's store).
+// runtime too — these functions are exported, so a JavaScript caller that leaves it out (or
+// passes something that is not an http(s) URL) gets a plain refusal, not an `Invalid URL` throw
+// or a permission naming the wrong store.
 describe("merchantOrigin is required (#331)", () => {
   const base = { bounds: bounds(), origin: ORIGIN, secret: SECRET, delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS };
 
   it("REFUSES to build a signing request without a merchantOrigin (bypass)", async () => {
     await expect(buildIntentSignRequest({ ...base } as never)).rejects.toThrow(/merchantOrigin is required/);
     await expect(buildIntentSignRequest({ ...base, merchantOrigin: "/coffee" })).rejects.toThrow(/absolute http\(s\) URL/);
+    // Parses as a URL with an empty host and path "shop.example/wine" — merchantFor would name
+    // the WINE store. Only the http(s) check stops it.
+    await expect(buildIntentSignRequest({ ...base, merchantOrigin: "foo:shop.example/wine" })).rejects.toThrow(/absolute http\(s\) URL/);
   });
 
   it("REFUSES to verify without a merchantOrigin — a refusal, never a throw (bypass)", async () => {

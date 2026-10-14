@@ -230,7 +230,7 @@ Each finding is `{ level: "error" | "warn", code, message, fix }`. It checks the
 | `in-memory-verification-store` | the default in-memory `store` on a deployment | inject a shared `{ store }` (Redis/Upstash) |
 | `in-memory-order-store` | the default in-memory order stores on a deployment | inject `{ orderStore, completedOrderStore }` |
 | `ephemeral-mandate-key` | no `mandateSigningKey` on a deployment — the AP2 key was generated at boot (**error** on any deployment) | pass a stable private P-256 JWK as `{ mandateSigningKey }` |
-| `ephemeral-checkout-key` | no `checkoutSigningKey` on a deployment — the key carts are quoted with was generated at boot (**warn**) | pass a second, different private P-256 JWK as `{ checkoutSigningKey }` |
+| `ephemeral-checkout-key` | no `checkoutSigningKey` on a deployment — the key carts are quoted with was generated at boot (**warn**) | pass a second, different private P-256 JWK as `{ checkoutSigningKey }` — one per store |
 
 In plain local dev — no deployment env signals (`VERCEL`, `AWS_LAMBDA_*`, `NODE_ENV=production`, …) — every
 check stays quiet, so the zero-config quickstart is undisturbed. `ephemeral-mandate-key` is an error even on
@@ -266,8 +266,9 @@ because a quoted cart and an issued mandate are different statements: each key's
 ever checked against `credentagent.ap2.checkoutPublicJwk`. Passing the same JWK for both throws. Omit it
 and the gate generates one at boot; `doctor()` warns on a deployment, because a cart quoted before a
 restart, or on another instance, then no longer verifies.
-Give each store its **own** checkout key, even two stores on one host: a store accepts any cart its
-key signed, so stores that share one would accept each other's carts
+Give each store its **own** checkout key, above all two stores on one host: a store accepts a cart
+signed with its key whose key id names its host, so two stores sharing a host and a key would accept
+each other's carts
 ([#335](https://github.com/openmobilehub/credentagent/issues/335)).
 
 Mint and check:

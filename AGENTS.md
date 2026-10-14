@@ -120,7 +120,8 @@ records the older dev-signed mandate.
 
 The gate signs with two keys, each a stable private P-256 JWK from your secret manager:
 `mandateSigningKey` (mandates) and `checkoutSigningKey` (the merchant checkout key carts
-are quoted with — a second, different key). Without them the keys are generated at boot
+are quoted with — a second, different key, and one per store: two stores on one host that
+share it accept each other's carts, #335). Without them the keys are generated at boot
 and everything signed stops verifying at the next restart; `doctor()` reports a missing
 `mandateSigningKey` as an error and a missing `checkoutSigningKey` as a warning on a
 deployment.
