@@ -26,6 +26,17 @@ function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
+/**
+ * A value as a JavaScript literal for an inline `<script>` (#321). Plain `JSON.stringify` leaves
+ * `<` alone, so a string holding `</script>` closes the element and whatever follows runs as
+ * markup. `<` becomes `\u003c` (and U+2028/2029 their escapes): the same value, never a tag.
+ */
+export function inlineJson(value: unknown): string {
+  const json = JSON.stringify(value);
+  if (json === undefined) return "undefined";
+  return json.replace(/</g, "\\u003c").replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
+}
+
 function money(amount: number, currency: string): string {
   return new Intl.NumberFormat("en-US", { style: "currency", currency }).format(amount);
 }
