@@ -24,7 +24,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 1
+          # Full history + tags: the review diffs against the base branch and, for a
+          # release PR, against the previous tag (what actually ships to npm).
+          fetch-depth: 0
 
       # A PR must not weaken its own required review: fail if this workflow file
       # differs from main (an intentional change needs an admin merge — CLAUDE.md).
@@ -33,7 +35,7 @@ jobs:
       # branch protection remain the backstop.
       - name: Refuse a PR that edits this workflow
         run: |
-          git fetch --depth=1 origin main
+          git fetch origin main
           if ! git diff --quiet origin/main -- .github/workflows/claude-code-review.yml; then
             echo "::error file=.github/workflows/claude-code-review.yml::This PR edits the review workflow; it must match main (admin merge required)."
             exit 1
@@ -58,27 +60,46 @@ jobs:
           # included API credit, which the API refuses for requests from this action (the same key
           # worked for the Agent SDK and `claude -p`). CLAUDE.md, "Code review".
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Opus, not the action's default model. On PR #309 the default (Sonnet) ran 4 turns
+          # in 16 s for $0.10 and approved a release, while a local Opus review found issues.
+          # A review is cheap next to a missed bug, so it gets the strongest model and room
+          # to read. git is read-only here (log/diff/show/tag/merge-base): the job never runs
+          # PR code, because it holds the review token.
           claude_args: >-
-            --max-turns 60
-            --allowedTools "Task,Agent,Read,Grep,Glob,mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh search:*)"
+            --model claude-opus-5-5
+            --max-turns 200
+            --allowedTools "Task,Agent,Read,Grep,Glob,mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh search:*),Bash(git log:*),Bash(git diff:*),Bash(git show:*),Bash(git tag:*),Bash(git merge-base:*)"
           prompt: |
             Review pull request ${{ github.repository }}#${{ github.event.pull_request.number }}.
-            The PR branch is checked out in the working directory.
+            The PR branch is checked out in the working directory with full git history.
+
+            Your stance is a skeptical senior reviewer whose job is to FIND problems, not
+            to confirm the PR is fine. An approval must be earned by evidence, not assumed
+            because the diff looks small.
 
             1. Read REVIEW.md at the repo root and the files it points to
                (CLAUDE.md, SECURITY-INVARIANTS.md, docs/reference/architecture-principles.md).
-               REVIEW.md is the checklist; follow its output contract.
-            2. Read the PR with `gh pr view ${{ github.event.pull_request.number }}` and the change
-               with `gh pr diff ${{ github.event.pull_request.number }}`. Read surrounding code with
-               Read/Grep/Glob where a finding depends on it. You may use sub-agents (Task) to
-               review in parallel.
-            3. Apply the diff-trigger table against SECURITY-INVARIANTS.md, the
-               delete-the-control bypass-test rule, the DX rubric, the honesty fencing
-               (trust_level), and the plain-language PR description rule. A violated
-               security invariant, a missing bypass test for a changed control, a
-               DX-rubric regression, or an overclaim of trust_level is request-changes.
-            4. Report only findings you have verified against the code — no style nits,
-               no speculation. False positives erode trust.
+               REVIEW.md is the checklist; follow its output contract, including §6 (scope)
+               and §7 (rigor).
+            2. Read the PR with `gh pr view ${{ github.event.pull_request.number }} --comments`
+               (body AND comments: release notes drafted as comments are in scope) and the
+               change with `gh pr diff ${{ github.event.pull_request.number }}`.
+            3. Decide the REAL scope (REVIEW.md §6). A release / version-bump PR ships every
+               change since the previous tag: review `git diff <previous tag>..HEAD` (find it
+               with `git tag --sort=-v:refname`), not only the bump. A PR that changes a
+               public API, a README, or a dependency range also puts its callers, examples
+               and docs in scope; grep for them.
+            4. Read every changed file IN FULL, plus the callers/callees each finding depends
+               on. Fan out with sub-agents (Task), at minimum one per dimension: security
+               invariants + bypass tests; correctness/edge cases; DX rubric + README/docs
+               truthfulness; honesty fencing (trust_level) + PR/release text. Each sub-agent
+               reports file:line evidence.
+            5. Verify every candidate finding against the code before posting. Report it as
+               CONFIRMED (you traced it) or PLAUSIBLE (strong evidence, one step unproven;
+               say which step). Drop only what you could disprove. Style nits stay out.
+            6. A violated security invariant, a missing bypass test for a changed control,
+               a DX-rubric regression, an overclaim of trust_level, or a README/release claim
+               the code does not back is request-changes.
 
             Posting (REQUIRED — the job fails if you post nothing):
             - For each finding, post an inline comment on the exact line with
@@ -87,8 +108,10 @@ jobs:
               `gh pr comment ${{ github.event.pull_request.number }} --body-file -` (or --body).
               It starts with "## Claude review" and states the verdict
               (approve / comment / request-changes), then lists each finding as
-              `file:line` + the invariant or principle it violates. If nothing is
-              wrong, say so in one line — still post it.
+              `file:line` + the invariant or principle it violates + CONFIRMED/PLAUSIBLE.
+              End with a "Coverage" line: the scope reviewed (e.g. `v0.5.0..HEAD`, N files
+              read in full) and the dimensions checked. An approve with no findings still
+              states its coverage, so a shallow pass is visible on the PR.
             - If this PR already has an earlier "## Claude review" comment, review only
               what changed since, and say so in the summary.
 
