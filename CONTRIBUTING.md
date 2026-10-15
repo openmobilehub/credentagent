@@ -91,8 +91,9 @@ your diff will be held against.
   non-draft PR opened from a branch in this repo. It's grounded in this project's security
   invariants. **The review is opt-in and currently ON** — it only runs when the repo variable
   `ENABLE_CLAUDE_REVIEW` is `"true"`, and posts its findings as PR comments. It is not a required
-  check, so human review is the gate — but its comments are review conversations, and those must
-  be resolved before merge (below). (Draft PRs are skipped to save cost; mark a PR ready for
+  check, so human review is the gate — but its comments on specific lines are review threads, and
+  those must be resolved before merge (below). Its summary comment has no Resolve button and
+  doesn't block. (Draft PRs are skipped to save cost; mark a PR ready for
   review to trigger a run.)
 - **Fork / external-contributor PRs** — the automated job is **skipped** (fork runs can't read the
   secret), and a skipped required check counts as passing, so it never blocks you. External PRs are
@@ -100,8 +101,9 @@ your diff will be held against.
   context, so it has the secret), the org-hosted managed Claude review integration, and/or an
   on-demand deeper review by a maintainer.
 - A PR that edits the review workflow (`.github/workflows/claude-code-review.yml`) itself will fail
-  `claude-review` by design and needs an admin merge; a maintainer comments **`@claude`** on it
-  for a review instead.
+  `claude-review` by design and needs an admin merge. For a review, a maintainer comments
+  **`@claude review this PR against REVIEW.md and post a summary`** — a bare `@claude` only does
+  what the comment asks.
 
 ### Human review
 

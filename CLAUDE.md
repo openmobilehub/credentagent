@@ -234,8 +234,9 @@ anticipate it when authoring:
 - A PR that edits `.github/workflows/claude-code-review.yml` itself will fail
   `claude-review` by design (the action validates the workflow matches `main`) and needs
   an admin merge. Since nothing reviews those PRs automatically, a maintainer comments
-  **`@claude`** on them — that runs `.github/workflows/claude.yml`, a separate workflow the
-  edit doesn't break.
+  **`@claude review this PR against REVIEW.md and post a summary`** on them — that runs
+  `.github/workflows/claude.yml`, a separate workflow the edit doesn't break. Give it those
+  words: `claude.yml` has no review prompt of its own and only does what the comment asks.
 - **Codex** (`chatgpt-codex-connector[bot]`) — automatic reviews are **off** (turned off
   2026-10-14). Why: across 23 PRs it reviewed once per PR, only for one author, often after
   merge, and caught nothing the Claude review missed. On-demand `@codex` doesn't work here
