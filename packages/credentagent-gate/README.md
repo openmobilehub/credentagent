@@ -58,6 +58,11 @@ the widget shows the confirmation. Add the headphones instead and the age gate d
 > Behind a proxy that serves your app under a path (`https://shop.example/store/*` → your `/*`),
 > include the path — `walletOrigin: "https://shop.example/store"` — and every approve link, page
 > fetch and redirect carries `/store`. The wallet still binds to the page's origin.
+> The path is also part of the store's identity: a spending permission signed at
+> `shop.example/store` names that store, so another store on the same host (`shop.example/other`,
+> or the root) refuses it — provided each store signs its carts with its own
+> `checkoutSigningKey` ([#335](https://github.com/openmobilehub/credentagent/issues/335)). For the same reason, give every deployment its own `walletOrigin`:
+> two that share one (say, a preview copying production's) are one merchant.
 
 ### Branding the ceremony pages
 
@@ -225,7 +230,7 @@ Each finding is `{ level: "error" | "warn", code, message, fix }`. It checks the
 | `in-memory-verification-store` | the default in-memory `store` on a deployment | inject a shared `{ store }` (Redis/Upstash) |
 | `in-memory-order-store` | the default in-memory order stores on a deployment | inject `{ orderStore, completedOrderStore }` |
 | `ephemeral-mandate-key` | no `mandateSigningKey` on a deployment — the AP2 key was generated at boot (**error** on any deployment) | pass a stable private P-256 JWK as `{ mandateSigningKey }` |
-| `ephemeral-checkout-key` | no `checkoutSigningKey` on a deployment — the key carts are quoted with was generated at boot (**warn**) | pass a second, different private P-256 JWK as `{ checkoutSigningKey }` |
+| `ephemeral-checkout-key` | no `checkoutSigningKey` on a deployment — the key carts are quoted with was generated at boot (**warn**) | pass a second, different private P-256 JWK as `{ checkoutSigningKey }` — one per store |
 
 In plain local dev — no deployment env signals (`VERCEL`, `AWS_LAMBDA_*`, `NODE_ENV=production`, …) — every
 check stays quiet, so the zero-config quickstart is undisturbed. `ephemeral-mandate-key` is an error even on
@@ -261,6 +266,10 @@ because a quoted cart and an issued mandate are different statements: each key's
 ever checked against `credentagent.ap2.checkoutPublicJwk`. Passing the same JWK for both throws. Omit it
 and the gate generates one at boot; `doctor()` warns on a deployment, because a cart quoted before a
 restart, or on another instance, then no longer verifies.
+Give each store its **own** checkout key, above all two stores on one host: a store accepts a cart
+signed with its key whose key id names its host, so two stores sharing a host and a key would accept
+each other's carts
+([#335](https://github.com/openmobilehub/credentagent/issues/335)).
 
 Mint and check:
 
@@ -377,7 +386,8 @@ its own "permission", with any limits it likes, and it verifies. Every limit is 
 yet proves a **person** set them. Use it for demos, never as a real safety control. Leaving the option
 out is a type error, and a refusal (`code: "trust"`) at runtime.
 
-A grant created with `agentKey` is spent this way, **at any merchant its permission names** — not
+A grant created with `agentKey` is spent this way, **at any merchant its permission names** (each
+checking a cart its own checkout key signed — see `checkoutSigningKey`, above) — not
 through `grant.spend()`, which refuses it with `agent-held-key`: the gate has no key to spend it with,
 which is the point. Leave `agentKey` out and the gate generates the key and spends server-side, as below.
 **Revoking such a grant does not recall it.** The agent already holds the signed permission, and
@@ -398,8 +408,9 @@ does not remember.
   and on the agent's side (`intent.permissionId`). Pass a function and it is called with the id **after**
   the chains verify, so your ledger is keyed by something the signatures vouch for. Leaving `spent` out
   refuses any permission that has a budget or a use count.
-- **A budget holds per merchant.** One permission works at every store it names, and each store sees only
-  its own `spent`: a "$200 in total" permission is $200 at each of them. Set `budget` with that in mind.
+- **A budget holds per merchant.** One permission works at every store it names (each checks carts
+  against its own checkout key), and each store sees only its own `spent`: a "$200 in total"
+  permission is $200 at each of them. Set `budget` with that in mind.
 
 ### Webhooks — tell a *different* service when an order settles
 
