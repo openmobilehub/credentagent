@@ -233,12 +233,14 @@ anticipate it when authoring:
   it, or reply with a won't-fix reason and then resolve — this includes bot threads.
 - A PR that edits `.github/workflows/claude-code-review.yml` itself will fail
   `claude-review` by design (the action validates the workflow matches `main`) and needs
-  an admin merge. Since nothing reviews those PRs automatically, comment **`@codex review`**
-  on them for a second pair of eyes.
+  an admin merge. Since nothing reviews those PRs automatically, a maintainer comments
+  **`@claude`** on them — that runs `.github/workflows/claude.yml`, a separate workflow the
+  edit doesn't break.
 - **Codex** (`chatgpt-codex-connector[bot]`) — automatic reviews are **off** (turned off
-  2026-10-14); it reviews only when someone comments `@codex review`. Why: across 23 PRs it
-  reviewed once per PR, only for one author, often after merge, and caught nothing the
-  Claude review missed. Its one gap-filler is the workflow PRs above.
+  2026-10-14). Why: across 23 PRs it reviewed once per PR, only for one author, often after
+  merge, and caught nothing the Claude review missed. On-demand `@codex` doesn't work here
+  either — it replies asking for a Codex environment this repo doesn't have — so don't
+  write `@codex` in PR descriptions or comments.
 
 Apache-2.0 · part of [Open Mobile Hub](https://openmobilehub.org) (Linux Foundation).
 

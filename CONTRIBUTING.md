@@ -89,22 +89,25 @@ your diff will be held against.
 
 - **Same-repo PRs** — an automated Claude review (`anthropics/claude-code-action`) runs on every
   non-draft PR opened from a branch in this repo. It's grounded in this project's security
-  invariants. **The review is opt-in and currently OFF** — it only runs when the repo variable
-  `ENABLE_CLAUDE_REVIEW` is `"true"`; otherwise `claude-review` is skipped, which counts as passing,
-  so it doesn't block merges (human review is the gate). (Draft PRs are also skipped to save cost;
-  mark a PR ready for review to trigger a run.)
+  invariants. **The review is opt-in and currently ON** — it only runs when the repo variable
+  `ENABLE_CLAUDE_REVIEW` is `"true"`, and posts its findings as PR comments. It is not a required
+  check, so human review is the gate — but its comments are review conversations, and those must
+  be resolved before merge (below). (Draft PRs are skipped to save cost; mark a PR ready for
+  review to trigger a run.)
 - **Fork / external-contributor PRs** — the automated job is **skipped** (fork runs can't read the
   secret), and a skipped required check counts as passing, so it never blocks you. External PRs are
   reviewed instead by a maintainer commenting **`@claude`** on the PR (which runs in base-repo
   context, so it has the secret), the org-hosted managed Claude review integration, and/or an
   on-demand deeper review by a maintainer.
 - A PR that edits the review workflow (`.github/workflows/claude-code-review.yml`) itself will fail
-  `claude-review` by design and needs an admin merge.
+  `claude-review` by design and needs an admin merge; a maintainer comments **`@claude`** on it
+  for a review instead.
 
 ### Human review
 
 - At least **one approving human review** is required to merge to `main`.
-- **All review conversations must be resolved** before merge.
+- **All review conversations must be resolved** before merge — branch protection enforces it,
+  bot threads included. Fix the finding, or reply with why you won't, then resolve the thread.
 - Keep PRs small and well-scoped — one clear purpose per PR. Prefer a new, well-bounded module over
   growing a file past its single responsibility, and match the style, naming, and comment density of
   the surrounding code.
