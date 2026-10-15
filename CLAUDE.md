@@ -197,7 +197,19 @@ anticipate it when authoring:
   `claude-review` is **opt-in and currently ON** (re-enabled 2026-09-29): the job only runs when
   the repo variable `ENABLE_CLAUDE_REVIEW` is `"true"`, and it posts its findings to the PR
   (`--comment`). It runs Opus at `--effort high`, or `max` for `release/*` branches and any
-  change under `packages/credentagent-gate/src/`. It is not a required check, so **human review is still the gate**. To pause it,
+  change under `packages/credentagent-gate/src/`. It is **tiered**, so a review costs what the push
+  changed:
+  - **full** — when the PR opens, reopens or leaves draft. **To force a full re-review, mark the
+    PR as draft, then ready for review.**
+  - **delta** — on a later push: only the PR's own new commits since the last reviewed head (plus
+    any file main also changed), with the effort picked from those commits alone. Merge commits
+    aren't read on their own, so a conflict resolved by hand is reviewed only through that overlap
+    (a conflict is almost always in a file `main` changed).
+  - **skip** — a push that leaves the PR's own diff unchanged (merging `main` in) and where `main`
+    touched none of the PR's files. CI still tests it.
+
+  A new push cancels the review still running on the old head; a cancelled run never counts as
+  reviewed. It is not a required check, so **human review is still the gate**. To pause it,
   `gh variable set ENABLE_CLAUDE_REVIEW --body false` — the job is then **skipped**. The
   `CLAUDE_CODE_OAUTH_TOKEN` secret must come from an account that can use Claude Code
   (`claude setup-token`); an unusable token errors on every PR.
@@ -230,7 +242,11 @@ anticipate it when authoring:
 - **Human review** — at least one approving review is required to merge to `main`, and branch
   protection **requires every review conversation to be resolved** (enforced since 2026-10-14;
   before that it wasn't, and bot findings were merged unanswered). Resolve a thread by fixing
-  it, or reply with a won't-fix reason and then resolve — this includes bot threads.
+  it, or reply with a won't-fix reason and then resolve — this includes bot threads. A branch
+  does **not** have to be up to date with `main` to merge (since 2026-10-15): CI tested the PR
+  merged onto `main` when it ran, and re-runs on `main` after every merge. Merging `main` in only
+  to clear "out-of-date" just re-ran CI and the review. (A merge queue isn't used: the DCO app
+  doesn't report on merge-queue runs, and DCO is a required check.)
 - A PR that edits `.github/workflows/claude-code-review.yml` itself will fail
   `claude-review` by design (the action validates the workflow matches `main`) and needs
   an admin merge. Since nothing reviews those PRs automatically, a maintainer comments
