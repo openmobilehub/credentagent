@@ -4,6 +4,12 @@ on:
   pull_request:
     types: [opened, synchronize, ready_for_review, reopened]
 
+# One review per PR at a time: a new push cancels the run still reviewing the old head. Nothing
+# is lost — a cancelled run never counts as reviewed, so the next run's scope still covers it.
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   claude-review:
     # OPT-IN — off by default. The CLAUDE_CODE_OAUTH_TOKEN secret exists, but the
@@ -19,6 +25,7 @@ jobs:
       pull-requests: write
       issues: read
       id-token: write
+      actions: read # "Pick review scope" looks up this workflow's earlier runs
 
     steps:
       - name: Checkout repository
@@ -41,6 +48,64 @@ jobs:
             exit 1
           fi
 
+      # Tiered, so a review costs what the push changed:
+      #   full  — the PR opened, reopened or left draft (or nothing earlier was reviewed);
+      #   delta — a later push: review only the PR's new commits since the last reviewed head;
+      #   skip  — the push left the PR's own diff unchanged (it only merged main in) and main
+      #           touched none of the PR's files. CI still tests it; there is nothing new to read.
+      # To force a full re-review, mark the PR as draft, then ready for review.
+      - name: Pick review scope
+        id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACTION: ${{ github.event.action }}
+          HEAD_REF: ${{ github.head_ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          mode="full"; last=""; commits=""; overlap=""
+          if [ "$ACTION" = synchronize ]; then
+            # The newest earlier head this workflow finished on for this branch (a review or a skip).
+            last=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/claude-code-review.yml/runs?event=pull_request&branch=$HEAD_REF&status=success&per_page=50" \
+              --jq "[.workflow_runs[] | select(.head_sha != \"$HEAD_SHA\")][0].head_sha // empty")
+            # A force-push can drop it from history; then nothing is known to be reviewed.
+            if [ -n "$last" ] && git cat-file -e "$last^{commit}" 2>/dev/null \
+              && git merge-base --is-ancestor "$last" "$HEAD_SHA"; then
+              mode="delta"
+            fi
+          fi
+          if [ "$mode" = delta ]; then
+            base_before=$(git merge-base origin/main "$last")
+            base_after=$(git merge-base origin/main "$HEAD_SHA")
+            # The PR's own new commits, leaving out what came in from main.
+            commits=$(git log --no-merges --format=%H "$last..$HEAD_SHA" ^origin/main | tr '\n' ' ')
+            # Files main changed since the last review that this PR also changes.
+            overlap=$(comm -12 \
+              <(git diff --name-only "$base_before" "$base_after" | sort -u) \
+              <(git diff --name-only "$base_after" "$HEAD_SHA" | sort -u) | tr '\n' ' ')
+            before=$(git diff "$base_before" "$last" | sha256sum)
+            after=$(git diff "$base_after" "$HEAD_SHA" | sha256sum)
+            if [ "$before" = "$after" ] && [ -z "${overlap// }" ]; then
+              mode="skip"
+            fi
+          fi
+          {
+            echo "mode=$mode"
+            echo "last=$last"
+            echo "commits=$commits"
+            echo "overlap=$overlap"
+          } >> "$GITHUB_OUTPUT"
+          echo "Review scope: $mode${last:+ (last reviewed $last)}"
+          echo "New PR commits: ${commits:-none}"
+          echo "Main changed these PR files: ${overlap:-none}"
+
+      - name: Skip — nothing new to review
+        if: steps.scope.outputs.mode == 'skip'
+        env:
+          LAST: ${{ steps.scope.outputs.last }}
+        run: |
+          echo "::notice::No review: this push leaves the PR's own diff unchanged since $LAST (it only merged main in), and main touched none of the PR's files."
+          echo "No Claude review needed: the PR's diff is unchanged since \`$LAST\`." >> "$GITHUB_STEP_SUMMARY"
+
       - name: Record review start time
         id: start
         run: echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
@@ -50,16 +115,26 @@ jobs:
       # security surface); `high` for everything else, which keeps routine PRs from eating
       # the subscription's usage limits. Explicit either way, so the level is never a
       # silent default.
+      # A delta review is judged by what it reads: the new commits and the overlapping files.
       - name: Pick review effort
         id: effort
+        if: steps.scope.outputs.mode != 'skip'
         env:
           HEAD_REF: ${{ github.head_ref }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MODE: ${{ steps.scope.outputs.mode }}
+          COMMITS: ${{ steps.scope.outputs.commits }}
+          OVERLAP: ${{ steps.scope.outputs.overlap }}
         run: |
+          if [ "$MODE" = delta ]; then
+            # shellcheck disable=SC2086 # COMMITS is a space-separated list of SHAs
+            files=$( { for c in $COMMITS; do git show --name-only --format= "$c"; done; tr ' ' '\n' <<< "$OVERLAP"; } )
+          else
+            files=$(git diff --name-only "$BASE_SHA...$HEAD_SHA")
+          fi
           effort=high
-          if [[ "$HEAD_REF" == release/* ]] \
-            || git diff --name-only "$BASE_SHA...$HEAD_SHA" | grep -q '^packages/credentagent-gate/src/'; then
+          if [[ "$HEAD_REF" == release/* ]] || grep -q '^packages/credentagent-gate/src/' <<< "$files"; then
             effort=max
           fi
           echo "effort=$effort" >> "$GITHUB_OUTPUT"
@@ -72,6 +147,7 @@ jobs:
       # job still went green. Every tool this prompt uses is listed below.
       - name: Run Claude Code Review
         id: claude-review
+        if: steps.scope.outputs.mode != 'skip'
         uses: anthropics/claude-code-action@v1
         env:
           # Sub-agents must block until they return. By default they run as background
@@ -102,6 +178,18 @@ jobs:
           prompt: |
             Review pull request ${{ github.repository }}#${{ github.event.pull_request.number }}.
             The PR branch is checked out in the working directory with full git history.
+
+            Review scope for this run: **${{ steps.scope.outputs.mode }}**.
+            - full: review the whole PR, following every step below.
+            - delta: an earlier Claude review covered this PR up to
+              `${{ steps.scope.outputs.last }}`. Review ONLY the PR's new commits:
+              `${{ steps.scope.outputs.commits }}` (read each with `git show <sha>`). If any
+              files are listed here, main changed them too since that review; check that
+              main's changes don't break this PR there: `${{ steps.scope.outputs.overlap }}`.
+              Commits merged in from main are not this PR's change; don't review them.
+              Read other code only to confirm or rule out a finding in that scope, or to check
+              whether an earlier review's findings were fixed. In step 4 below, launch a
+              sub-agent only for a dimension the new commits can affect; one is often enough.
 
             Your stance is a skeptical senior reviewer whose job is to FIND problems, not
             to confirm the PR is fine. An approval must be earned by evidence, not assumed
@@ -178,12 +266,12 @@ jobs:
               - Do not repeat what passed or what you checked; that goes in Details.
               - A follow-up review opens with one line: "Since the last review: N fixed,
                 M still open" — never re-list earlier findings in full.
-            - If this PR already has an earlier "## Claude review" comment, review only
-              what changed since, and say so in Details.
+            - In Details, state the scope: `full`, or `delta` with the commits you reviewed.
 
       # No fake green: a run that ends without posting a review fails, so a broken
       # review is visible on the PR instead of silently passing.
       - name: Verify Claude posted a review
+        if: steps.scope.outputs.mode != 'skip'
         env:
           GH_TOKEN: ${{ github.token }}
           SINCE: ${{ steps.start.outputs.at }}
