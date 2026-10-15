@@ -202,7 +202,9 @@ anticipate it when authoring:
   - **full** — when the PR opens, reopens or leaves draft. **To force a full re-review, mark the
     PR as draft, then ready for review.**
   - **delta** — on a later push: only the PR's own new commits since the last reviewed head (plus
-    any file main also changed), with the effort picked from those commits alone.
+    any file main also changed), with the effort picked from those commits alone. Merge commits
+    aren't read on their own, so a conflict resolved by hand is reviewed only through that overlap
+    (a conflict is almost always in a file `main` changed).
   - **skip** — a push that leaves the PR's own diff unchanged (merging `main` in) and where `main`
     touched none of the PR's files. CI still tests it.
 

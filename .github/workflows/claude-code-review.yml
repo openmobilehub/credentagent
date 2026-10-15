@@ -65,7 +65,8 @@ jobs:
           mode="full"; last=""; commits=""; overlap=""
           if [ "$ACTION" = synchronize ]; then
             # The newest earlier head this workflow finished on for this branch (a review or a skip).
-            last=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/claude-code-review.yml/runs?event=pull_request&branch=$HEAD_REF&status=success&per_page=50" \
+            last=$(gh api -X GET "repos/$GITHUB_REPOSITORY/actions/workflows/claude-code-review.yml/runs" \
+              -f event=pull_request -f branch="$HEAD_REF" -f status=success -F per_page=50 \
               --jq "[.workflow_runs[] | select(.head_sha != \"$HEAD_SHA\")][0].head_sha // empty")
             # A force-push can drop it from history; then nothing is known to be reviewed.
             if [ -n "$last" ] && git cat-file -e "$last^{commit}" 2>/dev/null \
