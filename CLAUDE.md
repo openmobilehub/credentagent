@@ -227,11 +227,17 @@ anticipate it when authoring:
     so it has the secret),
   - the org-hosted **managed Claude review** integration (auto-reviews forks), and/or
   - an on-demand deep multi-agent review by a maintainer.
-- **Human review** — at least one approving review is required to merge to `main`, and all
-  review conversations must be resolved first.
+- **Human review** — at least one approving review is required to merge to `main`. Branch
+  protection does **not** require review conversations to be resolved, so answer each finding
+  (fixed, or won't-fix with a reason) before merging rather than relying on a block.
 - A PR that edits `.github/workflows/claude-code-review.yml` itself will fail
   `claude-review` by design (the action validates the workflow matches `main`) and needs
-  an admin merge.
+  an admin merge. Since nothing reviews those PRs automatically, comment **`@codex review`**
+  on them for a second pair of eyes.
+- **Codex** (`chatgpt-codex-connector[bot]`) — automatic reviews are **off** (turned off
+  2026-10-14); it reviews only when someone comments `@codex review`. Why: across 23 PRs it
+  reviewed once per PR, only for one author, often after merge, and caught nothing the
+  Claude review missed. Its one gap-filler is the workflow PRs above.
 
 Apache-2.0 · part of [Open Mobile Hub](https://openmobilehub.org) (Linux Foundation).
 
