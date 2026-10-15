@@ -97,7 +97,7 @@ your diff will be held against.
   review to trigger a run.)
 - **Fork / external-contributor PRs** — the automated job is **skipped** (fork runs can't read the
   secret), and a skipped required check counts as passing, so it never blocks you. External PRs are
-  reviewed instead by a maintainer commenting **`@claude`** on the PR (which runs in base-repo
+  reviewed instead by a maintainer commenting **`@claude review this PR against REVIEW.md and post a summary`** on the PR (which runs in base-repo
   context, so it has the secret), the org-hosted managed Claude review integration, and/or an
   on-demand deeper review by a maintainer.
 - A PR that edits the review workflow (`.github/workflows/claude-code-review.yml`) itself will fail

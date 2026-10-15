@@ -188,7 +188,7 @@ anticipate it when authoring:
 > Claude review only runs on **same-repo** PRs (GitHub withholds secrets from fork-PR
 > workflow runs on a public repo — regardless of your permission level). If you push to a
 > branch here, you get the automatic review for free; if you fork, you only get a review
-> on-demand by commenting `@claude`.
+> on-demand by commenting `@claude review this PR against REVIEW.md and post a summary`.
 
 - **Same-repo PRs** — an automated Claude review (`anthropics/claude-code-action`) runs
   on every non-draft PR opened from a branch in this repo, grounded in this file's
@@ -223,7 +223,7 @@ anticipate it when authoring:
 - **Fork / external-contributor PRs** — the automated job is **skipped** (fork runs can't
   read the `CLAUDE_CODE_OAUTH_TOKEN` secret), so it never blocks you. A skipped required
   check counts as passing. Those PRs are reviewed by one of:
-  - a maintainer commenting **`@claude`** on the PR (on-demand; runs in base-repo context
+  - a maintainer commenting **`@claude review this PR against REVIEW.md and post a summary`** on the PR (on-demand; runs in base-repo context
     so it has the secret),
   - the org-hosted **managed Claude review** integration (auto-reviews forks), and/or
   - an on-demand deep multi-agent review by a maintainer.
