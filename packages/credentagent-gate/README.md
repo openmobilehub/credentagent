@@ -386,7 +386,8 @@ its own "permission", with any limits it likes, and it verifies. Every limit is 
 yet proves a **person** set them. Use it for demos, never as a real safety control. Leaving the option
 out is a type error, and a refusal (`code: "trust"`) at runtime.
 
-A grant created with `agentKey` is spent this way, **at any merchant its permission names** — not
+A grant created with `agentKey` is spent this way, **at any merchant its permission names** (each
+checking a cart its own checkout key signed — see `checkoutSigningKey`, above) — not
 through `grant.spend()`, which refuses it with `agent-held-key`: the gate has no key to spend it with,
 which is the point. Leave `agentKey` out and the gate generates the key and spends server-side, as below.
 **Revoking such a grant does not recall it.** The agent already holds the signed permission, and
@@ -407,8 +408,9 @@ does not remember.
   and on the agent's side (`intent.permissionId`). Pass a function and it is called with the id **after**
   the chains verify, so your ledger is keyed by something the signatures vouch for. Leaving `spent` out
   refuses any permission that has a budget or a use count.
-- **A budget holds per merchant.** One permission works at every store it names, and each store sees only
-  its own `spent`: a "$200 in total" permission is $200 at each of them. Set `budget` with that in mind.
+- **A budget holds per merchant.** One permission works at every store it names (each checks carts
+  against its own checkout key), and each store sees only its own `spent`: a "$200 in total"
+  permission is $200 at each of them. Set `budget` with that in mind.
 
 ### Webhooks — tell a *different* service when an order settles
 

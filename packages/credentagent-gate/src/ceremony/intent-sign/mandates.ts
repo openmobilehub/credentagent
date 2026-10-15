@@ -56,22 +56,22 @@ export type DelegateHashAlg = keyof typeof HASH_ALGS;
 export const DEFAULT_HASH_ALG: DelegateHashAlg = "sha-256";
 
 /**
- * Why `merchantOrigin` can't name a merchant, or null when it can. It must be an absolute
+ * Why `merchantUrl` can't name a merchant, or null when it can. It must be an absolute
  * http(s) URL: the store's `walletOrigin`. Checked at runtime because the intent-sign
  * functions are exported: a JavaScript caller that leaves it out gets a message saying what to
  * pass (and verify refuses instead of throwing `Invalid URL`), and a value like
  * `"foo:shop.example/wine"` — which parses, with an empty host — cannot name another store.
  * It is also the tripwire if a default derived from the request origin ever comes back (#331).
  */
-export function merchantOriginProblem(v: unknown): string | null {
-  if (typeof v !== "string" || v.length === 0) return "merchantOrigin is required: the store's public URL (walletOrigin), path included";
+export function merchantUrlProblem(v: unknown): string | null {
+  if (typeof v !== "string" || v.length === 0) return "merchantUrl is required: the store's public URL (walletOrigin), path included";
   try {
     const u = new URL(v);
     if (u.protocol === "https:" || u.protocol === "http:") return null;
   } catch {
     // fall through
   }
-  return `merchantOrigin must be an absolute http(s) URL, got ${JSON.stringify(v)}`;
+  return `merchantUrl must be an absolute http(s) URL, got ${JSON.stringify(v)}`;
 }
 
 /** Is `alg` one this rail can actually compute? A wallet asked for anything else cannot answer. */

@@ -101,7 +101,7 @@ export function registerIntentSignRail(app: RailApp, grants: Grants): void {
         mandateExp,
         allowedSkus,
         origin: originOf(req),
-        merchantOrigin: cfg.walletOrigin,
+        merchantUrl: cfg.walletOrigin,
         secret: cfg.secret,
         ...(cfg.readerIdentity ? { readerIdentity: cfg.readerIdentity } : {}),
       });
@@ -142,7 +142,7 @@ export function registerIntentSignRail(app: RailApp, grants: Grants): void {
         secret: cfg.secret,
         bounds,
         origin: originOf(req),
-        merchantOrigin: cfg.walletOrigin,
+        merchantUrl: cfg.walletOrigin,
         nonceGuard,
       });
       if (!out.ok) { res.status(400).json({ ok: false, reason: out.reason }); return; }

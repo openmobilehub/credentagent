@@ -45,7 +45,7 @@ function bounds(over: Partial<IntentBoundsInput> = {}): IntentBoundsInput {
 }
 
 async function signFor(b: IntentBoundsInput, simOver: Parameters<typeof devSimulateWalletSignature>[0] extends infer T ? Partial<T> : never = {}) {
-  const req = await buildIntentSignRequest({ bounds: b, origin: ORIGIN, merchantOrigin: ORIGIN.origin, secret: SECRET, delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
+  const req = await buildIntentSignRequest({ bounds: b, origin: ORIGIN, merchantUrl: ORIGIN.origin, secret: SECRET, delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
   const result = await devSimulateWalletSignature({ request: req, origin: ORIGIN.origin, ...simOver });
   return { req, result };
 }
@@ -59,7 +59,7 @@ describe("intent-sign REAL device-signed presentation", () => {
       readerContextToken: req.readerContextToken,
       secret: SECRET,
       bounds: b,
-      origin: ORIGIN, merchantOrigin: ORIGIN.origin,
+      origin: ORIGIN, merchantUrl: ORIGIN.origin,
       nonceGuard: memoryNonceGuard(),
       delegate: DELEGATE,
       mandateExp: MANDATE_EXP,
@@ -86,7 +86,7 @@ describe("intent-sign REAL device-signed presentation", () => {
       readerContextToken: req.readerContextToken,
       secret: SECRET,
       bounds: tampered,
-      origin: ORIGIN, merchantOrigin: ORIGIN.origin,
+      origin: ORIGIN, merchantUrl: ORIGIN.origin,
       nonceGuard: memoryNonceGuard(),
       delegate: DELEGATE,
       mandateExp: MANDATE_EXP,
@@ -106,7 +106,7 @@ describe("intent-sign REAL device-signed presentation", () => {
       readerContextToken: req.readerContextToken,
       secret: SECRET,
       bounds: bRec,
-      origin: ORIGIN, merchantOrigin: ORIGIN.origin,
+      origin: ORIGIN, merchantUrl: ORIGIN.origin,
       nonceGuard: memoryNonceGuard(),
       delegate: DELEGATE,
       mandateExp: MANDATE_EXP,
@@ -121,14 +121,14 @@ describe("intent-sign REAL device-signed presentation", () => {
   // terms. Delete the equality check in verify.ts and this is the test that fails.
   it("BYPASS: the wallet signs DIFFERENT mandates than the gate asked for → refused", async () => {
     const b = bounds();
-    const req = await buildIntentSignRequest({ bounds: b, origin: ORIGIN, merchantOrigin: ORIGIN.origin, secret: SECRET, delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
+    const req = await buildIntentSignRequest({ bounds: b, origin: ORIGIN, merchantUrl: ORIGIN.origin, secret: SECRET, delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
     // A raised per-purchase cap, signed as if the human had agreed to it.
     const inflated = JSON.parse(JSON.stringify(req.mandates)) as Record<string, unknown>[];
     const constraints = inflated[1].constraints as { type: string; max?: number }[];
     const range = constraints.find((c) => c.type === "payment.amount_range")!;
     range.max = 9_999_00;
     const result = await devSimulateWalletSignature({ request: req, origin: ORIGIN.origin, overrideMandates: inflated });
-    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantOrigin: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
+    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantUrl: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
     expect(out.ok).toBe(false);
     if (!out.ok) expect(out.reason).toMatch(/mandate mismatch/);
   });
@@ -137,11 +137,11 @@ describe("intent-sign REAL device-signed presentation", () => {
   // point: a grant may only ever be spent by the key the human actually authorized.
   it("BYPASS: mandates naming a DIFFERENT agent key → refused", async () => {
     const b = bounds();
-    const req = await buildIntentSignRequest({ bounds: b, origin: ORIGIN, merchantOrigin: ORIGIN.origin, secret: SECRET, delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
+    const req = await buildIntentSignRequest({ bounds: b, origin: ORIGIN, merchantUrl: ORIGIN.origin, secret: SECRET, delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
     const swapped = JSON.parse(JSON.stringify(req.mandates)) as Record<string, unknown>[];
     for (const m of swapped) m.cnf = { jwk: { kty: "EC", crv: "P-256", x: "attacker-x", y: "attacker-y" } };
     const result = await devSimulateWalletSignature({ request: req, origin: ORIGIN.origin, overrideMandates: swapped });
-    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantOrigin: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
+    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantUrl: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
     expect(out.ok).toBe(false);
   });
 
@@ -149,7 +149,7 @@ describe("intent-sign REAL device-signed presentation", () => {
   it("BYPASS: a key binding signed by a key the credential does not name → refused", async () => {
     const b = bounds();
     const { req, result } = await signFor(b, { forgeHolderKey: true });
-    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantOrigin: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
+    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantUrl: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
     expect(out.ok).toBe(false);
     if (!out.ok) expect(out.reason).toMatch(/key-binding signature/);
   });
@@ -165,7 +165,7 @@ describe("intent-sign REAL device-signed presentation", () => {
   it("BYPASS: a revealed field the ISSUER never signed a digest for → refused", async () => {
     const b = bounds();
     const { req, result } = await signFor(b, { forgeRevealedClaim: "attacker-card" });
-    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantOrigin: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
+    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantUrl: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
     expect(out.ok).toBe(false);
     if (!out.ok) expect(out.reason).toMatch(/Unreferenced disclosure/i);
   });
@@ -178,7 +178,7 @@ describe("intent-sign REAL device-signed presentation", () => {
   it("BYPASS: a key binding whose sd_hash does not cover the disclosures presented → refused", async () => {
     const b = bounds();
     const { req, result } = await signFor(b, { breakSdHash: true });
-    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantOrigin: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
+    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantUrl: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
     expect(out.ok).toBe(false);
     if (!out.ok) expect(out.reason).toMatch(/sd_hash/);
   });
@@ -187,7 +187,7 @@ describe("intent-sign REAL device-signed presentation", () => {
   it("BYPASS: a presentation with NO key binding → refused", async () => {
     const b = bounds();
     const { req, result } = await signFor(b, { omitKeyBinding: true });
-    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantOrigin: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
+    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantUrl: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
     expect(out.ok).toBe(false);
     if (!out.ok) expect(out.reason).toMatch(/key-binding/);
   });
@@ -196,8 +196,8 @@ describe("intent-sign REAL device-signed presentation", () => {
     const b = bounds();
     const { req, result } = await signFor(b);
     const guard = memoryNonceGuard();
-    const first = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantOrigin: ORIGIN.origin, nonceGuard: guard, delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
-    const second = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantOrigin: ORIGIN.origin, nonceGuard: guard, delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
+    const first = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantUrl: ORIGIN.origin, nonceGuard: guard, delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
+    const second = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantUrl: ORIGIN.origin, nonceGuard: guard, delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
     // First succeeds; the replay is REFUSED — assert the outcome, not the reason string.
     expect(first.ok).toBe(true);
     expect(second.ok).toBe(false);
@@ -206,7 +206,7 @@ describe("intent-sign REAL device-signed presentation", () => {
   it("refuses a signature made over a DIFFERENT nonce (not this request)", async () => {
     const b = bounds();
     const { req, result } = await signFor(b, { overrideNonce: "a-different-nonce" });
-    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantOrigin: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
+    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantUrl: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
     expect(out.ok).toBe(false);
     if (!out.ok) expect(out.reason).toMatch(/nonce/);
   });
@@ -214,7 +214,7 @@ describe("intent-sign REAL device-signed presentation", () => {
   it("refuses a wrong credential type", async () => {
     const b = bounds();
     const { req, result } = await signFor(b, { overrideVct: "org.iso.18013.5.1.mDL" });
-    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantOrigin: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
+    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantUrl: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
     expect(out.ok).toBe(false);
     if (!out.ok) expect(out.reason).toMatch(/wrong credential/);
   });
@@ -222,7 +222,7 @@ describe("intent-sign REAL device-signed presentation", () => {
   it("refuses when the payment credential discloses no instrument id", async () => {
     const b = bounds();
     const { req, result } = await signFor(b, { omitInstrumentId: true });
-    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantOrigin: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
+    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantUrl: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
     expect(out.ok).toBe(false);
     if (!out.ok) expect(out.reason).toMatch(/payment_instrument_id/);
   });
@@ -246,7 +246,7 @@ describe("intent-sign verify seam (FR-4) — no self-upgrade, verbatim relay", (
   it("BYPASS: the in-gate backend NEVER emits a trustLevel above device-signed on a VALID presentation", async () => {
     const b = bounds();
     const { req, result } = await signFor(b); // default backend = in-gate
-    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantOrigin: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
+    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantUrl: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
     expect(out.ok).toBe(true);
     if (out.ok) {
       expect(out.trustLevel).toBe("device-signed");
@@ -272,7 +272,7 @@ describe("intent-sign verify seam (FR-4) — no self-upgrade, verbatim relay", (
       disclosed: { payment_instrument_id: "instrument_delegated" },
       delegatePayload: req.delegateDigests.map((d) => ({ "...": d })),
     });
-    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantOrigin: ORIGIN.origin, nonceGuard: memoryNonceGuard(), backend: delegated, delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
+    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantUrl: ORIGIN.origin, nonceGuard: memoryNonceGuard(), backend: delegated, delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
     expect(out.ok).toBe(true);
     if (out.ok) {
       expect(out.trustLevel).toBe("issuer-verified"); // relayed verbatim — a stronger label
@@ -286,7 +286,7 @@ describe("intent-sign verify seam (FR-4) — no self-upgrade, verbatim relay", (
     const delegated: IntentVerifyBackend = async () => ({ ok: true, trustLevel: "issuer-verified", verifiedBy: "upay-verifier", credentialType: "urn:emvco:dpc:card:1", disclosed: { payment_instrument_id: "x" }, delegatePayload: req.delegateDigests.map((d) => ({ "...": d })) });
     // A tampered record (2000 vs the sealed 200) is refused BEFORE the backend runs — delegation
     // moves TRUST, never BINDING (the gate still re-derives boundsHash and requires equality).
-    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: bounds({ budget: 2000 }), origin: ORIGIN, merchantOrigin: ORIGIN.origin, nonceGuard: memoryNonceGuard(), backend: delegated });
+    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: bounds({ budget: 2000 }), origin: ORIGIN, merchantUrl: ORIGIN.origin, nonceGuard: memoryNonceGuard(), backend: delegated });
     expect(out.ok).toBe(false);
     if (!out.ok) expect(out.reason).toMatch(/bounds mismatch/);
   });
@@ -313,7 +313,7 @@ describe("the Key Binding audience (OpenID4VP §B.3.6)", () => {
       readerContextToken: req.readerContextToken,
       secret: SECRET,
       bounds: b,
-      origin: ORIGIN, merchantOrigin: ORIGIN.origin,
+      origin: ORIGIN, merchantUrl: ORIGIN.origin,
       nonceGuard: memoryNonceGuard(),
       delegate: DELEGATE,
       mandateExp: MANDATE_EXP,
@@ -340,7 +340,7 @@ describe("Delegate SD-JWT conformance (draft-gco-oauth-delegate-sd-jwt-00)", () 
     );
 
   async function build(over: Partial<Parameters<typeof buildIntentSignRequest>[0]> = {}) {
-    return buildIntentSignRequest({ bounds: bounds(), origin: ORIGIN, merchantOrigin: ORIGIN.origin, secret: SECRET, delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS, ...over });
+    return buildIntentSignRequest({ bounds: bounds(), origin: ORIGIN, merchantUrl: ORIGIN.origin, secret: SECRET, delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS, ...over });
   }
 
   it("§7.1: the request carries delegate_payload_disclosure, not AP2's plain delegate_payload", async () => {
@@ -385,7 +385,7 @@ describe("Delegate SD-JWT conformance (draft-gco-oauth-delegate-sd-jwt-00)", () 
     const { req, result } = await signFor(bounds());
     // Read the KB-JWT the way the verifier does: decrypt is not needed — the simulator's
     // presentation is rebuilt here from the same inputs, so assert on a fresh signature.
-    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: bounds(), origin: ORIGIN, merchantOrigin: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
+    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: bounds(), origin: ORIGIN, merchantUrl: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
     expect(out.ok).toBe(true);
     // The digests the gate computed are what the wallet had to sign over.
     expect(req.delegateDigests).toHaveLength(req.mandates.length);
@@ -397,7 +397,7 @@ describe("Delegate SD-JWT conformance (draft-gco-oauth-delegate-sd-jwt-00)", () 
   // looks for `delegate_payload`. Rename the constant back and this goes red.
   it("BYPASS: the KB-JWT claim is `delegate_payload`, with no leading underscore", async () => {
     const { req, result } = await signFor(bounds(), { plainDelegatePayload: false });
-    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: bounds(), origin: ORIGIN, merchantOrigin: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
+    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: bounds(), origin: ORIGIN, merchantUrl: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
     expect(out.ok).toBe(true);
     const { DELEGATE_PAYLOAD_CLAIM } = await import("../../ap2/delegate.js");
     expect(DELEGATE_PAYLOAD_CLAIM).toBe("delegate_payload");
@@ -409,7 +409,7 @@ describe("Delegate SD-JWT conformance (draft-gco-oauth-delegate-sd-jwt-00)", () 
   // accepting it would let the non-conformant output keep passing.
   it("BYPASS: a plain `kb+jwt` key binding is refused", async () => {
     const { req, result } = await signFor(bounds(), { overrideKbTyp: "kb+jwt" });
-    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: bounds(), origin: ORIGIN, merchantOrigin: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
+    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: bounds(), origin: ORIGIN, merchantUrl: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
     expect(out).toMatchObject({ ok: false });
     if (!out.ok) expect(out.reason).toContain("kb+jwt");
   });
@@ -419,7 +419,7 @@ describe("Delegate SD-JWT conformance (draft-gco-oauth-delegate-sd-jwt-00)", () 
   // tell a conformant wallet from a legacy one.
   it("BYPASS: mandates sent as plain objects instead of digests are refused", async () => {
     const { req, result } = await signFor(bounds(), { plainDelegatePayload: true });
-    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: bounds(), origin: ORIGIN, merchantOrigin: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
+    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: bounds(), origin: ORIGIN, merchantUrl: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
     expect(out).toMatchObject({ ok: false, reason: expect.stringContaining("mandate mismatch") });
   });
 
@@ -428,7 +428,7 @@ describe("Delegate SD-JWT conformance (draft-gco-oauth-delegate-sd-jwt-00)", () 
   // authorizations and sign one. An equality check on LENGTH alone would not catch this.
   it("BYPASS: signing only the last `delegate` entry is refused", async () => {
     const { req, result } = await signFor(bounds(), { signOnlyLastEntry: true });
-    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: bounds(), origin: ORIGIN, merchantOrigin: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
+    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: bounds(), origin: ORIGIN, merchantUrl: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
     expect(out).toMatchObject({ ok: false, reason: expect.stringContaining("mandate mismatch") });
   });
 
@@ -441,7 +441,7 @@ describe("Delegate SD-JWT conformance (draft-gco-oauth-delegate-sd-jwt-00)", () 
     for (const digest of req.delegateDigests) expect(digest).toMatch(/^[A-Za-z0-9_-]{64}$/); // base64url sha-384
 
     const result = await devSimulateWalletSignature({ request: req, origin: ORIGIN.origin });
-    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantOrigin: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS, hashAlg: "sha-384" });
+    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantUrl: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS, hashAlg: "sha-384" });
     expect(out.ok).toBe(true);
   });
 
@@ -451,7 +451,7 @@ describe("Delegate SD-JWT conformance (draft-gco-oauth-delegate-sd-jwt-00)", () 
     const b = bounds();
     const req = await build({ hashAlg: "sha-384" });
     const result = await devSimulateWalletSignature({ request: req, origin: ORIGIN.origin });
-    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantOrigin: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
+    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantUrl: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
     expect(out).toMatchObject({ ok: false, reason: expect.stringContaining("mandate mismatch") });
   });
 });
@@ -463,30 +463,42 @@ describe("a malformed disclosure set is refused, not unpacked", () => {
   it("BYPASS: the same disclosure presented twice, with the key binding re-signed → refused", async () => {
     const b = bounds();
     const { req, result } = await signFor(b, { duplicateDisclosure: true });
-    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantOrigin: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
+    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantUrl: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
     expect(out.ok).toBe(false);
     if (!out.ok) expect(out.reason).toMatch(/disclosure/i);
   });
 });
 
-// #331: merchantOrigin names the merchant the person signs for. It is required, and checked at
+// #331: merchantUrl names the merchant the person signs for. It is required, and checked at
 // runtime too — these functions are exported, so a JavaScript caller that leaves it out (or
 // passes something that is not an http(s) URL) gets a plain refusal, not an `Invalid URL` throw
 // or a permission naming the wrong store.
-describe("merchantOrigin is required (#331)", () => {
+describe("merchantUrl is required (#331)", () => {
   const base = { bounds: bounds(), origin: ORIGIN, secret: SECRET, delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS };
 
-  it("REFUSES to build a signing request without a merchantOrigin (bypass)", async () => {
-    await expect(buildIntentSignRequest({ ...base } as never)).rejects.toThrow(/merchantOrigin is required/);
-    await expect(buildIntentSignRequest({ ...base, merchantOrigin: "/coffee" })).rejects.toThrow(/absolute http\(s\) URL/);
+  it("REFUSES to build a signing request without a merchantUrl (bypass)", async () => {
+    await expect(buildIntentSignRequest({ ...base } as never)).rejects.toThrow(/merchantUrl is required/);
+    await expect(buildIntentSignRequest({ ...base, merchantUrl: "/coffee" })).rejects.toThrow(/absolute http\(s\) URL/);
     // Parses as a URL with an empty host and path "shop.example/wine" — merchantFor would name
     // the WINE store. Only the http(s) check stops it.
-    await expect(buildIntentSignRequest({ ...base, merchantOrigin: "foo:shop.example/wine" })).rejects.toThrow(/absolute http\(s\) URL/);
+    await expect(buildIntentSignRequest({ ...base, merchantUrl: "foo:shop.example/wine" })).rejects.toThrow(/absolute http\(s\) URL/);
   });
 
-  it("REFUSES to verify without a merchantOrigin — a refusal, never a throw (bypass)", async () => {
+  it("REFUSES to verify without a merchantUrl — a refusal, never a throw (bypass)", async () => {
     const { req, result } = await signFor(bounds());
     const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: bounds(), origin: ORIGIN, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS } as never);
-    expect(out).toMatchObject({ ok: false, reason: expect.stringMatching(/merchantOrigin is required/) });
+    expect(out).toMatchObject({ ok: false, reason: expect.stringMatching(/merchantUrl is required/) });
+  });
+
+  // A store served under a path: the wallet presentation stays bound to the bare origin, but the
+  // mandates name the path. The host's root store must not accept what was signed for /coffee.
+  it("binds the mandates to the path in merchantUrl — the host's root store REFUSES them (bypass)", async () => {
+    const b = bounds();
+    const coffee = "https://shop.example/coffee";
+    const req = await buildIntentSignRequest({ bounds: b, origin: ORIGIN, merchantUrl: coffee, secret: SECRET, delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
+    const result = await devSimulateWalletSignature({ request: req, origin: ORIGIN.origin });
+    const verifyAs = (merchantUrl: string) => verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantUrl, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
+    expect((await verifyAs(coffee)).ok).toBe(true);
+    expect((await verifyAs(ORIGIN.origin)).ok).toBe(false);
   });
 });

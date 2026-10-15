@@ -20,7 +20,7 @@ import { makeReaderCert, makeEncryptionKey } from "../mdoc/reader.js";
 import { sealReaderContext } from "../mdoc/readerContext.js";
 import { buildIntentSignDcql, PAYMENT_CREDENTIAL_ID } from "./dcql.js";
 import { boundsHash, deriveNonce, type IntentBoundsInput } from "./bounds.js";
-import { delegateEntries, merchantOriginProblem, openMandatesForGrant, type DelegateHashAlg, type DelegateJwk, type MandateContent } from "./mandates.js";
+import { delegateEntries, merchantUrlProblem, openMandatesForGrant, type DelegateHashAlg, type DelegateJwk, type MandateContent } from "./mandates.js";
 import type { DcqlQuery, ReaderIdentity } from "../../types.js";
 
 export interface SignedIntentRequest {
@@ -66,9 +66,9 @@ export async function buildIntentSignRequest(args: {
    *  from `origin`, the bare origin the wallet presentation is bound to: a store served under
    *  a path is a different merchant from its host's root (#331). Required — no default could
    *  know the path, and guessing the root would let a sibling store accept the permission. */
-  merchantOrigin: string;
+  merchantUrl: string;
 }): Promise<SignedIntentRequest> {
-  const merchantProblem = merchantOriginProblem(args.merchantOrigin);
+  const merchantProblem = merchantUrlProblem(args.merchantUrl);
   if (merchantProblem) throw new TypeError(merchantProblem);
   const { bounds, origin, secret } = args;
   const dcql = buildIntentSignDcql();
@@ -85,7 +85,7 @@ export async function buildIntentSignRequest(args: {
   // what came back to be identical.
   const mandates = openMandatesForGrant({
     bounds,
-    origin: args.merchantOrigin,
+    origin: args.merchantUrl,
     delegate: args.delegate,
     exp: args.mandateExp,
     allowedSkus: args.allowedSkus,
