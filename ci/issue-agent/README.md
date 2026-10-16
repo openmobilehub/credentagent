@@ -51,6 +51,41 @@ different agent before it reaches the PR:
 - If the agents don't converge (or a budget runs out, or a reviewer can't finish), the PR still
   opens as `[needs human]` with the open findings, or the issue gets a comment saying why.
 
+## The review loop
+
+With an `AGENT_GH_TOKEN` secret set, a converged change doesn't stop at "draft PR": it opens as a
+real PR (labelled **`agent:in-review`**, with a banner saying it isn't ready for a human yet), the
+Claude review runs on it, and `.github/workflows/issue-agent-review.yml` takes over after every
+review:
+
+```
+Claude review finishes on an agent/issue-* PR
+  ├─ assess   read the verdict + the open threads (the review bot's and maintainers' only)    (script)
+  │             ✅ Ready to merge, or 💬 with no thread open → hand to a human: label
+  │                agent:ready-for-human, request the labeller's review, drop the banner      ← stop
+  │             cycle cap reached → label agent:needs-human, say why                           ← stop
+  ├─ fix      answer every thread — fix it, or decline it with a reason; then the same gates,
+  │           mutation check (over the whole PR) and three reviews as the first run         (agents)
+  └─ push     apply the checked fix to the PR head (fast-forward, no force), reply to every
+              thread with the agent's answer and resolve it                                  (script)
+                → the push starts the next Claude review → assess again
+```
+
+- **A human is asked only at the end** — when the review is satisfied with nothing left open, or
+  when the loop stops (cycle cap `ISSUE_AGENT_MAX_REVIEW_CYCLES`, default 3; a budget; a fix that
+  doesn't pass its own checks; a change it may not publish; an answer with no code change, which no
+  new review would follow). It always says why, on the PR.
+- **Same trust split:** assess and push are trusted code; fix runs in a job with no GitHub token.
+  Only threads started by the review bot (a GitHub App account, not any user named `claude`) or by
+  people with write access are answered, and only their replies are read.
+- **Small notes get fixed too.** 💬 with open threads is not "done" — the agent fixes or answers
+  them first, so what reaches you has nothing open.
+- **Without `AGENT_GH_TOKEN`** the loop can't work — a push made with `GITHUB_TOKEN` starts no
+  workflow, so the fix would never be reviewed again. PRs then open as drafts, as before.
+- **To run it by hand:** *Actions → issue-agent-review → Run workflow* with the PR number, or
+  locally: `run.mjs assess-review <pr> --dry-run`, `run.mjs fix-review review.json`,
+  `run.mjs push-review <fix-dir> --review review.json --pr <pr> --dry-run`.
+
 ## What it trusts — and what it doesn't
 
 The agents run code: the implementer writes it, and the gates, the tests and the agents' own tools
@@ -126,6 +161,7 @@ is left, so together they can't pass the cap. A run that hits its cap stops and 
 | `ISSUE_AGENT_BUDGET_USD` | `25` | per-session cap |
 | `ISSUE_AGENT_RUN_BUDGET_USD` | `100` | per-run cap |
 | `ISSUE_AGENT_LABEL` | `agent` | the label `--poll` looks for |
+| `ISSUE_AGENT_MAX_REVIEW_CYCLES` | `3` | review-loop fix cycles before `agent:needs-human` |
 
 Secrets/variables: `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` (+ `CLAUDE_AUTH`), and optionally
 **`AGENT_GH_TOKEN`** (used only by the publish job) — without it, PRs are opened by `GITHUB_TOKEN`,

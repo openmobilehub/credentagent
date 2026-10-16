@@ -7,7 +7,10 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { titleAuthor, forbiddenPaths, applyAndCheck, isRunId, isCommitId, publishIssueNumber } from "./checks.mjs";
+import {
+  titleAuthor, forbiddenPaths, applyAndCheck, isRunId, isCommitId, publishIssueNumber,
+  isReviewBot, parseVerdict, agentBranch, threadsToAnswer, reviewDecision,
+} from "./checks.mjs";
 import { fingerprints, withinBaseline } from "./fingerprints.mjs";
 import { prBody, issueComment } from "./report.mjs";
 
@@ -114,5 +117,54 @@ describe("agent text in a PR body", () => {
   });
   it("says why when it skips", () => {
     expect(issueComment({ kind: "skipped", reason: "it is closed" })).toMatch(/not starting this one.*it is closed/);
+  });
+});
+
+describe("the review loop", () => {
+  const bot = { __typename: "Bot", login: "claude" };
+  const maintainer = { __typename: "User", login: "dzuluaga" };
+  const outsider = { __typename: "User", login: "mallory" };
+  const isTrusted = (login) => login === "dzuluaga";
+
+  it("reads the review's verdict", () => {
+    expect(parseVerdict("## Claude review\n**Verdict: ✅ Ready to merge**")).toBe("ready");
+    expect(parseVerdict("**Verdict: 💬 Ready — small notes**")).toBe("notes");
+    expect(parseVerdict("**Verdict: ⛔ Needs changes**")).toBe("changes");
+    expect(parseVerdict("no verdict here")).toBeUndefined();
+  });
+
+  it("touches only issue-agent branches", () => {
+    expect(agentBranch("agent/issue-286-202610161901")).toEqual({ issue: 286, run: "202610161901" });
+    expect(agentBranch("feat/issue-agent")).toBeUndefined();
+    expect(agentBranch("agent/issue-286-202610161901/../main")).toBeUndefined();
+  });
+
+  it("trusts the review bot, not a user who calls themselves claude", () => {
+    expect(isReviewBot(bot)).toBe(true);
+    expect(isReviewBot({ __typename: "User", login: "claude" })).toBe(false);
+  });
+
+  it("answers threads from the bot and maintainers only, and drops outsiders' replies", () => {
+    const thread = (id, root, ...replies) => ({ id, isResolved: false, path: "a.ts", line: 1, comments: [root, ...replies].map((author, i) => ({ databaseId: i, author, body: `${author.login} says` })) });
+    const { answer, ignored } = threadsToAnswer([
+      thread("T1", bot, outsider, maintainer),
+      thread("T2", outsider),
+      { ...thread("T3", bot), isResolved: true },
+      thread("T4", maintainer),
+    ], isTrusted);
+    expect(answer.map((t) => t.id)).toEqual(["T1", "T4"]);
+    expect(answer[0].comments.map((c) => c.author)).toEqual(["claude", "dzuluaga"]);
+    expect(ignored).toEqual(["a thread started by mallory (no write access)"]);
+  });
+
+  it("hands over only when the review is satisfied and nothing is open", () => {
+    const d = (verdict, open, cycle = 0) => reviewDecision({ verdict, open, cycle, maxCycles: 3 }).action;
+    expect(d("ready", 0)).toBe("done");
+    expect(d("notes", 0)).toBe("done");
+    expect(d("notes", 2)).toBe("fix"); // small notes still get fixed before a human is asked
+    expect(d("ready", 1)).toBe("fix");
+    expect(d("changes", 0)).toBe("fix");
+    expect(d(undefined, 0)).toBe("wait");
+    expect(d("changes", 3, 3)).toBe("give-up");
   });
 });

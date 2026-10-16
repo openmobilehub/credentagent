@@ -45,6 +45,50 @@ export function applyAndCheck(cwd, patch) {
   return { files, forbidden: forbiddenPaths(files) };
 }
 
+// ── the review loop ──────────────────────────────────────────────────────────────────────────────
+
+/** The Claude review's GitHub App account: a Bot, never a user who happens to be called "claude". */
+export const isReviewBot = (author) => author?.__typename === "Bot" && author?.login === "claude";
+
+/** "ready" (✅ Ready to merge), "notes" (💬 Ready — small notes), "changes" (⛔ Needs changes), or undefined. */
+export function parseVerdict(body) {
+  const m = String(body ?? "").match(/\*\*Verdict:\s*(✅|💬|⛔)/u);
+  return m ? { "✅": "ready", "💬": "notes", "⛔": "changes" }[m[1]] : undefined;
+}
+
+/** An agent PR's branch → its issue number and run id; anything else is not the agent's to touch. */
+export function agentBranch(ref) {
+  const m = String(ref).match(/^agent\/issue-(\d+)-(\d{12})$/);
+  return m ? { issue: Number(m[1]), run: m[2] } : undefined;
+}
+
+/**
+ * The open review threads the agent must answer: started by the review bot or by someone trusted,
+ * with only trusted (or bot) replies kept. Everything else is listed as ignored.
+ */
+export function threadsToAnswer(threads, isTrusted) {
+  const ok = (a) => isReviewBot(a) || isTrusted(a?.login);
+  const answer = [], ignored = [];
+  for (const t of threads) {
+    if (t.isResolved) continue;
+    const [root, ...rest] = t.comments;
+    if (!root || !ok(root.author)) { ignored.push(`a thread started by ${root?.author?.login ?? "a deleted user"} (no write access)`); continue; }
+    answer.push({ id: t.id, path: t.path, line: t.line, comments: [root, ...rest.filter((c) => ok(c.author))].map((c) => ({ author: c.author?.login, body: c.body, databaseId: c.databaseId })) });
+  }
+  return { answer, ignored };
+}
+
+/**
+ * What the loop does after a review: hand the PR to a human only when the reviewer is satisfied
+ * (✅, or 💬 with nothing left open) — otherwise fix, unless the cycle cap is reached.
+ */
+export function reviewDecision({ verdict, open, cycle, maxCycles }) {
+  if (!verdict) return { action: "wait", reason: "there is no Claude review verdict for the PR's latest commit yet" };
+  if ((verdict === "ready" || verdict === "notes") && open === 0) return { action: "done", reason: verdict === "ready" ? "the review says ✅ Ready to merge and every thread is resolved" : "the review says 💬 Ready — small notes, and every thread is resolved" };
+  if (cycle >= maxCycles) return { action: "give-up", reason: `${maxCycles} review cycles done and the review still ${verdict === "changes" ? "says ⛔ Needs changes" : `has ${open} open thread(s)`}` };
+  return { action: "fix", reason: verdict === "changes" ? "the review says ⛔ Needs changes" : `${open} review thread(s) still open` };
+}
+
 export const isRunId = (id) => /^\d{12}$/.test(String(id));
 export const isCommitId = (sha) => /^[0-9a-f]{40}$/.test(String(sha));
 

@@ -6,7 +6,7 @@
 
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 // Outside `code spans` only: inside one, GitHub shows `&lt;` literally — and HTML there is inert anyway.
-const md = (s) => String(s ?? "").split(/(`[^`\n]*`)/).map((part, i) => i % 2
+export const md = (s) => String(s ?? "").split(/(`[^`\n]*`)/).map((part, i) => i % 2
   ? part
   : part.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/@(?=[A-Za-z0-9-])/g, "@​")).join("");
 const MARK = "<!-- issue-agent -->";
@@ -149,6 +149,7 @@ export function issueComment({ kind, reason, prUrl, report, where }) {
     case "blocked": return `${MARK}\n🤖 **Issue agent: not starting this one.** After reading the code, the spec agent found it isn't actionable yet:\n\n> ${md(reason)}\n\n${retry}`;
     case "error": return `${MARK}\n🤖 **Issue agent: the run failed before it could open a PR.**${where ? ` Logs: ${where}` : ""}\n\n${retry}`;
     case "needs-human-nopr": return `${MARK}\n🤖 **Issue agent: no PR** — ${md(reason ?? "the run stopped early")}.${where ? ` Logs and transcripts: ${where}` : ""}\n\n${retry}`;
+    case "pr-in-review": return `${MARK}\n🤖 **Issue agent:** a PR is up and the agent is now working through the Claude review on it: ${prUrl}\n\nIt will ask for a human review once every review is resolved (or say why it stopped).`;
     default: {
       const ok = kind === "pr";
       const gates = report.last.gates.every((g) => g.green) ? "green"

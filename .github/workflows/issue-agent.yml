@@ -171,6 +171,10 @@ jobs:
       - name: Publish the reviewed change
         env:
           GH_TOKEN: ${{ secrets.AGENT_GH_TOKEN || github.token }}
+          # With a token whose events start workflows, the PR opens for the Claude review and the
+          # review loop (issue-agent-review.yml) takes it from there; without one it opens as a draft.
+          ISSUE_AGENT_REVIEW_LOOP: ${{ secrets.AGENT_GH_TOKEN != '' && 'on' || '' }}
+          ISSUE_AGENT_LABELLER: ${{ github.event.sender.login || github.actor }}
         run: |
           mkdir -p "$RUNNER_TEMP/issue-agent/run"
           node ci/issue-agent/run.mjs publish "$RUNNER_TEMP/issue-agent/run" --issue "$ISSUE"
