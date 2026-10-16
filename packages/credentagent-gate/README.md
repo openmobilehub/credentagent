@@ -973,8 +973,8 @@ ageDcql()  ·  ENVELOPE_VERSION  ·  ENVELOPE_SENTINEL
 //        DelegatedVerifier / DelegatedVerdict / DelegatedHandoff / SettlementRecordLike (delegated seam)
 ```
 
-Full API reference: [`docs/reference/api.md`](https://github.com/openmobilehub/credentagent/blob/main/docs/reference/api.md).
-The design specs under [`specs/`](https://github.com/openmobilehub/credentagent/tree/main/specs) are a historical record of
-past decisions: they still use the project's old name (Attesto) and its old routes, so don't build against them.
+More on the API: [`docs/reference/api.md`](https://github.com/openmobilehub/credentagent/blob/main/docs/reference/api.md).
+The first design specs ([`specs/001`–`003`](https://github.com/openmobilehub/credentagent/tree/main/specs)) predate the project's
+rename: they still use its old name (Attesto) and old routes, so don't build against them.
 
 Apache-2.0 · part of [Open Mobile Hub](https://openmobilehub.org) (Linux Foundation).
