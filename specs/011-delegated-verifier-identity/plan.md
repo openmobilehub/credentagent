@@ -2,15 +2,21 @@
 
 **Branch**: `011-delegated-verifier-identity` | **Date**: 2026-07-28 | **Spec**: [spec.md](./spec.md)
 
-**Input**: Issue #141 (docs/example task; zero package changes).
+**Input**: Issue #141 (an example, plus the approve-page fix that writing it exposed).
 
 ## Summary
 
 One new runnable example, `examples/delegated-verifier-identity/serve.mjs`: an MCP-shaped
 "release-a-sealed-record" tool gated behind `required(age.over(21))` — no cart, no price, no
 `payment.in(...)` — where the proof runs through the **external `DelegatedVerifier` seam** (a local
-stand-in with **no `settle` member**). Plus one `examples/README.md` entry. Nothing under
-`packages/` changes.
+stand-in with **no `settle` member**). Plus one `examples/README.md` entry.
+
+Writing the example exposed that the delegated rail's shared approve page still spoke as a
+checkout on an identity-only policy ("Authorize payment", a Pay step, a $0.00 Total, a return
+link to `/checkout`). So the gate package changes in one place: `delegated-payment/page.ts`
+words the page from THIS order's policy (`policyHasPayment`), the route passes the host's
+`returnUrl` like its sibling rails, and `theme.ts` gains default-preserving options
+(`showAmounts`, `includePay`, completion-banner labels). The rail's backend is unchanged.
 
 ## Technical Context
 
@@ -64,13 +70,17 @@ No violations → Complexity Tracking omitted.
 ```text
 specs/011-delegated-verifier-identity/
 ├── spec.md              # approved
-├── plan.md              # this file
-└── tasks.md             # task list
+└── plan.md              # this file
 
 examples/
 ├── delegated-verifier-identity/
-│   └── serve.mjs        # the example (hero file — the whole deliverable)
+│   └── serve.mjs        # the example (hero file)
 └── README.md            # + one "Gating patterns" entry
+
+packages/credentagent-gate/src/ceremony/
+├── delegated-payment/page.ts    # wording follows the order's policy
+├── delegated-payment/routes.ts  # passes hasPayment + the host's returnUrl
+└── theme.ts                     # showAmounts / includePay / banner labels (defaults unchanged)
 ```
 
 No research.md / data-model.md / contracts: the feature adds no API surface, no storage, no
@@ -83,6 +93,5 @@ endpoints — every contract it exercises already exists and is cited above.
    ceremony (no settlement field) → released record.
 3. `VERDICT=underage node …/serve.mjs` and `VERDICT=declined node …/serve.mjs` — refusal printed,
    release log empty.
-4. `git diff --stat main -- packages/` is empty (SC-003).
-5. Both package vitest suites untouched and green (`npm run test` per workspace) — belt-and-braces
-   that nothing under `packages/` moved.
+4. Root `npm test` green. Each new page test is paired with a control on a policy that DOES
+   settle, and each turns red when its fix is reverted (SC-003).

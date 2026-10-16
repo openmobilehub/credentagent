@@ -97,7 +97,9 @@ the delegated approve page for the $0 action, clicks through the ceremony, sees 
   release nothing.
 - **SC-002**: The hero file reads as a story (comment-led, like its two parents); no plumbing block
   a reader must reverse-engineer (Principle I). If one appears, stop and file the API gap.
-- **SC-003**: Zero diffs under `packages/` (docs/example task).
+- **SC-003**: On an identity-only policy the approve page announces no payment (no "Authorize
+  payment", no Pay step, no amounts) and returns to the host's `returnUrl`; on a policy that
+  settles, the page is unchanged.
 
 ## Out of scope
 
@@ -105,4 +107,5 @@ the delegated approve page for the $0 action, clicks through the ceremony, sees 
 - A `verifier` option on `defineHost({...})` — the example publishes the seam via
   `app.locals.credentagent` with a comment; if that reads as plumbing, it is filed as a DX follow-up
   rather than dressed up (constitution Principle I).
-- Any change to the delegated rail, its tests, or the packages.
+- Any change to the delegated rail's backend (verify, settle, gates). Only its page wording and
+  return link change.
