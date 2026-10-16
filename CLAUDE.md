@@ -263,9 +263,14 @@ anticipate it when authoring:
 
 Labelling an issue **`agent`** (write access needed) runs `.github/workflows/issue-agent.yml`:
 agents spec, implement and review it, and it comes back as a **draft PR** with acceptance criteria,
-the pipeline's own gate runs, a mutation check (the new tests fail with the fix reverted), three
-review verdicts, and before/after screenshots + video. It skips issues that are `needs-decision`,
-`epic`, or already have an open PR, and says why on the issue. It never merges; its PRs go through
+the pipeline's own gate runs, a mutation check (the changed tests fail with the fix reverted),
+three review verdicts, and before/after screenshots + video. It skips an issue that is closed,
+labelled `needs-decision`, `epic`, `wontfix`, `duplicate` or `question`, assigned to someone other
+than whoever labelled it, or already has an open PR,
+and says why in a comment on the issue. **Only words by people with write access reach the agents**
+(the issue body if its author has it, and such people's comments, frozen at the label) — so to give
+it a request from an outside contributor, restate it in a comment. The agents run in a job with no
+GitHub token; a separate job publishes their reviewed change. It never merges; its PRs go through
 the same human review as any other. Media lives on the `agent-evidence` branch — never merge it.
 How it works and how to run it locally: [`ci/issue-agent/README.md`](ci/issue-agent/README.md).
 
