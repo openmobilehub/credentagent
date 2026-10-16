@@ -15,6 +15,7 @@
 import type { CeremonyOrder } from "../types.js";
 import type { Branding } from "../../types.js";
 import { pageHead, brandHeader, orderSummaryCard, trustFooter, settlingBar, completionHandoffBanner, railCompleteScript, completedViewScript, refusalNotices, recordLinkScript } from "../theme.js";
+import { scriptJson } from "../script-json.js";
 
 function money(amount: number, currency: string): string {
   return new Intl.NumberFormat("en-US", { style: "currency", currency }).format(amount);
@@ -28,7 +29,7 @@ export function renderPasskeyPage(args: { order: CeremonyOrder; crossDevice?: bo
   // statelessOrders: carry the cart mandate back so the store-less hub can re-resolve.
   // Browser-visible path prefix (ctx.basePath) — every URL below carries it; "" at the root.
   const base = args.basePath ?? "";
-  const returnUrl = args.returnUrl ?? `${base}/checkout?order=${encodeURIComponent(order.id)}${args.cart ? `&cart=${args.cart}` : ""}`;
+  const returnUrl = args.returnUrl ?? `${base}/checkout?order=${encodeURIComponent(order.id)}${args.cart ? `&cart=${encodeURIComponent(args.cart)}` : ""}`;
   const total = money(order.total, order.currency);
 
   // The shared order summary card (line items + bold Total) — same chrome as the hub.
@@ -50,7 +51,7 @@ export function renderPasskeyPage(args: { order: CeremonyOrder; crossDevice?: bo
   const optionsUrl = `${base}/credentagent/passkey/options${crossDevice ? "?xdev=1" : ""}`;
   // statelessOrders: keep the cart mandate on the same-device ⇄ cross-device toggle so the
   // store-less server can still resolve THIS order after switching.
-  const cartQ = args.cart ? `&cart=${args.cart}` : "";
+  const cartQ = args.cart ? `&cart=${encodeURIComponent(args.cart)}` : "";
   const toggleHref = crossDevice ? `${base}/credentagent/passkey?order=${encodeURIComponent(order.id)}${cartQ}` : `${base}/credentagent/passkey?order=${encodeURIComponent(order.id)}&xdev=1${cartQ}`;
   const toggleText = crossDevice ? "← Use this device instead" : "Use my phone instead (scan a QR) →";
 
@@ -81,18 +82,18 @@ ${pageHead(`Authorize payment · ${order.id}`, extraCss, args.branding)}
   </div>
   ${trustFooter()}
   <script type="module">
-    import { startRegistration } from ${JSON.stringify(`${base}/credentagent/lib/sw/index.js`)};
-    const ORDER_ID = ${JSON.stringify(order.id)};
+    import { startRegistration } from ${scriptJson(`${base}/credentagent/lib/sw/index.js`)};
+    const ORDER_ID = ${scriptJson(order.id)};
     // statelessOrders: forward the signed cart mandate (?cart=… in this page's URL) so a
     // store-less server can reconstruct THIS order on verify.
     const CART = new URLSearchParams(location.search).get("cart");
-    const OPTIONS_URL = ${JSON.stringify(optionsUrl)};
-    const RETURN_URL = ${JSON.stringify(returnUrl)};
-    const DONE_BANNER = ${JSON.stringify(completionHandoffBanner(returnUrl))};
+    const OPTIONS_URL = ${scriptJson(optionsUrl)};
+    const RETURN_URL = ${scriptJson(returnUrl)};
+    const DONE_BANNER = ${scriptJson(completionHandoffBanner(returnUrl))};
     // Buyer-facing copy for every refusal the completion seam can make, rendered
     // server-side (escaped there) and picked by reason at runtime. Without this a refused
     // order painted the authorized mandate + green gates and then nothing at all.
-    const REFUSALS = ${JSON.stringify(refusalNotices({ returnUrl }))};
+    const REFUSALS = ${scriptJson(refusalNotices({ returnUrl }))};
     ${recordLinkScript(args.statusUrl)}
     const log = document.getElementById("log");
     const btn = document.getElementById("go");
@@ -108,7 +109,7 @@ ${pageHead(`Authorize payment · ${order.id}`, extraCss, args.branding)}
         const response = await startRegistration({ optionsJSON: options });
         step("→ verify · Settling via x402 on Hedera testnet (if configured)… can take ~10s");
         settling.classList.add("on");
-        const out = await fetch(${JSON.stringify(`${base}/credentagent/passkey/verify`)}, {
+        const out = await fetch(${scriptJson(`${base}/credentagent/passkey/verify`)}, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ response, challengeToken, order: ORDER_ID, cart: CART }),

@@ -142,35 +142,44 @@ serves — the same version MCP clients see in the protocol's server info:
 and which commit), so two deployments of the same version can be told apart. MCP clients then see
 `0.5.0+dev.3f9c2a1`.
 
-## Live catalog — one option, no loader
+## Live catalog — one option over your own database
 
 `createStorefront({ catalog })` takes a static `Product[]` by default — perfect for the quickstart.
 A real merchant wants to edit products **without a redeploy**, i.e. a **dynamic catalog source**.
-Pass `firestoreCatalog(...)` and the module owns the loader, the cache, and fail-closed loading — no
-hand-written glue:
+Pass a `CatalogSource` — two methods over your own database:
 
 ```ts
 import { createStorefront } from "@openmobilehub/credentagent-storefront/server";
-import { firestoreCatalog } from "@openmobilehub/credentagent-storefront/firestore";
+import type { CatalogSource, Product } from "@openmobilehub/credentagent-storefront";
 
-const store = createStorefront({
-  catalog: firestoreCatalog({
-    collection: "products",   // Firestore collection of product docs
-    ttlMs: 300_000,           // cache for 5 min, then refresh
-    // credential: { projectId, clientEmail, privateKey }  // or rely on Application Default Credentials
-  }),
-});
+let products: Product[] | undefined;
+let loadedAt = 0;
+
+const catalog: CatalogSource = {
+  async load() {                                                        // awaited before every request
+    if (products && Date.now() - loadedAt < 300_000) return products;   // cache for 5 min
+    const fresh = await db.listProducts();                              // your database
+    if (fresh.length === 0) throw new Error("catalog is empty");        // refuse rather than serve nothing
+    products = fresh;
+    loadedAt = Date.now();
+    return products;
+  },
+  current() {                                                           // the snapshot the re-price reads
+    if (!products) throw new Error("catalog not loaded yet");
+    return products;
+  },
+};
+
+const store = createStorefront({ catalog });
 ```
 
 - **Static array stays the zero-config default** — pass a `Product[]` (or omit `catalog`) and nothing
-  changes; no Firebase required.
-- **Fails closed:** an empty/unreachable **cold** load **refuses** (the server returns 503) rather than
-  serving an empty catalog; a **refresh** blip serves the last-known-good catalog; a malformed /
-  negative-price doc **fails the load** (never silently drops a product).
+  changes.
+- **Fails closed:** when `load()` rejects, the server **refuses** the request (503) rather than serving
+  an empty catalog. Throw on an empty or malformed result; never silently drop a product.
 - **Prices and age thresholds re-derive server-side** from the loaded catalog on every completion path
   (Security invariant 2 — never trust the order token).
-- **Lean by default:** `firebase-admin` is an **optional peer dependency**, loaded lazily only on the
-  credentials path — static-catalog users never install it.
+- **The cache is yours:** `load()` runs before every request, so cache inside it, as above.
 
 ## The catalog as data — for agents that don't render the widget
 
@@ -192,8 +201,8 @@ renders nothing:
   id *or* an array. One id answers exactly as before; an array answers
   `{ "results": [{ "id", "product" } | { "id", "error": "not-found" }, …] }` in request order. A single
   unknown id is an error that lists up to 50 valid ids (`validIds`) and the total (`validIdCount`).
-- **Same source as everything else:** both tools read the configured `catalog` (static or
-  `firestoreCatalog(...)`) on every call, and `browse-products` goes through the same
+- **Same source as everything else:** both tools read the configured `catalog` (static or a
+  `CatalogSource`) on every call, and `browse-products` goes through the same
   `listProducts()` — so the picker and the data never disagree.
 
 The same read is exported from the pure entry point:
@@ -359,12 +368,12 @@ the catalog; unknown ids are collected (`unknownIds`), not thrown.
 - Loyalty discount with a per-call percent override (`LOYALTY_DISCOUNT_PCT`, `PriceOpts`).
 - Pluggable stores (cart / created-order / completed-order / verification) — default in-memory;
   inject a shared store (e.g. Redis) for a multi-instance serverless deployment.
-- Catalog is static by default or a **dynamic source** (`firestoreCatalog(...)` from `./firestore`) —
-  edit products with no redeploy; loaded + cached server-side, fail-closed.
+- Catalog is static by default or a **dynamic source** (a `CatalogSource` you write) —
+  edit products with no redeploy; loaded server-side, fail-closed.
 
 `createStorefront()` accepts `{ catalog, reviews, baseUrl, cartStore, orderStore, createdOrderStore,
 verificationStore, storage, signingKey, allowEphemeralKey, settle, verifier }`. `catalog` is a
-`Product[]` (static) or a `CatalogSource` (dynamic, e.g. `firestoreCatalog(...)`). `baseUrl` is the
+`Product[]` (static) or a `CatalogSource` (dynamic). `baseUrl` is the
 public URL checkout links start from (default: the first request's origin); behind a proxy that serves
 the store under a path, include it (`https://shop.example/store`) and give the gate the same
 `walletOrigin`, so the checkout and consent pages link and fetch under `/store`. The optional

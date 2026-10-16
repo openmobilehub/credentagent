@@ -7,6 +7,7 @@
 // a number into a mandate has never made it true.
 import { amountOfMinor, sumAmounts, toMinorUnits } from "./money.js";
 import type { CeremonyOrder } from "../ceremony/types.js";
+import { basePathOf } from "../ceremony/origin.js";
 import type {
   Amount,
   CheckoutConstraint,
@@ -19,14 +20,20 @@ import type {
 } from "./types.js";
 
 /**
- * The merchant identity a mandate binds to. Derived from the gate's own origin.
+ * The merchant identity a mandate binds to. Derived from the gate's own public URL.
+ *
+ * The id is the host PLUS the base path (#331): two stores mounted on one host at `/coffee`
+ * and `/wine` are different merchants, and a permission signed for one must not be spendable
+ * at the other. A store at the root keeps the bare host, so mandates already signed for it
+ * still match.
  *
  * `name` is REQUIRED by `types/merchant.json`, so a caller that has no display name gets the
- * host — the one string that is true about this merchant whatever else we know.
+ * id — the one string that is true about this merchant whatever else we know.
  */
 export function merchantFor(origin: string, name?: string): Merchant {
   const { host } = new URL(origin);
-  return { id: host, name: name ?? host, origin };
+  const id = `${host}${basePathOf(origin)}`;
+  return { id, name: name ?? id, origin };
 }
 
 /**

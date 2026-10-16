@@ -13,6 +13,7 @@
 // never the trust line.
 import type { Branding } from "../../types.js";
 import { pageHead, brandHeader, deviceSignedTrustFooter } from "../theme.js";
+import { scriptJson } from "../script-json.js";
 
 export interface IntentSignPageArgs {
   /** The grant id — scopes the /request + /verify calls. */
@@ -105,8 +106,8 @@ ${pageHead(title, extraCss, args.branding)}
   <div id="done">✓ Signed — this grant is now authorized. <a id="back" href="${escapeHtml(args.returnUrl ?? "#")}">continue ›</a></div>
   ${deviceSignedTrustFooter()}
   <script type="module">
-    const ID = ${JSON.stringify(args.grantId)};
-    const RETURN_URL = ${JSON.stringify(args.returnUrl ?? "")};
+    const ID = ${scriptJson(args.grantId)};
+    const RETURN_URL = ${scriptJson(args.returnUrl ?? "")};
     const log = document.getElementById("log");
     const goDc = document.getElementById("go-dc");
     const doneEl = document.getElementById("done");
@@ -122,11 +123,11 @@ ${pageHead(title, extraCss, args.branding)}
     let reqData = null;
     function prefetch() {
       reqData = null;
-      fetch(${JSON.stringify(`${args.basePath ?? ""}/credentagent/grants/`)} + encodeURIComponent(ID) + "/sign/request").then((r) => r.json()).then((d) => { reqData = d; }).catch(() => {});
+      fetch(${scriptJson(`${args.basePath ?? ""}/credentagent/grants/`)} + encodeURIComponent(ID) + "/sign/request").then((r) => r.json()).then((d) => { reqData = d; }).catch(() => {});
     }
     // Nothing this grant covers is signable until the age step is done, so there is no request to
     // pre-fetch — /sign/request would refuse to mint a mandate that authorizes nothing anyway.
-    const BLOCKED = ${JSON.stringify(!!withheld?.blocking)};
+    const BLOCKED = ${scriptJson(!!withheld?.blocking)};
     const DC_API = !!(navigator.credentials && navigator.credentials.get);
     if (BLOCKED) {
       goDc.disabled = true;
@@ -147,7 +148,7 @@ ${pageHead(title, extraCss, args.branding)}
           let data = result && result.data != null ? result.data : null;
           if (typeof data === "string") { try { data = JSON.parse(data); } catch (e) {} }
           step("→ verify device signature…");
-          const out = await fetch(${JSON.stringify(`${args.basePath ?? ""}/credentagent/grants/`)} + encodeURIComponent(ID) + "/sign/verify", {
+          const out = await fetch(${scriptJson(`${args.basePath ?? ""}/credentagent/grants/`)} + encodeURIComponent(ID) + "/sign/verify", {
             method: "POST", headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ readerContextToken: rd.readerContextToken, result: { protocol: (result && result.protocol) || null, data } }),
           }).then((r) => r.json());

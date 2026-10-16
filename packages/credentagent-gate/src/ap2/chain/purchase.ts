@@ -208,8 +208,8 @@ export interface VerifyPurchaseOptions {
    *
    * Pass a function and it is called with the VERIFIED `permissionId`, after the chains check out —
    * so you look your ledger up by an id the signatures vouch for, never by bytes read from an
-   * unverified token. A budget holds per merchant: one permission works at every store it names,
-   * and each store sees only its own spending.
+   * unverified token. A budget holds per merchant: one permission works at every store it names
+   * (each checks carts against its own `checkoutKey`), and each store sees only its own spending.
    */
   spent?: Spent | ((permissionId: string) => Spent | Promise<Spent>);
   /** Your catalog's total for this cart, in minor units. The price authority — never the proof. */
