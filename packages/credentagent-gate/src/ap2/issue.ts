@@ -8,6 +8,7 @@
 import type { KeyObject } from "node:crypto";
 import { digestToken, sdJwtInstance, SD_HASH_ALG } from "./sdjwt.js";
 import { signCompactJwt } from "./jwt.js";
+import { lineItemsProblem } from "./from-gate.js";
 import { CHECKOUT_KEY_FRAGMENT, ephemeralSigningKey, type GateSigningKey, type PublicJwkP256 } from "./keys.js";
 import {
   VCT,
@@ -152,8 +153,14 @@ export class Ap2Issuer {
    *
    * The cart's `merchant` is this merchant. Leave it out and it is filled in. A cart naming
    * another merchant is refused, because no permission would ever match it.
+   *
+   * Every line must be a real purchase: a quantity that is a whole number of at least 1, and an
+   * item price that is a whole number of minor units above 0. A cart with any other line is
+   * refused — a line of −1 tea would lower the total without breaking any limit (#286).
    */
   signCheckout(checkout: UcpCheckout): string {
+    const lines = lineItemsProblem(checkout.line_items);
+    if (lines) throw new Error(`refusing to quote this cart: ${lines}`);
     const merchant = checkout.merchant ?? this.#merchant;
     if (!merchant) throw new Error("the cart names no merchant — pass checkout.merchant, or construct Ap2Issuer with { merchant }");
     if (this.#merchant && merchant.id !== this.#merchant.id) {

@@ -15,7 +15,7 @@ import { DEFAULT_MANDATE_TTL_MS } from "../issue.js";
 import { permissionIdOf } from "../digest.js";
 import { peekJson, verifyCompactJwt } from "../jwt.js";
 import { digestToken, SD_HASH_ALG } from "../sdjwt.js";
-import { rederiveTotal, totalOf } from "../from-gate.js";
+import { lineItemsProblem, rederiveTotal, totalOf } from "../from-gate.js";
 import type { PublicJwkP256 } from "../keys.js";
 import {
   VCT,
@@ -340,16 +340,16 @@ export async function verifyDelegatedPurchase(
 
 const isCount = (v: unknown): boolean => Number.isSafeInteger(v) && (v as number) >= 0;
 
-/** What a cart needs before anything reads it: a merchant, and lines with an item id and a count. */
+/**
+ * What a cart needs before anything reads it: a merchant, a totals list, and lines that are each a
+ * real purchase — an item id, a quantity of at least 1, a price above 0 (`lineItemsProblem`, the
+ * same rule `signCheckout` quotes by). A line of quantity −1 would otherwise lower the total (#286).
+ */
 function cartProblem(cart: UcpCheckout): string | undefined {
   if (!cart || typeof cart !== "object") return "the checkout is not an object";
   if (!cart.merchant || typeof cart.merchant !== "object") return "the checkout names no merchant";
-  if (!Array.isArray(cart.line_items) || !Array.isArray(cart.totals)) return "the checkout has no line_items or totals list";
-  for (const line of cart.line_items) {
-    if (!line?.item || typeof line.item.id !== "string" || !Number.isSafeInteger(line.quantity))
-      return "a checkout line has no item id or no integer quantity";
-  }
-  return undefined;
+  if (!Array.isArray(cart.totals)) return "the checkout has no totals list";
+  return lineItemsProblem(cart.line_items);
 }
 
 /** What a closed payment needs before anything reads it: an integer amount in a named currency. */

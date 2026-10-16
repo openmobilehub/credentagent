@@ -7,7 +7,8 @@
 import { describe, expect, it } from "vitest";
 import { DelegatedIntent, verifyDelegatedPurchase, type DelegatedPurchaseProof, type VerifyPurchaseOptions } from "./purchase.js";
 import type { Spent } from "./constraints.js";
-import { resolveSigningKey } from "../keys.js";
+import { CHECKOUT_KEY_FRAGMENT, resolveSigningKey } from "../keys.js";
+import { signCompactJwt } from "../jwt.js";
 import { Ap2Issuer } from "../issue.js";
 import { merchantFor } from "../from-gate.js";
 import { newWallet, testGrant, GATE_ORIGIN } from "./test-wallet.js";
@@ -19,26 +20,34 @@ import { walletChain } from "./serialize.js";
 
 const SECOND = "https://second-shop.example";
 
-/** A merchant: its key, its quoted cart, and its catalog (the price authority — invariant 2). */
-function merchant(origin: string, lines: Array<[string, number]> = [["coffee", 1]], mutate: (c: UcpCheckout) => UcpCheckout = (c) => c) {
-  const key = resolveSigningKey(origin);
-  const ap2 = new Ap2Issuer(key);
+/**
+ * A merchant: its key, its quoted cart, and its catalog (the price authority — invariant 2). A line
+ * is `[sku, quantity, unit price]`, the price 450 unless given.
+ *
+ * The cart is signed with the checkout key directly, not through `signCheckout`: these tests feed
+ * the verifier carts `signCheckout` refuses to quote, to show the verifier refuses them too.
+ */
+function merchant(origin: string, lines: Array<[string, number, number?]> = [["coffee", 1]], mutate: (c: UcpCheckout) => UcpCheckout = (c) => c) {
+  const checkoutKey = resolveSigningKey(origin, undefined, CHECKOUT_KEY_FRAGMENT);
+  const ap2 = new Ap2Issuer(resolveSigningKey(origin), { checkoutKey });
+  const priced = lines.map(([id, q, price = 450]) => ({ id, q, price }));
   const ucp: UcpCheckout = mutate({
     id: "ord_1",
     merchant: merchantFor(origin),
-    line_items: lines.map(([id, q], i) => ({
+    line_items: priced.map(({ id, q, price }, i) => ({
       id: `li${i}`,
-      item: { id, title: id, price: 450 },
+      item: { id, title: id, price },
       quantity: q,
-      totals: [{ type: "total", amount: 450 * q }],
+      totals: [{ type: "total", amount: price * q }],
     })),
     status: "ready_for_complete",
     currency: "USD",
-    totals: [{ type: "total", amount: lines.reduce((s, [, q]) => s + 450 * q, 0) }],
+    totals: [{ type: "total", amount: priced.reduce((s, { q, price }) => s + price * q, 0) }],
     links: [],
   });
-  const catalog = (c: UcpCheckout) => c.line_items.reduce((s, l) => s + 450 * l.quantity, 0);
-  return { origin, ap2, ucp, checkoutJwt: ap2.signCheckout(ucp), price: catalog };
+  // The honest catalog: unit price × quantity, for whatever quantity the cart asks for.
+  const catalog = (c: UcpCheckout) => c.line_items.reduce((s, l) => s + l.item.price * l.quantity, 0);
+  return { origin, ap2, ucp, checkoutJwt: signCompactJwt(ucp, checkoutKey.privateKey, checkoutKey.kid), price: catalog };
 }
 
 /** Verify at merchant `m` with the options every test shares; `over` changes the one under test. */
@@ -59,7 +68,7 @@ async function purchase(
     grant?: Parameters<typeof testGrant>[0];
     at?: string;
     amount?: number;
-    lines?: Array<[string, number]>;
+    lines?: Array<[string, number, number?]>;
     mutate?: (c: UcpCheckout) => UcpCheckout;
     payee?: string;
   } = {},
@@ -468,6 +477,50 @@ describe("malformed input is refused, never thrown", () => {
     };
     const v = await verifyWith(proof, m, { nonce: "n" });
     expect(v).toMatchObject({ ok: false, code: "malformed", detail: expect.stringMatching(/line_items/) });
+  });
+
+  // #286: the line_items limit skips a line of quantity ≤ 0, but the total still subtracts it. So
+  // "1 coffee and −1 tea" fits every limit, adds up, and matches an honest catalog — $12.50 paid
+  // for a $22 coffee. Only refusing the line itself, before anything adds it up, stops it.
+  async function cartOf(lines: Array<[string, number, number?]>) {
+    const g = await testGrant();
+    const m = merchant(GATE_ORIGIN, lines);
+    const hash = digestToken(m.checkoutJwt);
+    const hop = (which: 0 | 1, content: Record<string, unknown>) =>
+      appendAgentHop({ chain: walletChain(g.presentation, g.disclosures[which])!, agentKey: g.agent.privateKey, content, audience: GATE_ORIGIN, nonce: "n" });
+    const proof = {
+      checkout: await hop(0, { vct: VCT.checkout, checkout_jwt: m.checkoutJwt, checkout_hash: hash, iat: iat() }),
+      payment: await hop(1, { ...honestPayment(hash), payment_amount: { amount: m.ucp.totals[0].amount, currency: "USD" } }),
+    };
+    return verifyWith(proof, m, { nonce: "n" });
+  }
+
+  it("refuses a cart that pays $12.50 for a $22 coffee with a line of −1 tea (bypass, #286)", async () => {
+    const v = await cartOf([
+      ["coffee", 1, 2200],
+      ["tea", -1, 950],
+    ]);
+    expect(v).toMatchObject({ ok: false, code: "malformed", detail: expect.stringMatching(/quantity/) });
+  });
+
+  it("refuses a line of quantity 0, or a fractional quantity (bypass, #286)", async () => {
+    for (const q of [0, 1.5]) {
+      const v = await cartOf([
+        ["coffee", 1],
+        ["tea", q],
+      ]);
+      expect(v).toMatchObject({ ok: false, code: "malformed", detail: expect.stringMatching(/quantity/) });
+    }
+  });
+
+  it("refuses a line whose price is not a positive whole number of minor units (bypass, #286)", async () => {
+    for (const price of [0, -950, 4.5]) {
+      const v = await cartOf([
+        ["coffee", 1],
+        ["tea", 1, price],
+      ]);
+      expect(v).toMatchObject({ ok: false, code: "malformed", detail: expect.stringMatching(/price/) });
+    }
   });
 });
 

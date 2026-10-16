@@ -93,6 +93,27 @@ function lineTotalOf(line: UcpLineItem, currency: string): Amount {
   return amountOfMinor(total.amount, currency);
 }
 
+/**
+ * What every cart line needs before anything adds it up: an item id, a whole quantity of at
+ * least 1, and a unit price that is a whole number of minor units above 0. `undefined` when all do.
+ *
+ * One rule for the store that quotes a cart (`Ap2Issuer.signCheckout`) and the store that verifies
+ * one (`verifyDelegatedPurchase`). A line of quantity −1 is skipped by the `checkout.line_items`
+ * limit yet still subtracted from the total — "1 coffee and −1 tea" would fit every limit and
+ * match an honest catalog's price (#286). So such a line is refused, never read.
+ */
+export function lineItemsProblem(lines: unknown): string | undefined {
+  if (!Array.isArray(lines)) return "the checkout has no line_items list";
+  for (const line of lines as UcpLineItem[]) {
+    if (!line?.item || typeof line.item.id !== "string") return "a checkout line has no item id";
+    if (!Number.isSafeInteger(line.quantity) || line.quantity < 1)
+      return `line ${line.id} has quantity ${line.quantity} — each line's quantity must be a whole number of at least 1`;
+    if (!Number.isSafeInteger(line.item.price) || line.item.price < 1)
+      return `line ${line.id} has price ${line.item.price} — each item's price must be a whole number of minor units above 0`;
+  }
+  return undefined;
+}
+
 /** The `total` entry — the one number a payment must match. Throws if the cart has none. */
 export function totalOf(checkout: UcpCheckout): Amount {
   const total = checkout.totals.find((t) => t.type === "total");

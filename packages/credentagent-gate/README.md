@@ -395,8 +395,15 @@ which is the point. Leave `agentKey` out and the gate generates the key and spen
 expiry it was signed with — today a year from creation, because a grant does not yet take its own
 expiry. Bound it with `budget` and `perSpend`, which every merchant enforces.
 
+**Every cart line must be a real purchase:** a quantity that is a whole number of at least 1, and an
+item price that is a whole number of minor units above 0. `signCheckout` throws on any other line, and
+`verifyDelegatedPurchase` refuses it with `"malformed"` before checking anything else. A line of −1 tea
+would otherwise lower the total while every limit still held
+([#286](https://github.com/openmobilehub/credentagent/issues/286)). So if you build the quote from
+quantities the agent sends, an agent asking for −1 of something gets an error, not a cheaper cart.
+
 **What a verified purchase means:** every link of both chains verifies against the key the link before it
-names, both chains rest on the same wallet signature, the cart is the one you signed, the payment pays
+names, both chains rest on the same wallet signature, every cart line is a real purchase (above), the cart is the one you signed, the payment pays
 exactly its total, every limit in the permission holds — **a limit this verifier does not recognise, or
 one missing a field, fails** — and your catalog agrees with the price. It does **not** mean a person set
 those limits (see `trust`, above), so `trust_level` is `"presence-only-demo"`.

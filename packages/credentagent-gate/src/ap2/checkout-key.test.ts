@@ -69,6 +69,24 @@ describe("the merchant's checkout key (FR-6)", () => {
     );
   });
 
+  // #286: a line of quantity −1 lowers the total without breaking any limit. The store that quotes
+  // the cart is the first place to refuse it — a cart it never signs, no agent can pay for.
+  it("refuses to quote a line that is not a real purchase — quantity below 1, or no positive price (bypass)", () => {
+    const ap2 = new Ap2Issuer(resolveSigningKey(ORIGIN));
+    const coffee = cart.line_items[0];
+    const tea = { ...coffee, id: "li_2", item: { id: "tea", title: "Tea", price: 950 }, totals: [{ type: "total" as const, amount: 950 }] };
+    for (const bad of [
+      { ...tea, quantity: -1, totals: [{ type: "total" as const, amount: -950 }] },
+      { ...tea, quantity: 0, totals: [{ type: "total" as const, amount: 0 }] },
+      { ...tea, quantity: 1.5 },
+      { ...tea, item: { ...tea.item, price: 0 } },
+      { ...tea, item: { ...tea.item, price: -950 } },
+    ]) {
+      expect(() => ap2.signCheckout({ ...cart, line_items: [coffee, bad] })).toThrow(/line li_2/);
+    }
+    expect(() => ap2.signCheckout({ ...cart, line_items: [coffee, tea] })).not.toThrow();
+  });
+
   it("publishes both keys at /.well-known/did.json — the mandate key first", async () => {
     const credentagent = new CredentAgent({ walletOrigin: ORIGIN, mandateSigningKey: privateJwk(), checkoutSigningKey: privateJwk() });
     const app = express();
