@@ -17,6 +17,7 @@ import type {
   CeremonyOrderStore,
   CompletionSeam,
   DelegatedVerifier,
+  PolicyAgeLookup,
   SettlementSeam,
 } from "./types.js";
 import { verifyCartMandate } from "./cartMandate.js";
@@ -84,6 +85,11 @@ export interface CeremonySeams {
    *  the custom-gate sweep is scoped to THIS order's policy under the plain `mount(app, ceremony)`
    *  path — not only via `orders.serve`. Absent / order missing ⇒ the registry-wide sweep (fail-closed). */
   orderPolicies?: ReadonlyMap<string, readonly string[]>;
+  /** The age each order's own policy requires (#354) — `CredentAgent.mount()` passes it from
+   *  `requirements()`, `orders.serve` from its stored created orders. The rails evaluate an age
+   *  proof at the stricter of it and the lines' `minimumAge`, and `mountCeremony` adds it to every
+   *  rail's completion as `policyMinAge`. Absent / unknown order ⇒ only the lines decide. */
+  policyAge?: PolicyAgeLookup;
   /** Where a rail returns the buyer after they prove (the "continue to checkout" link +
    *  the post-proof redirect). Absent ⇒ each rail's default `/checkout?order=<id>` (the
    *  storefront's route). A host that serves its checkout elsewhere — e.g. `orders.serve`
@@ -133,6 +139,8 @@ export interface CeremonyContext {
   /** Per-order resolved policy (#59 finding 2 / PR #131) — `mountCeremony` uses it to scope the
    *  completion sweep to THIS order's policy. Absent ⇒ the sweep stays registry-wide (fail-closed). */
   orderPolicies?: ReadonlyMap<string, readonly string[]>;
+  /** The age each order's own policy requires (#354) — see `CeremonySeams.policyAge`. */
+  policyAge?: PolicyAgeLookup;
   /** Build the buyer's return-to-checkout URL for an order (absent ⇒ the rail default). */
   returnUrl?: (orderId: string) => string;
   /** The store's order-status record URL for an order (absent ⇒ no "Order record" link). */
@@ -177,6 +185,7 @@ export function mountCeremony(app: CeremonyApp, options: Partial<CeremonySeams> 
   const readerIdentity = options.readerIdentity ?? locals.readerIdentity;
   const credentialRegistry = options.credentialRegistry ?? locals.credentialRegistry;
   const orderPolicies = options.orderPolicies ?? locals.orderPolicies;
+  const policyAge = options.policyAge ?? locals.policyAge;
   const returnUrl = options.returnUrl ?? locals.returnUrl;
   const statusUrl = options.statusUrl ?? locals.statusUrl;
   const branding = options.branding ?? locals.branding;
@@ -217,15 +226,20 @@ export function mountCeremony(app: CeremonyApp, options: Partial<CeremonySeams> 
   // passkey/dc-payment rails can't set it themselves. Never overrides an explicit one (orders.serve
   // sets it from the stored created order); an order the map never saw falls back to the whole
   // registry (fail-closed). Purely additive when no `orderPolicies` was passed.
+  // The same wrap carries the order's own policy age (`policyMinAge`, #354), so a host's
+  // completion enforces an `age.over(n)` from the policy even on an item with no `minimumAge`.
   const baseCompletion = completion as CompletionSeam;
-  const scopedCompletion: CompletionSeam = orderPolicies
-    ? (input) =>
-        baseCompletion(
-          input.policyCredentialIds !== undefined
-            ? input
-            : { ...input, policyCredentialIds: orderPolicies.get(input.order.id) },
-        )
-    : baseCompletion;
+  const scopedCompletion: CompletionSeam =
+    orderPolicies || policyAge
+      ? async (input) => {
+          const id = input.order.id;
+          return baseCompletion({
+            ...input,
+            ...(input.policyCredentialIds === undefined && orderPolicies ? { policyCredentialIds: orderPolicies.get(id) } : {}),
+            ...(input.policyMinAge === undefined && policyAge ? { policyMinAge: await policyAge(id) } : {}),
+          });
+        }
+      : baseCompletion;
 
   const ctx: CeremonyContext = {
     verificationStore: verificationStore as VerificationStore,
@@ -237,6 +251,7 @@ export function mountCeremony(app: CeremonyApp, options: Partial<CeremonySeams> 
     statelessOrders,
     ...(credentialRegistry ? { credentialRegistry } : {}),
     ...(orderPolicies ? { orderPolicies } : {}),
+    ...(policyAge ? { policyAge } : {}),
     ...(settlement ? { settlement } : {}),
     ...(verifier ? { verifier } : {}),
     ...(readerIdentity ? { readerIdentity } : {}),

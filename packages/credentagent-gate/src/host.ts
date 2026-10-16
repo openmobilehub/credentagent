@@ -25,6 +25,7 @@ import type {
   CompletionInput,
   CompletionResult,
   CompletionSeam,
+  PolicyAgeLookup,
 } from "./ceremony/types.js";
 import type { Credential, VerificationStore } from "./types.js";
 import { MemoryVerificationStore } from "./store.js";
@@ -134,8 +135,8 @@ export function defineHost(spec: DefineHostSpec): Host {
   // the seams `mount()` injects onto app.locals AFTER publish. Same lazy read the storefront
   // does for the registry; here also for the resolved signing key.
   let boundApp: HostApp | undefined;
-  const localsOf = (): { credentialRegistry?: ReadonlyMap<string, Credential>; signingKey?: string } | undefined =>
-    boundApp?.locals.credentagent as { credentialRegistry?: ReadonlyMap<string, Credential>; signingKey?: string } | undefined;
+  type BoundLocals = { credentialRegistry?: ReadonlyMap<string, Credential>; signingKey?: string; policyAge?: PolicyAgeLookup };
+  const localsOf = (): BoundLocals | undefined => boundApp?.locals.credentagent as BoundLocals | undefined;
   const registryOf = (): ReadonlyMap<string, Credential> | undefined => localsOf()?.credentialRegistry;
   // The key completion verifies a Cart Mandate with MUST be the one the rails signed it with.
   // On the `allowEphemeralKey` path mount GENERATES the key and republishes it here, so
@@ -161,7 +162,13 @@ export function defineHost(spec: DefineHostSpec): Host {
 
   return {
     verificationStore,
-    complete: (input) => Promise.resolve(complete(input)),
+    complete: async (input) => {
+      // The host's OWN action path doesn't pass through mount()'s completion wrap, so add the
+      // order's own policy age here from the lookup mount published (#354) — read at CALL time,
+      // like the registry — or an `age.over(n)` policy on an untagged item completes unproven.
+      const policyAge = localsOf()?.policyAge;
+      return complete(input.policyMinAge === undefined && policyAge ? { ...input, policyMinAge: await policyAge(input.order.id) } : input);
+    },
     publish(app: HostApp): void {
       boundApp = app;
       app.locals.credentagent = {

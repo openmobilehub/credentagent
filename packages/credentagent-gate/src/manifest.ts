@@ -72,6 +72,22 @@ function mountedApproveUrlFor(walletOrigin: string, credentialId: string, effect
 }
 
 /**
+ * The age an order's own policy requires: the strictest `age.over(n)` step that applies to it
+ * (its `appliesTo` / `.when()` run server-side, exactly as for the manifest below), or
+ * `undefined` when the policy asks for no age. Like any gate, it blocks whether the step is
+ * `required` or not. This is what `CompletionInput.policyMinAge` carries (#354).
+ */
+export function policyMinAge(order: GateOrder, policy: readonly Step[]): number | undefined {
+  let min: number | undefined;
+  for (const { credential: c } of policy) {
+    if (c.id !== "age" || typeof c.params?.minAge !== "number") continue;
+    if (c.appliesTo && !c.appliesTo(order)) continue;
+    min = Math.max(min ?? 0, c.params.minAge);
+  }
+  return min;
+}
+
+/**
  * Resolve a policy against an order into the serializable manifest.
  *
  * Ordering: declared order is preserved EXCEPT that `authorize`-effect entries

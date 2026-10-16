@@ -174,6 +174,12 @@ export interface VerificationManifestEntry {
 
 export interface VerificationRecord {
   ageVerified?: boolean;
+  /** The age `ageVerified` was proven at (e.g. 21 for an `age_over_21` proof). `completeOrder`
+   *  compares it with the strictest age the order requires — its lines' `minimumAge` and its
+   *  policy's `age.over(n)` — so a proof made at a lower threshold cannot complete a stricter
+   *  order (invariant 5, #354). Absent on a record written before it existed ⇒ read as the
+   *  threshold the rails used then: the line age, or 21. */
+  ageVerifiedOver?: number;
   loyalty?: { applied: boolean; membershipNumber: string | null };
   /**
    * Custom gate() credentials proven for THIS order, keyed by credential id

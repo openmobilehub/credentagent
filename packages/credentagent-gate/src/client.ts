@@ -4,7 +4,7 @@
 
 import * as x509 from "@peculiar/x509";
 import type { Branding, Credential, CredentAgentOptions, GateOrder, ReaderIdentity, Step, VerificationManifestEntry, VerificationStore } from "./types.js";
-import { resolveRequirements } from "./manifest.js";
+import { policyMinAge, resolveRequirements } from "./manifest.js";
 import { MemoryVerificationStore } from "./store.js";
 import { mountCeremony, type CeremonyApp, type CeremonySeams } from "./ceremony/mount.js";
 import { basePathOf } from "./ceremony/origin.js";
@@ -82,6 +82,10 @@ export class CredentAgent {
   // review). In-memory + bounded (see `rememberOrderPolicy`); a completing instance that never saw
   // the order falls back to the registry-wide sweep (fail-closed). Holds ids only; never the wire.
   private readonly orderPolicies = new Map<string, readonly string[]>();
+  // Per-order policy AGE (#354): the strictest `age.over(n)` in the order's resolved policy that
+  // applies to it, so completion and the rails enforce it even on an item with no `minimumAge`.
+  // Remembered and evicted together with `orderPolicies` (same bound, same single-process scope).
+  private readonly orderPolicyAges = new Map<string, number>();
   // Config facts `doctor()` inspects (#25). Retained at construction so the preflight can read
   // what was configured once — a stable gateSecret, and whether the stores are shared (injected)
   // or the in-memory defaults. `walletOrigin` + `readerIdentity` are already public/held above.
@@ -245,16 +249,22 @@ export class CredentAgent {
   /** Remember an order's resolved policy credential ids, bounded so a long-running process can't
    *  grow it without limit — evicting the oldest (FIFO) drops back to the fail-closed registry-wide
    *  sweep for that order, never opens a gate. */
-  private rememberOrderPolicy(orderId: string, credentialIds: readonly string[]): void {
+  private rememberOrderPolicy(orderId: string, credentialIds: readonly string[], minAge: number | undefined): void {
     this.orderPolicies.delete(orderId); // re-insert at the tail so a re-resolve refreshes recency
     this.orderPolicies.set(orderId, credentialIds);
+    if (minAge === undefined) this.orderPolicyAges.delete(orderId);
+    else this.orderPolicyAges.set(orderId, minAge);
     const MAX = 10_000;
     while (this.orderPolicies.size > MAX) {
       const oldest = this.orderPolicies.keys().next().value;
       if (oldest === undefined) break;
       this.orderPolicies.delete(oldest);
+      this.orderPolicyAges.delete(oldest);
     }
   }
+
+  /** The mounted ceremony's lookup for an order's own policy age (`CeremonySeams.policyAge`). */
+  private readonly policyAge = (orderId: string): number | undefined => this.orderPolicyAges.get(orderId);
 
   requirements(order: GateOrder, policy: Step[]): VerificationManifestEntry[] {
     // Register-on-resolve (007): remember each policy credential by id so the mounted
@@ -268,7 +278,7 @@ export class CredentAgent {
     // completion. A synchronous in-memory write (like register-on-resolve above), keyed by order id
     // — from the developer's policy, never the token. Single-process only: a multi-instance completing
     // instance that never ran this falls back to the registry-wide sweep (fail-closed), same as before.
-    this.rememberOrderPolicy(order.id, policy.map((step) => step.credential.id));
+    this.rememberOrderPolicy(order.id, policy.map((step) => step.credential.id), policyMinAge(order, policy));
     return resolveRequirements(order, policy, { walletOrigin: this.walletOrigin, mountedRoutes: this.mountedRoutes, delegated: this.delegated });
   }
 
@@ -340,7 +350,7 @@ export class CredentAgent {
     // fetch on the other two, and every mandate this gate signed would be uncheckable there.
     this.publishSigningKey(app);
     if (ceremony) {
-      mountCeremony(app as CeremonyApp, { ...this.basePathSeam(), ...ceremony, verificationStore: this.store, readerIdentity: this.readerIdentity, credentialRegistry: this.registry, orderPolicies: this.orderPolicies, ...(this.branding ? { branding: this.branding } : {}), ...(this.inspectPresentations ? { inspectPresentations: true } : {}) });
+      mountCeremony(app as CeremonyApp, { ...this.basePathSeam(), ...ceremony, verificationStore: this.store, readerIdentity: this.readerIdentity, credentialRegistry: this.registry, orderPolicies: this.orderPolicies, policyAge: this.policyAge, ...(this.branding ? { branding: this.branding } : {}), ...(this.inspectPresentations ? { inspectPresentations: true } : {}) });
       this.mountedRoutes = true;
       if (ceremony.verifier) this.delegated = true;
       // #25 doctor(): a host owns the serving surface here; capture the signing key it supplied via
@@ -356,7 +366,7 @@ export class CredentAgent {
     // rails write (invariant 4). Falls back to CredentAgent's own store otherwise.
     const locals = (app.locals.credentagent ?? {}) as Partial<CeremonySeams>;
     if (locals.orderStore && locals.catalog && locals.completion) {
-      mountCeremony(app as CeremonyApp, { ...this.basePathSeam(), readerIdentity: this.readerIdentity, credentialRegistry: this.registry, orderPolicies: this.orderPolicies, ...(this.branding ? { branding: this.branding } : {}), ...(this.inspectPresentations ? { inspectPresentations: true } : {}), ...(locals.verificationStore ? {} : { verificationStore: this.store }) });
+      mountCeremony(app as CeremonyApp, { ...this.basePathSeam(), readerIdentity: this.readerIdentity, credentialRegistry: this.registry, orderPolicies: this.orderPolicies, policyAge: this.policyAge, ...(this.branding ? { branding: this.branding } : {}), ...(this.inspectPresentations ? { inspectPresentations: true } : {}), ...(locals.verificationStore ? {} : { verificationStore: this.store }) });
       this.mountedRoutes = true;
       // The host published a verifier on app.locals (createStorefront({ verifier })): route the
       // manifest's gate/authorize links to the delegated ceremony (008).
