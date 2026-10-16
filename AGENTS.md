@@ -148,7 +148,7 @@ Routes are registered by four different calls — call the ones you need. There 
 `llms.txt` discovery document; this file and the manifest that `requirements()`
 returns are the discovery surface.
 
-**`credentagent.mount(app)`** — always, on every path:
+**`credentagent.mount(app)`** — in every form of the call, exactly one of these two (which one depends on `walletOrigin`):
 
 | Route | What it is |
 | --- | --- |

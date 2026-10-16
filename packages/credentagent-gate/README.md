@@ -957,7 +957,7 @@ class CredentAgent {
                                              // catalog, loyaltyDiscountPct, mandateSigningKey, checkoutSigningKey
                                              // (the two keys: stable private P-256 JWKs from your secret manager)
   requirements(order: GateOrder, policy: Step[]): VerificationManifestEntry[];   // Context 1
-  mount(app: ExpressApp, ceremony?: MountCeremony): void;                        // Context 2 (+ /.well-known/did.json)
+  mount(app: ExpressApp, ceremony?: MountCeremony): void;                        // Context 2 (+ /.well-known/did.json, or /did.json for a store under a path)
   doctor(opts?: { print?: boolean }): DoctorReport;                              // config preflight (#25)
   readonly orders: Orders;     // orders.create / retrieve / serve
   readonly grants: Grants;     // spending grants
