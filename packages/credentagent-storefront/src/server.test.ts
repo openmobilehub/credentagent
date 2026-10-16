@@ -779,6 +779,37 @@ describe("statelessOrders — the cart mandate is the order transport (FR-007)",
     const res = await request(store.app).get(url.pathname + "?" + url.searchParams.toString());
     expect(res.status).toBe(404); // verifyCartMandate refuses the edited cart → resolveCreated null
   });
+
+  // #330: a VALID mandate with a tail after `=` still decodes (base64url stops there), so the
+  // page renders — and each link it builds from `cart` must carry it encoded, or the tail
+  // becomes extra query parameters on the gate links.
+  it("BYPASS: a tailed cart cannot add query parameters to the page's links", async () => {
+    const store = makeStateless();
+    const url = await checkoutUrl(store);
+    url.searchParams.set("cart", `${url.searchParams.get("cart")}=&injected=1`);
+    const res = await request(store.app).get(url.pathname + "?" + url.searchParams.toString());
+    expect(res.status).toBe(200);
+    expect(res.text).toContain("%26injected%3D1"); // the tail rides inside cart=, encoded
+    expect(res.text).not.toMatch(/(&|&amp;|\\u0026)injected=1/); // never as its own parameter
+  });
+
+  // The same, for the payment-method links (withCart → METHODS in the page script). They only
+  // render on a gated order that nothing blocks, so this store's policy is payment-only.
+  it("BYPASS: a tailed cart cannot add query parameters to the payment-method links", async () => {
+    const store = createStorefront({ statelessOrders: true, allowEphemeralKey: true, baseUrl: "http://shop.test" });
+    const credentagent = new CredentAgent();
+    credentagent.mount(store.app);
+    store.gate((order) => credentagent.requirements(order, [required(payment.in("usd"))]));
+    const sc = (await (await connect(store)).callTool({ name: "checkout", arguments: { items: [{ productId: "aurora-headphones", quantity: 1 }] } })).structuredContent as any;
+    const url = new URL(sc.checkoutUrl);
+    url.searchParams.set("cart", `${url.searchParams.get("cart")}=&injected=1`);
+    const res = await request(store.app).get(url.pathname + "?" + url.searchParams.toString());
+    expect(res.status).toBe(200);
+    const methods = res.text.match(/const METHODS = (.*);/)?.[1] ?? "";
+    expect(methods).toContain("/credentagent/passkey?order="); // the links rendered
+    expect(methods).toContain("%26injected%3D1");
+    expect(methods).not.toMatch(/(&|\\u0026)injected=1/);
+  });
 });
 
 // Full checkout walk in BOTH custody modes — the regression Diego hit: after the age

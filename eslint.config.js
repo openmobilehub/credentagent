@@ -73,6 +73,28 @@ export default [
     },
   },
 
+  // Ceremony pages: a value dropped into an inline <script> goes through scriptJson(), never a
+  // bare JSON.stringify — which does not escape `</script>`, so a value could end the script
+  // and run markup on the page the buyer approves on (#330; earlier #103, #321). The
+  // moduleGlobalState selectors are repeated because a later no-restricted-syntax REPLACES
+  // the earlier one for the same files.
+  {
+    files: ["packages/credentagent-gate/src/ceremony/**/*.ts"],
+    ignores: ["**/*.test.ts", "packages/credentagent-gate/src/ceremony/script-json.ts"],
+    languageOptions: { parser: tsParser },
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        ...moduleGlobalState,
+        {
+          selector: "TemplateLiteral > CallExpression[callee.object.name='JSON'][callee.property.name='stringify']",
+          message:
+            "Interpolating JSON.stringify into a page template can close its <script> — page integrity on the consent pages (SECURITY-INVARIANTS.md #6-adjacent, #330): use scriptJson() from ceremony/script-json.ts.",
+        },
+      ],
+    },
+  },
+
   // Ceremony rails and helpers: completion happens ONLY through the injected
   // ctx.completion seam so every rail reconciles against the same gates
   // (invariant 1). Rail tests exercise the seam directly and are excluded.
