@@ -38,7 +38,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { fingerprints, stripAnsi, withinBaseline } from "./fingerprints.mjs";
-import { TRUSTED_PERMISSIONS, titleAuthor, forbiddenPaths, stagedPaths, isRunId, isCommitId, publishIssueNumber } from "./checks.mjs";
+import { TRUSTED_PERMISSIONS, titleAuthor, forbiddenPaths, applyAndCheck, isRunId, isCommitId, publishIssueNumber } from "./checks.mjs";
 import { reportHtml, prBody, issueComment } from "./report.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -200,7 +200,9 @@ async function agent(role, prompt, { cwd, schema, write = false, check = false, 
   const transcript = join(RUN.dir, "transcripts", `${role}.jsonl`);
   mkdirSync(dirname(transcript), { recursive: true });
   RUN.log(`▶ ${role}${resume ? " (resumed)" : ""}`);
-  let sessionId = resume, result, structured, cost = 0, error;
+  let sessionId = resume, result, structured, cost = 0, error, sawResult = false;
+  const allowed = Math.min(AGENT_BUDGET_USD, remaining, cap ?? Infinity);
+  try {
   for await (const msg of query({
     prompt,
     options: {
@@ -216,7 +218,7 @@ async function agent(role, prompt, { cwd, schema, write = false, check = false, 
       outputFormat: { type: "json_schema", schema },
       additionalDirectories,
       maxTurns,
-      maxBudgetUsd: Math.min(AGENT_BUDGET_USD, remaining, cap ?? Infinity),
+      maxBudgetUsd: allowed,
     },
   })) {
     appendFileSync(transcript, JSON.stringify(msg) + "\n");
@@ -225,11 +227,19 @@ async function agent(role, prompt, { cwd, schema, write = false, check = false, 
       for (const b of msg.message.content ?? []) if (b.type === "tool_use") RUN.log(`   ${role} · ${b.name} ${summarizeInput(b.input)}`);
     }
     if (msg.type === "result") {
+      sawResult = true;
       cost = msg.total_cost_usd ?? 0;
       result = msg.result;
       structured = msg.structured_output;
       if (msg.subtype !== "success") error = `${msg.subtype}${msg.errors ? `: ${msg.errors.join("; ")}` : ""}`;
     }
+  }
+  } catch (e) {
+    // The SDK died mid-session: what it spent is unknown, so count the whole allowance — a retry
+    // then can't get a fresh share, and the run cap still holds.
+    const charged = sawResult ? cost : allowed;
+    RUN.costUsd += charged;
+    throw Object.assign(e, { costUsd: charged });
   }
   RUN.costUsd += cost;
   const fail = (e) => Object.assign(e, { costUsd: cost });
@@ -448,8 +458,9 @@ async function implementIssue(issue, { dir } = {}) {
   const last = rounds.at(-1);
   const done = Boolean(last.clean);
   const patch = reviewedPatch ?? diffPatch(repoDir, base);
-  const touched = [...patch.matchAll(/^diff --git a\/(\S+)/gm)].map((m) => m[1]);
-  const forbidden = touched.filter((f) => f.startsWith(".github/"));
+  trackNew(repoDir);
+  const touched = git(["diff", "--name-only", "--no-renames", "-z", base], { cwd: repoDir }).out.split("\0").filter(Boolean);
+  const forbidden = forbiddenPaths(touched);
   writeFileSync(join(RUN.dir, "change.patch"), patch);
 
   // evidence — after the patch is frozen, so nothing the evidence agent does can reach the PR
@@ -495,7 +506,7 @@ async function implementIssue(issue, { dir } = {}) {
 // The run directory comes from the job that ran agent code, so publish treats it as UNTRUSTED input:
 // the issue number comes from the workflow (`--issue`) and must match; the title is re-read from
 // GitHub through the same trust filter as the snapshot; the base must be a commit on main; the
-// files touched are recomputed from the patch itself. What's left on trust — the report's text and
+// files touched are read from git after applying the patch. What's left on trust — the report's text and
 // its "ready" verdict — only shapes a DRAFT PR's description, which a human reviews like any other.
 function publishRun(dir) {
   const outcomeFile = join(dir, "outcome.json");
@@ -538,9 +549,7 @@ function publishRun(dir) {
   const wt = join(dir, "publish");
   if (existsSync(wt)) git(["worktree", "remove", "--force", wt], { allowFail: true });
   git(["worktree", "add", "--quiet", "--detach", wt, report.base]);
-  git(["apply", "--index", "--whitespace=nowarn", "-"], { cwd: wt, input: patch });
-  const files = stagedPaths(wt);
-  const forbidden = forbiddenPaths(files);
+  const { files, forbidden } = applyAndCheck(wt, patch);
   if (forbidden.length) {
     git(["worktree", "remove", "--force", wt], { allowFail: true });
     const reason = `the change touches ${forbidden.join(", ")} — the agent never publishes changes under .github/`;

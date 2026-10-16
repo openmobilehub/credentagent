@@ -7,12 +7,14 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { titleAuthor, forbiddenPaths, stagedPaths, isRunId, isCommitId, publishIssueNumber } from "./checks.mjs";
+import { titleAuthor, forbiddenPaths, applyAndCheck, isRunId, isCommitId, publishIssueNumber } from "./checks.mjs";
 import { fingerprints, withinBaseline } from "./fingerprints.mjs";
 import { prBody, issueComment } from "./report.mjs";
 
+// Pinned so a contributor's own git config (quotePath off, signed commits) can't change the outcome.
 const git = (cwd, ...args) => {
-  const r = spawnSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "user.name=t", "-c", "user.email=t@example.com", ...args], { cwd, encoding: "utf8" });
+  const r = spawnSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "core.quotePath=true", "-c", "commit.gpgsign=false",
+    "-c", "user.name=t", "-c", "user.email=t@example.com", ...args], { cwd, encoding: "utf8" });
   if (r.status !== 0) throw new Error(r.stderr);
   return r.stdout;
 };
@@ -61,22 +63,19 @@ describe("the publish job's checks", () => {
       git(src, "add", "-A");
       return git(src, "diff", "--cached", "--binary", "HEAD");
     };
-    const apply = (patch) => spawnSync("git", ["apply", "--index", "-"], { cwd: repo, input: patch, encoding: "utf8" });
-
+    // applyAndCheck is the publish job's single call: apply, then ask git what changed.
     it("catches a .github/ file whose name git quotes in the patch header", () => {
       const patch = patchOf((src) => {
         mkdirSync(join(src, ".github"), { recursive: true });
         writeFileSync(join(src, ".github", "CÖDEOWNERS"), "* @someone\n");
       });
       expect(patch).toMatch(/^diff --git "a\/\.github\//m); // git quotes it — a header regex misses it
-      expect(apply(patch).status).toBe(0);
-      expect(forbiddenPaths(stagedPaths(repo))).toEqual([".github/CÖDEOWNERS"]);
+      expect(applyAndCheck(repo, patch).forbidden).toEqual([".github/CÖDEOWNERS"]);
     });
 
-    it("lists ordinary files as they are", () => {
+    it("lists ordinary files as they are, and forbids nothing", () => {
       const patch = patchOf((src) => writeFileSync(join(src, "a.txt"), "x\n"));
-      expect(apply(patch).status).toBe(0);
-      expect(stagedPaths(repo)).toEqual(["a.txt"]);
+      expect(applyAndCheck(repo, patch)).toEqual({ files: ["a.txt"], forbidden: [] });
     });
   });
 });

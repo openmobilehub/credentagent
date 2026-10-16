@@ -27,6 +27,17 @@ export function stagedPaths(cwd) {
   return r.stdout.split("\0").filter(Boolean);
 }
 
+/**
+ * Apply a patch to a clean checkout (`--index`, hooks off) and report what it touched, as git sees
+ * it, and which of those the agent may never publish. The publish job's one call for both.
+ */
+export function applyAndCheck(cwd, patch) {
+  const r = spawnSync("git", ["-c", "core.hooksPath=/dev/null", "apply", "--index", "--whitespace=nowarn", "-"], { cwd, input: patch, encoding: "utf8" });
+  if (r.status !== 0) throw new Error(`git apply failed: ${r.stderr}`);
+  const files = stagedPaths(cwd);
+  return { files, forbidden: forbiddenPaths(files) };
+}
+
 export const isRunId = (id) => /^\d{12}$/.test(String(id));
 export const isCommitId = (sha) => /^[0-9a-f]{40}$/.test(String(sha));
 
