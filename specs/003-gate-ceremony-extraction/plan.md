@@ -63,7 +63,7 @@ specs/003-gate-ceremony-extraction/
 ├── data-model.md        # Phase 1 — mount() seams + entities
 ├── quickstart.md        # Phase 1 — runnable validation
 ├── contracts/
-│   └── attesto-mount.api.md   # Phase 1 — the mount() public contract + ceremony routes
+│   └── credentagent-mount.api.md   # Phase 1 — the mount() public contract + ceremony routes
 └── tasks.md             # Phase 2 (/speckit-tasks — NOT created here)
 ```
 

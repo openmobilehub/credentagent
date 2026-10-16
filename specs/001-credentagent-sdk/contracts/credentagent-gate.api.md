@@ -1,5 +1,7 @@
 # Contract: `@openmobilehub/attesto-gate` public API (v0.1)
 
+> **Historical design record**, written when the project was called Attesto. Read `Attesto` as `CredentAgent`, `attesto-*` as `credentagent-*`, and `/attesto/*` as `/credentagent/*`. For the current API, see [`docs/reference/api.md`](../../../docs/reference/api.md).
+
 The surface the implementation MUST satisfy and tests MUST exercise. TypeScript signatures are the contract.
 
 ## Client

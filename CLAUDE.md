@@ -25,10 +25,10 @@ This repo (`openmobilehub/credentagent`) is the **library**: two npm workspaces 
 Tests run with **`npm test` from the repo root** (vitest) — that is the authoritative run,
 and the only one that includes the cross-package integration suite (see *Testing
 expectations*). `npm run test:workspaces` is the faster inner loop and skips it.
-`npm run build` typechecks + builds each package. The end-to-end reference DEMO lives in a
-**separate** repo,
-[`openmobilehub/mcp-apps-shopping-demo`](https://github.com/openmobilehub/mcp-apps-shopping-demo),
-which consumes these packages — link to it, don't describe it as part of this repo.
+`npm run build` typechecks + builds each package. The end-to-end DEMO is the
+**Utopia Marketplace MCP server** in a **separate** repo,
+[`openwallet-foundation/multipaz-utopia`](https://github.com/openwallet-foundation/multipaz-utopia/tree/main/organizations/marketplace/mcp),
+which consumes these packages from npm — link to it, don't describe it as part of this repo.
 
 ## Status & decisions — GitHub is the source of truth
 
@@ -188,7 +188,7 @@ anticipate it when authoring:
 > Claude review only runs on **same-repo** PRs (GitHub withholds secrets from fork-PR
 > workflow runs on a public repo — regardless of your permission level). If you push to a
 > branch here, you get the automatic review for free; if you fork, you only get a review
-> on-demand by commenting `@claude`.
+> on-demand by commenting `@claude review this PR against REVIEW.md and post a summary`.
 
 - **Same-repo PRs** — an automated Claude review (`anthropics/claude-code-action`) runs
   on every non-draft PR opened from a branch in this repo, grounded in this file's
@@ -197,7 +197,19 @@ anticipate it when authoring:
   `claude-review` is **opt-in and currently ON** (re-enabled 2026-09-29): the job only runs when
   the repo variable `ENABLE_CLAUDE_REVIEW` is `"true"`, and it posts its findings to the PR
   (`--comment`). It runs Opus at `--effort high`, or `max` for `release/*` branches and any
-  change under `packages/credentagent-gate/src/`. It is not a required check, so **human review is still the gate**. To pause it,
+  change under `packages/credentagent-gate/src/`. It is **tiered**, so a review costs what the push
+  changed:
+  - **full** — when the PR opens, reopens or leaves draft. **To force a full re-review, mark the
+    PR as draft, then ready for review.**
+  - **delta** — on a later push: only the PR's own new commits since the last reviewed head (plus
+    any file main also changed), with the effort picked from those commits alone. Merge commits
+    aren't read on their own, so a conflict resolved by hand is reviewed only through that overlap
+    (a conflict is almost always in a file `main` changed).
+  - **skip** — a push that leaves the PR's own diff unchanged (merging `main` in) and where `main`
+    touched none of the PR's files. CI still tests it.
+
+  A new push cancels the review still running on the old head; a cancelled run never counts as
+  reviewed. It is not a required check, so **human review is still the gate**. To pause it,
   `gh variable set ENABLE_CLAUDE_REVIEW --body false` — the job is then **skipped**. The
   `CLAUDE_CODE_OAUTH_TOKEN` secret must come from an account that can use Claude Code
   (`claude setup-token`); an unusable token errors on every PR.
@@ -223,15 +235,29 @@ anticipate it when authoring:
 - **Fork / external-contributor PRs** — the automated job is **skipped** (fork runs can't
   read the `CLAUDE_CODE_OAUTH_TOKEN` secret), so it never blocks you. A skipped required
   check counts as passing. Those PRs are reviewed by one of:
-  - a maintainer commenting **`@claude`** on the PR (on-demand; runs in base-repo context
+  - a maintainer commenting **`@claude review this PR against REVIEW.md and post a summary`** on the PR (on-demand; runs in base-repo context
     so it has the secret),
   - the org-hosted **managed Claude review** integration (auto-reviews forks), and/or
   - an on-demand deep multi-agent review by a maintainer.
-- **Human review** — at least one approving review is required to merge to `main`, and all
-  review conversations must be resolved first.
+- **Human review** — at least one approving review is required to merge to `main`, and branch
+  protection **requires every review conversation to be resolved** (enforced since 2026-10-14;
+  before that it wasn't, and bot findings were merged unanswered). Resolve a thread by fixing
+  it, or reply with a won't-fix reason and then resolve — this includes bot threads. A branch
+  does **not** have to be up to date with `main` to merge (since 2026-10-15): CI tested the PR
+  merged onto `main` when it ran, and re-runs on `main` after every merge. Merging `main` in only
+  to clear "out-of-date" just re-ran CI and the review. (A merge queue isn't used: the DCO app
+  doesn't report on merge-queue runs, and DCO is a required check.)
 - A PR that edits `.github/workflows/claude-code-review.yml` itself will fail
   `claude-review` by design (the action validates the workflow matches `main`) and needs
-  an admin merge.
+  an admin merge. Since nothing reviews those PRs automatically, a maintainer comments
+  **`@claude review this PR against REVIEW.md and post a summary`** on them — that runs
+  `.github/workflows/claude.yml`, a separate workflow the edit doesn't break. Give it those
+  words: `claude.yml` has no review prompt of its own and only does what the comment asks.
+- **Codex** (`chatgpt-codex-connector[bot]`) — automatic reviews are **off** (turned off
+  2026-10-14). Why: across 23 PRs it reviewed once per PR, only for one author, often after
+  merge, and caught nothing the Claude review missed. On-demand `@codex` doesn't work here
+  either — it replies asking for a Codex environment this repo doesn't have — so don't
+  write `@codex` in PR descriptions or comments.
 
 Apache-2.0 · part of [Open Mobile Hub](https://openmobilehub.org) (Linux Foundation).
 

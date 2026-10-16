@@ -19,6 +19,7 @@
 // page; a refusal shows the reason plus a return link, never a dead end.
 
 import { pageHead, brandHeader, orderSummaryCard, trustFooter, completionHandoffBanner, railCompleteScript } from "../theme.js";
+import { scriptJson } from "../script-json.js";
 
 export interface DelegatedPageOptions {
   order: string;
@@ -78,13 +79,13 @@ ${pageHead(`Authorize payment · ${order}`)}
   var go = document.getElementById("go");
   var out = document.getElementById("out");
   var done = document.getElementById("done");
-  var ORDER = ${JSON.stringify(order)};
+  var ORDER = ${scriptJson(order)};
   // statelessOrders (FR-007): the signed cart mandate on the URL is the ONLY order transport —
   // there is no order store to fall back on — so it must ride every hop, including the verify
   // POST below. Read from the live URL, exactly as the dc-payment rail does.
   var CART = new URLSearchParams(location.search).get("cart");
-  var RETURN_URL = ${JSON.stringify(returnUrl)};
-  var DONE_BANNER = ${JSON.stringify(completionHandoffBanner(returnUrl))};
+  var RETURN_URL = ${scriptJson(returnUrl)};
+  var DONE_BANNER = ${scriptJson(completionHandoffBanner(returnUrl))};
   // Show the "Return to checkout" link built with DOM APIs — never by concatenating
   // RETURN_URL into innerHTML. The URL carries a caller-supplied cart param, and innerHTML
   // would PARSE any markup that survived in it; setAttribute + textContent cannot.
@@ -101,7 +102,7 @@ ${pageHead(`Authorize payment · ${order}`)}
     go.disabled = true;
     out.textContent = "Preparing request\\u2026";
     try {
-      var res = await fetch(${JSON.stringify(`${base}/credentagent/delegated/request?${qs}`)});
+      var res = await fetch(${scriptJson(`${base}/credentagent/delegated/request?${qs}`)});
       if (!res.ok) throw new Error("request failed (" + res.status + ")");
       var data = await res.json();
       var handoff = data.handoff || {};
@@ -135,7 +136,7 @@ ${pageHead(`Authorize payment · ${order}`)}
       // Complete: the browser sends back ONLY the sealed reference — never an approval.
       // The gate re-fetches the verified presentment, re-checks the amount + policy, and
       // settles server-side.
-      var res2 = await fetch(${JSON.stringify(`${base}/credentagent/delegated/verify`)}, {
+      var res2 = await fetch(${scriptJson(`${base}/credentagent/delegated/verify`)}, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ order: ORDER, cart: CART, referenceToken: data.referenceToken }),

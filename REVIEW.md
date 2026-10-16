@@ -20,7 +20,11 @@ enforces mechanically:
 - no module-level `let`/`var`/`new Map()`/`new Set()` in package `src` — per-order
   state lives behind `VerificationStore` (invariant 4);
 - no `Math.random()` in the gate package — randomness in the security surface comes
-  from `node:crypto` (invariant 6-adjacent).
+  from `node:crypto` (invariant 6-adjacent);
+- no `JSON.stringify(…)` interpolated directly into a ceremony page template — values
+  inside a page's `<script>` go through `scriptJson()` (page integrity, invariant
+  6-adjacent; #330). It does not see a wrapped or precomputed `JSON.stringify`, a raw
+  value in a script, or an unencoded `cart` join, so review those by hand.
 
 Spend zero review attention re-checking those. **Do** review any new
 `eslint-disable` in the diff: it must carry a one-line justification, and the
@@ -128,8 +132,28 @@ approvals are the failure mode this section exists to prevent.
 
 ## Output contract (automated review)
 
-Report a verdict plus findings, each anchored to `file:line`, naming the
-invariant or principle it violates, and labelled CONFIRMED or PLAUSIBLE.
+Rigor and readability are separate jobs: be as thorough as §7 asks, then write
+the result so a busy person who did not write the code understands it in one
+read. Long, jargon-heavy reviews get skimmed, and a skimmed review misses the one
+finding that mattered.
+
+**Visible part (what a person reads), at most ~200 words:**
+
+1. `## Claude review`, then a verdict in plain words: **✅ Ready to merge**,
+   **💬 Ready — small notes**, or **⛔ Needs changes**.
+2. One or two sentences: what the PR does and whether it is safe to merge.
+3. **Fix before merging** (only for ⛔, at most 3 items). For each: what is
+   wrong, why it matters (an everyday example), and what to do, in one sentence each.
+4. **Worth a look** (optional): at most 5 one-line, non-blocking notes.
+5. On a follow-up review, one line first: "Since the last review: N fixed, M still open".
+
+Above the details: no file paths, line numbers, invariant numbers, rubric codes or
+bare issue numbers. Name the thing instead ("the payment page"). Don't list what
+passed.
+
+**Details (collapsed `<details>` block, for the author):** every finding with its
+`file:line`, the invariant or principle it maps to, CONFIRMED or PLAUSIBLE, and the
+evidence; then the coverage line from §7.
+
 Findings that map to §1–§4 (or a release claim the code does not back, §6) are
-request-changes; §5 findings are comments unless they compound. End with the
-coverage line from §7.
+⛔ Needs changes. §5 findings are 💬 notes unless they compound.

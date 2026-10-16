@@ -1,6 +1,6 @@
 // @openmobilehub/credentagent-gate — public types (the contract, in TypeScript).
 //
-// Two layers (see specs/001-attesto-sdk/data-model.md):
+// Two layers (see specs/001-credentagent-sdk/data-model.md):
 //   • policy   — code: builders carry functions (.when / verify / appliesTo) and live in your server.
 //   • manifest — data: `requirements()` resolves the policy server-side and emits a flat, JSON-safe
 //                manifest. Functions NEVER cross the wire. `requirements()` is that code→data boundary.
@@ -339,6 +339,9 @@ export interface CredentAgentOptions {
    *
    * Omit for local dev and the gate generates one at boot; `doctor()` warns on a deployment,
    * because a cart quoted before a restart, or on another instance, then no longer verifies.
+   *
+   * Use one per store. Two stores on one host that share it accept each other's carts — the
+   * key id names only the host (#335).
    */
   checkoutSigningKey?: PrivateJwkP256;
   /**

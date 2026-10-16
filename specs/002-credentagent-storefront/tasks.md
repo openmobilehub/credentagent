@@ -4,11 +4,11 @@ description: "Task list — Attesto Storefront (002)"
 
 # Tasks: Attesto Storefront extraction (002)
 
-**Input**: Design documents from `specs/002-attesto-storefront/` — `plan.md`, `spec.md`, `research.md`,
-`data-model.md`, `contracts/attesto-storefront.api.md`, `quickstart.md`. Governance: `.specify/memory/constitution.md` (v1.0.0).
+**Input**: Design documents from `specs/002-credentagent-storefront/` — `plan.md`, `spec.md`, `research.md`,
+`data-model.md`, `contracts/credentagent-storefront.api.md`, `quickstart.md`. Governance: `.specify/memory/constitution.md` (v1.0.0).
 
 **Tests**: YES — TDD (Constitution: security/bypass + composition paths MUST be tested). The contract tests
-in `contracts/attesto-storefront.api.md` are written FIRST.
+in `contracts/credentagent-storefront.api.md` are written FIRST.
 
 **Organization**: by user story. Paths: package = `packages/attesto-storefront/`; demo (harness) = repo root.
 

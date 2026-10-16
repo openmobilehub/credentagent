@@ -1,7 +1,9 @@
 # Quickstart — Gate Ceremony Extraction (003)
 
+> **Historical design record**, written when the project was called Attesto. Read `Attesto` as `CredentAgent`, `attesto-*` as `credentagent-*`, and `/attesto/*` as `/credentagent/*`. For the current API, see [`docs/reference/api.md`](../../docs/reference/api.md).
+
 Validates that `attesto.mount(store.app)` serves the **real** ceremony (all three rails) and that age + membership
-+ payment run through the gate. API source of truth: [`contracts/attesto-mount.api.md`](./contracts/attesto-mount.api.md);
++ payment run through the gate. API source of truth: [`contracts/credentagent-mount.api.md`](./contracts/credentagent-mount.api.md);
 shapes in [`data-model.md`](./data-model.md).
 
 ## The pattern this makes true (≤ 10 lines)

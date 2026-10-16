@@ -5,10 +5,9 @@ from the user's phone wallet before a consequential MCP tool completes. **Identi
 leads; payments is one application** — `age.over(21)`, a loyalty membership, a
 prescription, and `payment.in("usd")` are all just credentials in the same policy.
 
-> **Design preview / v0.1.** This package is real and tested, but the broader CredentAgent
-> SDK is still being extracted from the reference server
-> ([mcp-apps-shopping-demo](https://github.com/openmobilehub/mcp-apps-shopping-demo)).
-> See the repo's `ROADMAP.md` for what's shipping vs. next.
+> **Design preview.** This package is real and tested, and its API can still change before 1.0.
+> See the repo's [`ROADMAP.md`](https://github.com/openmobilehub/credentagent/blob/main/ROADMAP.md) for what's shipping vs. next. For a
+> storefront running it end to end, see the [Utopia Marketplace MCP server](https://github.com/openwallet-foundation/multipaz-utopia/tree/main/organizations/marketplace/mcp).
 
 ## Install
 
@@ -25,8 +24,8 @@ Express-shaped host.
 The whole flow in ≤ 10 lines — a credential-gated agentic storefront. `createStorefront()`
 publishes the ceremony seams; `new CredentAgent().mount(store.app)` wires the real `/credentagent/*`
 ceremony rails; `store.gate()` resolves your policy on every `checkout` call (copied from
-[`examples/storefront.mjs`](https://github.com/openmobilehub/mcp-apps-shopping-demo/blob/main/examples/storefront.mjs) /
-[`storefront-gate.test.ts`](https://github.com/openmobilehub/mcp-apps-shopping-demo/blob/main/storefront-gate.test.ts)):
+[`examples/storefront.mjs`](https://github.com/openmobilehub/credentagent/blob/main/examples/storefront.mjs) /
+[`storefront-gate.test.ts`](https://github.com/openmobilehub/credentagent/blob/main/storefront-gate.test.ts)):
 
 ```ts
 import { createStorefront } from "@openmobilehub/credentagent-storefront/server";
@@ -58,6 +57,11 @@ the widget shows the confirmation. Add the headphones instead and the age gate d
 > Behind a proxy that serves your app under a path (`https://shop.example/store/*` → your `/*`),
 > include the path — `walletOrigin: "https://shop.example/store"` — and every approve link, page
 > fetch and redirect carries `/store`. The wallet still binds to the page's origin.
+> The path is also part of the store's identity: a spending permission signed at
+> `shop.example/store` names that store, so another store on the same host (`shop.example/other`,
+> or the root) refuses it — provided each store signs its carts with its own
+> `checkoutSigningKey` ([#335](https://github.com/openmobilehub/credentagent/issues/335)). For the same reason, give every deployment its own `walletOrigin`:
+> two that share one (say, a preview copying production's) are one merchant.
 
 ### Branding the ceremony pages
 
@@ -225,7 +229,7 @@ Each finding is `{ level: "error" | "warn", code, message, fix }`. It checks the
 | `in-memory-verification-store` | the default in-memory `store` on a deployment | inject a shared `{ store }` (Redis/Upstash) |
 | `in-memory-order-store` | the default in-memory order stores on a deployment | inject `{ orderStore, completedOrderStore }` |
 | `ephemeral-mandate-key` | no `mandateSigningKey` on a deployment — the AP2 key was generated at boot (**error** on any deployment) | pass a stable private P-256 JWK as `{ mandateSigningKey }` |
-| `ephemeral-checkout-key` | no `checkoutSigningKey` on a deployment — the key carts are quoted with was generated at boot (**warn**) | pass a second, different private P-256 JWK as `{ checkoutSigningKey }` |
+| `ephemeral-checkout-key` | no `checkoutSigningKey` on a deployment — the key carts are quoted with was generated at boot (**warn**) | pass a second, different private P-256 JWK as `{ checkoutSigningKey }` — one per store |
 
 In plain local dev — no deployment env signals (`VERCEL`, `AWS_LAMBDA_*`, `NODE_ENV=production`, …) — every
 check stays quiet, so the zero-config quickstart is undisturbed. `ephemeral-mandate-key` is an error even on
@@ -261,6 +265,10 @@ because a quoted cart and an issued mandate are different statements: each key's
 ever checked against `credentagent.ap2.checkoutPublicJwk`. Passing the same JWK for both throws. Omit it
 and the gate generates one at boot; `doctor()` warns on a deployment, because a cart quoted before a
 restart, or on another instance, then no longer verifies.
+Give each store its **own** checkout key, above all two stores on one host: a store accepts a cart
+signed with its key whose key id names its host, so two stores sharing a host and a key would accept
+each other's carts
+([#335](https://github.com/openmobilehub/credentagent/issues/335)).
 
 Mint and check:
 
@@ -377,7 +385,8 @@ its own "permission", with any limits it likes, and it verifies. Every limit is 
 yet proves a **person** set them. Use it for demos, never as a real safety control. Leaving the option
 out is a type error, and a refusal (`code: "trust"`) at runtime.
 
-A grant created with `agentKey` is spent this way, **at any merchant its permission names** — not
+A grant created with `agentKey` is spent this way, **at any merchant its permission names** (each
+checking a cart its own checkout key signed — see `checkoutSigningKey`, above) — not
 through `grant.spend()`, which refuses it with `agent-held-key`: the gate has no key to spend it with,
 which is the point. Leave `agentKey` out and the gate generates the key and spends server-side, as below.
 **Revoking such a grant does not recall it.** The agent already holds the signed permission, and
@@ -398,8 +407,9 @@ does not remember.
   and on the agent's side (`intent.permissionId`). Pass a function and it is called with the id **after**
   the chains verify, so your ledger is keyed by something the signatures vouch for. Leaving `spent` out
   refuses any permission that has a budget or a use count.
-- **A budget holds per merchant.** One permission works at every store it names, and each store sees only
-  its own `spent`: a "$200 in total" permission is $200 at each of them. Set `budget` with that in mind.
+- **A budget holds per merchant.** One permission works at every store it names (each checks carts
+  against its own checkout key), and each store sees only its own `spent`: a "$200 in total"
+  permission is $200 at each of them. Set `budget` with that in mind.
 
 ### Webhooks — tell a *different* service when an order settles
 
@@ -487,7 +497,7 @@ app.post("/checkout/:id", async (req, res) => {
 ## The three execution contexts
 
 The split is load-bearing — conflating them is the documented root cause of confusion
-([spec §0](https://github.com/openmobilehub/mcp-apps-shopping-demo/blob/main/specs/001-attesto-sdk/spec.md)). v0.1 is consolidated **Mode A**:
+([spec §0](https://github.com/openmobilehub/credentagent/blob/main/specs/001-credentagent-sdk/spec.md)). v0.1 is consolidated **Mode A**:
 
 1. **Tool — mints the link + reports requirements.** Your `checkout` handler runs once when
    checkout is requested. There is no phone in the loop, so it does **not** run a ceremony — it
@@ -515,8 +525,7 @@ Wrap each in `required(c)` or `optional(c)` to build the ordered policy array. A
 conditional with `.when((order) => boolean)` — it returns a fresh `Credential` (non-mutating) whose
 predicate is AND-ed onto any existing `appliesTo`.
 
-**Gate any credential** with `defineCredential` — no registration step, usable by object
-(from [`specs/001-attesto-sdk/quickstart.md`](https://github.com/openmobilehub/mcp-apps-shopping-demo/blob/main/specs/001-attesto-sdk/quickstart.md)):
+**Gate any credential** with `defineCredential` — no registration step, usable by object:
 
 ```ts
 import { defineCredential, dcql, gate } from "@openmobilehub/credentagent-gate";
@@ -525,7 +534,7 @@ const prescription = defineCredential({
   id: "prescription",
   request: dcql({ docType: "org.hl7.prescription.1", claims: ["rx_valid"] }),
   verify: (c) => c.rx_valid === true,
-  effect: gate(),                                   // the only effect a custom credential supports today
+  effect: gate(),                                   // custom credentials support gate() only
   appliesTo: (order) => order.lines.some((l) => l.requiresRx),  // definition-time conditional
   ui: { label: "Prescription", action: "Verify prescription" },
 });
@@ -665,14 +674,14 @@ The one rule that makes delegation safe: **trust is delegable, binding is not.**
 - The **gate** keeps what it must never outsource: it re-derives the amount/payee from the catalog and
   re-checks the verdict against it, re-runs *your* policy over the disclosed claims (an 18+ verifier
   check never satisfies `age.over(21)`), and only **then** authorizes `settle`. A verifier that
-  approves the wrong amount — or a stricter-than-the-merchant age — is refused before any money moves.
+  approves the wrong amount — or a laxer age than the merchant requires — is refused before any money moves.
 
 The concrete verifier is a **host-side adapter** — no processor-specific symbol lives in this package.
 
-> **No real adapter ships yet.** This package defines the *interface*; the first real adapter lives
-> host-side in [`openwallet-foundation/multipaz-utopia`](https://github.com/openwallet-foundation/multipaz-utopia)
-> (**S6**, tracked in [multipaz-utopia#16](https://github.com/openwallet-foundation/multipaz-utopia/issues/16)).
-> Today the only way to run the delegated rail is a **stand-in** like the scripted verifier in
+> **No adapter ships in this package.** This package defines the *interface*; the first real adapter
+> lives host-side in the [Utopia Marketplace MCP server](https://github.com/openwallet-foundation/multipaz-utopia/tree/main/organizations/marketplace/mcp) —
+> [`src/verifier.ts`](https://github.com/openwallet-foundation/multipaz-utopia/blob/main/organizations/marketplace/mcp/src/verifier.ts), which hands verification and settlement to Multipaz and UPay.
+> Without a host like that, the way to run the delegated rail is a **stand-in** like the scripted verifier in
 > [`examples/delegated-verifier/`](../../examples/delegated-verifier) — a test double, never shipped, and
 > deliberately kept out of the runnable `run-storefront` example. Stating this plainly is the honesty
 > fence working, not a gap.
@@ -994,8 +1003,8 @@ ageDcql()  ·  ENVELOPE_VERSION  ·  ENVELOPE_SENTINEL
   GRANT_VIEW_KIND · GrantViewData · GrantViewProduct
 ```
 
-Full, compiler-checked contract: [`specs/001-attesto-sdk/`](https://github.com/openmobilehub/mcp-apps-shopping-demo/tree/main/specs/001-attesto-sdk/) (the
-[quickstart](https://github.com/openmobilehub/mcp-apps-shopping-demo/blob/main/specs/001-attesto-sdk/quickstart.md), [`spec.md`](https://github.com/openmobilehub/mcp-apps-shopping-demo/blob/main/specs/001-attesto-sdk/spec.md),
-and the [mount contract](https://github.com/openmobilehub/mcp-apps-shopping-demo/blob/main/specs/003-gate-ceremony-extraction/contracts/attesto-mount.api.md)).
+More on the API: [`docs/reference/api.md`](https://github.com/openmobilehub/credentagent/blob/main/docs/reference/api.md).
+The first design specs ([`specs/001`–`003`](https://github.com/openmobilehub/credentagent/tree/main/specs)) predate the project's
+rename: they still use its old name (Attesto) and old routes, so don't build against them.
 
 Apache-2.0 · part of [Open Mobile Hub](https://openmobilehub.org) (Linux Foundation).
