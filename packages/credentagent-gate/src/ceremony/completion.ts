@@ -249,16 +249,18 @@ async function completeOrderLocked(input: CompletionInput, ctx: CompletionContex
   }
 
   // Invariant 1: enforce the age gate on EVERY completion path. The age restriction
-  // is re-derived from the catalog-priced lines (never the token); an age-restricted
-  // order must carry a positive per-order age claim — written by the credential
-  // gate's verify handler (credential-gate/routes.ts) — before it can complete. This
-  // is the shared-completion-seam half of CT9; the demo's place-order + MCP
-  // order-completion-tool halves are wired in T014.
-  const ageRestricted = repriced.lines.some((l) => typeof l.minimumAge === "number" && l.minimumAge > 0);
-  // The STRICTEST threshold this order demands, re-derived from the catalog-priced lines (never
-  // the token — invariant 2). 0 when nothing is restricted. Read by the delegated branch below to
-  // test a sealed age proof at the RIGHT threshold, so an 18+ proof cannot open a 21+ item.
-  const requiredAge = Math.max(0, ...repriced.lines.map((l) => (typeof l.minimumAge === "number" ? l.minimumAge : 0)));
+  // is re-derived from the catalog-priced lines (never the token) AND from the order's own
+  // policy (`policyMinAge` — an `age.over(n)` in the policy, #354: before it, a policy age on an
+  // item with no `minimumAge` tag was never enforced). An age-restricted order must carry a
+  // positive per-order age claim — written by the credential gate's verify handler
+  // (credential-gate/routes.ts) — before it can complete. This is the shared-completion-seam
+  // half of CT9; the demo's place-order + MCP order-completion-tool halves are wired in T014.
+  const lineAge = Math.max(0, ...repriced.lines.map((l) => (typeof l.minimumAge === "number" ? l.minimumAge : 0)));
+  // The STRICTEST threshold this order demands (lines vs policy, the stricter wins). 0 when
+  // nothing is restricted. Read below to test an age proof at the RIGHT threshold, so an 18+
+  // proof cannot open a 21+ order (invariant 5).
+  const requiredAge = Math.max(lineAge, input.policyMinAge ?? 0);
+  const ageRestricted = requiredAge > 0;
 
   // ── HNP delegated-draw branch (005 FR-006): additive + fail-closed. Only taken when a
   // draw is present; every HP path above/below is byte-unchanged. The gate re-runs the FULL
@@ -361,8 +363,12 @@ async function completeOrderLocked(input: CompletionInput, ctx: CompletionContex
     return { completed: true, delegationId: intent.intentId };
   }
 
-  if (ageRestricted && (verification as { ageVerified?: boolean } | undefined)?.ageVerified !== true) {
-    return { completed: false, reason: "age" };
+  if (ageRestricted) {
+    const v = verification as { ageVerified?: boolean; ageVerifiedOver?: number } | undefined;
+    // The age the proof was made at. A record from before rails stored it was proven at the
+    // threshold they used then: the line age, or 21 when no line set one.
+    const provenAge = v?.ageVerifiedOver ?? (lineAge > 0 ? lineAge : 21);
+    if (v?.ageVerified !== true || provenAge < requiredAge) return { completed: false, reason: "age" };
   }
 
   // Invariant 1 (generalized — 007): enforce EVERY applicable custom `gate()` credential, not

@@ -193,6 +193,35 @@ describe("orders.serve — checkout wiring", () => {
     });
   });
 
+  // #354: orders.serve carries the order's stored policy age to the completion, so an
+  // `age.over(n)` in the policy holds on an item with no `minimumAge` tag (the sticker).
+  describe("#354 — the stored policy's age is enforced on an untagged item", () => {
+    const seamOf = (app: ReturnType<typeof fakeApp>) =>
+      (app.locals.credentagent as { completion: (i: CompletionInput) => Promise<CompletionResult> }).completion;
+    const stickerInput = (id: string): CompletionInput => ({
+      order: { id, lines: [{ id: "sticker", name: "Sticker", unitPrice: 5, quantity: 1, lineTotal: 5, currency: "USD" }], subtotal: 5, discount: 0, total: 5, currency: "USD" },
+      mandateId: "m", amount: 5, currency: "USD", method: "test", gates: [{ gate: "g", pass: true, detail: "" }],
+    });
+    const serveWith = async (policy: ReturnType<typeof gatedPolicy>) => {
+      const ca = new CredentAgent({ walletOrigin: "http://localhost:4000" });
+      const app = fakeApp();
+      ca.orders.serve(app);
+      const { id } = await ca.orders.create({ order: stickerOrder(), policy });
+      await app._get.get("/credentagent/orders/:id")!({ params: { id } }, fakeRes()); // warm the order for re-pricing
+      return { app, id };
+    };
+
+    it("BYPASS (invariant 1+5): an untagged item under a 21+ policy with NO proven age is refused (reason 'age')", async () => {
+      const { app, id } = await serveWith([required(age.over(21))]);
+      expect(await seamOf(app)(stickerInput(id))).toMatchObject({ completed: false, reason: "age" });
+    });
+
+    it("control: the same untagged item completes when its policy asks no age", async () => {
+      const { app, id } = await serveWith([]);
+      expect((await seamOf(app)(stickerInput(id))).completed).toBe(true);
+    });
+  });
+
   it("an optional membership discount does not, by itself, gate the demo path", async () => {
     // A discount is not a blocking gate; an order whose only policy entry is an optional
     // membership discount stays ungated (payment/age would gate it — this one has neither).

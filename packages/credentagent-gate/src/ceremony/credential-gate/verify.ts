@@ -78,6 +78,17 @@ export function requiredAgeForOrder(order: CeremonyOrder): number | null {
   return ages.length ? Math.max(...ages) : null;
 }
 
+/**
+ * The age THIS order must prove: the strictest of its lines' `minimumAge` and the age its own
+ * policy requires (`age.over(n)` — `CompletionInput.policyMinAge`, #354), or `null` when neither
+ * asks for one. Every rail evaluates an age proof at this threshold and `completeOrder` enforces
+ * it, so the two cannot disagree about which age an order needs.
+ */
+export function requiredAgeFor(order: CeremonyOrder, policyMinAge?: number): number | null {
+  const age = Math.max(requiredAgeForOrder(order) ?? 0, policyMinAge ?? 0);
+  return age > 0 ? age : null;
+}
+
 /** True iff this order is age-restricted but carries no positive per-order age claim. */
 export function isAgeUnsatisfied(order: CeremonyOrder, verification: { ageVerified?: boolean } | undefined | null): boolean {
   return requiredAgeForOrder(order) != null && verification?.ageVerified !== true;

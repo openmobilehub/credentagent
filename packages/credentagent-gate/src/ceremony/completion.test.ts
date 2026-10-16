@@ -471,3 +471,64 @@ describe("completeOrder — draw TOCTOU: revoke mid-completion is caught atomica
     expect(h.records.size).toBe(0);
   });
 });
+
+// ── #354: an age check in the POLICY is enforced at its own threshold ────────────────────────
+// `age.over(n)` in an order's policy used to count only if a line also carried `minimumAge`:
+// completion derived "is this order age-restricted?" from the lines alone, so an action that is
+// not a product (no tag) completed on an 18+ proof under a 21+ policy (invariants 1 + 5). The
+// order's own policy age now arrives as `input.policyMinAge`, and the stricter of it and the
+// lines is what must be proven — at that threshold, read from `ageVerifiedOver`.
+describe("completeOrder — an age check in the policy is enforced at its own threshold (#354)", () => {
+  it("BYPASS (invariant 1+5): an UNTAGGED line under a 21+ policy with NO proven age is refused (reason 'age')", async () => {
+    const h = harness();
+    const res = await completeOrder(h.input([{ productId: "widget", quantity: 1 }], { policyMinAge: 21 }), h.ctx);
+    expect(res).toMatchObject({ completed: false, reason: "age" });
+    expect(h.records.size).toBe(0);
+  });
+
+  it("BYPASS (invariant 5): an age proven at 18 does not complete a 21+ policy", async () => {
+    const h = harness();
+    await h.store.write("ORD-1", { ageVerified: true, ageVerifiedOver: 18 });
+    const res = await completeOrder(h.input([{ productId: "widget", quantity: 1 }], { policyMinAge: 21 }), h.ctx);
+    expect(res).toMatchObject({ completed: false, reason: "age" });
+  });
+
+  it("BYPASS (invariant 5): the policy wins when it is stricter than the line (25+ policy, 21+ wine, 21 proven)", async () => {
+    const h = harness();
+    await h.store.write("ORD-1", { ageVerified: true, ageVerifiedOver: 21 });
+    const res = await completeOrder(h.input([{ productId: "wine", quantity: 1 }], { policyMinAge: 25 }), h.ctx);
+    expect(res).toMatchObject({ completed: false, reason: "age" });
+  });
+
+  it("a record from before the threshold was stored counts as proven at the line age, so it cannot open a stricter policy", async () => {
+    const h = harness();
+    await h.store.write("ORD-1", { ageVerified: true }); // no ageVerifiedOver: the rails proved 21 by default
+    const strict = await completeOrder(h.input([{ productId: "widget", quantity: 1 }], { policyMinAge: 25 }), h.ctx);
+    expect(strict).toMatchObject({ completed: false, reason: "age" });
+  });
+
+  it("the SAME untagged order completes once 21+ is proven (control: the refusal was the policy age)", async () => {
+    const h = harness();
+    await h.store.write("ORD-1", { ageVerified: true, ageVerifiedOver: 21 });
+    const res = await completeOrder(h.input([{ productId: "widget", quantity: 1 }], { policyMinAge: 21 }), h.ctx);
+    expect(res.completed).toBe(true);
+  });
+
+  it("an untagged order whose policy has no age still completes without any age proof (control: additive)", async () => {
+    const h = harness();
+    const res = await completeOrder(h.input([{ productId: "widget", quantity: 1 }], { policyMinAge: undefined }), h.ctx);
+    expect(res.completed).toBe(true);
+  });
+
+  it("BYPASS (draw path): a delegated draw on an untagged line under a 21+ policy steps up, with no sealed age proof", async () => {
+    const h = harness();
+    const rev = new MemoryRevocationStore();
+    const { intent, mkDraw } = await drawFixture({ maxAmount: 100 });
+    const res = await completeOrder(
+      h.input([{ productId: "widget", quantity: 2 }], { amount: 20, policyMinAge: 21, draw: { intent, draw: await mkDraw(20) } }),
+      { ...h.ctx, revocation: rev },
+    );
+    expect(res.completed).toBe(false);
+    expect(res.refusals?.[0]?.code).toBe("step-up");
+  });
+});
