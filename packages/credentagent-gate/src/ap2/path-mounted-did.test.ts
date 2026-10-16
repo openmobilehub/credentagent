@@ -46,7 +46,7 @@ describe("a path-mounted store's DID document", () => {
     expect(doc.verificationMethod.map((m) => m.id)).toEqual([`${STORE}#gate-signing-key`, `${STORE}#merchant-checkout-key`]);
     for (const m of doc.verificationMethod) expect(m.controller).toBe(STORE);
     expect(doc.assertionMethod[0]).toBe(`${STORE}#gate-signing-key`);
-    // `.well-known` stays served too — where existing allowlists and readers look.
+    // `.well-known` stays served too — the route every store publishes, which proxies are told to pass.
     expect((await request(app).get("/.well-known/did.json")).body.id).toBe(STORE);
   });
 

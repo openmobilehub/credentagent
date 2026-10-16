@@ -162,6 +162,6 @@ describe("#331 — a store's identity includes its base path", () => {
       spent: { amount: 0, uses: 0 },
       price: (cart) => cart.line_items.reduce((sum, l) => sum + 1800 * l.quantity, 0),
     });
-    expect(verdict).toMatchObject({ ok: false, code: "signature" });
+    expect(verdict).toMatchObject({ ok: false, code: "signature", detail: expect.stringMatching(/^the checkout is not signed by this merchant's checkout key/) });
   });
 });

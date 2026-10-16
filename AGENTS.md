@@ -152,7 +152,7 @@ returns are the discovery surface.
 
 | Route | What it is |
 | --- | --- |
-| `GET /.well-known/did.json` | the gate's two public keys (the mandate key and the merchant checkout key) as a DID document. Taken at the **root** of the host app, not under `/credentagent/*` — a proxy or route allowlist must pass it, or nobody can check the mandates the gate signs |
+| `GET /.well-known/did.json` | the gate's two public keys (the mandate key and the merchant checkout key) as a DID document. Taken at the **root** of the host app, not under `/credentagent/*` — a proxy or route allowlist must pass it. For a store at the site root it is the only address its keys are looked up at, so without it nobody can check the mandates the gate signs |
 | `GET /did.json` | the same document, registered only when `walletOrigin` carries a path. It is where a store served under a path is looked up (`<walletOrigin>/did.json`); a proxy must pass it too |
 
 **`credentagent.mount(app, seams)`** (or a host such as the storefront that supplies the

@@ -387,7 +387,7 @@ export class CredentAgent {
    * looked up at `/.well-known/did.json`. A store served under a path (`did:web:shop.example:store`)
    * is looked up at `<walletOrigin>/did.json`, which a path-stripping proxy maps to this app's
    * `/did.json` — registered only then, so a root store claims no route nobody reads. The
-   * `.well-known` route stays for every store: it is where 0.5 hosts and their allowlists look.
+   * `.well-known` route stays for every store: it is the address the route table tells proxies to pass.
    */
   private publishSigningKey(app: ExpressApp): void {
     if (this.didServed || typeof app.get !== "function") return;
