@@ -71,6 +71,7 @@ export function merchantUrlProblem(v: unknown): string | null {
   } catch {
     // fall through
   }
+  // eslint-disable-next-line no-restricted-syntax -- an error message, never rendered into a page <script>
   return `merchantUrl must be an absolute http(s) URL, got ${JSON.stringify(v)}`;
 }
 
