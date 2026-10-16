@@ -1,9 +1,7 @@
 # Example — run THIS repo's storefront + gate
 
-The separate demo (`openmobilehub/mcp-apps-shopping-demo`) vendors its **own, older** copy of the
-packages (the pre-rename `Attesto` API) and can't consume this repo's `credentagent` packages until the
-"flip the demo" step lands. So to exercise **the code in this repo** — the gate + storefront we
-actually iterate on — boot the storefront directly. `createStorefront().listen()` is a runnable MCP
+To exercise **the code in this repo** — the gate + storefront we actually iterate on, not the
+versions published to npm — boot the storefront directly. `createStorefront().listen()` is a runnable MCP
 shopping server with the gate mounted on it.
 
 ## Run it

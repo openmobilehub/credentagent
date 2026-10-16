@@ -5,10 +5,9 @@ from the user's phone wallet before a consequential MCP tool completes. **Identi
 leads; payments is one application** — `age.over(21)`, a loyalty membership, a
 prescription, and `payment.in("usd")` are all just credentials in the same policy.
 
-> **Design preview / v0.1.** This package is real and tested, but the broader CredentAgent
-> SDK is still being extracted from the reference server
-> ([mcp-apps-shopping-demo](https://github.com/openmobilehub/mcp-apps-shopping-demo)).
-> See the repo's `ROADMAP.md` for what's shipping vs. next.
+> **Design preview.** This package is real and tested, and its API can still change before 1.0.
+> See the repo's [`ROADMAP.md`](https://github.com/openmobilehub/credentagent/blob/main/ROADMAP.md) for what's shipping vs. next. For a
+> storefront running it end to end, see the [Utopia Marketplace MCP server](https://github.com/openwallet-foundation/multipaz-utopia/tree/main/organizations/marketplace/mcp).
 
 ## Install
 
@@ -25,8 +24,8 @@ Express-shaped host.
 The whole flow in ≤ 10 lines — a credential-gated agentic storefront. `createStorefront()`
 publishes the ceremony seams; `new CredentAgent().mount(store.app)` wires the real `/credentagent/*`
 ceremony rails; `store.gate()` resolves your policy on every `checkout` call (copied from
-[`examples/storefront.mjs`](https://github.com/openmobilehub/mcp-apps-shopping-demo/blob/main/examples/storefront.mjs) /
-[`storefront-gate.test.ts`](https://github.com/openmobilehub/mcp-apps-shopping-demo/blob/main/storefront-gate.test.ts)):
+[`examples/storefront.mjs`](https://github.com/openmobilehub/credentagent/blob/main/examples/storefront.mjs) /
+[`storefront-gate.test.ts`](https://github.com/openmobilehub/credentagent/blob/main/storefront-gate.test.ts)):
 
 ```ts
 import { createStorefront } from "@openmobilehub/credentagent-storefront/server";
@@ -498,7 +497,7 @@ app.post("/checkout/:id", async (req, res) => {
 ## The three execution contexts
 
 The split is load-bearing — conflating them is the documented root cause of confusion
-([spec §0](https://github.com/openmobilehub/mcp-apps-shopping-demo/blob/main/specs/001-attesto-sdk/spec.md)). v0.1 is consolidated **Mode A**:
+([spec §0](https://github.com/openmobilehub/credentagent/blob/main/specs/001-credentagent-sdk/spec.md)). v0.1 is consolidated **Mode A**:
 
 1. **Tool — mints the link + reports requirements.** Your `checkout` handler runs once when
    checkout is requested. There is no phone in the loop, so it does **not** run a ceremony — it
@@ -526,8 +525,7 @@ Wrap each in `required(c)` or `optional(c)` to build the ordered policy array. A
 conditional with `.when((order) => boolean)` — it returns a fresh `Credential` (non-mutating) whose
 predicate is AND-ed onto any existing `appliesTo`.
 
-**Gate any credential** with `defineCredential` — no registration step, usable by object
-(from [`specs/001-attesto-sdk/quickstart.md`](https://github.com/openmobilehub/mcp-apps-shopping-demo/blob/main/specs/001-attesto-sdk/quickstart.md)):
+**Gate any credential** with `defineCredential` — no registration step, usable by object:
 
 ```ts
 import { defineCredential, dcql, gate } from "@openmobilehub/credentagent-gate";
@@ -536,7 +534,7 @@ const prescription = defineCredential({
   id: "prescription",
   request: dcql({ docType: "org.hl7.prescription.1", claims: ["rx_valid"] }),
   verify: (c) => c.rx_valid === true,
-  effect: gate(),                                   // or discount({ percent }) / authorize()
+  effect: gate(),                                   // custom credentials support gate() only
   appliesTo: (order) => order.lines.some((l) => l.requiresRx),  // definition-time conditional
   ui: { label: "Prescription", action: "Verify prescription" },
 });
@@ -673,14 +671,14 @@ The one rule that makes delegation safe: **trust is delegable, binding is not.**
 - The **gate** keeps what it must never outsource: it re-derives the amount/payee from the catalog and
   re-checks the verdict against it, re-runs *your* policy over the disclosed claims (an 18+ verifier
   check never satisfies `age.over(21)`), and only **then** authorizes `settle`. A verifier that
-  approves the wrong amount — or a stricter-than-the-merchant age — is refused before any money moves.
+  approves the wrong amount — or a laxer age than the merchant requires — is refused before any money moves.
 
 The concrete verifier is a **host-side adapter** — no processor-specific symbol lives in this package.
 
-> **No real adapter ships yet.** This package defines the *interface*; the first real adapter lives
-> host-side in [`openwallet-foundation/multipaz-utopia`](https://github.com/openwallet-foundation/multipaz-utopia)
-> (**S6**, tracked in [multipaz-utopia#16](https://github.com/openwallet-foundation/multipaz-utopia/issues/16)).
-> Today the only way to run the delegated rail is a **stand-in** like the scripted verifier in
+> **No adapter ships in this package.** This package defines the *interface*; the first real adapter
+> lives host-side in the [Utopia Marketplace MCP server](https://github.com/openwallet-foundation/multipaz-utopia/tree/main/organizations/marketplace/mcp) —
+> [`src/verifier.ts`](https://github.com/openwallet-foundation/multipaz-utopia/blob/main/organizations/marketplace/mcp/src/verifier.ts), which hands verification and settlement to Multipaz and UPay.
+> Without a host like that, the way to run the delegated rail is a **stand-in** like the scripted verifier in
 > [`examples/delegated-verifier/`](../../examples/delegated-verifier) — a test double, never shipped, and
 > deliberately kept out of the runnable `run-storefront` example. Stating this plainly is the honesty
 > fence working, not a gap.
@@ -975,8 +973,8 @@ ageDcql()  ·  ENVELOPE_VERSION  ·  ENVELOPE_SENTINEL
 //        DelegatedVerifier / DelegatedVerdict / DelegatedHandoff / SettlementRecordLike (delegated seam)
 ```
 
-Full, compiler-checked contract: [`specs/001-attesto-sdk/`](https://github.com/openmobilehub/mcp-apps-shopping-demo/tree/main/specs/001-attesto-sdk/) (the
-[quickstart](https://github.com/openmobilehub/mcp-apps-shopping-demo/blob/main/specs/001-attesto-sdk/quickstart.md), [`spec.md`](https://github.com/openmobilehub/mcp-apps-shopping-demo/blob/main/specs/001-attesto-sdk/spec.md),
-and the [mount contract](https://github.com/openmobilehub/mcp-apps-shopping-demo/blob/main/specs/003-gate-ceremony-extraction/contracts/attesto-mount.api.md)).
+More on the API: [`docs/reference/api.md`](https://github.com/openmobilehub/credentagent/blob/main/docs/reference/api.md).
+The first design specs ([`specs/001`–`003`](https://github.com/openmobilehub/credentagent/tree/main/specs)) predate the project's
+rename: they still use its old name (Attesto) and old routes, so don't build against them.
 
 Apache-2.0 · part of [Open Mobile Hub](https://openmobilehub.org) (Linux Foundation).

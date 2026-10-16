@@ -7,11 +7,10 @@ own products, own-the-code). Pairs with
 with any credential**: age, membership, a prescription, payment. **Payments is one application
 of the same gate, not the point** — `minimumAge` on a product is all it takes to lock checkout.
 
-> **Design preview / v0.1.** The pure pricing/order model (`@openmobilehub/credentagent-storefront`)
-> and the runnable MCP server (`@openmobilehub/credentagent-storefront/server`) are real and tested.
-> Some of the demo's widget polish is still being extracted from the reference server
-> ([mcp-apps-shopping-demo](https://github.com/openmobilehub/mcp-apps-shopping-demo)).
-> See the repo's `ROADMAP.md`.
+> **Design preview.** The pure pricing/order model (`@openmobilehub/credentagent-storefront`)
+> and the runnable MCP server (`@openmobilehub/credentagent-storefront/server`) are real and tested,
+> and the API can still change before 1.0. See the repo's [`ROADMAP.md`](https://github.com/openmobilehub/credentagent/blob/main/ROADMAP.md).
+> For a storefront running it end to end, see the [Utopia Marketplace MCP server](https://github.com/openwallet-foundation/multipaz-utopia/tree/main/organizations/marketplace/mcp).
 
 ## Install
 
@@ -28,8 +27,8 @@ Apache-2.0, ESM. Two entry points: `.` (the pure pricing model, dependency-light
 page) over HTTP at `/mcp`. It publishes the ceremony seams on `store.app.locals.credentagent`, so
 `new CredentAgent().mount(store.app)` wires the real `/credentagent/*` ceremony rails with zero glue, and
 `store.gate()` resolves your policy on every `checkout` call (copied from
-[`examples/storefront.mjs`](https://github.com/openmobilehub/mcp-apps-shopping-demo/blob/main/examples/storefront.mjs) /
-[`storefront-gate.test.ts`](https://github.com/openmobilehub/mcp-apps-shopping-demo/blob/main/storefront-gate.test.ts)):
+[`examples/storefront.mjs`](https://github.com/openmobilehub/credentagent/blob/main/examples/storefront.mjs) /
+[`storefront-gate.test.ts`](https://github.com/openmobilehub/credentagent/blob/main/storefront-gate.test.ts)):
 
 ```ts
 import { createStorefront } from "@openmobilehub/credentagent-storefront/server";
@@ -275,7 +274,7 @@ own `requestState` + `answers` arguments, so the round trip completes either way
 ## The three execution contexts
 
 `createStorefront()` is built around the split the gate enforces — conflating these is forbidden
-([spec §0](https://github.com/openmobilehub/mcp-apps-shopping-demo/blob/main/specs/001-attesto-sdk/spec.md)):
+([spec §0](https://github.com/openmobilehub/credentagent/blob/main/specs/001-credentagent-sdk/spec.md)):
 
 1. **Tool — mints the link + reports requirements.** The `checkout` tool snapshots the cart into an
    order, returns `{ orderId, checkoutUrl, requires }`, and runs **no ceremony** (no phone in the loop).
@@ -385,11 +384,11 @@ leaves the cart intact.
 
 Pass a `verifier` and the **same** `store.gate(...)` policy runs a real, issuer-trust-verified,
 amount-bound payment through an external verifier/processor — only the backend moves in. The first real
-adapter lives host-side in [`openwallet-foundation/multipaz-utopia`](https://github.com/openwallet-foundation/multipaz-utopia)
-(tracked in [multipaz-utopia#16](https://github.com/openwallet-foundation/multipaz-utopia/issues/16)):
+adapter lives host-side in the [Utopia Marketplace MCP server](https://github.com/openwallet-foundation/multipaz-utopia/tree/main/organizations/marketplace/mcp)
+([`src/verifier.ts`](https://github.com/openwallet-foundation/multipaz-utopia/blob/main/organizations/marketplace/mcp/src/verifier.ts)):
 
 ```ts
-const store = createStorefront({ verifier });   // e.g. the multipaz-utopia adapter, once it lands
+const store = createStorefront({ verifier });   // e.g. Utopia's multipazUpayVerifier(...)
 new CredentAgent().mount(store.app);             // zero-arg — picks the verifier up from app.locals
 ```
 

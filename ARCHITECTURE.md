@@ -12,10 +12,10 @@ This repo is two npm packages:
 | [`@openmobilehub/credentagent-gate`](../../packages/credentagent-gate) | The Gate — the policy DSL, the `requirements()` resolver, and the `mount()` ceremony that serves the `/credentagent/*` verification rails. | `new CredentAgent()`, `credentagent.requirements(order, policy)`, `credentagent.mount(app)` |
 | [`@openmobilehub/credentagent-storefront`](../../packages/credentagent-storefront) | The agentic storefront core — a runnable MCP shopping server (cart → priced cart → order, ten tools, a widget, a checkout page), catalog-injected. | `createStorefront()` |
 
-The reference DEMO that runs both packages on every surface (Claude, ChatGPT, Goose,
-Claude Code) lives in the separate
-[mcp-apps-shopping-demo](https://github.com/openmobilehub/mcp-apps-shopping-demo) repo —
-linked, not duplicated here.
+The end-to-end DEMO that runs both packages (Claude, ChatGPT, Goose) is the
+[Utopia Marketplace MCP server](https://github.com/openwallet-foundation/multipaz-utopia/tree/main/organizations/marketplace/mcp) in the separate
+`multipaz-utopia` repo — linked, not duplicated here. The runnable reference in this repo is
+`examples/quickstart`.
 
 > **Honest status — read this first.** Trust is **presence-only** today
 > (`trust_level: "presence-only-demo"`). The *wire* crypto is real — WebAuthn on the
