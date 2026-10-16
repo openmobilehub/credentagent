@@ -706,15 +706,28 @@ describe("delegated rail — the approve page honors the host's seams", () => {
     expect(out.html).not.toContain("/checkout?order=ORD-1");
   });
 
-  it("shows no Pay step when the policy has no payment credential", async () => {
+  // The route, not the test, decides `hasPayment` here — so these fail if the route stops
+  // passing the order's policy to the page (the page alone defaults to the payment wording).
+  // The fixture order is priced at $124, so "no amounts" is a real check, not a $0 artefact.
+  const visible = (html: string) => html.replace(/<style>[\s\S]*?<\/style>/g, "");
+
+  it("words the page as a verification, with no Pay step or amounts, when the policy has no payment credential", async () => {
     const out = await getPage({ credentialRegistry: new Map([["age", age.over(21)]]) });
-    expect(out.html).not.toContain('<div class="rail-label">Pay</div>');
+    const html = visible(out.html);
+    expect(html).not.toContain('<div class="rail-label">Pay</div>');
+    expect(html).toContain("Verify your credential");
+    expect(html).not.toContain("Authorize payment");
+    expect(html).not.toContain("$124.00");
   });
 
-  it("still shows the Pay step when the policy HAS one (control)", async () => {
+  it("still words the page as a payment, with the Pay step and amounts, when the policy HAS one (control)", async () => {
     const out = await getPage({
       credentialRegistry: new Map([["age", age.over(21)], ["payment", payment.in("usd")]]),
     });
-    expect(out.html).toContain('<div class="rail-label">Pay</div>');
+    const html = visible(out.html);
+    expect(html).toContain('<div class="rail-label">Pay</div>');
+    expect(html).toContain("Authorize payment");
+    expect(html).not.toContain("Verify your credential");
+    expect(html).toContain("$124.00");
   });
 });

@@ -133,9 +133,9 @@ const DESIGN_CSS = `
   .summary table { width: 100%; border-collapse: collapse; }
   .summary td { padding: 8px 0; font-size: .95rem; }
   .summary .line td { border-bottom: 1px solid var(--hairline); }
-  /* With no Total row (showAmounts:false) the last line's rule would dangle. A Total is
-     always last when amounts show, so this changes nothing for a checkout page. */
-  .summary .line:last-child td { border-bottom: none; }
+  /* With no Total row (showAmounts:false) the last line's rule would dangle. Scoped to the
+     card orderSummaryCard marks .no-amounts, so other .summary cards keep their dividers. */
+  .summary.no-amounts .line:last-child td { border-bottom: none; }
   .summary .qty { color: var(--muted); font-variant-numeric: tabular-nums; }
   .summary .disc td { color: var(--accent); font-weight: 600; }
   .summary .total td { padding-top: 12px; border-top: 1px solid var(--hairline); font-weight: 700; font-size: 1.05rem; }
@@ -510,7 +510,7 @@ export function orderSummaryCard(args: OrderSummaryArgs): string {
     ? `<tr class="total"><td>Total</td><td class="num">${money(args.total, cur)}</td></tr>`
     : "";
   const caption = args.caption ? `<p class="card-title">${escapeHtml(args.caption)}</p>` : "";
-  return `<div class="card summary">
+  return `<div class="card summary${showAmounts ? "" : " no-amounts"}">
   ${caption}<table>
     ${rows}
     ${discRow}

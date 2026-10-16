@@ -8,7 +8,7 @@
 //      as live HTML/CSS on the consent page a buyer sees.
 
 import { describe, it, expect } from "vitest";
-import { pageHead, brandHeader, trustFooter, orderSummaryCard } from "./theme.js";
+import { pageHead, brandHeader, trustFooter, orderSummaryCard, completionHandoffBanner } from "./theme.js";
 import { renderCredentialPage } from "./credential-gate/page.js";
 import { renderPasskeyPage } from "./passkey/page.js";
 import { renderDcPaymentPage } from "./dc-payment/page.js";
@@ -222,6 +222,7 @@ describe("orderSummaryCard — amounts are suppressible for a non-payment ceremo
     expect(html).toContain("Request REQ-1");
     expect(html).not.toContain("$0.00");
     expect(html).not.toMatch(/<tr class="total">/);
+    expect(html).toContain('class="card summary no-amounts"'); // scopes the last-divider rule
   });
 
   it("renders the money by default — every checkout page is unchanged (control)", () => {
@@ -231,5 +232,28 @@ describe("orderSummaryCard — amounts are suppressible for a non-payment ceremo
     });
     expect(html).toContain("$124.00");
     expect(html).toMatch(/<tr class="total">/);
+    expect(html).not.toContain("no-amounts");
+  });
+});
+
+// The banner labels are host-facing strings rendered as HTML, so they are escaped like the
+// return URL — an override can change the wording, never inject markup.
+describe("completionHandoffBanner — wording overrides are escaped", () => {
+  it("escapes headline, sub and return label", () => {
+    const html = completionHandoffBanner("/records/R-1", {
+      headline: "<b>Verified</b>",
+      sub: "<img src=x onerror=alert(1)>",
+      returnLabel: "<i>Continue</i>",
+    });
+    expect(html).not.toMatch(/<b>|<img|<i>/);
+    expect(html).toContain("&lt;b&gt;Verified&lt;/b&gt;");
+    expect(html).toContain("&lt;i&gt;Continue&lt;/i&gt;");
+  });
+
+  it("keeps the checkout wording by default (control)", () => {
+    const html = completionHandoffBanner("/checkout?order=O-1");
+    expect(html).toContain("✓ Order complete");
+    expect(html).toContain("Your agent has your order");
+    expect(html).toContain("Return to checkout ›");
   });
 });

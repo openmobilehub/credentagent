@@ -91,9 +91,11 @@ export const registerDelegatedPaymentGate: RailRegistrar = (app: CeremonyApp, ct
     // Order-derived stepper with Pay current: reflects only the gates THIS order has, and
     // shows Age ✓ only when it was ACTUALLY verified (read from the store) — never hardcoded.
     const verified = (await ctx.verificationStore.read(order.id)) ?? {};
-    // Frame the page on THIS order's policy: with no payment credential the ceremony settles
-    // nothing, so it must not show a Pay step or promise a payment (see page.ts). The current
-    // step is then the identity credential being proven, not "pay".
+    // Frame the page on the SAME signal the settle step below uses (`policyHasPayment`): when it
+    // is false the ceremony settles nothing, so the page must not show a Pay step or promise a
+    // payment (see page.ts), and the current step is the identity credential being proven.
+    // Note the signal covers every policy this instance has resolved that applies to the order,
+    // not only this order's own — see issue #353.
     const hasPayment = policyHasPayment(ctx, order);
     const identityStep = hasPayment ? undefined : delegatedPolicyEntries(ctx.credentialRegistry, order)[0];
     const rail = hasPayment

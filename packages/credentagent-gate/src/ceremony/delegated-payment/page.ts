@@ -37,10 +37,11 @@ export interface DelegatedPageOptions {
   /** Browser-visible path prefix (from `ctx.basePath`) — every URL this page fetches or links
    *  carries it. Absent ⇒ "" (served at the root). */
   basePath?: string;
-  /** Does THIS order's policy carry a payment credential (`policyHasPayment`)? When it does
-   *  not, the ceremony settles nothing, so the page must not announce a payment, a payment
-   *  credential or a settlement — it proves identity and returns. Defaults to true so the
-   *  payment framing stays the default for every existing caller. */
+  /** Will this ceremony settle a payment? The route passes `policyHasPayment` — the same signal
+   *  its settle step uses, so the wording always matches what the ceremony does. When false,
+   *  nothing settles, so the page must not announce a payment, a payment credential or a
+   *  settlement — it proves the credential and returns. Defaults to true so the payment framing
+   *  stays the default for every existing caller. */
   hasPayment?: boolean;
 }
 
