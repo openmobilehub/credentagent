@@ -38,7 +38,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { fingerprints, stripAnsi, withinBaseline } from "./fingerprints.mjs";
-import { TRUSTED_PERMISSIONS, titleAuthor, forbiddenPaths, applyAndCheck, isRunId, isCommitId, publishIssueNumber } from "./checks.mjs";
+import { TRUSTED_PERMISSIONS, titleAuthor, forbiddenPaths, applyAndCheck, changedSince, isRunId, isCommitId, publishIssueNumber } from "./checks.mjs";
 import { reportHtml, prBody, issueComment } from "./report.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -235,8 +235,9 @@ async function agent(role, prompt, { cwd, schema, write = false, check = false, 
     }
   }
   } catch (e) {
-    // The SDK died mid-session: what it spent is unknown, so count the whole allowance — a retry
-    // then can't get a fresh share, and the run cap still holds.
+    // The SDK died mid-session: what it spent is unknown, so count the whole allowance. Deliberately
+    // conservative — the run cap holds and spend is never under-reported — at the price that a
+    // reviewer which crashes this way isn't retried (one that ends with an error result still is).
     const charged = sawResult ? cost : allowed;
     RUN.costUsd += charged;
     throw Object.assign(e, { costUsd: charged });
@@ -459,7 +460,7 @@ async function implementIssue(issue, { dir } = {}) {
   const done = Boolean(last.clean);
   const patch = reviewedPatch ?? diffPatch(repoDir, base);
   trackNew(repoDir);
-  const touched = git(["diff", "--name-only", "--no-renames", "-z", base], { cwd: repoDir }).out.split("\0").filter(Boolean);
+  const touched = changedSince(repoDir, base);
   const forbidden = forbiddenPaths(touched);
   writeFileSync(join(RUN.dir, "change.patch"), patch);
 

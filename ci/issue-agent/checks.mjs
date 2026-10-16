@@ -27,6 +27,13 @@ export function stagedPaths(cwd) {
   return r.stdout.split("\0").filter(Boolean);
 }
 
+/** Files changed since `base` in a working tree (new files included once registered), from stdout only. */
+export function changedSince(cwd, base) {
+  const r = spawnSync("git", ["-c", "core.hooksPath=/dev/null", "diff", "--name-only", "--no-renames", "-z", base], { cwd, encoding: "utf8" });
+  if (r.status !== 0) throw new Error(`git diff failed: ${r.stderr}`);
+  return r.stdout.split("\0").filter(Boolean);
+}
+
 /**
  * Apply a patch to a clean checkout (`--index`, hooks off) and report what it touched, as git sees
  * it, and which of those the agent may never publish. The publish job's one call for both.
