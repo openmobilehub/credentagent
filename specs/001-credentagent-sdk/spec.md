@@ -1,5 +1,7 @@
 # Attesto SDK — v0.1 Spec
 
+> **Historical design record**, written when the project was called Attesto. Read `Attesto` as `CredentAgent`, `attesto-*` as `credentagent-*`, and `/attesto/*` as `/credentagent/*`. For the current API, see [`docs/reference/api.md`](../../docs/reference/api.md).
+
 **Status:** design, grounded in the working reference server in this repo. Every claim cites real code.
 **One line:** an SDK that lets a developer gate a consequential MCP tool behind a verifiable credential
 from the user's phone wallet. Identity leads; payments is one application.

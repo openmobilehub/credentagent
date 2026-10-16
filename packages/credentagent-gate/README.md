@@ -516,8 +516,7 @@ Wrap each in `required(c)` or `optional(c)` to build the ordered policy array. A
 conditional with `.when((order) => boolean)` — it returns a fresh `Credential` (non-mutating) whose
 predicate is AND-ed onto any existing `appliesTo`.
 
-**Gate any credential** with `defineCredential` — no registration step, usable by object
-(from [`specs/001-credentagent-sdk/quickstart.md`](https://github.com/openmobilehub/credentagent/blob/main/specs/001-credentagent-sdk/quickstart.md)):
+**Gate any credential** with `defineCredential` — no registration step, usable by object:
 
 ```ts
 import { defineCredential, dcql, gate } from "@openmobilehub/credentagent-gate";
@@ -526,7 +525,7 @@ const prescription = defineCredential({
   id: "prescription",
   request: dcql({ docType: "org.hl7.prescription.1", claims: ["rx_valid"] }),
   verify: (c) => c.rx_valid === true,
-  effect: gate(),                                   // or discount({ percent }) / authorize()
+  effect: gate(),                                   // custom credentials support gate() only
   appliesTo: (order) => order.lines.some((l) => l.requiresRx),  // definition-time conditional
   ui: { label: "Prescription", action: "Verify prescription" },
 });

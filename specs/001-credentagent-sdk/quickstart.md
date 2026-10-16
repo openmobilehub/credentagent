@@ -1,5 +1,7 @@
 # Quickstart — Attesto SDK v0.1
 
+> **Historical design record**, written when the project was called Attesto. Read `Attesto` as `CredentAgent`, `attesto-*` as `credentagent-*`, and `/attesto/*` as `/credentagent/*`. For the current API, see [`docs/reference/api.md`](../../docs/reference/api.md).
+
 The gate is only useful gating a real **storefront**, so this shows the two components **together**: a
 storefront (a catalog + a `checkout` MCP tool + a checkout page) with the gate wrapped around its checkout.
 API source of truth: [`contracts/credentagent-gate.api.md`](./contracts/credentagent-gate.api.md); shapes in

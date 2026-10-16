@@ -1,5 +1,7 @@
 # Contract — `attesto.mount(app)` + ceremony routes
 
+> **Historical design record**, written when the project was called Attesto. Read `Attesto` as `CredentAgent`, `attesto-*` as `credentagent-*`, and `/attesto/*` as `/credentagent/*`. For the current API, see [`docs/reference/api.md`](../../../docs/reference/api.md).
+
 The public contract this feature adds to `@openmobilehub/attesto-gate`. Behavior is preserved from the demo's
 `payment-gate/`; only the location + the injected-seam boundary are new. Each contract item (CT#) is a testable
 acceptance.
