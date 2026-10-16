@@ -231,6 +231,22 @@ describe("CT6 — the four deterministic gates run on a real passkey ceremony", 
     expect(h.records.get("ORD-P")?.amount).toBe(199);
   });
 
+  it("REFUSES to hand an earlier proof's raw answer to whoever completes the payment (#320)", async () => {
+    // A verification record stored before #320 can still carry the wallet's raw answer, and
+    // whoever runs the passkey ceremony needs only the order id. The receipt lists the proof;
+    // the bytes stay out of the response and the completed record.
+    const h = harness();
+    h.seed("ORD-LEGACY", [{ id: "aurora-headphones", quantity: 1 }]);
+    const presentation = { format: "mso_mdoc", deviceResponse: "LEGACY-RAW", inspectUrl: "https://tools.multipaz.org/mdocDeviceResponse#LEGACY-RAW" };
+    const legacy = { gate: "Membership", rail: "credential", trust_level: "presence-only-demo", checks: [], presentedAt: "t", presentation };
+    await h.verificationStore.write("ORD-LEGACY", { proofs: [legacy as never] });
+    const res = await authorize(h, "ORD-LEGACY");
+    expect(res.body.completed).toBe(true);
+    expect(res.body.proofsHtml).toContain("Membership");
+    expect(JSON.stringify(res.body)).not.toContain("LEGACY-RAW");
+    expect(JSON.stringify(h.records.get("ORD-LEGACY"))).not.toContain("LEGACY-RAW");
+  });
+
   it("a replayed verify is idempotent — it records/settles nothing twice", async () => {
     const h = harness();
     h.seed("ORD-P", [{ id: "aurora-headphones", quantity: 1 }]);

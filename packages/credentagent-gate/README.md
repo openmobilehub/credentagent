@@ -114,11 +114,12 @@ the verify response for your own tooling:
 ```
 
 - **Off by default.** A DeviceResponse from a real ID can carry personal data (the disclosed claims,
-  the issuer's certificate chain, a device public key). With the option on, it goes back to the
-  browser that just presented it, and stays on the order's verification record (your
-  `VerificationStore`) only until the order completes, so the receipt that browser gets can still
-  link it. The **completed order never carries it**, so nothing read by order id returns it:
-  not `orders.retrieve()`, the status routes, `get-order-status`, or the `order.settled` webhook.
+  the issuer's certificate chain, a device public key). With the option on, it goes back **only**
+  to the browser that just presented it, in that verify response. It is **never stored**: not on
+  the order's verification record (your `VerificationStore`), not on the completed order. So
+  nothing that needs only the order id returns it: not `orders.retrieve()`, the status routes,
+  `get-order-status`, the paid checkout page, the `order.settled` webhook, or the payment step
+  that completes the order (its receipt links only the credential that payment itself presented).
   It is never logged. The payload rides in the link's `#fragment`, which the browser never sends
   to the inspector's server. (One
   pre-existing exception: the dc-payment verify response has always carried the same bytes inside
@@ -148,9 +149,14 @@ already read (`orders.retrieve()`, `GET /credentagent/orders/:id/status`, and th
 
 - The storefront widget lists each proof on the confirmed order.
 - The completed order keeps the gate, the rail, the checks and the trust level — **never the
-  wallet's raw answer (`presentation`), even with `inspectPresentations` on**, because anyone who
-  knows the order id can read it. The **Inspect** link lives on the consent page and on the receipt
-  the presenting browser gets when it completes the order.
+  wallet's raw answer, even with `inspectPresentations` on**, because anyone who knows the order id
+  can read it. The **Inspect** link appears only right after a presentation, in the browser that
+  made it: on the consent page after an age or membership proof, and on the payment page for that
+  payment's own credential. The paid checkout page and the widget list each proof and its trust
+  level, without Multipaz Tools links.
+- A check's `detail` can still repeat a value the wallet disclosed (a membership number, a payment
+  instrument id or expiry). Removing those is tracked in
+  [#350](https://github.com/openmobilehub/credentagent/issues/350).
 - The `order.settled` webhook carries the same proofs.
 - `rail: "instant-demo"` marks a demo tap, never a wallet proof. Each proof states its own `trust_level`.
 

@@ -31,6 +31,7 @@ import { buildPasskeyMandate, buildBindingFields, runGates } from "../mandate.js
 import { buildRegistrationOptions, verifyPasskeyAssertion } from "./verify.js";
 import { renderPasskeyPage } from "./page.js";
 import { checkoutRail, proofLinksHtml } from "../theme.js";
+import { withoutPresentations } from "../proofs.js";
 
 // Minimal structural request/response shapes — the real Express req/res satisfy
 // them, so the package never imports express.
@@ -177,8 +178,9 @@ export const registerPasskeyGate: RailRegistrar = (app: CeremonyApp, ctx: Ceremo
       const mandate = buildPasskeyMandate({ order, authenticator, origin });
       const gates = runGates(mandate);
       // The order's earlier proofs — read BEFORE completion clears the verification record, so the
-      // finished page can list every credential of the order.
-      const priorProofs = (await ctx.verificationStore.read(order.id))?.proofs ?? [];
+      // finished page can list every credential of the order. Without credential bytes (#320): this
+      // caller may not be the browser that presented them.
+      const priorProofs = withoutPresentations((await ctx.verificationStore.read(order.id))?.proofs ?? []);
       const paymentProof = {
         gate: `Pay (${mandate.payment.currency})`,
         rail: "passkey" as const,
@@ -207,7 +209,7 @@ export const registerPasskeyGate: RailRegistrar = (app: CeremonyApp, ctx: Ceremo
         reason: completion.reason ?? null,
         binding: buildBindingFields(order, origin),
         trust_level: "presence-only-demo",
-        // Once complete: every credential of the order, with its Multipaz Tools links + Order record.
+        // Once complete: every credential of the order + Order record.
         ...(completion.completed ? { proofsHtml: proofLinksHtml([...priorProofs, paymentProof], ctx.statusUrl?.(order.id)) } : {}),
       });
     } catch (err) {

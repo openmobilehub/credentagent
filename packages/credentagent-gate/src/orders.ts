@@ -50,6 +50,20 @@ export class MemoryOrderStore<T> implements OrderStore<T> {
   clear(id: string): void { this.m.delete(id); }
 }
 
+/** The completed-order store as every reader gets it (the status route, the paid page,
+ *  `orders.retrieve`): proofs without the wallet's raw answer, even on an order stored before
+ *  #320 fixed the write side. Those reads need only the order id. */
+export function receiptsOnly(store: OrderStore<CompletedOrder>): OrderStore<CompletedOrder> {
+  return {
+    read: async (id) => {
+      const done = await store.read(id);
+      return done?.proofs ? { ...done, proofs: withoutPresentations(done.proofs) } : done;
+    },
+    write: (id, value) => store.write(id, value),
+    clear: (id) => store.clear(id),
+  };
+}
+
 /**
  * The refusal codes the door's `{ ok:false, code }` branch can carry — a TYPED union, not
  * `string`, so `res.code === "not-found"` autocompletes, a typo fails to compile, and a
@@ -134,7 +148,8 @@ export class Orders {
   async _complete(completion: CompletedOrder): Promise<void> {
     // Never the wallet's raw answer (#320): the stored order is served by id to anyone (the
     // status route, orders.retrieve), and the webhook goes to ANOTHER service. The receipt —
-    // gate, rail, checks, trust level — stays; inspectPresentations is for the presenting browser.
+    // gate, rail, checks, trust level — stays; the raw answer goes only to the browser that
+    // presented it, in its own verify response.
     const record = completion.proofs ? { ...completion, proofs: withoutPresentations(completion.proofs) } : completion;
     await this.deps.completed.write(record.orderId, record);
     // One completion choke point feeds both signals: the in-process listener AND the HTTP

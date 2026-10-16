@@ -616,6 +616,31 @@ describe("dynamic catalog source (spec 006) — createStorefront({ catalog: fire
   });
 });
 
+describe("#320 — a completed order never serves the wallet's raw answer", () => {
+  // A persistent store (the dev demo's Redis) can hold orders completed before the gate stopped
+  // writing the bytes. Every read here needs only the order id, so each one must strip them.
+  it("REFUSES to serve a raw answer an order stored before #320 still holds (order-status, get-order-status, the paid page)", async () => {
+    const orders = new MemoryOrderStore<CompletedOrderRecord>();
+    const store = createStorefront({ orderStore: orders });
+    const c = await connect(store);
+    const orderId = ((await c.callTool({ name: "checkout", arguments: { items: [{ productId: "drift-mouse", quantity: 1 }] } })).structuredContent as any).orderId;
+    const presentation = { format: "mso_mdoc", deviceResponse: "LEGACY-RAW", inspectUrl: "https://tools.multipaz.org/mdocDeviceResponse#LEGACY-RAW" };
+    const legacy = { gate: "Age 21+", rail: "credential", trust_level: "presence-only-demo", checks: [], presentedAt: "t", presentation };
+    await orders.write(orderId, { orderId, amount: 49, currency: "USD", method: "dc-payment", completedAt: "t", proofs: [legacy as never] });
+
+    const status = await request(store.app).get(`/checkout/order-status?orderId=${orderId}`);
+    expect(status.body.completed).toBe(true);
+    expect(status.body.order.proofs.map((p: { gate: string }) => p.gate)).toEqual(["Age 21+"]);
+    expect(JSON.stringify(status.body)).not.toContain("LEGACY-RAW");
+    const tool = await c.callTool({ name: "get-order-status", arguments: { orderId } });
+    expect((tool.structuredContent as any).status).toBe("completed");
+    expect(JSON.stringify(tool)).not.toContain("LEGACY-RAW");
+    const page = await request(store.app).get(`/checkout?order=${orderId}`);
+    expect(page.text).toContain("Age 21+");
+    expect(page.text).not.toContain("LEGACY-RAW");
+  });
+});
+
 describe("CT6 — cart state is per storefront instance (no bleed)", () => {
   it("two storefronts keep independent carts", async () => {
     const a = await connect(createStorefront());

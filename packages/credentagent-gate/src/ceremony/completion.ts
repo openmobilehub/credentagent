@@ -207,7 +207,7 @@ async function completeOrderLocked(input: CompletionInput, ctx: CompletionContex
   // (the verification record is cleared below). The payment rail's own proof goes last.
   // Without the wallet's raw answer (#320): every read of the completed record — the status
   // routes, get-order-status, the paid checkout page — is public to anyone with the order id.
-  const proofs = withoutPresentations([...(verification?.proofs ?? []), ...(input.proof ? [input.proof] : [])])!;
+  const proofs = withoutPresentations([...(verification?.proofs ?? []), ...(input.proof ? [input.proof] : [])]);
   const proofField = proofs.length ? { proofs } : {};
   // A DELEGATED draw carries its own loyalty claim: the membership the human proved at approval
   // time, sealed into the intent (#172). It is read from the intent — never from a verification

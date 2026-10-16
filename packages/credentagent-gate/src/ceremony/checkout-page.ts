@@ -85,8 +85,9 @@ export interface RenderPaid {
     /** Block-explorer link, when the backend settles on a chain. */
     hashscanUrl?: string;
   } | null;
-  /** What was proven for the order (the order proof receipt) — listed under the banner with the
-   *  Multipaz Tools links a wallet proof carries. */
+  /** What was proven for the order (the order proof receipt) — listed under the banner with each
+   *  proof's trust level and the Order record link. No Multipaz Tools links: a completed order
+   *  never carries the wallet's raw answer (#320). */
   proofs?: ProofEntry[];
 }
 
