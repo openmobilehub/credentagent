@@ -1,0 +1,127 @@
+// Report builders for the issue agent: the test-proof page (recorded as video), the human report
+// (index.html next to the media), the PR body, and the issue comment.
+
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+const MARK = "<!-- issue-agent -->";
+
+const STYLE = `
+:root{--bg:#fbfbfa;--fg:#1f2328;--muted:#656d76;--card:#fff;--line:#d0d7de;--ok:#1a7f37;--bad:#cf222e;--warn:#9a6700;--code:#f6f8fa}
+@media (prefers-color-scheme:dark){:root{--bg:#0d1117;--fg:#e6edf3;--muted:#8d96a0;--card:#161b22;--line:#30363d;--ok:#3fb950;--bad:#f85149;--warn:#d29922;--code:#0d1117}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+main{max-width:1100px;margin:0 auto;padding:28px 16px 64px}h1{font-size:24px;margin:0 0 4px}h2{font-size:18px;margin:32px 0 10px}
+.muted{color:var(--muted)}.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin:10px 0}
+.pill{display:inline-block;padding:2px 10px;border-radius:999px;font-weight:600;font-size:13px;border:1px solid currentColor}
+.ok{color:var(--ok)}.bad{color:var(--bad)}.warn{color:var(--warn)}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:10px;overflow:auto;font-size:12px;line-height:1.45;max-height:420px}
+table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid var(--line);padding:6px 8px;text-align:left;vertical-align:top}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px}figure{margin:0}figure img,figure video{width:100%;border:1px solid var(--line);border-radius:8px;background:#fff}
+figcaption{font-size:13px;color:var(--muted);margin-top:4px}`;
+
+// The page the pipeline records as a video for every issue: what it checked, with its own outputs.
+export function proofHtml({ issue, spec, last, base }) {
+  const m = last.mutation;
+  const gateRows = last.gates.map((g) => `<tr><td>${esc(g.name)}</td><td class="${g.green ? "ok" : g.ok ? "warn" : "bad"}">${g.green ? "pass" : g.ok ? "red on main too — not this change" : "FAIL"}</td><td>${esc(g.preexisting ? g.fingerprints.join("; ") : g.summary ?? "")}</td></tr>`).join("");
+  const crit = (last.reviews?.find((r) => r.lens === "spec")?.criteria ?? []);
+  const critRows = spec.acceptance_criteria.map((ac) => {
+    const c = crit.find((x) => x.id === ac.id);
+    return `<tr><td>${esc(ac.id)}</td><td>${esc(ac.text)}</td><td class="${c?.met ? "ok" : "bad"}">${c ? (c.met ? "met" : "NOT met") : "—"}</td><td>${esc(c?.evidence ?? "")}</td></tr>`;
+  }).join("");
+  return `<!doctype html><html><head><meta charset="utf-8"><style>${STYLE}</style></head><body><main>
+<p class="muted">Issue agent · test proof · base ${esc(base.slice(0, 7))}</p>
+<h1>#${issue.number} ${esc(issue.title)}</h1>
+<h2>Acceptance criteria (checked by the spec reviewer)</h2><div class="card"><table>${critRows}</table></div>
+<h2>Gates, run by the pipeline from the repo root</h2><div class="card"><table>${gateRows}</table></div>
+${m?.applicable ? `<h2>New tests with the fix reverted — <span class="${m.withoutFix?.code ? "ok" : "bad"}">${m.withoutFix?.code ? "they FAIL (good: they guard the fix)" : "they PASS (bad)"}</span></h2>
+<p class="muted">Reverted: ${esc((m.reverted ?? []).join(", "))}<br>Ran: ${esc((m.tests ?? []).join(", "))}</p><pre>${esc(m.withoutFix?.tail ?? m.reason ?? "")}</pre>
+<h2>Same tests with the fix — <span class="${m.withFix?.code === 0 ? "ok" : "bad"}">${m.withFix?.code === 0 ? "pass" : "FAIL"}</span></h2><pre>${esc(m.withFix?.tail ?? "")}</pre>`
+    : `<h2>Test proof</h2><p class="muted">${esc(m?.reason ?? "not run")}</p>`}
+</main></body></html>`;
+}
+
+function mediaFigures(manifest, mediaBase) {
+  const media = manifest.filter((e) => e.kind === "image" || e.kind === "video");
+  const group = (side) => media.filter((e) => e.side === side);
+  const fig = (e) => e.kind === "video"
+    ? `<figure><video controls muted playsinline src="${esc(mediaBase + e.file)}"></video><figcaption>🎬 ${esc(e.caption)}</figcaption></figure>`
+    : `<figure><a href="${esc(mediaBase + e.file)}"><img src="${esc(mediaBase + e.file)}" alt="${esc(e.caption)}" loading="lazy"></a><figcaption>${esc(e.caption)}</figcaption></figure>`;
+  const dialogs = manifest.filter((e) => e.kind === "events" && e.events.length);
+  return ["before", "after", "proof"].map((side) => group(side).length
+    ? `<h2>${side === "proof" ? "Test proof" : side === "before" ? "Before (main)" : "After (this change)"}</h2><div class="grid">${group(side).map(fig).join("")}</div>`
+    : "").join("") + (dialogs.length
+    ? `<h2>What the browser saw</h2><div class="card"><table>${dialogs.map((d) => `<tr><td>${esc(d.side)} · ${esc(d.session)}</td><td><pre>${esc(JSON.stringify(d.events, null, 1))}</pre></td></tr>`).join("")}</table></div>` : "");
+}
+
+export function reportHtml(r, { mediaBase }) {
+  const status = r.done ? `<span class="pill ok">ready for human review</span>` : `<span class="pill bad">needs a human — not converged in ${r.rounds.length} rounds</span>`;
+  const reviews = (r.last.reviews ?? []).map((rv) => `<div class="card"><b>${esc(rv.lens)}</b> — <span class="${rv.verdict === "approve" ? "ok" : "bad"}">${esc(rv.verdict)}</span>${rv.findings.length ? `<ul>${rv.findings.map((f) => `<li><span class="${f.severity === "blocking" ? "bad" : "warn"}">${esc(f.severity)}</span> ${esc(f.file ?? "")}${f.line ? `:${f.line}` : ""} ${esc(f.summary)}</li>`).join("")}</ul>` : ` · no findings`}</div>`).join("");
+  const history = r.rounds.map((x) => `<tr><td>${x.round}</td><td>${x.gates.map((g) => `${esc(g.name)} ${g.ok ? "✓" : "✗"}`).join(" · ")}</td><td>${x.mutation ? (x.mutation.applicable ? (x.mutation.ok ? "✓" : `✗ ${esc(x.mutation.reason)}`) : "n/a") : "—"}</td><td>${x.reviews ? x.reviews.map((v) => `${esc(v.lens)} ${v.verdict === "approve" ? "✓" : "✗"}`).join(" · ") : "—"}</td></tr>`).join("");
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Issue #${r.issue.number} report</title><style>${STYLE}</style></head><body><main>
+<p class="muted">Issue agent run ${esc(r.id)} · ${esc(r.model)} · ~$${r.costUsd.toFixed(2)} · base ${esc(r.base.slice(0, 7))} · branch ${esc(r.branch)}</p>
+<h1><a href="${esc(r.issue.url)}">#${r.issue.number}</a> ${esc(r.issue.title)}</h1><p>${status}</p>
+<div class="card">${esc(r.spec.summary)}</div>
+<h2>What changed</h2><div class="card">${esc(r.last.impl.summary)}</div>
+${r.evidence ? `<h2>What the recordings show</h2><div class="card">${esc(r.evidence.demonstrates)}${r.evidence.limitations ? `<p class="warn">Limits: ${esc(r.evidence.limitations)}</p>` : ""}</div>` : ""}
+${mediaFigures(r.manifest, mediaBase)}
+<h2>Reviews (final round)</h2>${reviews}
+<h2>Rounds</h2><div class="card"><table><tr><th>#</th><th>gates</th><th>test proof</th><th>reviews</th></tr>${history}</table></div>
+${(r.last.impl.open_questions ?? []).length ? `<h2>Open questions for a human</h2><ul>${r.last.impl.open_questions.map((q) => `<li>${esc(q)}</li>`).join("")}</ul>` : ""}
+</main></body></html>`;
+}
+
+export function prBody(r, { mediaBase }) {
+  const crit = r.last.reviews?.find((x) => x.lens === "spec")?.criteria ?? [];
+  const acs = r.spec.acceptance_criteria.map((ac) => {
+    const c = crit.find((x) => x.id === ac.id);
+    return `- [${c?.met ? "x" : " "}] **${ac.id}** ${ac.text}${c?.evidence ? ` — _${c.evidence}_` : ""}`;
+  }).join("\n");
+  const media = r.manifest.filter((e) => e.kind === "image" || e.kind === "video");
+  const show = (side, title) => {
+    const items = media.filter((e) => e.side === side);
+    if (!items.length) return "";
+    return `#### ${title}\n\n${items.map((e) => e.kind === "image" ? `<img src="${mediaBase}${e.file}" width="640" alt="${esc(e.caption)}">\n\n_${e.caption}_` : `🎬 [${e.caption}](${mediaBase}${e.file})`).join("\n\n")}\n`;
+  };
+  const g = r.last.gates.map((x) => `\`${x.name}\` ${x.green ? "✅" : x.ok ? "⚠️ red on main too, not this change" : "❌"}${x.summary ? ` ${x.summary}` : ""}`).join(" · ");
+  const m = r.last.mutation;
+  const blocking = (r.last.reviews ?? []).flatMap((rv) => rv.findings.filter((f) => f.severity === "blocking").map((f) => `- **${rv.lens}** ${f.file ? `\`${f.file}${f.line ? `:${f.line}` : ""}\` ` : ""}${f.summary}`));
+  const suggestions = (r.last.reviews ?? []).flatMap((rv) => rv.findings.filter((f) => f.severity === "suggestion").map((f) => `- **${rv.lens}** ${f.file ? `\`${f.file}${f.line ? `:${f.line}` : ""}\` ` : ""}${f.summary}`));
+  return `${MARK}
+${r.done ? "" : `> [!WARNING]\n> **Not finished.** The agents did not converge in ${r.rounds.length} rounds. The open findings are listed below — a human has to take this over.\n\n`}## In plain terms
+
+${r.spec.summary}
+
+${r.last.impl.summary}
+
+Fixes #${r.issue.number}
+
+## Acceptance criteria
+
+${acs}
+
+## Proof
+
+- **Gates** (run by the pipeline, not the implementing agent): ${g}
+- **Test proof:** ${m?.applicable ? (m.ok ? `with the source change reverted, the new tests **fail** (${(m.tests ?? []).map((t) => `\`${t}\``).join(", ")}); with it, they pass.` : `❌ ${m.reason}`) : `n/a — ${m?.reason ?? "not run"}`}
+- **Reviews** (3 independent agents): ${(r.last.reviews ?? []).map((v) => `${v.lens} ${v.verdict === "approve" ? "✅" : "❌"}`).join(" · ") || "not reached"}
+${r.evidence ? `\n${r.evidence.demonstrates}${r.evidence.limitations ? `\n\n_Limits:_ ${r.evidence.limitations}` : ""}\n` : ""}
+${show("before", "Before (main)")}
+${show("after", "After (this change)")}
+${show("proof", "Test proof")}
+📄 [Full report with playable videos](${`https://htmlpreview.github.io/?${mediaBase.replace("https://raw.githubusercontent.com/", "https://github.com/").replace(/\/agent-evidence\//, "/blob/agent-evidence/")}index.html`})
+
+${blocking.length ? `## Open blocking findings\n\n${blocking.join("\n")}\n` : ""}${suggestions.length ? `<details><summary>Reviewer suggestions (non-blocking)</summary>\n\n${suggestions.join("\n")}\n</details>\n` : ""}${(r.last.impl.open_questions ?? []).length ? `\n## Open questions\n\n${r.last.impl.open_questions.map((q) => `- ${q}`).join("\n")}\n` : ""}
+<sub>Opened by the issue agent (\`ci/issue-agent\`) · run \`${r.id}\` · ${r.rounds.length} round(s) · ${r.model}. Draft until a human has read it.</sub>
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+`;
+}
+
+export function issueComment({ kind, spec, prUrl, report, run }) {
+  if (kind === "blocked") {
+    return `${MARK}\n🤖 **Issue agent: not starting this one.**\n\n${spec.blocker}\n\n<sub>run \`${run.id}\`. Remove and re-add the \`agent\` label to retry once this is resolved.</sub>`;
+  }
+  const ok = kind === "pr";
+  return `${MARK}\n🤖 **Issue agent:** ${ok ? "a draft PR is ready for review" : "a draft PR is up, but it **needs a human** — the agents didn't converge"}: ${prUrl}\n\n${report.spec.acceptance_criteria.length} acceptance criteria · ${report.rounds.length} round(s) · gates ${
+    report.last.gates.every((g) => g.green) ? "green"
+    : report.last.gates.every((g) => g.ok) ? `green except what's already red on main (${report.last.gates.filter((g) => !g.green).map((g) => g.name).join(", ")})`
+    : "red"}${report.manifest.some((e) => e.kind === "video") ? " · screenshots and video in the PR" : ""}`;
+}

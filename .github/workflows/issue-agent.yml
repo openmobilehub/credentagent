@@ -1,0 +1,111 @@
+name: issue-agent
+
+# Label an issue `agent` → agents implement it and open a draft PR with the evidence.
+# One way in, one way out (ci/issue-agent/README.md). The pipeline: spec → implement → the
+# pipeline's own build/typecheck/lint/test gates → a mutation check that the new tests fail without
+# the fix → three independent reviews (spec, security, DX) → before/after screenshots and video
+# recorded in a real browser → one signed-off commit on `agent/issue-<n>-<run>` → a draft PR.
+#
+# The draft is never merged by the agent: branch protection still needs a human approval and every
+# review thread resolved (CLAUDE.md, "Code review").
+#
+# Who can trigger it: anyone who can add a label (triage access) — the job then checks the sender
+# has WRITE access before doing anything, because the issue text becomes an agent's instructions.
+#
+# Auth: same switch as agent-e2e — the repo variable CLAUDE_AUTH. Unset → the subscription login
+# (CLAUDE_CODE_OAUTH_TOKEN); "api" → ANTHROPIC_API_KEY (billed to the API, capped per agent by
+# ISSUE_AGENT_BUDGET_USD). Only the orchestrator holds the GitHub token; no agent sees it.
+#
+# PRs opened with the default GITHUB_TOKEN don't start other workflows (GitHub's rule), so CI and
+# the Claude review would not run on them. Set an AGENT_GH_TOKEN secret (a fine-grained PAT or app
+# token with contents + pull-requests + issues write on this repo) to have them run normally.
+
+on:
+  issues:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: "Issue number"
+        required: true
+      force:
+        description: "Skip preflight (labels / existing PRs)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: issue-agent-${{ github.event.issue.number || inputs.issue }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  implement:
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'agent'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Only for maintainers
+        if: github.event_name == 'issues'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SENDER: ${{ github.event.sender.login }}
+        run: |
+          perm=$(gh api "repos/${{ github.repository }}/collaborators/$SENDER/permission" --jq .permission)
+          case "$perm" in
+            admin|maintain|write) echo "::notice::$SENDER has $perm access — starting." ;;
+            *) echo "::error::$SENDER has '$perm' access; the issue agent needs write."; exit 1 ;;
+          esac
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.AGENT_GH_TOKEN || github.token }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install the harness and a browser
+        working-directory: ci/issue-agent
+        run: |
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps chromium
+
+      - name: Git identity (commits are DCO signed off)
+        run: |
+          git config --global user.name "credentagent-issue-agent[bot]"
+          git config --global user.email "issue-agent@users.noreply.github.com"
+
+      - name: Run the issue agent
+        env:
+          GH_TOKEN: ${{ secrets.AGENT_GH_TOKEN || github.token }}
+          CLAUDE_AUTH: ${{ vars.CLAUDE_AUTH }}
+          API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          ISSUE: ${{ github.event.issue.number || inputs.issue }}
+          FORCE: ${{ inputs.force && '--force' || '' }}
+        run: |
+          # Export only the chosen Claude credential, so the SDK can never pick the other one.
+          if [ "$CLAUDE_AUTH" = "api" ]; then
+            [ -n "$API_KEY" ] || { echo "::error::CLAUDE_AUTH is \"api\" but ANTHROPIC_API_KEY is not set."; exit 1; }
+            export ANTHROPIC_API_KEY="$API_KEY"
+          else
+            [ -n "$OAUTH_TOKEN" ] || { echo "::error::CLAUDE_CODE_OAUTH_TOKEN is not set."; exit 1; }
+            export CLAUDE_CODE_OAUTH_TOKEN="$OAUTH_TOKEN"
+          fi
+          unset API_KEY OAUTH_TOKEN
+          node ci/issue-agent/run.mjs "$ISSUE" $FORCE --runs "$RUNNER_TEMP/issue-agent"
+
+      - name: Keep the run (transcripts, report, media)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-agent-${{ github.event.issue.number || inputs.issue }}-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/issue-agent/*/run.log
+            ${{ runner.temp }}/issue-agent/*/*.json
+            ${{ runner.temp }}/issue-agent/*/transcripts/
+            ${{ runner.temp }}/issue-agent/*/evidence/
+          retention-days: 30
