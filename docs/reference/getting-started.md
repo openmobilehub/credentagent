@@ -75,7 +75,7 @@ console.log(`CredentAgent-gated storefront running → ${url}`);
 What each line does:
 
 - `createStorefront()` — the storefront, catalog-injected. With no `catalog` passed
-  it serves a built-in `SAMPLE_CATALOG` that includes one 21+ item (whiskey) so it
+  it serves a built-in `SAMPLE_CATALOG` that includes two 21+ items (whiskey, champagne) so it
   demos itself. The return value is `{ app, catalog, gate, listen, mcpServer }`.
 - `new CredentAgent()` — the Gate client, zero-config. For a deployment, pass your public
   origin: `new CredentAgent({ walletOrigin: "https://shop.example" })`.
@@ -172,7 +172,7 @@ const prescription = defineCredential({
   id: "prescription",
   request: dcql({ docType: "org.hl7.prescription.1", claims: ["rx_valid"] }), // what to ask the wallet
   verify: (claims) => claims.rx_valid === true,                               // explicit positive claim
-  effect: gate(),                                                             // gate() | discount({ percent }) | authorize()
+  effect: gate(),                                                             // custom credentials support gate() only
   appliesTo: (order) => order.lines.some((l) => l.category === "Pharmacy"),   // ONLY for pharmacy lines
   ui: { label: "Prescription", action: "Verify prescription" },
 });

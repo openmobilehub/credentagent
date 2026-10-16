@@ -240,8 +240,9 @@ but "every mandate already signed stops verifying at the next restart".
 
 A spending grant signed on a phone is recorded as an [AP2](https://github.com/google-agentic-commerce/AP2)
 mandate: an SD-JWT (RFC 9901) signed ES256, typed by AP2's `vct` claim, and you can mint and check
-mandates yourself with `credentagent.ap2`. A checkout still records the older dev-signed mandate (an
-integrity hash, not a key signature). Pass the key and `mount()`
+mandates yourself with `credentagent.ap2`. A checkout still records the older payment mandate
+(`ap2.PaymentMandate`), which is not key-signed: the passkey rail's carries a dev integrity hash, and
+the dc-payment rail's carries none. Pass the key and `mount()`
 publishes its public half, so a mandate this gate signed is verifiable by someone who does not have
 your source:
 
@@ -545,7 +546,10 @@ const prescription = defineCredential({
 never-retain by default). The credential id defaults to a stable, unique derivation from the full
 doctype (`org.openwallet.payment.1` → `org_openwallet_payment_1`); pass `dcql({ docType, claims, id })`
 to name it yourself. The three effect builders — `gate()`, `discount({ percent })`, `authorize()` —
-are the only effects the resolver interprets.
+are the only effects the resolver interprets. A **custom** credential takes `gate()` only:
+`defineCredential` throws on `discount()` or `authorize()`, because neither would be enforced for it
+yet (a custom `authorize` would complete unproven). The built-ins that use them (`membership`,
+`payment`) keep their own paths.
 
 A custom credential is **served by the mounted ceremony and enforced end-to-end** — no new code
 path: `requirements()` registers it by id, the credential-gate rail builds the wallet request from
@@ -591,7 +595,8 @@ The three rails `mount()` serves differ in how much crypto is real today:
 | `delegated` (opt-in — `mount({ verifier })`) | the same policy, verified + settled by an **external** verifier/processor; the gate re-derives the binding and re-runs your policy, and **relays** the verdict's trust | the verifier's — `issuer-verified` with a real anchor |
 
 The built-in OpenID4VP plumbing is scaffolded; cryptographic mdoc trust is the integration step, not
-new cryptography. The mandate is AP2-shaped and dev-signed (integrity hash), not key-signed.
+new cryptography. The payment mandate a checkout ceremony records (`ap2.PaymentMandate`) is AP2-shaped
+and not key-signed: the passkey rail's carries a dev integrity hash, and the dc-payment rail's carries none.
 `trust_level: "issuer-verified"` is reachable **today** through the `verifier` seam (below) — the gate
 relays a level a real anchor produced; it does not verify issuer signatures itself.
 
@@ -841,8 +846,12 @@ is the fast-follow, and the gate **relays** that level verbatim with the attesto
 Test the whole flow **with no phone** using the exported simulated wallet — see
 [`examples/device-signed-grants.mjs`](https://github.com/openmobilehub/credentagent/blob/main/examples/device-signed-grants.mjs)
 (`devSimulateWalletSignature` produces a real device signature the way Stripe's test cards stand in
-for a real card). The **on-device** path — import `payment.mpzpass` into Multipaz and sign on a
-phone — is verified separately.
+for a real card). The **on-device** path is verified separately: the grant asks the wallet for an
+**SD-JWT** payment credential (`vct` `urn:emvco:dpc:card:1` or `com.emvco.dpc`). From a clone of
+this repo, mint one with
+[`node tools/demo-pki/mint/mint-dpc-sdjwt.mjs --mpzpass`](https://github.com/openmobilehub/credentagent/blob/main/tools/demo-pki/mint/mint-dpc-sdjwt.mjs),
+which writes `tools/demo-pki/keys/dpc.mpzpass`. Import that file into Multipaz, and sign on the
+phone. The mdoc `payment.mpzpass` from the demo set no longer matches.
 
 ### Credentials on a grant — presented before you authorize, or not at all
 
@@ -930,15 +939,23 @@ effectively a bearer instrument, fenced as a demo. A *real* HNP control requires
 "delegated"` **and** `trust_level: "issuer-verified"`; the HTTP intent rail + the wallet server that
 provide those are later increments.
 
-## API surface (v0.1)
+## API surface
 
 ```ts
 // Client (configure once, then declarative calls)
 class CredentAgent {
-  constructor(opts?: { walletOrigin?: string; store?: VerificationStore; credentials?: Credential[]; branding?: Branding; inspectPresentations?: boolean });
+  constructor(opts?: CredentAgentOptions);   // walletOrigin, store, credentials, branding, inspectPresentations,
+                                             // readerIdentity, orderStore, completedOrderStore, gateSecret, webhooks,
+                                             // catalog, loyaltyDiscountPct, mandateSigningKey, checkoutSigningKey
+                                             // (the two keys: stable private P-256 JWKs from your secret manager)
   requirements(order: GateOrder, policy: Step[]): VerificationManifestEntry[];   // Context 1
-  mount(app: ExpressApp, ceremony?: MountCeremony): void;                        // Context 2
+  mount(app: ExpressApp, ceremony?: MountCeremony): void;                        // Context 2 (+ /.well-known/did.json)
   doctor(opts?: { print?: boolean }): DoctorReport;                              // config preflight (#25)
+  readonly orders: Orders;     // orders.create / retrieve / serve
+  readonly grants: Grants;     // spending grants
+  readonly webhooks: Webhooks;
+  readonly ap2: Ap2Issuer;     // AP2 mandates signed with mandateSigningKey
+  on(event: "order.settled", handler): void;
 }
 
 // Policy builders + extensibility
@@ -962,6 +979,17 @@ sealIntent  ·  checkDraw  ·  signDraw  ·  MemoryRevocationStore  ·  Draw / I
 // signingKey-gated check in completeOrder + the opt-in `statelessOrders` transport
 issueCartMandate(args, secret)  ·  verifyCartMandate(mandate, orderId, secret)  ·  DEFAULT_CART_MANDATE_TTL_MS
 
+// AP2 mandates (SD-JWT, ES256) — the store's own, and checking any
+credentagent.ap2.checkout(args) · .payment(args) · .openCheckout(args) · .openPayment(args) · .signCheckout(checkout)
+verifyMandate(token, { publicJwk, … })  ·  didWebFor(origin)  ·  didDocument(...)  ·  resolveSigningKey(...)
+
+// Agent purchases — the store's side (the agent's side is the /agent entry point below)
+verifyDelegatedPurchase(proof, { trust: "presence-only-demo", audience, nonce, checkoutKey, price, spent?, nowMs? })
+  → PurchaseVerdict | PurchaseRefusal   // { ok: false, code, detail, violations? }
+
+// Money — an Amount is integer minor units; converting to minor units refuses rather than rounds
+amountFrom · amountOfMinor · amountsEqual · formatAmount · sumAmounts · toMajorUnits · toMinorUnits · exponentFor
+
 // Retained Mode-B / roadmap blocking primitive
 gated()  ·  buildVerificationRequired()  ·  isVerificationRequired()  ·  envelopeInstruction()
 ageDcql()  ·  ENVELOPE_VERSION  ·  ENVELOPE_SENTINEL
@@ -971,6 +999,12 @@ ageDcql()  ·  ENVELOPE_VERSION  ·  ENVELOPE_SENTINEL
 //        TrustLevel, DcqlQuery, DcqlClaim, DcqlCredentialOption, ExpressApp,
 //        CompletionSeam / SettlementSeam / CeremonyOrder (host composition)
 //        DelegatedVerifier / DelegatedVerdict / DelegatedHandoff / SettlementRecordLike (delegated seam)
+
+// Entry points besides the root
+"@openmobilehub/credentagent-gate/agent"   // the AGENT's side; holds its private key, so never imported by a store
+  AgentKey.generate() · AgentKey.fromJwk(jwk) · DelegatedIntent.fromWalletPresentation({ presentation, disclosures }) · intent.spend(args) → DelegatedPurchaseProof
+"@openmobilehub/credentagent-gate/cards"   // the card kit, first slice: the permission card's data contract
+  GRANT_VIEW_KIND · GrantViewData · GrantViewProduct
 ```
 
 More on the API: [`docs/reference/api.md`](https://github.com/openmobilehub/credentagent/blob/main/docs/reference/api.md).
