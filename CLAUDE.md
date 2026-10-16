@@ -268,7 +268,7 @@ three review verdicts, and before/after screenshots + video. It skips an issue t
 labelled `needs-decision`, `epic`, `wontfix`, `duplicate` or `question`, assigned to someone other
 than whoever labelled it, or already has an open PR,
 and says why in a comment on the issue. **Only words by people with write access reach the agents**
-(the issue body if its author has it, and such people's comments, frozen at the label) — so to give
+(the title and body if their author has it, and such people's comments, frozen at the label) — so to give
 it a request from an outside contributor, restate it in a comment. The agents run in a job with no
 GitHub token; a separate job publishes their reviewed change. It never merges; its PRs go through
 the same human review as any other. Media lives on the `agent-evidence` branch — never merge it.

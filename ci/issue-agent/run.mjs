@@ -125,10 +125,18 @@ const trusted = (login) => TRUSTED_PERMISSIONS.includes(permissionOf(login));
 function snapshotIssue(n, snapshotAt = new Date().toISOString()) {
   const q = `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issue(number:$n){
     number title body url state lastEditedAt author{login} labels(first:50){nodes{name}} assignees(first:10){nodes{login}}
+    timelineItems(itemTypes:[RENAMED_TITLE_EVENT], last:20){nodes{... on RenamedTitleEvent{createdAt actor{login}}}}
     comments(last:100){nodes{author{login} body createdAt lastEditedAt}}}}}`;
   const i = ghJson(["api", "graphql", "-f", `query=${q}`, "-f", `o=${OWNER}`, "-f", `r=${NAME}`, "-F", `n=${n}`]).data.repository.issue;
   const after = (t) => t && t > snapshotAt;
   const dropped = [];
+  // The title is words too: it's trusted when whoever wrote it last (the author, or the last renamer)
+  // has write access. A rename after the label is refused like a body edit (lastEditedAt misses renames).
+  const renames = i.timelineItems.nodes;
+  if (renames.some((e) => after(e.createdAt))) return { skip: `the issue was renamed after it was labelled; remove and re-add the \`${TRIGGER_LABEL}\` label to run on the current title` };
+  const titleBy = renames.at(-1)?.actor?.login ?? i.author?.login;
+  let title = i.title;
+  if (!trusted(titleBy)) { dropped.push(`the issue title (by ${titleBy ?? "a deleted user"}, who has no write access)`); title = `Issue #${i.number}`; }
   let body = i.body ?? "";
   if (!trusted(i.author?.login)) { dropped.push(`the issue body (by ${i.author?.login ?? "a deleted user"}, who has no write access)`); body = ""; }
   else if (after(i.lastEditedAt)) return { skip: `the issue was edited after it was labelled (${i.lastEditedAt}); remove and re-add the \`${TRIGGER_LABEL}\` label to run on the current text` };
@@ -140,7 +148,7 @@ function snapshotIssue(n, snapshotAt = new Date().toISOString()) {
     if (after(c.createdAt) || after(c.lastEditedAt)) { dropped.push(`a comment by ${who} written or edited after the label`); continue; }
     comments.push({ author: who, body: c.body });
   }
-  const issue = { number: i.number, title: i.title, body, url: i.url, state: i.state, author: i.author?.login,
+  const issue = { number: i.number, title, body, url: i.url, state: i.state, author: i.author?.login,
     labels: i.labels.nodes.map((l) => l.name), assignees: i.assignees.nodes.map((a) => a.login), comments, dropped, snapshotAt };
   if (!body.trim() && !comments.length) return { issue, skip: "nothing on this issue was written by someone with write access — a maintainer can restate the request in a comment, then re-add the label" };
   return { issue, skip: preflight(issue) };
@@ -182,7 +190,9 @@ const NEVER = ["Bash(git push *)", "Bash(git commit *)", "Bash(git reset *)", "B
 
 class BudgetSpent extends Error {}
 
-async function agent(role, prompt, { cwd, schema, write = false, check = false, resume, maxTurns = 120, additionalDirectories } = {}) {
+// `share`: how many agents run at once from the same remaining budget (the 3 reviewers), so together
+// they can't spend past the run's cap.
+async function agent(role, prompt, { cwd, schema, write = false, check = false, resume, maxTurns = 120, additionalDirectories, share = 1 } = {}) {
   const { query } = await import("@anthropic-ai/claude-agent-sdk"); // only the implement phase loads agent code
   const remaining = RUN_BUDGET_USD - RUN.costUsd;
   if (remaining <= 0) throw new BudgetSpent(`the run's $${RUN_BUDGET_USD} budget is spent`);
@@ -205,7 +215,7 @@ async function agent(role, prompt, { cwd, schema, write = false, check = false, 
       outputFormat: { type: "json_schema", schema },
       additionalDirectories,
       maxTurns,
-      maxBudgetUsd: Math.min(AGENT_BUDGET_USD, remaining),
+      maxBudgetUsd: Math.min(AGENT_BUDGET_USD, remaining / share),
     },
   })) {
     appendFileSync(transcript, JSON.stringify(msg) + "\n");
@@ -333,7 +343,7 @@ async function review(lens, issue, spec, base, facts, cwd, round, roles) {
   for (let attempt = 1; ; attempt++) {
     try {
       const { out } = await agent(`review-${lens}-r${round}${attempt > 1 ? `-retry` : ""}`, roles.reviewPrompt(lens, issue, spec, base) + facts,
-        { cwd, schema: roles.REVIEW_SCHEMA, check: true, maxTurns: 80 });
+        { cwd, schema: roles.REVIEW_SCHEMA, check: true, maxTurns: 80, share: 3 });
       return { lens, ...out };
     } catch (e) {
       if (e instanceof BudgetSpent || attempt >= 2) throw e;
@@ -476,16 +486,24 @@ async function implementIssue(issue, { dir } = {}) {
 //
 // Applies the reviewed patch to a clean checkout of the run's base, so nothing else from the run's
 // working tree (evidence edits, files a test wrote, hooks) can reach the PR.
+//
+// The run directory comes from the job that ran agent code, so publish treats it as UNTRUSTED input:
+// the issue number comes from the workflow (`--issue`) and must match; the title is re-read from
+// GitHub through the same trust filter as the snapshot; the base must be a commit on main; the
+// files touched are recomputed from the patch itself. What's left on trust — the report's text and
+// its "ready" verdict — only shapes a DRAFT PR's description, which a human reviews like any other.
 function publishRun(dir) {
   const outcomeFile = join(dir, "outcome.json");
+  const trustedN = opt("--issue") ? Number(opt("--issue")) : undefined;
   if (!existsSync(outcomeFile)) {
-    const n = Number(opt("--issue"));
-    const where = actionsRunUrl();
-    if (n) gh(["issue", "comment", String(n), "-R", REPO, "--body", issueComment({ kind: "error", where })]);
-    return { n, status: "error", reason: "the implement phase produced no outcome" };
+    if (trustedN) gh(["issue", "comment", String(trustedN), "-R", REPO, "--body", issueComment({ kind: "error", where: actionsRunUrl() })]);
+    return { n: trustedN, status: "error", reason: "the implement phase produced no outcome" };
   }
   const outcome = JSON.parse(readFileSync(outcomeFile, "utf8"));
-  const n = outcome.n;
+  if (trustedN !== undefined && outcome.n !== trustedN) throw new Error(`the run is for issue ${outcome.n}, but this workflow run is for issue ${trustedN}`);
+  const n = trustedN ?? outcome.n;
+  if (!Number.isSafeInteger(n) || n < 1) throw new Error(`not an issue number: ${n}`);
+  if (!/^\d{12}$/.test(String(outcome.id))) throw new Error(`not a run id: ${outcome.id}`);
   RUN ??= { id: outcome.id, dir, costUsd: 0, log: (s) => { console.log(s); appendFileSync(join(dir, "run.log"), s + "\n"); } };
   if (outcome.status === "blocked") {
     gh(["issue", "comment", String(n), "-R", REPO, "--body", issueComment({ kind: "blocked", reason: outcome.reason })]);
@@ -496,13 +514,29 @@ function publishRun(dir) {
     return { n, status: outcome.status, reason: outcome.reason };
   }
   const report = JSON.parse(readFileSync(join(dir, "report.json"), "utf8"));
-  const { issue, done, id } = report;
+  const id = outcome.id;
   const patch = readFileSync(join(dir, "change.patch"), "utf8");
+  // A consistency check against an accident, not a seal: both files come from the same job.
   if (createHash("sha256").update(patch).digest("hex") !== report.patchSha256) throw new Error("change.patch does not match the reviewed patch recorded in report.json");
   if (!patch.trim()) {
     gh(["issue", "comment", String(n), "-R", REPO, "--body", issueComment({ kind: "needs-human-nopr", reason: "the agents produced no change", where: actionsRunUrl() })]);
     return { n, status: "needs-human", reason: "empty change" };
   }
+  // Re-derived here, not taken from the report.
+  if (!/^[0-9a-f]{40}$/.test(String(report.base))) throw new Error(`not a commit id: ${report.base}`);
+  git(["fetch", "--quiet", "origin", "main"]);
+  if (git(["merge-base", "--is-ancestor", report.base, "FETCH_HEAD"], { allowFail: true }).code !== 0) throw new Error(`the run's base ${report.base} is not a commit on main`);
+  const files = [...patch.matchAll(/^diff --git a\/(.+?) b\/(.+)$/gm)].flatMap((m) => [m[1], m[2]]);
+  const forbidden = [...new Set(files.filter((f) => f.startsWith(".github/") || f.startsWith(".git/")))];
+  if (forbidden.length) {
+    const reason = `the change touches ${forbidden.join(", ")} — the agent never publishes changes to workflows`;
+    gh(["issue", "comment", String(n), "-R", REPO, "--body", issueComment({ kind: "needs-human-nopr", reason, where: actionsRunUrl() })]);
+    return { n, status: "needs-human", reason };
+  }
+  const fresh = snapshotIssue(n).issue;
+  const issue = { ...report.issue, number: n, title: fresh?.title ?? `Issue #${n}`, url: fresh?.url ?? report.issue.url };
+  Object.assign(report, { issue, files: [...new Set(files)] });
+  const done = report.done === true;
   const branch = `agent/issue-${n}-${id}`;
   // The DCO sign-off is the committer's identity: refuse git's guess (user@hostname).
   const email = process.env.GIT_COMMITTER_EMAIL || git(["config", "user.email"], { allowFail: true }).out.trim();
@@ -511,7 +545,6 @@ function publishRun(dir) {
   // Commit the patch on a clean worktree of the base.
   const wt = join(dir, "publish");
   if (existsSync(wt)) git(["worktree", "remove", "--force", wt], { allowFail: true });
-  git(["fetch", "--quiet", "origin", report.base]);
   git(["worktree", "add", "--quiet", "--detach", wt, report.base]);
   git(["apply", "--index", "--whitespace=nowarn", "-"], { cwd: wt, input: patch });
   const commitMsg = `${issue.title} (#${n})\n\n${report.last.impl.summary}\n\nFixes #${n}\n\nCo-Authored-By: ${modelName(report.model)} <noreply@anthropic.com>`;
@@ -602,9 +635,17 @@ if (mode === "snapshot") {
   const o = await implementIssue(issue, { dir: opt("--dir") && resolve(opt("--dir")) });
   console.log(`\n━━ #${o.n} ${o.status}${o.reason ? ` — ${o.reason}` : ""} · ${o.dir}`);
 } else if (mode === "publish") {
-  // CI phase 3 (also `run.mjs publish <dir>` after a local --no-publish run).
-  const o = publishRun(resolve(arg));
-  console.log(`\n━━ #${o.n} ${o.status}${o.pr ? ` ${o.pr}` : ""}${o.reason ? ` — ${o.reason}` : ""}`);
+  // CI phase 3 (also `run.mjs publish <dir>` after a local --no-publish run). Any failure still
+  // tells the issue, so a run never ends silently.
+  try {
+    const o = publishRun(resolve(arg));
+    console.log(`\n━━ #${o.n} ${o.status}${o.pr ? ` ${o.pr}` : ""}${o.reason ? ` — ${o.reason}` : ""}`);
+  } catch (e) {
+    console.error(e);
+    const n = Number(opt("--issue"));
+    if (n && !flag("--dry-run")) sh("gh", ["issue", "comment", String(n), "-R", REPO, "--body", issueComment({ kind: "error", where: actionsRunUrl() })], { allowFail: true });
+    process.exitCode = 1;
+  }
 } else if (mode === "publish-evidence") {
   // Re-publish a run's media + report (same paths, so a PR's links keep working).
   const dir = resolve(arg);

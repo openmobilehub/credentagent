@@ -46,8 +46,8 @@ different agent before it reaches the PR:
 - **Reviewers didn't write the code.** They can read, and run the project's checks; whatever their
   runs leave in the tree is thrown away. A criterion with no verdict counts as not met.
 - **Only the reviewed patch is published**, applied to a clean checkout — so nothing the evidence
-  agent, a test run or a server leaves behind can reach the PR. A patch touching `.github/` is never
-  published as ready.
+  agent, a test run or a server leaves behind *in the working tree* can reach the PR. A patch
+  touching `.github/` is never pushed. (What the publish job does and doesn't trust is below.)
 - If the agents don't converge (or a budget runs out, or a reviewer can't finish), the PR still
   opens as `[needs human]` with the open findings, or the issue gets a comment saying why.
 
@@ -59,8 +59,9 @@ execute it. So the design limits **what that code can reach** and **who can stee
 | | |
 | --- | --- |
 | **Who can start it** | Anyone who can add a label — and the workflow then requires **write access**. |
-| **Whose words reach the agents** | Only the issue body and comments **by people with write access**, frozen at the label. Anything by others, or written/edited after the label, is left out and listed in the report. An issue edited after its label is refused until re-labelled. |
+| **Whose words reach the agents** | Only the title, body and comments **by people with write access** (for the title: its author, or whoever renamed it last), frozen at the label. Anything by others, or written/edited after the label, is left out and listed in the report; an outsider's title becomes "Issue #n". An issue edited or renamed after its label is refused until re-labelled. |
 | **GitHub credentials** | **None in the job that runs agent code** (CI): the `implement` job has read-only access, its checkout keeps no credential, and no token is in its environment. Only the `publish` job holds a write token, and it never installs or runs anything the agents wrote — it applies a patch. |
+| **What publish takes from the agents' job** | Treated as untrusted input. The issue number comes from the workflow and must match; the title is re-read from GitHub through the same filter; the base must be a commit on `main`; the files touched are recomputed from the patch, and a patch touching `.github/` is never pushed. Code running in the agents' job *could* rewrite the patch or the report it hands over (the recorded sha256 catches accidents, not that) — so what reaches GitHub is always a **draft** PR that a human reviews like any other, never a merge. |
 | **Claude credential** | The agents need one to run, so it is in *their* environment — an agent's tools can read it. Code the agents wrote (npm scripts, tests, builds) runs with **every** credential stripped. |
 | **Git hooks** | Disabled for every git command the script runs. |
 | **Network** | Not restricted. An agent's `node`/`npm` can reach the internet. |
@@ -112,7 +113,8 @@ run on the Agent SDK, which the API key's credit accepts (unlike `claude-code-ac
 A clean run is 6 agent sessions (spec, implement, 3 reviews, evidence) — the runs so far cost about
 $4–6 each. The worst case is 1 + 3 rounds × (1 + 3 fixes + 3 reviews) + 1 = **23 sessions**, so spend
 is capped twice: each session at `ISSUE_AGENT_BUDGET_USD` (25) and the whole run at
-`ISSUE_AGENT_RUN_BUDGET_USD` (100). A run that hits its cap stops and says so.
+`ISSUE_AGENT_RUN_BUDGET_USD` (100) — the three reviewers, which run at once, each get a third of what
+is left, so together they can't pass the cap. A run that hits its cap stops and says so.
 
 ## Knobs
 

@@ -87,7 +87,8 @@ export function prBody(r, { mediaBase, repo }) {
     const c = verdicts.find((x) => x.id === ac.id);
     return `- [${c?.met ? "x" : " "}] **${md(ac.id)}** ${md(ac.text)}${c?.evidence ? ` — _${md(c.evidence)}_` : ""}`;
   }).join("\n");
-  const media = r.manifest.filter((e) => e.kind === "image" || e.kind === "video");
+  // File names come from the evidence agent: only plain media names reach a src/href.
+  const media = r.manifest.filter((e) => (e.kind === "image" || e.kind === "video") && /^[A-Za-z0-9._-]+\.(png|webm)$/.test(String(e.file)));
   const show = (side, title) => {
     const items = media.filter((e) => e.side === side);
     if (!items.length) return "";
@@ -98,7 +99,7 @@ export function prBody(r, { mediaBase, repo }) {
   const findings = (sev) => (r.last.reviews ?? []).flatMap((rv) => rv.findings.filter((f) => f.severity === sev).map((f) => `- **${rv.lens}** ${f.file ? `\`${md(f.file)}${f.line ? `:${f.line}` : ""}\` ` : ""}${md(f.summary)}`));
   const blocking = findings("blocking"), suggestions = findings("suggestion");
   const report = `https://htmlpreview.github.io/?${mediaBase.replace("https://raw.githubusercontent.com/", "https://github.com/").replace(/\/agent-evidence\//, "/blob/agent-evidence/")}index.html`;
-  const files = (r.files ?? []).map((f) => `\`${f}\``).join(", ");
+  const files = (r.files ?? []).map((f) => `\`${String(f).replace(/[`\n]/g, "'")}\``).join(", ");
   return `${MARK}
 ${r.done ? "" : `> [!WARNING]\n> **Not finished${r.stopped ? `: ${md(r.stopped)}` : ""}.** The open findings are listed below — a human has to take this over.\n\n`}## In plain terms
 
