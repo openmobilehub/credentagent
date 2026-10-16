@@ -27,6 +27,13 @@ export function stagedPaths(cwd) {
   return r.stdout.split("\0").filter(Boolean);
 }
 
+/** Files that differ between two commits, from stdout only. */
+export function filesBetween(cwd, from, to) {
+  const r = spawnSync("git", ["-c", "core.hooksPath=/dev/null", "diff", "--name-only", "--no-renames", "-z", from, to], { cwd, encoding: "utf8" });
+  if (r.status !== 0) throw new Error(`git diff failed: ${r.stderr}`);
+  return r.stdout.split("\0").filter(Boolean);
+}
+
 /** Files changed since `base` in a working tree (new files included once registered), from stdout only. */
 export function changedSince(cwd, base) {
   const r = spawnSync("git", ["-c", "core.hooksPath=/dev/null", "diff", "--name-only", "--no-renames", "-z", base], { cwd, encoding: "utf8" });
@@ -88,6 +95,20 @@ export function reviewDecision({ verdict, open, cycle, maxCycles }) {
   if (cycle >= maxCycles) return { action: "give-up", reason: `${maxCycles} review cycles done and the review still ${verdict === "changes" ? "says ⛔ Needs changes" : `has ${open} open thread(s)`}` };
   return { action: "fix", reason: verdict === "changes" ? "the review says ⛔ Needs changes" : `${open} review thread(s) still open` };
 }
+
+/**
+ * Review cycles already pushed: the loop's per-cycle comments (`<!-- issue-agent-review cycle=k`),
+ * by someone trusted. The hand-over comments carry the same prefix but aren't cycles.
+ */
+export const cyclesDone = (comments, isTrustedAuthor) =>
+  comments.filter((c) => /<!-- issue-agent-review cycle=\d+ /.test(c.body) && isTrustedAuthor(c.author)).length;
+
+/**
+ * Files main changed since the PR branched off that the PR changes too. When there are any, the
+ * loop brings main in before fixing — the review reads the PR as merged onto main, so a stale copy
+ * of such a file is something only a merge can fix.
+ */
+export const sharedChanges = (mainChanged, prChanged) => [...new Set(prChanged)].filter((f) => mainChanged.includes(f)).sort();
 
 export const isRunId = (id) => /^\d{12}$/.test(String(id));
 export const isCommitId = (sha) => /^[0-9a-f]{40}$/.test(String(sha));

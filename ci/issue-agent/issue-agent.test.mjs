@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   titleAuthor, forbiddenPaths, applyAndCheck, isRunId, isCommitId, publishIssueNumber,
-  isReviewBot, parseVerdict, agentBranch, threadsToAnswer, reviewDecision,
+  isReviewBot, parseVerdict, agentBranch, threadsToAnswer, reviewDecision, sharedChanges, cyclesDone,
 } from "./checks.mjs";
 import { fingerprints, withinBaseline } from "./fingerprints.mjs";
 import { prBody, issueComment } from "./report.mjs";
@@ -155,6 +155,22 @@ describe("the review loop", () => {
     expect(answer.map((t) => t.id)).toEqual(["T1", "T4"]);
     expect(answer[0].comments.map((c) => c.author)).toEqual(["claude", "dzuluaga"]);
     expect(ignored).toEqual(["a thread started by mallory (no write access)"]);
+  });
+
+  it("counts pushed cycles, not hand-overs or outsiders' copies", () => {
+    const c = (author, body) => ({ author, body });
+    const comments = [
+      c(maintainer, "<!-- issue-agent-review cycle=1 sha=abc -->\n🔁"),
+      c(maintainer, "<!-- issue-agent-review cycle=2 sha=def -->\n🔁"),
+      c(maintainer, "<!-- issue-agent-review stopped -->\n⚠️"),
+      c(outsider, "<!-- issue-agent-review cycle=9 sha=x -->"),
+    ];
+    expect(cyclesDone(comments, (a) => isTrusted(a?.login))).toBe(2);
+  });
+
+  it("brings main in only when main changed a file the PR changes too", () => {
+    expect(sharedChanges(["README.md", "docs/a.md"], ["README.md", "src/x.ts"])).toEqual(["README.md"]);
+    expect(sharedChanges(["docs/a.md"], ["src/x.ts"])).toEqual([]);
   });
 
   it("hands over only when the review is satisfied and nothing is open", () => {

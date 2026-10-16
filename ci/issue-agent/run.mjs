@@ -40,7 +40,7 @@ import { fileURLToPath } from "node:url";
 import { fingerprints, stripAnsi, withinBaseline } from "./fingerprints.mjs";
 import {
   TRUSTED_PERMISSIONS, titleAuthor, forbiddenPaths, applyAndCheck, changedSince, isRunId, isCommitId, publishIssueNumber,
-  isReviewBot, parseVerdict, agentBranch, threadsToAnswer, reviewDecision,
+  isReviewBot, parseVerdict, agentBranch, threadsToAnswer, reviewDecision, sharedChanges, filesBetween, cyclesDone,
 } from "./checks.mjs";
 import { reportHtml, prBody, issueComment, md } from "./report.mjs";
 
@@ -708,7 +708,7 @@ function assessReview(prNumber) {
   const summary = pr.comments.nodes.filter((c) => isReviewBot(c.author) && c.body.startsWith("## Claude review") && c.createdAt >= headAt).at(-1);
   const verdict = parseVerdict(summary?.body);
   const { answer, ignored } = threadsToAnswer(pr.reviewThreads.nodes.map((t) => ({ ...t, comments: t.comments.nodes })), trusted);
-  const cycle = pr.comments.nodes.filter((c) => c.body.includes(REVIEW_MARK) && (c.author?.__typename === "Bot" || trusted(c.author?.login))).length;
+  const cycle = cyclesDone(pr.comments.nodes, (a) => a?.__typename === "Bot" || trusted(a?.login));
   const decision = reviewDecision({ verdict, open: answer.length, cycle, maxCycles: MAX_REVIEW_CYCLES });
   const issue = snapshotIssue(branch.issue).issue ?? { number: branch.issue, title: `Issue #${branch.issue}`, body: "", comments: [], dropped: [] };
   return {
@@ -745,7 +745,25 @@ async function fixReview(review, { dir } = {}) {
   const repoDir = join(RUN.dir, "repo");
   git(["fetch", "--quiet", "origin", review.head]);
   checkout(repoDir, review.head);
-  const head = review.head;
+  let head = review.head;
+  // If main has since changed files this PR changes too, bring main in first (the review reads the
+  // PR merged onto main). The push job re-does this same merge itself before applying the patch.
+  const mainSha = git(["rev-parse", "origin/main"], { cwd: repoDir }).out.trim();
+  const forkPoint = git(["merge-base", "origin/main", head], { cwd: repoDir }).out.trim();
+  const shared = sharedChanges(filesBetween(repoDir, forkPoint, mainSha), filesBetween(repoDir, forkPoint, head));
+  let mergedMain;
+  if (shared.length) {
+    const m = git(["-c", "user.name=issue-agent", "-c", "user.email=issue-agent@localhost", "merge", "--quiet", "--no-ff", "--no-edit", "--signoff", mainSha], { cwd: repoDir, allowFail: true });
+    if (m.code !== 0) {
+      git(["merge", "--abort"], { cwd: repoDir, allowFail: true });
+      return outcome({ status: "needs-human", reason: `main has changed ${shared.join(", ")} since this PR branched off, and merging it conflicts — a human has to resolve that` });
+    }
+    mergedMain = mainSha;
+    head = git(["rev-parse", "HEAD"], { cwd: repoDir }).out.trim();
+    RUN.log(`  merged main ${mainSha.slice(0, 7)} (it changed ${shared.join(", ")})`);
+    code("npm", ["ci", "--no-audit", "--no-fund"], { cwd: repoDir });
+    code("npm", ["run", "build"], { cwd: repoDir, allowFail: true });
+  }
   const mainBase = git(["merge-base", "origin/main", head], { cwd: repoDir }).out.trim();
   const baseline = runGates(repoDir, { stopOnFail: false });
   RUN.log(`  baseline (PR head ${head.slice(0, 7)}): ${baseline.map((b) => `${b.name} ${b.green ? "green" : `RED (${b.fingerprints.length})`}`).join(" · ")}`);
@@ -764,8 +782,12 @@ async function fixReview(review, { dir } = {}) {
   const last = rounds.at(-1);
   const patch = reviewedPatch ?? (last ? diffPatch(repoDir, head) : "");
   writeFileSync(join(RUN.dir, "fix.patch"), patch);
-  writeFileSync(join(RUN.dir, "fix.json"), JSON.stringify({ rounds, last, responses: last?.impl?.responses ?? impl?.responses ?? [], summary: last?.impl?.summary ?? "", costUsd: RUN.costUsd }, null, 2));
-  return outcome({ status: last?.clean ? "ready" : "needs-human", reason: stopped ?? (last?.clean ? undefined : "the fix did not pass the pipeline's own checks and reviews"), patchSha256: createHash("sha256").update(patch).digest("hex") });
+  const final = last?.impl ?? impl ?? {};
+  writeFileSync(join(RUN.dir, "fix.json"), JSON.stringify({
+    rounds, last, responses: final.responses ?? [], summary: final.summary ?? "", summary_items: final.summary_items ?? [],
+    description_update: final.description_update ?? "", open_questions: final.open_questions ?? [], costUsd: RUN.costUsd,
+  }, null, 2));
+  return outcome({ status: last?.clean ? "ready" : "needs-human", reason: stopped ?? (last?.clean ? undefined : "the fix did not pass the pipeline's own checks and reviews"), patchSha256: createHash("sha256").update(patch).digest("hex"), mergedMain });
 }
 
 // Trusted: review.json is from the assess job; the run directory is from the agents' job (untrusted).
@@ -795,6 +817,18 @@ function pushReview(dir, review) {
     if (existsSync(wt)) git(["worktree", "remove", "--force", wt], { allowFail: true });
     git(["fetch", "--quiet", "origin", review.head]);
     git(["worktree", "add", "--quiet", "--detach", wt, review.head]);
+    if (outcome.mergedMain) {
+      // Re-do the fix job's merge of main here, from a commit we check is really on main — the
+      // patch was made on top of exactly that merge.
+      if (!isCommitId(outcome.mergedMain)) throw new Error(`not a commit id: ${outcome.mergedMain}`);
+      git(["fetch", "--quiet", "origin", "main"]);
+      if (git(["merge-base", "--is-ancestor", outcome.mergedMain, "FETCH_HEAD"], { allowFail: true }).code !== 0) throw new Error(`${outcome.mergedMain} is not a commit on main`);
+      if (git(["merge", "--quiet", "--no-ff", "--no-edit", "--signoff", outcome.mergedMain], { cwd: wt, allowFail: true }).code !== 0) {
+        git(["merge", "--abort"], { cwd: wt, allowFail: true });
+        git(["worktree", "remove", "--force", wt], { allowFail: true });
+        return handOver(review, "needs-human", "bringing main into the branch conflicts");
+      }
+    }
     const { forbidden } = applyAndCheck(wt, patch);
     if (forbidden.length) { git(["worktree", "remove", "--force", wt], { allowFail: true }); return handOver(review, "needs-human", `the fix touches ${forbidden.join(", ")}, which the agent never publishes`); }
     const msg = `Address review, cycle ${k}: ${String(fix.summary).split("\n")[0].slice(0, 120)}\n\n${fix.summary}\n\nCo-Authored-By: ${modelName(MODEL)} <noreply@anthropic.com>`;
@@ -817,9 +851,21 @@ function pushReview(dir, review) {
     sh("gh", ["api", `repos/${REPO}/pulls/${review.pr}/comments/${root}/replies`, "-f", `body=${body}`], { allowFail: true });
     if (r) { gh(["api", "graphql", "-f", `query=mutation{resolveReviewThread(input:{threadId:"${t.id}"}){thread{isResolved}}}`]); answered++; }
   }
+  // The agent can't edit the PR description; this trusted job writes its corrections into it, as
+  // one "Updated after review" section that each cycle replaces (escaped like all agent text).
+  const update = String(fix.description_update ?? fix.last?.impl?.description_update ?? "").trim().replace(/^#{1,6} [^\n]*\n+/, ""); // our heading, not the agent's
+  if (update) {
+    const section = `<!-- issue-agent-update -->\n### Updated after review cycle ${k}\n\n${md(update)}\n<!-- /issue-agent-update -->`;
+    const current = loadPr(review.pr).body;
+    const body = /<!-- issue-agent-update -->[\s\S]*?<!-- \/issue-agent-update -->/.test(current)
+      ? current.replace(/<!-- issue-agent-update -->[\s\S]*?<!-- \/issue-agent-update -->/, section)
+      : current.replace(/\n## In plain terms\n/, `\n${section}\n\n## In plain terms\n`);
+    if (body !== current) sh("gh", ["pr", "edit", review.url, "-R", REPO, "--body", body], { allowFail: true });
+  }
   const declined = fix.responses.filter((r) => r.action === "declined").length;
+  fix.summary_items = fix.summary_items?.length ? fix.summary_items : fix.last?.impl?.summary_items ?? [];
   gh(["pr", "comment", review.url, "-R", REPO, "--body",
-    `${REVIEW_MARK} cycle=${k} sha=${sha ?? "none"} -->\n🔁 **Review cycle ${k}/${review.maxCycles}:** ${sha ? `pushed ${sha.slice(0, 7)}` : "no code change"} · ${answered}/${review.threads.length} thread(s) answered and resolved${declined ? ` (${declined} declined with a reason)` : ""}${(fix.summary_items ?? []).length ? ` · summary items: ${md(fix.summary_items.join("; "))}` : ""}.${sha ? " Waiting for the next review." : ""}`]);
+    `${REVIEW_MARK} cycle=${k} sha=${sha ?? "none"} -->\n🔁 **Review cycle ${k}/${review.maxCycles}:** ${sha ? `pushed ${sha.slice(0, 7)}` : "no code change"}${outcome.mergedMain ? ` (with main ${outcome.mergedMain.slice(0, 7)} merged in)` : ""} ·${answered}/${review.threads.length} thread(s) answered and resolved${declined ? ` (${declined} declined with a reason)` : ""}${(fix.summary_items ?? []).length ? ` · summary items: ${md(fix.summary_items.join("; "))}` : ""}.${sha ? " Waiting for the next review." : ""}`]);
   // No push means no new review would ever come: hand over now rather than wait forever.
   if (!sha) return handOver({ ...review, cycle: k, threads: review.threads.filter((t) => !byId.has(t.id)) }, "needs-human", "the agent answered the review without changing code, so no new review will run");
   return { pr: review.pr, status: "pushed", sha };
