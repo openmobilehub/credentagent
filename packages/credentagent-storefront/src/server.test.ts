@@ -973,9 +973,9 @@ describe("live cross-device status mirror (#73)", () => {
 
 // 008 (#89, S5): a REAL delegated ceremony runs end-to-end through the storefront's mounted
 // rail — same gate() policy, only the verification/settlement backend moved in. The verifier
-// here is a test double (never shipped): it is the only way to drive completion before the
-// real Multipaz/UPay adapter (S6, downstream) exists, and it captures the gate's minted
-// binding and echoes it, exactly as a real adapter binds to what the gate sent.
+// here is a test double (never shipped): it drives completion without the real Multipaz/UPay
+// adapter (`multipazUpayVerifier`, which lives in the Utopia Marketplace repo), and it captures
+// the gate's minted binding and echoes it, exactly as a real adapter binds to what the gate sent.
 describe("008 — delegated ceremony completes through the storefront (S5)", () => {
   function scriptedVerifier() {
     let captured: { amount: number; currency: string; payee: { id: string } } | undefined;

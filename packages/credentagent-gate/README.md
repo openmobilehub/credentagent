@@ -1,4 +1,6 @@
-# @openmobilehub/credentagent-gate
+Full API reference: [`docs/reference/api.md`](https://github.com/openmobilehub/credentagent/blob/main/docs/reference/api.md).
+The design specs under [`specs/`](https://github.com/openmobilehub/credentagent/tree/main/specs) are a historical record of
+past decisions: they still use the project's old name (Attesto) and its old routes, so don't build against them.# @openmobilehub/credentagent-gate
 
 **The consent layer for AI agents.** An AI agent must prove a verifiable credential
 from the user's phone wallet before a consequential MCP tool completes. **Identity
@@ -661,7 +663,7 @@ The one rule that makes delegation safe: **trust is delegable, binding is not.**
 - The **gate** keeps what it must never outsource: it re-derives the amount/payee from the catalog and
   re-checks the verdict against it, re-runs *your* policy over the disclosed claims (an 18+ verifier
   check never satisfies `age.over(21)`), and only **then** authorizes `settle`. A verifier that
-  approves the wrong amount — or a stricter-than-the-merchant age — is refused before any money moves.
+  approves the wrong amount — or a laxer age than the merchant requires — is refused before any money moves.
 
 The concrete verifier is a **host-side adapter** — no processor-specific symbol lives in this package.
 
