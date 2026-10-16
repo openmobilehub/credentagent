@@ -46,6 +46,8 @@ describe("a path-mounted store's DID document", () => {
     expect(doc.verificationMethod.map((m) => m.id)).toEqual([`${STORE}#gate-signing-key`, `${STORE}#merchant-checkout-key`]);
     for (const m of doc.verificationMethod) expect(m.controller).toBe(STORE);
     expect(doc.assertionMethod[0]).toBe(`${STORE}#gate-signing-key`);
+    // `.well-known` stays served too — where existing allowlists and readers look.
+    expect((await request(app).get("/.well-known/did.json")).body.id).toBe(STORE);
   });
 
   it("lets a stranger check a mandate it signed from /did.json alone", async () => {
@@ -74,5 +76,12 @@ describe("a store at the site root", () => {
     const doc = (await request(app).get("/.well-known/did.json")).body as { id: string };
     expect(doc.id).toBe("did:web:shop.example");
     expect(credentagent.ap2.issuer).toBe("did:web:shop.example");
+  });
+
+  // did:web never resolves a root DID at `/did.json`; claiming it would only shadow a host route.
+  it("leaves /did.json to the host app", async () => {
+    const { app } = gateAt("https://shop.example");
+    app.get("/did.json", (_req, res) => res.json({ host: true }));
+    expect((await request(app).get("/did.json")).body).toEqual({ host: true });
   });
 });

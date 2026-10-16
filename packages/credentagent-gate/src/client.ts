@@ -30,7 +30,7 @@ export type MountCeremony = Omit<Partial<CeremonySeams>, "verificationStore">;
 export interface ExpressApp {
   locals: Record<string, unknown>;
   /** Optional: when present, `mount()` publishes the mandate-signing key at
-   *  `/.well-known/did.json` and `/did.json`. Structural, so the package stays free of an express import. */
+   *  `/.well-known/did.json` (and `/did.json` when `walletOrigin` carries a path). Structural, so the package stays free of an express import. */
   get?: (path: string, handler: (req: unknown, res: { json: (body: unknown) => void }) => void) => void;
 }
 
@@ -383,15 +383,17 @@ export class CredentAgent {
    * signatures" a hollow claim — the whole point of leaving a mock signer behind. The document is
    * built once and captured, so the handler cannot be made to re-read mutable state later.
    *
-   * Served at BOTH paths did:web resolves. A root store (`did:web:shop.example`) is looked up at
-   * `/.well-known/did.json`; a store served under a path (`did:web:shop.example:store`) at
-   * `<walletOrigin>/did.json`, which a path-stripping proxy maps to this app's `/did.json`.
+   * Served where did:web resolves this store's DID. A root store (`did:web:shop.example`) is
+   * looked up at `/.well-known/did.json`. A store served under a path (`did:web:shop.example:store`)
+   * is looked up at `<walletOrigin>/did.json`, which a path-stripping proxy maps to this app's
+   * `/did.json` — registered only then, so a root store claims no route nobody reads. The
+   * `.well-known` route stays for every store: it is where 0.5 hosts and their allowlists look.
    */
   private publishSigningKey(app: ExpressApp): void {
     if (this.didServed || typeof app.get !== "function") return;
     const doc = didDocument(this.mandateKey, this.checkoutKey);
     app.get("/.well-known/did.json", (_req, res) => res.json(doc));
-    app.get("/did.json", (_req, res) => res.json(doc));
+    if (basePathOf(this.walletOrigin)) app.get("/did.json", (_req, res) => res.json(doc));
     this.didServed = true;
   }
 }

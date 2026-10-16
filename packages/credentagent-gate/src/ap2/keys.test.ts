@@ -34,6 +34,24 @@ describe("did:web identity", () => {
     expect(didWebFor("http://localhost:3000/store")).toBe("did:web:localhost%3A3000:store");
     expect(didWebFor("https://shop.example/my%20store")).toBe("did:web:shop.example:my%20store");
   });
+
+  // `:` is the did:web separator: left raw, the store at `/a:b` would claim the DID of the store at
+  // `/a/b`. A malformed escape is kept, never thrown — it is read in the CredentAgent constructor.
+  it("escapes a segment's own `:`, and keeps a malformed escape rather than throwing", () => {
+    expect(didWebFor("https://shop.example/a:b")).toBe("did:web:shop.example:a%3Ab");
+    expect(didWebFor("https://shop.example/a:b")).not.toBe(didWebFor("https://shop.example/a/b"));
+    expect(didWebFor("https://shop.example/%zz")).toBe("did:web:shop.example:%25zz");
+  });
+
+  // DID Core's `idchar` is ALPHA / DIGIT / `.` `-` `_` / pct-encoded; `encodeURIComponent` leaves
+  // `! ' ( ) * ~` raw, and a resolver refuses a DID carrying them.
+  it("percent-encodes path characters a DID may not carry raw", () => {
+    expect(didWebFor("https://example.edu/~alice/shop")).toBe("did:web:example.edu:%7Ealice:shop");
+    expect(didWebFor("https://shop.example/a(b)!*'")).toBe("did:web:shop.example:a%28b%29%21%2A%27");
+    for (const did of [didWebFor("https://example.edu/~alice/shop"), didWebFor("https://shop.example/a(b)!*'")]) {
+      expect(did).toMatch(/^did:web:(?:[a-zA-Z0-9._-]|%[0-9a-fA-F]{2})+(?::(?:[a-zA-Z0-9._-]|%[0-9a-fA-F]{2})+)*$/);
+    }
+  });
 });
 
 describe("resolving the mandate signing key", () => {

@@ -5,8 +5,8 @@
 // reports that as an ERROR ON A DEPLOYMENT, because an ephemeral key means every mandate the
 // process signed becomes unverifiable the moment it restarts.
 //
-// DECISION (spec 013 #2): `mount()` serves `/.well-known/did.json` (and `/did.json`, where
-// did:web resolves a store served under a path — see `didWebFor`). Without a published
+// DECISION (spec 013 #2): `mount()` serves `/.well-known/did.json` (and, for a store served
+// under a path, `/did.json`, where did:web resolves it — see `didWebFor`). Without a published
 // key the signature is checkable only by us, which would make "real signatures" a hollow
 // claim. (The older `MOCK-DEV-SIGNER` path in `ceremony/mandate.ts` is still live; it will be
 // retired once checkouts move onto `Ap2Issuer`.)
@@ -74,8 +74,14 @@ export function didWebFor(origin: string): string {
   const url = new URL(origin);
   // `URL` already percent-encodes the path, but leaves a `:` in a segment alone — and a `:` is the
   // did:web separator. Decode then re-encode, so every segment is encoded exactly once.
-  const segments = url.pathname.split("/").filter(Boolean).map((s) => encodeURIComponent(safeDecode(s)));
-  return ["did:web", encodeURIComponent(url.host), ...segments].join(":");
+  const segments = url.pathname.split("/").filter(Boolean).map((s) => idSegment(safeDecode(s)));
+  return ["did:web", idSegment(url.host), ...segments].join(":");
+}
+
+/** Percent-encode for a DID `idchar` (ALPHA / DIGIT / `.` `-` `_` / pct-encoded).
+ *  `encodeURIComponent` leaves `! ' ( ) * ~` raw, which DID Core — and resolvers — refuse. */
+function idSegment(s: string): string {
+  return encodeURIComponent(s).replace(/[!'()*~]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
 }
 
 function safeDecode(segment: string): string {
@@ -174,7 +180,8 @@ export function importVerifyKey(jwk: PublicJwkP256): KeyObject {
 }
 
 /**
- * The DID document `mount()` serves at `/.well-known/did.json` and `/did.json`.
+ * The DID document `mount()` serves at `/.well-known/did.json` (a root store) or `/did.json` (a
+ * store served under a path).
  *
  * The mandate-signing key, then any further keys this gate signs with — today the merchant's
  * checkout key (FR-6). `assertionMethod` is the right relationship for issuing statements;
@@ -192,12 +199,15 @@ export function didDocument(key: GateSigningKey, ...more: GateSigningKey[]): Rec
 }
 
 /**
- * The other half of {@link didDocument}: turn a fetched `/.well-known/did.json` into the
+ * The other half of {@link didDocument}: turn a fetched DID document into the
  * `publicJwk` {@link verifyMandate} takes — so checking a mandate somebody else's gate signed
  * is a fetch and two calls, not hand-written plumbing.
  *
+ * A root store's document is at `https://shop.example/.well-known/did.json`; a store served
+ * under a path (`did:web:shop.example:store`) publishes it at `https://shop.example/store/did.json`.
+ *
  * ```ts
- * const doc = await (await fetch("https://shop.example/.well-known/did.json")).json();
+ * const doc = await (await fetch("https://shop.example/.well-known/did.json")).json(); // or <walletOrigin>/did.json
  * const verdict = await verifyMandate(token, { publicJwk: publicJwkFromDidDocument(doc) });
  * ```
  *

@@ -60,9 +60,9 @@ the widget shows the confirmation. Add the headphones instead and the age gate d
 > fetch and redirect carries `/store`. The wallet still binds to the page's origin.
 > The path is also part of the store's identity: a spending permission signed at
 > `shop.example/store` names that store, so another store on the same host (`shop.example/other`,
-> or the root) refuses it — provided each store signs its carts with its own
-> `checkoutSigningKey` ([#335](https://github.com/openmobilehub/credentagent/issues/335)). For the same reason, give every deployment its own `walletOrigin`:
-> two that share one (say, a preview copying production's) are one merchant.
+> or the root) refuses it, and refuses the carts it quoted. For the same reason, give every deployment its own `walletOrigin`:
+> two that share one (say, a preview copying production's) are one merchant
+> ([#335](https://github.com/openmobilehub/credentagent/issues/335)).
 
 ### Branding the ceremony pages
 
@@ -252,7 +252,7 @@ const credentagent = new CredentAgent({
   mandateSigningKey: JSON.parse(process.env.MANDATE_SIGNING_KEY),   // a PRIVATE P-256 JWK
   checkoutSigningKey: JSON.parse(process.env.CHECKOUT_SIGNING_KEY), // a DIFFERENT one — signs the carts you quote
 });
-credentagent.mount(app);        // serves GET /.well-known/did.json (and /did.json) — both public halves
+credentagent.mount(app);        // serves GET /.well-known/did.json (and /did.json for a store under a path) — both public halves
 ```
 
 The gate's identity is a [did:web](https://w3c-ccg.github.io/did-method-web/) id built from
@@ -273,9 +273,10 @@ because a quoted cart and an issued mandate are different statements: each key's
 ever checked against `credentagent.ap2.checkoutPublicJwk`. Passing the same JWK for both throws. Omit it
 and the gate generates one at boot; `doctor()` warns on a deployment, because a cart quoted before a
 restart, or on another instance, then no longer verifies.
-Give each store its **own** checkout key, above all two stores on one host: a store accepts a cart
-signed with its key whose key id names its host, so two stores sharing a host and a key would accept
-each other's carts
+Give each store its **own** checkout key. A store accepts a cart signed with its key whose key id
+names its `walletOrigin`, path included — so stores at `/coffee` and `/wine` on one host refuse each
+other's carts even if they share a key, but two deployments sharing one `walletOrigin` and one key
+accept each other's, and so does any verifier handed the key without its `kid`
 ([#335](https://github.com/openmobilehub/credentagent/issues/335)).
 
 Mint and check:

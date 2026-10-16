@@ -15,6 +15,8 @@ import { AgentKey, DelegatedIntent } from "./agent.js";
 import { devSimulateWalletSignature } from "./ceremony/intent-sign/simulate.js";
 import { merchantFor } from "./ap2/from-gate.js";
 import type { UcpCheckout } from "./ap2/types.js";
+import type { PrivateJwkP256 } from "./ap2/keys.js";
+import { generateKeyPairSync } from "node:crypto";
 
 const CATALOG = { coffee: { price: 18, category: "Beverages" } };
 const HOST = "shop.example";
@@ -23,8 +25,13 @@ const COFFEE = `${ORIGIN}/coffee`;
 const WINE = `${ORIGIN}/wine`;
 
 // A store served under a path by a proxy: the server sees paths WITHOUT the prefix.
-function store(walletOrigin: string) {
-  const credentagent = new CredentAgent({ walletOrigin, catalog: CATALOG, gateSecret: `secret-for-${walletOrigin}` });
+function store(walletOrigin: string, checkoutSigningKey?: PrivateJwkP256) {
+  const credentagent = new CredentAgent({
+    walletOrigin,
+    catalog: CATALOG,
+    gateSecret: `secret-for-${walletOrigin}`,
+    ...(checkoutSigningKey ? { checkoutSigningKey } : {}),
+  });
   const app = express();
   app.use(express.json());
   credentagent.grants.serve(app);
@@ -50,9 +57,8 @@ const cartAt = (origin: string): UcpCheckout => ({
 });
 
 /** The coffee store's permission, signed on the phone — what the agent holds. */
-async function coffeePermission() {
+async function coffeePermission(coffee = store(COFFEE)) {
   const agentKey = AgentKey.generate();
-  const coffee = store(COFFEE);
   const created = await coffee.credentagent.grants.create({ merchant: "coffee", budget: 200, perSpend: 30, allow: { skus: ["coffee"] }, agentKey: agentKey.publicJwk });
   expect((await signOnPhone(coffee.app, created.id)).body).toMatchObject({ ok: true, status: "authorized" });
   const grant = (await coffee.credentagent.grants.retrieve(created.id))!;
@@ -128,5 +134,34 @@ describe("#331 — a store's identity includes its base path", () => {
     expect(verdict).toMatchObject({ ok: false, code: "constraint" });
     if (verdict.ok) return;
     expect(verdict.violations?.map((v) => v.constraint)).toEqual(expect.arrayContaining(["checkout.allowed_merchants", "payment.allowed_payees"]));
+  });
+
+  // #335 / #322: two stores on one host that share a checkoutSigningKey. The coffee store's own
+  // quote, under the coffee permission, presented at the wine store: every merchant constraint
+  // holds (the cart IS coffee's), so only the cart signature's key id can refuse it — and it does,
+  // because that id carries the store's path. With a host-only DID both ids were
+  // `did:web:shop.example#merchant-checkout-key` and the wine store accepted the coffee cart.
+  it("REFUSES a cart the coffee store signed at the wine store, even with one shared checkout key (bypass)", async () => {
+    const shared = generateKeyPairSync("ec", { namedCurve: "P-256" }).privateKey.export({ format: "jwk" }) as unknown as PrivateJwkP256;
+    const coffee = store(COFFEE, shared);
+    const wine = store(WINE, shared);
+    expect(wine.credentagent.ap2.checkoutPublicJwk).toMatchObject({ x: coffee.credentagent.ap2.checkoutPublicJwk.x });
+    const { agentKey, intent } = await coffeePermission(coffee);
+    const proof = await intent.spend({
+      agentKey,
+      checkoutJwt: coffee.credentagent.ap2.signCheckout(cartAt(COFFEE)),
+      instrument: { id: "demo-instrument-0001", type: "card" },
+      audience: WINE,
+      nonce: "merchant-nonce",
+    });
+    const verdict = await verifyDelegatedPurchase(proof, {
+      trust: "presence-only-demo",
+      audience: WINE,
+      nonce: "merchant-nonce",
+      checkoutKey: wine.credentagent.ap2.checkoutPublicJwk,
+      spent: { amount: 0, uses: 0 },
+      price: (cart) => cart.line_items.reduce((sum, l) => sum + 1800 * l.quantity, 0),
+    });
+    expect(verdict).toMatchObject({ ok: false, code: "signature" });
   });
 });
