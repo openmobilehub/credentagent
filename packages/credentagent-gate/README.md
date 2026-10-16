@@ -594,7 +594,8 @@ The three rails `mount()` serves differ in how much crypto is real today:
 | `delegated` (opt-in — `mount({ verifier })`) | the same policy, verified + settled by an **external** verifier/processor; the gate re-derives the binding and re-runs your policy, and **relays** the verdict's trust | the verifier's — `issuer-verified` with a real anchor |
 
 The built-in OpenID4VP plumbing is scaffolded; cryptographic mdoc trust is the integration step, not
-new cryptography. The mandate is AP2-shaped and dev-signed (integrity hash), not key-signed.
+new cryptography. The checkout mandate a ceremony records is AP2-shaped and dev-signed (integrity
+hash), not key-signed.
 `trust_level: "issuer-verified"` is reachable **today** through the `verifier` seam (below) — the gate
 relays a level a real anchor produced; it does not verify issuer signatures itself.
 
@@ -845,9 +846,11 @@ Test the whole flow **with no phone** using the exported simulated wallet — se
 [`examples/device-signed-grants.mjs`](https://github.com/openmobilehub/credentagent/blob/main/examples/device-signed-grants.mjs)
 (`devSimulateWalletSignature` produces a real device signature the way Stripe's test cards stand in
 for a real card). The **on-device** path is verified separately: the grant asks the wallet for an
-**SD-JWT** payment credential (`vct` `urn:emvco:dpc:card:1` or `com.emvco.dpc`), so mint one with
-`node tools/demo-pki/mint/mint-dpc-sdjwt.mjs --mpzpass`, import the resulting `dpc.mpzpass` into
-Multipaz, and sign on the phone. The mdoc `payment.mpzpass` from the demo set no longer matches.
+**SD-JWT** payment credential (`vct` `urn:emvco:dpc:card:1` or `com.emvco.dpc`). From a clone of
+this repo, mint one with
+[`node tools/demo-pki/mint/mint-dpc-sdjwt.mjs --mpzpass`](https://github.com/openmobilehub/credentagent/blob/main/tools/demo-pki/mint/mint-dpc-sdjwt.mjs),
+which writes `tools/demo-pki/keys/dpc.mpzpass`. Import that file into Multipaz, and sign on the
+phone. The mdoc `payment.mpzpass` from the demo set no longer matches.
 
 ### Credentials on a grant — presented before you authorize, or not at all
 
@@ -980,10 +983,10 @@ credentagent.ap2.checkout(args) · .payment(args) · .openCheckout(args) · .ope
 verifyMandate(token, { publicJwk, … })  ·  didWebFor(origin)  ·  didDocument(...)  ·  resolveSigningKey(...)
 
 // Agent purchases — the store's side (the agent's side is the /agent entry point below)
-verifyDelegatedPurchase(proof, { trust: "presence-only-demo", audience, nonce, checkoutKey, spent?, price?, nowMs? })
-  → PurchaseVerdict | PurchaseRefusal   // { ok: false, code, detail }
+verifyDelegatedPurchase(proof, { trust: "presence-only-demo", audience, nonce, checkoutKey, price, spent?, nowMs? })
+  → PurchaseVerdict | PurchaseRefusal   // { ok: false, code, detail, violations? }
 
-// Money — whole minor units (cents), never floats
+// Money — an Amount is integer minor units; converters refuse rather than round
 amountFrom · amountOfMinor · amountsEqual · formatAmount · sumAmounts · toMajorUnits · toMinorUnits · exponentFor
 
 // Retained Mode-B / roadmap blocking primitive

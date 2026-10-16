@@ -134,13 +134,13 @@ Every storefront answers `GET /version` with its package versions and the MCP ve
 serves — the same version MCP clients see in the protocol's server info:
 
 ```json
-{ "name": "credentagent-storefront", "version": "0.5.0", "build": "dev.3f9c2a1", "gate": "0.5.0",
+{ "name": "credentagent-storefront", "version": "<version>", "build": "dev.3f9c2a1", "gate": "<gate version>",
   "mcpProtocolVersions": ["2026-07-28", "2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05", "2024-10-07"] }
 ```
 
 `build` is optional: pass `createStorefront({ build })` to label a deployment (say, where it runs
 and which commit), so two deployments of the same version can be told apart. MCP clients then see
-`0.5.0+dev.3f9c2a1`.
+`<version>+dev.3f9c2a1`.
 
 ## Live catalog — one option over your own database
 
@@ -364,7 +364,7 @@ the catalog; unknown ids are collected (`unknownIds`), not thrown.
 - `priceCart()` / `createOrder()` / `requiredAgeForLines()` / `getProduct()` / `getReviews()` /
   `listProducts()` / `projectProduct()` — pure, catalog-injected pricing & lookups.
 - The `Product` / `Order` / `PricedCart` / `PricedCartLine` model + a runnable `SAMPLE_CATALOG`
-  (includes one 21+ item) so the package demos itself.
+  (includes two 21+ items) so the package demos itself.
 - Loyalty discount with a per-call percent override (`LOYALTY_DISCOUNT_PCT`, `PriceOpts`).
 - Pluggable stores (cart / created-order / completed-order / verification) — default in-memory;
   inject a shared store (e.g. Redis) for a multi-instance serverless deployment.
@@ -374,7 +374,10 @@ the catalog; unknown ids are collected (`unknownIds`), not thrown.
 `createStorefront()` accepts `{ catalog, reviews, baseUrl, cartStore, orderStore, createdOrderStore,
 orderCartStore, verificationStore, storage, signingKey, allowEphemeralKey, statelessOrders, statelessMcp,
 build, settle, verifier, grants, merchant, approvalHoldMs }`. `orderCartStore` remembers which cart each
-order came from, so completion empties that cart; share it on a multi-instance deployment. `build`
+order came from, so completion empties that cart; share it on a multi-instance deployment.
+`statelessOrders` carries each created order in a signed cart mandate on the checkout link instead
+of a store write, so it needs a stable `signingKey` (it throws without one, unless you pass
+`allowEphemeralKey: true` for a single-process dev server). `build`
 labels a deployment (see [`GET /version`](#which-version-is-live--get-version)). `catalog` is a
 `Product[]` (static) or a `CatalogSource` (dynamic). `baseUrl` is the
 public URL checkout links start from (default: the first request's origin); behind a proxy that serves

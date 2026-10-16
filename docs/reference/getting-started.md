@@ -172,7 +172,7 @@ const prescription = defineCredential({
   id: "prescription",
   request: dcql({ docType: "org.hl7.prescription.1", claims: ["rx_valid"] }), // what to ask the wallet
   verify: (claims) => claims.rx_valid === true,                               // explicit positive claim
-  effect: gate(),                                                             // gate() | discount({ percent }) | authorize()
+  effect: gate(),                                                             // custom credentials support gate() only
   appliesTo: (order) => order.lines.some((l) => l.category === "Pharmacy"),   // ONLY for pharmacy lines
   ui: { label: "Prescription", action: "Verify prescription" },
 });
