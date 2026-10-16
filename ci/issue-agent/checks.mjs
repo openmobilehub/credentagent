@@ -86,13 +86,18 @@ export function threadsToAnswer(threads, isTrusted) {
 }
 
 /**
- * What the loop does after a review: hand the PR to a human only when the reviewer is satisfied
- * (✅, or 💬 with nothing left open) — otherwise fix, unless the cycle cap is reached.
+ * What the loop does after a review. It keeps fixing until the reviewer is satisfied (✅, or 💬
+ * with nothing left open). At the cycle cap, 💬 counts as ready — the reviewer calls it safe to
+ * merge, and each review of a fix tends to find a new, smaller note — so the PR goes to a human
+ * with the open notes listed. ⛔ at the cap is never "ready": the loop stops and says why.
  */
 export function reviewDecision({ verdict, open, cycle, maxCycles }) {
   if (!verdict) return { action: "wait", reason: "there is no Claude review verdict for the PR's latest commit yet" };
   if ((verdict === "ready" || verdict === "notes") && open === 0) return { action: "done", reason: verdict === "ready" ? "the review says ✅ Ready to merge and every thread is resolved" : "the review says 💬 Ready — small notes, and every thread is resolved" };
-  if (cycle >= maxCycles) return { action: "give-up", reason: `${maxCycles} review cycles done and the review still ${verdict === "changes" ? "says ⛔ Needs changes" : `has ${open} open thread(s)`}` };
+  if (cycle >= maxCycles) {
+    if (verdict === "ready" || verdict === "notes") return { action: "done", notes: open, reason: `after ${maxCycles} review cycles the review says ${verdict === "ready" ? "✅ Ready to merge" : "💬 Ready — small notes"}, with ${open} small note(s) still open (listed below)` };
+    return { action: "give-up", reason: `${maxCycles} review cycles done and the review still says ⛔ Needs changes` };
+  }
   return { action: "fix", reason: verdict === "changes" ? "the review says ⛔ Needs changes" : `${open} review thread(s) still open` };
 }
 

@@ -275,8 +275,9 @@ the same human review as any other. Media lives on the `agent-evidence` branch �
 With an `AGENT_GH_TOKEN` secret, the agent also works through the Claude review on its own PR
 (`.github/workflows/issue-agent-review.yml`): it fixes or answers every thread, pushes, resolves the
 threads, and repeats — labelled `agent:in-review` meanwhile — and **asks for a human review only
-when the review is ✅, or 💬 with nothing open** (`agent:ready-for-human`), or when it stops after
-3 cycles or for another stated reason (`agent:needs-human`). Don't review an `agent:in-review` PR
+when the review is ✅, or 💬 with nothing open** (`agent:ready-for-human`). After 3 cycles a 💬
+also goes to a human as ready, with the open small notes listed; a ⛔ stops as `agent:needs-human`,
+as does any other stated reason. Don't review an `agent:in-review` PR
 yet; you'll be asked.
 How it works and how to run it locally: [`ci/issue-agent/README.md`](ci/issue-agent/README.md).
 

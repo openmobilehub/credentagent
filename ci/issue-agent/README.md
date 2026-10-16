@@ -63,7 +63,8 @@ Claude review finishes on an agent/issue-* PR
   ├─ assess   read the verdict + the open threads (the review bot's and maintainers' only)    (script)
   │             ✅ Ready to merge, or 💬 with no thread open → hand to a human: label
   │                agent:ready-for-human, request the labeller's review, drop the banner      ← stop
-  │             cycle cap reached → label agent:needs-human, say why                           ← stop
+  │             cycle cap reached with 💬 → the same hand-over, with the open notes listed      ← stop
+  │             cycle cap reached with ⛔ → label agent:needs-human, say why                   ← stop
   ├─ fix      answer every thread — fix it, or decline it with a reason; then the same gates,
   │           mutation check (over the whole PR) and three reviews as the first run         (agents)
   └─ push     apply the checked fix to the PR head (fast-forward, no force), reply to every
@@ -78,8 +79,18 @@ Claude review finishes on an agent/issue-* PR
 - **Same trust split:** assess and push are trusted code; fix runs in a job with no GitHub token.
   Only threads started by the review bot (a GitHub App account, not any user named `claude`) or by
   people with write access are answered, and only their replies are read.
-- **Small notes get fixed too.** 💬 with open threads is not "done" — the agent fixes or answers
-  them first, so what reaches you has nothing open.
+- **Small notes get fixed too — up to the cap.** 💬 with open threads is not "done": the agent
+  fixes or answers them. But each review of a fix reads only the new commit and tends to find a
+  new, smaller note (on #347 it was "safe to merge" from cycle 2 on, with a fresh doc nit every
+  round), so at the cycle cap **💬 counts as ready**: the PR goes to you as `agent:ready-for-human`
+  with the open notes listed and linked. **⛔ at the cap never does** — that stops as
+  `agent:needs-human`.
+- **Main is brought in when it matters.** If `main` has changed a file the PR also changes, the fix
+  job merges `main` first (the review reads the PR merged onto main, so a stale copy of such a file
+  can only be fixed by a merge); the push job re-does that merge from a commit it checks is on
+  `main`, signed off, and hands over on a conflict.
+- **The PR description stays true.** The agent can't edit it; it returns corrections, and the push
+  job writes them into one "Updated after review cycle k" section.
 - **Without `AGENT_GH_TOKEN`** the loop can't work — a push made with `GITHUB_TOKEN` starts no
   workflow, so the fix would never be reviewed again. PRs then open as drafts, as before.
 - **To run it by hand:** *Actions → issue-agent-review → Run workflow* with the PR number, or

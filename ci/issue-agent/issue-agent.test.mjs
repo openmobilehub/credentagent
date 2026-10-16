@@ -181,6 +181,15 @@ describe("the review loop", () => {
     expect(d("ready", 1)).toBe("fix");
     expect(d("changes", 0)).toBe("fix");
     expect(d(undefined, 0)).toBe("wait");
-    expect(d("changes", 3, 3)).toBe("give-up");
+  });
+
+  it("at the cycle cap, counts 💬 as ready (notes listed) but never ⛔", () => {
+    const at = (verdict, open) => reviewDecision({ verdict, open, cycle: 3, maxCycles: 3 });
+    expect(at("notes", 2)).toMatchObject({ action: "done", notes: 2 });
+    expect(at("ready", 1)).toMatchObject({ action: "done", notes: 1 });
+    expect(at("changes", 0).action).toBe("give-up");
+    expect(at("changes", 4).action).toBe("give-up");
+    // before the cap, open notes are still fixed
+    expect(reviewDecision({ verdict: "notes", open: 2, cycle: 2, maxCycles: 3 }).action).toBe("fix");
   });
 });

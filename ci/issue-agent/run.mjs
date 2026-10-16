@@ -729,9 +729,16 @@ function handOver(review, kind, reason) {
   const body = review.body.replace(/^> \[!NOTE\]\n> \*\*The agent is still working on this[^\n]*\n\n/, "");
   if (body !== review.body) sh("gh", ["pr", "edit", url, "-R", REPO, "--body", body], { allowFail: true });
   const who = review.labeller ? `@${review.labeller} ` : "";
+  // Open threads, each as a link a reviewer can click: the file and the note's first line.
+  const open = (review.threads ?? []).map((t) => {
+    const first = String(t.comments[0].body).replace(/[*_`#>]/g, "").split("\n").map((l) => l.trim()).find(Boolean)?.slice(0, 160) ?? "";
+    return `- [${md(t.path ?? "general")}${t.line ? `:${t.line}` : ""}](${url}#discussion_r${t.comments[0].databaseId}) — ${md(first)}`;
+  }).join("\n");
   const text = kind === "ready"
-    ? `${REVIEW_MARK} done -->\n✅ **Every review is resolved — ${who}this is ready for your review.** ${md(reason)} after ${review.cycle} fix cycle(s).`
-    : `${REVIEW_MARK} stopped -->\n⚠️ **The agent stopped iterating — ${who}this needs a human.** ${md(reason)}.${review.threads?.length ? ` ${review.threads.length} review thread(s) are still open.` : ""}`;
+    ? (review.threads?.length
+      ? `${REVIEW_MARK} done -->\n✅ **${who}this is ready for your review — with ${review.threads.length} small note(s) left open.** ${md(reason)}. The reviewer calls it safe to merge; each review of a fix found a new, smaller note, so the agent stopped at the cycle cap rather than chase them:\n\n${open}`
+      : `${REVIEW_MARK} done -->\n✅ **Every review is resolved — ${who}this is ready for your review.** ${md(reason)} after ${review.cycle} fix cycle(s).`)
+    : `${REVIEW_MARK} stopped -->\n⚠️ **The agent stopped iterating — ${who}this needs a human.** ${md(reason)}.${open ? `\n\nStill open:\n${open}` : ""}`;
   gh(["pr", "comment", url, "-R", REPO, "--body", text]);
   RUN?.log?.(`  handed over (${kind}): ${reason}`);
   return { pr: review.pr, status: kind === "ready" ? "ready-for-human" : "needs-human", reason };
