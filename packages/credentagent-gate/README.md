@@ -252,8 +252,15 @@ const credentagent = new CredentAgent({
   mandateSigningKey: JSON.parse(process.env.MANDATE_SIGNING_KEY),   // a PRIVATE P-256 JWK
   checkoutSigningKey: JSON.parse(process.env.CHECKOUT_SIGNING_KEY), // a DIFFERENT one — signs the carts you quote
 });
-credentagent.mount(app);        // serves GET /.well-known/did.json — both public halves
+credentagent.mount(app);        // serves GET /.well-known/did.json (and /did.json) — both public halves
 ```
+
+The gate's identity is a [did:web](https://w3c-ccg.github.io/did-method-web/) id built from
+`walletOrigin`. A store at the site root is `did:web:shop.example`, found at
+`https://shop.example/.well-known/did.json`. A store served under a path (`walletOrigin:
+"https://shop.example/store"`) is its own identity, `did:web:shop.example:store`, found at
+`https://shop.example/store/did.json` — the `/did.json` route `mount()` serves, behind your proxy's
+`/store` prefix. A published key lets anyone check a signature; it is not issuer-verified trust.
 
 `mandateSigningKey` is **not** `gateSecret`. `gateSecret` is a symmetric HMAC secret for challenge
 tokens; this is an asymmetric key whose public half goes to the world. Omit it and the gate generates
@@ -294,7 +301,7 @@ Anyone else checks it from the published document alone — a fetch and two call
 ```ts
 import { publicJwkFromDidDocument, verifyMandate } from "@openmobilehub/credentagent-gate";
 
-const doc = await (await fetch("https://shop.example/.well-known/did.json")).json();
+const doc = await (await fetch("https://shop.example/.well-known/did.json")).json(); // a path-mounted store: https://shop.example/store/did.json
 const verdict = await verifyMandate(token, { publicJwk: publicJwkFromDidDocument(doc) });
 ```
 

@@ -17,10 +17,22 @@ function p256PrivateJwk(): PrivateJwkP256 {
 }
 
 describe("did:web identity", () => {
-  it("keys on the authority, percent-encoded, with no path segments", () => {
+  it("keys a root origin on the authority, percent-encoded", () => {
     expect(didWebFor("https://shop.example")).toBe("did:web:shop.example");
-    expect(didWebFor("https://shop.example/checkout?x=1")).toBe("did:web:shop.example");
+    expect(didWebFor("https://shop.example/")).toBe("did:web:shop.example");
     expect(didWebFor("http://localhost:3000")).toBe("did:web:localhost%3A3000");
+  });
+
+  // A store served under a path is its own identity: did:web resolves `did:web:host:store` to
+  // `https://host/store/did.json`. Dropping the path names the site root, where nobody published
+  // this store's key — and makes two stores on one host claim the same DID.
+  it("keeps a path-mounted origin's path, one colon-separated segment each", () => {
+    expect(didWebFor("https://shop.example/store")).toBe("did:web:shop.example:store");
+    expect(didWebFor("https://shop.example/store/")).toBe("did:web:shop.example:store");
+    expect(didWebFor("https://shop.example/a/b")).toBe("did:web:shop.example:a:b");
+    expect(didWebFor("https://shop.example/checkout?x=1#frag")).toBe("did:web:shop.example:checkout");
+    expect(didWebFor("http://localhost:3000/store")).toBe("did:web:localhost%3A3000:store");
+    expect(didWebFor("https://shop.example/my%20store")).toBe("did:web:shop.example:my%20store");
   });
 });
 
