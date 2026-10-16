@@ -38,10 +38,11 @@ export interface DelegatedPageOptions {
    *  carries it. Absent ⇒ "" (served at the root). */
   basePath?: string;
   /** Will this ceremony settle a payment? The route passes `policyHasPayment` — the same signal
-   *  its settle step uses, so the wording always matches what the ceremony does. When false,
-   *  nothing settles, so the page must not announce a payment, a payment credential or a
-   *  settlement — it proves the credential and returns. Defaults to true so the payment framing
-   *  stays the default for every existing caller. */
+   *  its settle step uses. When false, the rail builds no settle step, so the page must not
+   *  announce a payment, a payment credential or a settlement — it proves the credential and
+   *  returns. (A host-wide `settle` passed to `defineHost`/`createStorefront` still runs in
+   *  `completeOrder`.) Defaults to true so the payment framing stays the default for every
+   *  existing caller. */
   hasPayment?: boolean;
 }
 

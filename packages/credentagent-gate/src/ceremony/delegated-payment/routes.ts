@@ -92,8 +92,9 @@ export const registerDelegatedPaymentGate: RailRegistrar = (app: CeremonyApp, ct
     // shows Age ✓ only when it was ACTUALLY verified (read from the store) — never hardcoded.
     const verified = (await ctx.verificationStore.read(order.id)) ?? {};
     // Frame the page on the SAME signal the settle step below uses (`policyHasPayment`): when it
-    // is false the ceremony settles nothing, so the page must not show a Pay step or promise a
-    // payment (see page.ts), and the current step is the identity credential being proven.
+    // is false the rail builds no settle step, so the page must not show a Pay step or promise a
+    // payment (see page.ts), and the current step is the identity credential being proven. (A
+    // host-wide `settle` from defineHost/createStorefront still runs in completeOrder.)
     // Note the signal covers every policy this instance has resolved that applies to the order,
     // not only this order's own — see issue #353.
     const hasPayment = policyHasPayment(ctx, order);

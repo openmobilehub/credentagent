@@ -127,6 +127,11 @@ function releaseRecord({ subject, requestId }) {
     }
     return releaseRefusal(requestId); // still unproven: same request, same approve link
   }
+  // The approve page names this record, so a request without one would ask the person to approve
+  // "unknown" — and a `null` name would still release on the re-call. Refuse it up front.
+  if (typeof subject !== "string" || subject === "") {
+    return { released: false, error: "name the record to release" };
+  }
   const id = `REQ-${randomUUID()}`;
   subjects.set(id, subject);
   requests.set(id, priceAction([{ productId: "sealed-record", quantity: 1 }], id));
@@ -156,7 +161,9 @@ function releaseRefusal(requestId) {
 
 // ── Browser conveniences: click the whole flow, then read the release log.
 app.get("/dev/release", (req, res) => {
-  res.redirect(releaseRecord({ subject: "patient-7" }).present.approve_url);
+  // Relative, so the click-through works behind a forwarded port, a tunnel or a cloud editor.
+  const approve = new URL(releaseRecord({ subject: "patient-7" }).present.approve_url);
+  res.redirect(approve.pathname + approve.search);
 });
 app.get("/records/:id", (req, res) => {
   const rec = released.get(req.params.id);
