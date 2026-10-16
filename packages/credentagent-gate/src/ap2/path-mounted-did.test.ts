@@ -46,8 +46,13 @@ describe("a path-mounted store's DID document", () => {
     expect(doc.verificationMethod.map((m) => m.id)).toEqual([`${STORE}#gate-signing-key`, `${STORE}#merchant-checkout-key`]);
     for (const m of doc.verificationMethod) expect(m.controller).toBe(STORE);
     expect(doc.assertionMethod[0]).toBe(`${STORE}#gate-signing-key`);
-    // `.well-known` stays served too — the route every store publishes, which proxies are told to pass.
-    expect((await request(app).get("/.well-known/did.json")).body.id).toBe(STORE);
+  });
+
+  // did:web never resolves a path DID at `.well-known`; claiming it would only shadow a host route.
+  it("leaves /.well-known/did.json to the host app", async () => {
+    const { app } = gateAt("https://shop.example/store");
+    app.get("/.well-known/did.json", (_req, res) => res.json({ host: true }));
+    expect((await request(app).get("/.well-known/did.json")).body).toEqual({ host: true });
   });
 
   it("lets a stranger check a mandate it signed from /did.json alone", async () => {

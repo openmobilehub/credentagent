@@ -252,7 +252,7 @@ const credentagent = new CredentAgent({
   mandateSigningKey: JSON.parse(process.env.MANDATE_SIGNING_KEY),   // a PRIVATE P-256 JWK
   checkoutSigningKey: JSON.parse(process.env.CHECKOUT_SIGNING_KEY), // a DIFFERENT one — signs the carts you quote
 });
-credentagent.mount(app);        // serves GET /.well-known/did.json (and /did.json for a store under a path) — both public halves
+credentagent.mount(app);        // serves GET /.well-known/did.json (/did.json instead for a store under a path) — both public halves
 ```
 
 The gate's identity is a [did:web](https://w3c-ccg.github.io/did-method-web/) id built from

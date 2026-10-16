@@ -5,8 +5,8 @@
 // reports that as an ERROR ON A DEPLOYMENT, because an ephemeral key means every mandate the
 // process signed becomes unverifiable the moment it restarts.
 //
-// DECISION (spec 013 #2): `mount()` serves `/.well-known/did.json` (and, for a store served
-// under a path, `/did.json`, where did:web resolves it — see `didWebFor`). Without a published
+// DECISION (spec 013 #2): `mount()` serves `/.well-known/did.json` (or, for a store served
+// under a path, `/did.json` instead, where did:web resolves it — see `didWebFor`). Without a published
 // key the signature is checkable only by us, which would make "real signatures" a hollow
 // claim. (The older `MOCK-DEV-SIGNER` path in `ceremony/mandate.ts` is still live; it will be
 // retired once checkouts move onto `Ap2Issuer`.)
