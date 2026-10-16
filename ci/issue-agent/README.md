@@ -61,7 +61,7 @@ execute it. So the design limits **what that code can reach** and **who can stee
 | **Who can start it** | Anyone who can add a label — and the workflow then requires **write access**. |
 | **Whose words reach the agents** | Only the title, body and comments **by people with write access** (for the title: its author, or whoever renamed it last), frozen at the label. Anything by others, or written/edited after the label, is left out and listed in the report; an outsider's title becomes "Issue #n". An issue edited or renamed after its label is refused until re-labelled. |
 | **GitHub credentials** | **None in the job that runs agent code** (CI): the `implement` job has read-only access, its checkout keeps no credential, and no token is in its environment. Only the `publish` job holds a write token, and it never installs or runs anything the agents wrote — it applies a patch. |
-| **What publish takes from the agents' job** | Treated as untrusted input. The issue number comes from the workflow and must match; the title is re-read from GitHub through the same filter; the base must be a commit on `main`; the files touched are recomputed from the patch, and a patch touching `.github/` is never pushed. Code running in the agents' job *could* rewrite the patch or the report it hands over (the recorded sha256 catches accidents, not that) — so what reaches GitHub is always a **draft** PR that a human reviews like any other, never a merge. |
+| **What publish takes from the agents' job** | Treated as untrusted input. The issue number comes from the workflow and must match; the title is re-read from GitHub through the same filter; the base must be a commit on `main`; the files touched are read from git after the patch is applied (not from the patch's own headers), and a change touching `.github/` is never pushed. Code running in the agents' job *could* rewrite the patch or the report it hands over (the recorded sha256 catches accidents, not that) — so what reaches GitHub is always a **draft** PR that a human reviews like any other, never a merge. |
 | **Claude credential** | The agents need one to run, so it is in *their* environment — an agent's tools can read it. Code the agents wrote (npm scripts, tests, builds) runs with **every** credential stripped. |
 | **Git hooks** | Disabled for every git command the script runs. |
 | **Network** | Not restricted. An agent's `node`/`npm` can reach the internet. |
@@ -136,6 +136,9 @@ and GitHub doesn't start CI or the Claude review on those until someone marks th
 - `run.mjs` — the orchestrator: `snapshot`, `implement`, `publish` (CI runs them as three jobs; locally
   they run back to back).
 - `roles.mjs` — each agent's prompt and output schema.
+- `checks.mjs` — the trust decisions (who wrote the title, which paths publish refuses, id checks).
+- `issue-agent.test.mjs` — tests for those, the baseline and the PR-body escaping; part of the root
+  `npm test`, and each fails if its check is removed.
 - `fingerprints.mjs` — gate failures → comparable fingerprints, for the baseline.
 - `capture.mjs` — Playwright helpers the evidence agent imports (`session`, `startServer`).
 - `report.mjs` — the test-proof page, the HTML report, the PR body, the issue comments.

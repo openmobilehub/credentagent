@@ -38,6 +38,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { fingerprints, stripAnsi, withinBaseline } from "./fingerprints.mjs";
+import { TRUSTED_PERMISSIONS, titleAuthor, forbiddenPaths, stagedPaths, isRunId, isCommitId, publishIssueNumber } from "./checks.mjs";
 import { reportHtml, prBody, issueComment } from "./report.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -49,7 +50,6 @@ const AGENT_BUDGET_USD = Number(process.env.ISSUE_AGENT_BUDGET_USD ?? 25);
 const RUN_BUDGET_USD = Number(process.env.ISSUE_AGENT_RUN_BUDGET_USD ?? 100);
 const TRIGGER_LABEL = process.env.ISSUE_AGENT_LABEL ?? "agent";
 const BLOCKING_LABELS = ["needs-decision", "epic", "wontfix", "duplicate", "question"];
-const TRUSTED_PERMISSIONS = ["admin", "maintain", "write"];
 const EVIDENCE_BRANCH = "agent-evidence";
 
 // ── args ─────────────────────────────────────────────────────────────────────────────────────────
@@ -134,7 +134,7 @@ function snapshotIssue(n, snapshotAt = new Date().toISOString()) {
   // has write access. A rename after the label is refused like a body edit (lastEditedAt misses renames).
   const renames = i.timelineItems.nodes;
   if (renames.some((e) => after(e.createdAt))) return { skip: `the issue was renamed after it was labelled; remove and re-add the \`${TRIGGER_LABEL}\` label to run on the current title` };
-  const titleBy = renames.at(-1)?.actor?.login ?? i.author?.login;
+  const titleBy = titleAuthor(i.author?.login, renames);
   let title = i.title;
   if (!trusted(titleBy)) { dropped.push(`the issue title (by ${titleBy ?? "a deleted user"}, who has no write access)`); title = `Issue #${i.number}`; }
   let body = i.body ?? "";
@@ -190,12 +190,13 @@ const NEVER = ["Bash(git push *)", "Bash(git commit *)", "Bash(git reset *)", "B
 
 class BudgetSpent extends Error {}
 
-// `share`: how many agents run at once from the same remaining budget (the 3 reviewers), so together
-// they can't spend past the run's cap.
-async function agent(role, prompt, { cwd, schema, write = false, check = false, resume, maxTurns = 120, additionalDirectories, share = 1 } = {}) {
+// `cap`: a budget fixed by the caller — the 3 parallel reviewers each get a third of what's left when
+// their round starts, retry included, so together they can't spend past the run's cap.
+async function agent(role, prompt, { cwd, schema, write = false, check = false, resume, maxTurns = 120, additionalDirectories, cap } = {}) {
   const { query } = await import("@anthropic-ai/claude-agent-sdk"); // only the implement phase loads agent code
   const remaining = RUN_BUDGET_USD - RUN.costUsd;
   if (remaining <= 0) throw new BudgetSpent(`the run's $${RUN_BUDGET_USD} budget is spent`);
+  if (cap !== undefined && cap <= 0) throw new BudgetSpent(`${role}'s share of the budget is spent`);
   const transcript = join(RUN.dir, "transcripts", `${role}.jsonl`);
   mkdirSync(dirname(transcript), { recursive: true });
   RUN.log(`▶ ${role}${resume ? " (resumed)" : ""}`);
@@ -215,7 +216,7 @@ async function agent(role, prompt, { cwd, schema, write = false, check = false, 
       outputFormat: { type: "json_schema", schema },
       additionalDirectories,
       maxTurns,
-      maxBudgetUsd: Math.min(AGENT_BUDGET_USD, remaining / share),
+      maxBudgetUsd: Math.min(AGENT_BUDGET_USD, remaining, cap ?? Infinity),
     },
   })) {
     appendFileSync(transcript, JSON.stringify(msg) + "\n");
@@ -231,11 +232,12 @@ async function agent(role, prompt, { cwd, schema, write = false, check = false, 
     }
   }
   RUN.costUsd += cost;
-  if (error?.startsWith("error_max_budget_usd")) throw new BudgetSpent(`${role} hit its budget`);
-  if (error || structured == null) throw new Error(`${role} agent did not finish: ${error ?? "no structured output"}\n${result ?? ""}`);
+  const fail = (e) => Object.assign(e, { costUsd: cost });
+  if (error?.startsWith("error_max_budget_usd")) throw fail(new BudgetSpent(`${role} hit its budget`));
+  if (error || structured == null) throw fail(new Error(`${role} agent did not finish: ${error ?? "no structured output"}\n${result ?? ""}`));
   RUN.log(`✓ ${role} ($${cost.toFixed(2)}, run $${RUN.costUsd.toFixed(2)})`);
   writeFileSync(join(RUN.dir, `${role}.json`), JSON.stringify(structured, null, 2));
-  return { out: structured, sessionId };
+  return { out: structured, sessionId, costUsd: cost };
 }
 function summarizeInput(i = {}) {
   return String(i.command ?? i.file_path ?? i.pattern ?? i.path ?? "").replace(/\s+/g, " ").slice(0, 110);
@@ -339,15 +341,17 @@ These were measured by the pipeline (not claimed by the implementer):
 </pipeline_facts>`;
 }
 
-async function review(lens, issue, spec, base, facts, cwd, round, roles) {
+async function review(lens, issue, spec, base, facts, cwd, round, roles, cap) {
+  let left = cap; // this reviewer's share for the round, retry included
   for (let attempt = 1; ; attempt++) {
     try {
       const { out } = await agent(`review-${lens}-r${round}${attempt > 1 ? `-retry` : ""}`, roles.reviewPrompt(lens, issue, spec, base) + facts,
-        { cwd, schema: roles.REVIEW_SCHEMA, check: true, maxTurns: 80, share: 3 });
+        { cwd, schema: roles.REVIEW_SCHEMA, check: true, maxTurns: 80, cap: left });
       return { lens, ...out };
     } catch (e) {
-      if (e instanceof BudgetSpent || attempt >= 2) throw e;
-      RUN.log(`  review-${lens} failed (${e.message.split("\n")[0]}); retrying once`);
+      left -= e.costUsd ?? 0;
+      if (e instanceof BudgetSpent || attempt >= 2 || left <= 0) throw e;
+      RUN.log(`  review-${lens} failed (${e.message.split("\n")[0]}); retrying once with $${left.toFixed(2)} left of its share`);
     }
   }
 }
@@ -412,7 +416,8 @@ async function implementIssue(issue, { dir } = {}) {
       // behind is thrown away, and this exact patch is what gets published.
       const patch = diffPatch(repoDir, base);
       const facts = pipelineFacts(r, baseline);
-      const settled = await Promise.allSettled(["spec", "security", "dx"].map((l) => review(l, issue, spec, base, facts, repoDir, round, roles)));
+      const share = Math.min(AGENT_BUDGET_USD, (RUN_BUDGET_USD - RUN.costUsd) / 3);
+      const settled = await Promise.allSettled(["spec", "security", "dx"].map((l) => review(l, issue, spec, base, facts, repoDir, round, roles, share)));
       if (diffPatch(repoDir, base) !== patch) { RUN.log("  reviewers' runs changed the tree — restoring the reviewed change"); restorePatch(repoDir, base, patch); }
       const failed = settled.filter((s) => s.status === "rejected");
       if (failed.length) {
@@ -500,10 +505,8 @@ function publishRun(dir) {
     return { n: trustedN, status: "error", reason: "the implement phase produced no outcome" };
   }
   const outcome = JSON.parse(readFileSync(outcomeFile, "utf8"));
-  if (trustedN !== undefined && outcome.n !== trustedN) throw new Error(`the run is for issue ${outcome.n}, but this workflow run is for issue ${trustedN}`);
-  const n = trustedN ?? outcome.n;
-  if (!Number.isSafeInteger(n) || n < 1) throw new Error(`not an issue number: ${n}`);
-  if (!/^\d{12}$/.test(String(outcome.id))) throw new Error(`not a run id: ${outcome.id}`);
+  const n = publishIssueNumber(trustedN, outcome.n);
+  if (!isRunId(outcome.id)) throw new Error(`not a run id: ${outcome.id}`);
   RUN ??= { id: outcome.id, dir, costUsd: 0, log: (s) => { console.log(s); appendFileSync(join(dir, "run.log"), s + "\n"); } };
   if (outcome.status === "blocked") {
     gh(["issue", "comment", String(n), "-R", REPO, "--body", issueComment({ kind: "blocked", reason: outcome.reason })]);
@@ -523,30 +526,32 @@ function publishRun(dir) {
     return { n, status: "needs-human", reason: "empty change" };
   }
   // Re-derived here, not taken from the report.
-  if (!/^[0-9a-f]{40}$/.test(String(report.base))) throw new Error(`not a commit id: ${report.base}`);
+  if (!isCommitId(report.base)) throw new Error(`not a commit id: ${report.base}`);
   git(["fetch", "--quiet", "origin", "main"]);
   if (git(["merge-base", "--is-ancestor", report.base, "FETCH_HEAD"], { allowFail: true }).code !== 0) throw new Error(`the run's base ${report.base} is not a commit on main`);
-  const files = [...patch.matchAll(/^diff --git a\/(.+?) b\/(.+)$/gm)].flatMap((m) => [m[1], m[2]]);
-  const forbidden = [...new Set(files.filter((f) => f.startsWith(".github/") || f.startsWith(".git/")))];
+  // The DCO sign-off is the committer's identity: refuse git's guess (user@hostname).
+  const email = process.env.GIT_COMMITTER_EMAIL || git(["config", "user.email"], { allowFail: true }).out.trim();
+  if (!email) throw new Error("no git identity to sign off with: set git config user.name / user.email (or GIT_COMMITTER_NAME / GIT_COMMITTER_EMAIL)");
+
+  // Apply the patch on a clean worktree of the base, then ask git what it actually changed — the
+  // patch's own headers can quote or misstate paths.
+  const wt = join(dir, "publish");
+  if (existsSync(wt)) git(["worktree", "remove", "--force", wt], { allowFail: true });
+  git(["worktree", "add", "--quiet", "--detach", wt, report.base]);
+  git(["apply", "--index", "--whitespace=nowarn", "-"], { cwd: wt, input: patch });
+  const files = stagedPaths(wt);
+  const forbidden = forbiddenPaths(files);
   if (forbidden.length) {
-    const reason = `the change touches ${forbidden.join(", ")} — the agent never publishes changes to workflows`;
+    git(["worktree", "remove", "--force", wt], { allowFail: true });
+    const reason = `the change touches ${forbidden.join(", ")} — the agent never publishes changes under .github/`;
     gh(["issue", "comment", String(n), "-R", REPO, "--body", issueComment({ kind: "needs-human-nopr", reason, where: actionsRunUrl() })]);
     return { n, status: "needs-human", reason };
   }
   const fresh = snapshotIssue(n).issue;
   const issue = { ...report.issue, number: n, title: fresh?.title ?? `Issue #${n}`, url: fresh?.url ?? report.issue.url };
-  Object.assign(report, { issue, files: [...new Set(files)] });
+  Object.assign(report, { issue, files });
   const done = report.done === true;
   const branch = `agent/issue-${n}-${id}`;
-  // The DCO sign-off is the committer's identity: refuse git's guess (user@hostname).
-  const email = process.env.GIT_COMMITTER_EMAIL || git(["config", "user.email"], { allowFail: true }).out.trim();
-  if (!email) throw new Error("no git identity to sign off with: set git config user.name / user.email (or GIT_COMMITTER_NAME / GIT_COMMITTER_EMAIL)");
-
-  // Commit the patch on a clean worktree of the base.
-  const wt = join(dir, "publish");
-  if (existsSync(wt)) git(["worktree", "remove", "--force", wt], { allowFail: true });
-  git(["worktree", "add", "--quiet", "--detach", wt, report.base]);
-  git(["apply", "--index", "--whitespace=nowarn", "-"], { cwd: wt, input: patch });
   const commitMsg = `${issue.title} (#${n})\n\n${report.last.impl.summary}\n\nFixes #${n}\n\nCo-Authored-By: ${modelName(report.model)} <noreply@anthropic.com>`;
   git(["commit", "--quiet", "-s", "-F", "-"], { cwd: wt, input: commitMsg });
   if (flag("--dry-run")) {
