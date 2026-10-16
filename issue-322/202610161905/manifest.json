@@ -1,0 +1,176 @@
+[
+  {
+    "kind": "image",
+    "file": "before-path-mounted-01.png",
+    "caption": "before: https://shop.example/store/did.json (where did:web resolution looks for a path-mounted store) is not served — 404",
+    "side": "before",
+    "session": "before-path-mounted",
+    "url": "http://localhost:4320/store/did.json",
+    "at": "2026-10-16T19:11:31.418Z"
+  },
+  {
+    "kind": "image",
+    "file": "before-path-mounted-02.png",
+    "caption": "before: the key is published at /store/.well-known/did.json, but its id is did:web:shop.example — an id that points at the site root, not the store",
+    "side": "before",
+    "session": "before-path-mounted",
+    "url": "http://localhost:4320/store/.well-known/did.json",
+    "at": "2026-10-16T19:11:32.172Z"
+  },
+  {
+    "kind": "image",
+    "file": "before-path-mounted-03.png",
+    "caption": "before: a stranger resolving did:web:shop.example goes to https://shop.example/.well-known/did.json and gets 404 — the store's key can't be found (FAIL)",
+    "side": "before",
+    "session": "before-path-mounted",
+    "url": "http://localhost:4320/__resolve",
+    "at": "2026-10-16T19:11:33.447Z"
+  },
+  {
+    "kind": "events",
+    "session": "before-path-mounted",
+    "side": "before",
+    "events": [],
+    "at": "2026-10-16T19:11:33.664Z"
+  },
+  {
+    "kind": "video",
+    "file": "before-path-mounted.webm",
+    "caption": "before: path-mounted store (walletOrigin https://shop.example/store) — /store/did.json, /store/.well-known/did.json, then the did:web resolution check",
+    "side": "before",
+    "session": "before-path-mounted",
+    "at": "2026-10-16T19:11:33.665Z"
+  },
+  {
+    "kind": "image",
+    "file": "before-root-control-01.png",
+    "caption": "before: control — root store's /.well-known/did.json has id did:web:shop.example (unchanged)",
+    "side": "before",
+    "session": "before-root-control",
+    "url": "http://localhost:4321/.well-known/did.json",
+    "at": "2026-10-16T19:11:34.815Z"
+  },
+  {
+    "kind": "image",
+    "file": "before-root-control-02.png",
+    "caption": "before: control — resolving did:web:shop.example finds the root store's own key document (PASS)",
+    "side": "before",
+    "session": "before-root-control",
+    "url": "http://localhost:4321/__resolve",
+    "at": "2026-10-16T19:11:36.089Z"
+  },
+  {
+    "kind": "events",
+    "session": "before-root-control",
+    "side": "before",
+    "events": [],
+    "at": "2026-10-16T19:11:36.297Z"
+  },
+  {
+    "kind": "video",
+    "file": "before-root-control.webm",
+    "caption": "before: control — root store (walletOrigin https://shop.example) resolves the same before and after",
+    "side": "before",
+    "session": "before-root-control",
+    "at": "2026-10-16T19:11:36.297Z"
+  },
+  {
+    "kind": "image",
+    "file": "after-path-mounted-01.png",
+    "caption": "after: https://shop.example/store/did.json returns the store's DID document with id did:web:shop.example:store and both key ids under that DID",
+    "side": "after",
+    "session": "after-path-mounted",
+    "url": "http://localhost:4322/store/did.json",
+    "at": "2026-10-16T19:11:37.443Z"
+  },
+  {
+    "kind": "image",
+    "file": "after-path-mounted-02.png",
+    "caption": "after: /store/.well-known/did.json is still served (same document), now carrying the path-scoped id did:web:shop.example:store",
+    "side": "after",
+    "session": "after-path-mounted",
+    "url": "http://localhost:4322/store/.well-known/did.json",
+    "at": "2026-10-16T19:11:38.194Z"
+  },
+  {
+    "kind": "image",
+    "file": "after-path-mounted-03.png",
+    "caption": "after: resolving did:web:shop.example:store goes to https://shop.example/store/did.json and gets this store's own key document (PASS)",
+    "side": "after",
+    "session": "after-path-mounted",
+    "url": "http://localhost:4322/__resolve",
+    "at": "2026-10-16T19:11:39.470Z"
+  },
+  {
+    "kind": "events",
+    "session": "after-path-mounted",
+    "side": "after",
+    "events": [],
+    "at": "2026-10-16T19:11:39.679Z"
+  },
+  {
+    "kind": "video",
+    "file": "after-path-mounted.webm",
+    "caption": "after: path-mounted store (walletOrigin https://shop.example/store) — /store/did.json, /store/.well-known/did.json, then the did:web resolution check",
+    "side": "after",
+    "session": "after-path-mounted",
+    "at": "2026-10-16T19:11:39.679Z"
+  },
+  {
+    "kind": "image",
+    "file": "after-root-control-01.png",
+    "caption": "after: control — root store's /.well-known/did.json has id did:web:shop.example (unchanged)",
+    "side": "after",
+    "session": "after-root-control",
+    "url": "http://localhost:4323/.well-known/did.json",
+    "at": "2026-10-16T19:11:40.826Z"
+  },
+  {
+    "kind": "image",
+    "file": "after-root-control-02.png",
+    "caption": "after: control — resolving did:web:shop.example finds the root store's own key document (PASS)",
+    "side": "after",
+    "session": "after-root-control",
+    "url": "http://localhost:4323/__resolve",
+    "at": "2026-10-16T19:11:42.100Z"
+  },
+  {
+    "kind": "events",
+    "session": "after-root-control",
+    "side": "after",
+    "events": [],
+    "at": "2026-10-16T19:11:42.308Z"
+  },
+  {
+    "kind": "video",
+    "file": "after-root-control.webm",
+    "caption": "after: control — root store (walletOrigin https://shop.example) resolves the same before and after",
+    "side": "after",
+    "session": "after-root-control",
+    "at": "2026-10-16T19:11:42.308Z"
+  },
+  {
+    "kind": "image",
+    "file": "test-proof-01.png",
+    "caption": "Test proof: the pipeline's own gate runs, and the new tests failing on main's code and passing on the fix",
+    "side": "proof",
+    "session": "test-proof",
+    "url": "about:blank",
+    "at": "2026-10-16T19:12:09.309Z"
+  },
+  {
+    "kind": "events",
+    "session": "test-proof",
+    "side": "proof",
+    "events": [],
+    "at": "2026-10-16T19:12:13.351Z"
+  },
+  {
+    "kind": "video",
+    "file": "test-proof.webm",
+    "caption": "Test proof: the pipeline's own gate runs, and the new tests failing on main's code and passing on the fix",
+    "side": "proof",
+    "session": "test-proof",
+    "at": "2026-10-16T19:12:13.352Z"
+  }
+]
