@@ -1,6 +1,4 @@
-Full API reference: [`docs/reference/api.md`](https://github.com/openmobilehub/credentagent/blob/main/docs/reference/api.md).
-The design specs under [`specs/`](https://github.com/openmobilehub/credentagent/tree/main/specs) are a historical record of
-past decisions: they still use the project's old name (Attesto) and its old routes, so don't build against them.# @openmobilehub/credentagent-gate
+# @openmobilehub/credentagent-gate
 
 **The consent layer for AI agents.** An AI agent must prove a verifiable credential
 from the user's phone wallet before a consequential MCP tool completes. **Identity
@@ -975,8 +973,8 @@ ageDcql()  ·  ENVELOPE_VERSION  ·  ENVELOPE_SENTINEL
 //        DelegatedVerifier / DelegatedVerdict / DelegatedHandoff / SettlementRecordLike (delegated seam)
 ```
 
-Full, compiler-checked contract: [`specs/001-credentagent-sdk/`](https://github.com/openmobilehub/credentagent/tree/main/specs/001-credentagent-sdk/) (the
-[quickstart](https://github.com/openmobilehub/credentagent/blob/main/specs/001-credentagent-sdk/quickstart.md), [`spec.md`](https://github.com/openmobilehub/credentagent/blob/main/specs/001-credentagent-sdk/spec.md),
-and the [mount contract](https://github.com/openmobilehub/credentagent/blob/main/specs/003-gate-ceremony-extraction/contracts/credentagent-mount.api.md)).
+Full API reference: [`docs/reference/api.md`](https://github.com/openmobilehub/credentagent/blob/main/docs/reference/api.md).
+The design specs under [`specs/`](https://github.com/openmobilehub/credentagent/tree/main/specs) are a historical record of
+past decisions: they still use the project's old name (Attesto) and its old routes, so don't build against them.
 
 Apache-2.0 · part of [Open Mobile Hub](https://openmobilehub.org) (Linux Foundation).
