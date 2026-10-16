@@ -1,6 +1,6 @@
 # Feature Specification: Identity-only delegated gate example
 
-**Feature Branch**: `011-delegated-verifier-identity` · **Created**: 2026-07-28 · **Status**: Approved (docs/example task)
+**Feature Branch**: `011-delegated-verifier-identity` · **Created**: 2026-07-28 · **Status**: Approved (example + approve-page fix)
 
 **Input**: Issue [#141](https://github.com/openmobilehub/credentagent/issues/141) — raised in review on
 PR #103 and explicitly scoped there as a follow-up example, not a feature. Part of the
@@ -12,18 +12,19 @@ The project's thesis is **"identity leads; payments is one application"** — bu
 the external-verifier seam ([`examples/delegated-verifier/serve.mjs`](../../examples/delegated-verifier/serve.mjs))
 tells a **shopping** story: an outside checker verifies a card and (simulated) money moves.
 
-The other half is missing: using the same outside checker to **prove who someone is, with no
-purchase at all** — release a sealed record, confirm a licensed professional — and **nobody is
-charged anything**.
+The other half is missing: using the same outside checker to **check a fact about someone, with no
+purchase at all** — that they are 21 or older before a sealed record is released, or that they hold
+a licence — and **nobody is charged anything**.
 
 The rail already supports it, and the behavior is pinned:
 [`delegated-payment.test.ts:508`](../../packages/credentagent-gate/src/ceremony/delegated-payment/delegated-payment.test.ts)
 (*"an identity-only delegated gate (no payment) completes with NO settlement call"*) — `settle?()`
 is optional on `DelegatedVerifier` ([`ceremony/types.ts`](../../packages/credentagent-gate/src/ceremony/types.ts)),
 and the verify handler only builds a settle thunk when `policyHasPayment(...)` is true
-([`delegated-payment/routes.ts:165`](../../packages/credentagent-gate/src/ceremony/delegated-payment/routes.ts)).
-What's missing is a **story a developer can run and read**. This is a **docs/example task — zero
-package source changes**.
+([`delegated-payment/routes.ts:183`](../../packages/credentagent-gate/src/ceremony/delegated-payment/routes.ts)).
+What was missing is a **story a developer can run and read**. Writing it exposed that the shared
+approve page still spoke as a checkout on this path, so the gate package also changes: the page's
+wording and return link (SC-003). The rail's backend is unchanged.
 
 ## Decisions *(locked; recorded here rather than as `needs-decision`)*
 
@@ -36,8 +37,8 @@ package source changes**.
   [`examples/bring-your-own-host.mjs`](../../examples/bring-your-own-host.mjs)) — the "catalog" prices
   every action at **$0** (it is an action, not a sale).
 - **The stand-in verifier has NO `settle` member at all.** Omitting the method (not just never
-  calling it) is the loudest possible proof the money path is unreachable: if the gate ever tried to
-  settle, the run would fail with the rail's own "verifier has no settle()" error.
+  calling it) means a settle attempt cannot succeed: the proof would be refused with the rail's own
+  "verifier has no settle()" error, which the walk-through prints as a settlement error.
 - **The example drives the delegated page directly.** `requirements()` deliberately routes identity
   (`gate`-effect) approve links to the built-in credential rail even in delegated mode
   ([`manifest.ts:60`](../../packages/credentagent-gate/src/manifest.ts)); routing identity gates to
@@ -84,7 +85,9 @@ the delegated approve page for the $0 action, clicks through the ceremony, sees 
 - **FR-003**: The stand-in verifier implements `buildRequest` + `consume` and **omits `settle`**;
   `VERDICT=ok|underage|declined` env modes mirror the shopping example's.
 - **FR-004**: The gated action is enforced **server-side**: the tool releases only against the
-  completed-order record the shared completion wrote — never off a client flag (invariant 1).
+  completed-order record the shared completion wrote — never off a client flag (invariant 1). The
+  server mints the request id and stores which record it covers; a re-call releases only that
+  record and refuses one naming another (invariants 2 and 4).
 - **FR-005**: The file carries the honesty fence: stand-in ≠ trust anchor,
   `trust_level: "presence-only-demo"`, real adapter is S6 (`multipaz-utopia#16`).
 - **FR-006**: [`examples/README.md`](../../examples/README.md) gains an entry under **Gating
@@ -103,9 +106,20 @@ the delegated approve page for the $0 action, clicks through the ceremony, sees 
 
 ## Out of scope
 
-- Routing identity-only manifest approve links to the delegated page (design question for epic #60).
+- Routing identity-only manifest approve links to the delegated page — issue #356
+  (under epic #60).
 - A `verifier` option on `defineHost({...})` — the example publishes the seam via
-  `app.locals.credentagent` with a comment; if that reads as plumbing, it is filed as a DX follow-up
-  rather than dressed up (constitution Principle I).
+  `app.locals.credentagent` with a comment; issue #355.
+- A helper that builds the refusal envelope from the policy — the example builds it by hand; #23.
 - Any change to the delegated rail's backend (verify, settle, gates). Only its page wording and
   return link change.
+
+## Known limits (existing package behavior, tracked)
+
+- The built-in demo rails that `mount()` also serves accept self-asserted claims (their instant-demo
+  branch), so a hand-made POST can complete a request without the external verifier —
+  issue #352.
+- The delegated rail decides "this policy has a payment" from every policy the instance has
+  resolved, not from this request's — issue #353.
+- Completion enforces age only from a line's `minimumAge`, not from `age.over(n)` in the policy;
+  the example's action carries `minimumAge: 21` for that reason — issue #354.
