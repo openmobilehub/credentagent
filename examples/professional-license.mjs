@@ -65,7 +65,7 @@ const professionalLicense = defineCredential({
   id: "professional_license",
   request: dcql({ docType: "org.example.license.1", claims: ["license_active"] }), // what to ask the wallet
   verify: (claims) => claims.license_active === true, // explicit positive claim (Security invariant 5)
-  effect: gate(), // gate() | discount({percent}) | authorize() — a hard gate here
+  effect: gate(), // custom credentials support gate() only — a hard gate
   appliesTo: isLicensedLine, // definition-time conditional: ONLY for licensed lines
   ui: { label: "Professional license", action: "Verify your license" }, // the card shown in Context 2
 });

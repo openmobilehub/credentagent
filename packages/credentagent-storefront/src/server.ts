@@ -177,15 +177,19 @@ export interface StorefrontOptions {
    * just run with a per-process key.
    */
   signingKey?: string;
-  /** Allow a per-process ephemeral signing key (default: true unless `signingKey` is set). */
+  /**
+   * Allow a per-process ephemeral signing key (default: true unless `signingKey` is set).
+   * `statelessOrders` is stricter: it needs this set to `true` explicitly when no `signingKey` is given.
+   */
   allowEphemeralKey?: boolean;
   /**
    * Opt-in (default false): carry the created order in a signed Cart Mandate on the
    * checkout link (`?order=<id>&cart=<base64url>`) instead of a `createdOrderStore`
    * write, so a checkout survives an instance split with no shared created-order store
-   * (gate FR-007). Forces a concrete `signingKey` (generated if none) so the mandate the
-   * checkout tool issues is the one the gate rails verify. Verification + completion
-   * state still use their stores.
+   * (gate FR-007). Needs a stable `signingKey`, so the mandate one instance issues verifies
+   * on another: without one it throws, unless `allowEphemeralKey: true` (a per-process key,
+   * for a single-process dev server / tests). Verification + completion state still use
+   * their stores.
    */
   statelessOrders?: boolean;
   /**
@@ -203,7 +207,7 @@ export interface StorefrontOptions {
   /**
    * Optional label for THIS deployment — e.g. `"dev.3f9c2a1"` (where + which commit) — so two
    * deployments of the same package version can be told apart. Reported next to the version by
-   * `GET /version`, and to MCP clients as semver build metadata (`0.5.0+dev.3f9c2a1`).
+   * `GET /version`, and to MCP clients as semver build metadata (`<version>+dev.3f9c2a1`).
    * Characters outside `[0-9A-Za-z.-]` become `-`.
    */
   build?: string;

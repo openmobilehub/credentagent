@@ -1,6 +1,6 @@
 // @openmobilehub/credentagent-gate — public types (the contract, in TypeScript).
 //
-// Two layers (see specs/001-attesto-sdk/data-model.md):
+// Two layers (see specs/001-credentagent-sdk/data-model.md):
 //   • policy   — code: builders carry functions (.when / verify / appliesTo) and live in your server.
 //   • manifest — data: `requirements()` resolves the policy server-side and emits a flat, JSON-safe
 //                manifest. Functions NEVER cross the wire. `requirements()` is that code→data boundary.
