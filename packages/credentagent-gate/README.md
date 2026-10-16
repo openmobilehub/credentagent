@@ -240,8 +240,9 @@ but "every mandate already signed stops verifying at the next restart".
 
 A spending grant signed on a phone is recorded as an [AP2](https://github.com/google-agentic-commerce/AP2)
 mandate: an SD-JWT (RFC 9901) signed ES256, typed by AP2's `vct` claim, and you can mint and check
-mandates yourself with `credentagent.ap2`. A checkout still records the older dev-signed mandate (an
-integrity hash, not a key signature). Pass the key and `mount()`
+mandates yourself with `credentagent.ap2`. A checkout still records the older payment mandate
+(`ap2.PaymentMandate`), which is not key-signed: the passkey rail's carries a dev integrity hash, and
+the dc-payment rail's carries none. Pass the key and `mount()`
 publishes its public half, so a mandate this gate signed is verifiable by someone who does not have
 your source:
 
@@ -594,8 +595,8 @@ The three rails `mount()` serves differ in how much crypto is real today:
 | `delegated` (opt-in — `mount({ verifier })`) | the same policy, verified + settled by an **external** verifier/processor; the gate re-derives the binding and re-runs your policy, and **relays** the verdict's trust | the verifier's — `issuer-verified` with a real anchor |
 
 The built-in OpenID4VP plumbing is scaffolded; cryptographic mdoc trust is the integration step, not
-new cryptography. The checkout mandate a ceremony records is AP2-shaped and dev-signed (integrity
-hash), not key-signed.
+new cryptography. The payment mandate a checkout ceremony records (`ap2.PaymentMandate`) is AP2-shaped
+and not key-signed: the passkey rail's carries a dev integrity hash, and the dc-payment rail's carries none.
 `trust_level: "issuer-verified"` is reachable **today** through the `verifier` seam (below) — the gate
 relays a level a real anchor produced; it does not verify issuer signatures itself.
 
@@ -986,7 +987,7 @@ verifyMandate(token, { publicJwk, … })  ·  didWebFor(origin)  ·  didDocument
 verifyDelegatedPurchase(proof, { trust: "presence-only-demo", audience, nonce, checkoutKey, price, spent?, nowMs? })
   → PurchaseVerdict | PurchaseRefusal   // { ok: false, code, detail, violations? }
 
-// Money — an Amount is integer minor units; converters refuse rather than round
+// Money — an Amount is integer minor units; converting to minor units refuses rather than rounds
 amountFrom · amountOfMinor · amountsEqual · formatAmount · sumAmounts · toMajorUnits · toMinorUnits · exponentFor
 
 // Retained Mode-B / roadmap blocking primitive
