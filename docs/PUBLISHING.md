@@ -12,7 +12,20 @@ Both version in lockstep (bump them together), Apache-2.0, ESM, ship their own t
 
 - [x] Both build clean from a wiped `dist/` — `npm run -w @openmobilehub/credentagent-gate build`,
       `npm run -w @openmobilehub/credentagent-storefront build`.
-- [x] `exports` maps resolve to emitted files: gate `.`; storefront `.` and `./server`.
+- [x] **Every** `exports` subpath imports from the packed tarballs installed into a clean project — today
+      gate `.`, `./agent`, `./cards`; storefront `.`, `./server`, `./redis`. Read the keys from each
+      `package.json`, don't copy a list: the storefront's `./firestore` was declared but never built, and a
+      list that skipped it let 0.4.0 and 0.5.0 ship an import that always failed (#323, removed in #314).
+      ```bash
+      mkdir -p /tmp/ca-pack   # npm pack does not create its --pack-destination
+      for p in credentagent-gate credentagent-storefront; do (cd packages/$p && npm pack --pack-destination /tmp/ca-pack); done
+      mkdir -p /tmp/ca-try && cd /tmp/ca-try && npm init -y >/dev/null && npm i /tmp/ca-pack/*.tgz
+      for p in credentagent-gate credentagent-storefront; do
+        node -e 'for (const k of Object.keys(require(process.argv[1]).exports)) console.log(process.argv[2] + k.slice(1))' \
+          "$OLDPWD/packages/$p/package.json" "@openmobilehub/$p" |
+          while read spec; do node --input-type=module -e "await import('$spec'); console.log('ok', '$spec')" || exit 1; done
+      done
+      ```
 - [x] The storefront's runtime asset `dist/ui/mcp-app.html` (read via `readFile` at request time) **is**
       in the tarball (`npm pack --dry-run` confirms). The `files` allowlist covers it via `"dist"`.
 - [x] No heavy/demo deps leak into either package's `dependencies` or built `dist` (no `@upstash/redis`,
