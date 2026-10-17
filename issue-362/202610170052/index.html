@@ -1,0 +1,46 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Issue #362 report</title><style>
+:root{--bg:#fbfbfa;--fg:#1f2328;--muted:#656d76;--card:#fff;--line:#d0d7de;--ok:#1a7f37;--bad:#cf222e;--warn:#9a6700;--code:#f6f8fa}
+@media (prefers-color-scheme:dark){:root{--bg:#0d1117;--fg:#e6edf3;--muted:#8d96a0;--card:#161b22;--line:#30363d;--ok:#3fb950;--bad:#f85149;--warn:#d29922;--code:#0d1117}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+main{max-width:1100px;margin:0 auto;padding:28px 16px 64px}h1{font-size:24px;margin:0 0 4px}h2{font-size:18px;margin:32px 0 10px}
+.muted{color:var(--muted)}.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin:10px 0}
+.pill{display:inline-block;padding:2px 10px;border-radius:999px;font-weight:600;font-size:13px;border:1px solid currentColor}
+.ok{color:var(--ok)}.bad{color:var(--bad)}.warn{color:var(--warn)}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:10px;overflow:auto;font-size:12px;line-height:1.45;max-height:420px}
+table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid var(--line);padding:6px 8px;text-align:left;vertical-align:top}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px}figure{margin:0}figure img,figure video{width:100%;border:1px solid var(--line);border-radius:8px;background:#fff}
+figcaption{font-size:13px;color:var(--muted);margin-top:4px}</style></head><body><main>
+<p class="muted">Issue agent run 202610170052 · claude-opus-5-5 · ~$33.81 · base e0436e7</p>
+<h1><a href="https://github.com/openmobilehub/credentagent/issues/362">#362</a> Make the issue agent several times faster without weakening the final review</h1><p><span class="pill bad">needs a human</span></p>
+<div class="card">This makes the issue agent (the pipeline in `ci/issue-agent/` that turns a GitHub issue labelled `agent` into a draft pull request) faster, without weakening the GitHub Claude review that does the final check. Nothing in the published npm packages changes. I confirmed the problem on current main:
+- The three internal reviewers in `roles.mjs` (the `LENSES` object and `reviewPrompt`) only point at parts of REVIEW.md. They never state its stale-docs rule (§6), its &quot;fix it or flag it&quot; rule (§5), or its &quot;which test fails if this line is reverted?&quot; rule (§2). They also get no diff up front.
+- Every role runs on one model, `MODEL = ISSUE_AGENT_MODEL` in `run.mjs:49`.
+- `runGates` runs the full root `npm test` after every fix attempt (`run.mjs:446`).
+- `checkout()` runs `npm ci` and a fresh build for every worktree, including the &quot;before&quot; checkout used for evidence.
+- The baseline (main&#39;s own gate results) is measured again on every run, even for the same main commit.
+
+After the change:
+- The spec agent and the three reviewers run on a faster, configurable review model. The implementer keeps the main model, and `report.json` records which model each role used.
+- Fix attempts inside a round run only the affected workspace&#39;s tests or the changed test files.
+- The root `npm test` runs exactly once per round, before the reviews. Nothing is published unless that run passed.
+- A main commit that was already measured reuses its baseline, and `run.log` says so.
+- The &quot;before&quot; checkout skips its second `npm ci` when the lockfile is the same.
+- The README documents all of this.
+
+Changes under `.github/` stay out of scope, as the issue says. The issue&#39;s instructions concern the pipeline itself, which is the feature here; nothing in it asks to change credentials or tools beyond that.
+
+One thing the implementer should know: `mutationCheck` in `run.mjs` only reverts source files under `packages/` and `examples/`. A change made only in `ci/issue-agent/` will hit &quot;tests changed but no source file did — nothing to revert&quot; unless that filter also covers `ci/issue-agent/*.mjs` (test files are already excluded). Widening it is in scope, and this run needs it.</div>
+<h2>What changed</h2><div class="card">I haven&#39;t changed any code since the first attempt. Nothing in this checkout can make the test-proof check pass, so retrying won&#39;t help.
+
+The test-proof check undoes the source change and expects the changed tests to fail. The copy of the check that runs here is `main`&#39;s `ci/issue-agent/run.mjs`, which only undoes files under `packages/` and `examples/`. This change lives entirely in `ci/issue-agent/`, as the issue requires. So the check always finds nothing to undo.
+
+This change already widens that list to include `ci/issue-agent/` (`isMutableSource` in `checks.mjs`). That only takes effect once the change is merged to `main`. Getting past the check now would mean editing some unrelated file under `packages/`. That would fool the check rather than satisfy it, so I didn&#39;t.
+
+The new tests failed before the code existed, and all 52 in `ci/issue-agent/issue-agent.test.mjs` pass now. Build, typecheck, lint and the root `npm test` passed in the first attempt; I haven&#39;t re-run them since, because no code has changed.<p class="muted">Files: ci/issue-agent/README.md, ci/issue-agent/checks.mjs, ci/issue-agent/issue-agent.test.mjs, ci/issue-agent/roles.mjs, ci/issue-agent/run.mjs</p></div>
+
+
+<h2>Test proof</h2><div class="grid"><figure><a href="https://raw.githubusercontent.com/openmobilehub/credentagent/agent-evidence/issue-362/202610170052/test-proof-01.png"><img src="https://raw.githubusercontent.com/openmobilehub/credentagent/agent-evidence/issue-362/202610170052/test-proof-01.png" alt="Test proof: the pipeline&#39;s own gate runs, and the changed tests failing on main&#39;s code and passing on the fix" loading="lazy"></a><figcaption>Test proof: the pipeline&#39;s own gate runs, and the changed tests failing on main&#39;s code and passing on the fix</figcaption></figure><figure><video controls muted playsinline src="https://raw.githubusercontent.com/openmobilehub/credentagent/agent-evidence/issue-362/202610170052/test-proof.webm"></video><figcaption>🎬 Test proof: the pipeline&#39;s own gate runs, and the changed tests failing on main&#39;s code and passing on the fix</figcaption></figure></div>
+<h2>Reviews (final round)</h2>
+<h2>Rounds</h2><div class="card"><table><tr><th>#</th><th>gates</th><th>test proof</th><th>reviews</th></tr><tr><td>1</td><td>build ✓ · typecheck ✓ · lint ✓ · test ✓</td><td>✗ tests changed but no source file did — nothing to revert</td><td>—</td></tr><tr><td>2</td><td>build ✓ · typecheck ✓ · lint ✓ · test ✓</td><td>✗ tests changed but no source file did — nothing to revert</td><td>—</td></tr><tr><td>3</td><td>build ✓ · typecheck ✓ · lint ✓ · test ✓</td><td>✗ tests changed but no source file did — nothing to revert</td><td>—</td></tr></table></div>
+<h2>Open questions for a human</h2><ul><li>The test-proof failure is a false negative of main&#39;s harness: it only reverts packages/ and examples/ files, and this change is entirely in ci/issue-agent/. The fix ships in this change. A human should judge the test proof from the evidence, or re-run after merge. Retrying in this run cannot change the result.</li></ul>
+</main></body></html>
