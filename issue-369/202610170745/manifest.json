@@ -1,0 +1,164 @@
+[
+  {
+    "kind": "image",
+    "file": "before-router-01.png",
+    "caption": "before: only / reaches Pages; robots.txt, llms.txt, sitemap.xml, /about and /no-such-page all hit Vercel's 79-byte text/plain NOT_FOUND",
+    "side": "before",
+    "session": "before-router",
+    "url": "about:blank",
+    "at": "2026-10-17T07:54:37.690Z"
+  },
+  {
+    "kind": "image",
+    "file": "before-router-02.png",
+    "caption": "before: GET /robots.txt → 404 text/plain; charset=utf-8 (no match (Vercel NOT_FOUND))",
+    "side": "before",
+    "session": "before-router",
+    "url": "http://localhost:4290/robots.txt",
+    "at": "2026-10-17T07:54:38.268Z"
+  },
+  {
+    "kind": "image",
+    "file": "before-router-03.png",
+    "caption": "before: GET /sitemap.xml → 404 text/plain; charset=utf-8 (no match (Vercel NOT_FOUND))",
+    "side": "before",
+    "session": "before-router",
+    "url": "http://localhost:4290/sitemap.xml",
+    "at": "2026-10-17T07:54:38.833Z"
+  },
+  {
+    "kind": "image",
+    "file": "before-router-04.png",
+    "caption": "before: GET /no-such-page → 404 text/plain; charset=utf-8 (no match (Vercel NOT_FOUND))",
+    "side": "before",
+    "session": "before-router",
+    "url": "http://localhost:4290/no-such-page",
+    "at": "2026-10-17T07:54:39.401Z"
+  },
+  {
+    "kind": "image",
+    "file": "before-router-05.png",
+    "caption": "before: GET /api/ask → 200 application/json (function)",
+    "side": "before",
+    "session": "before-router",
+    "url": "http://localhost:4290/api/ask",
+    "at": "2026-10-17T07:54:39.967Z"
+  },
+  {
+    "kind": "image",
+    "file": "before-router-06.png",
+    "caption": "before: GET /marketplace/mcp → 200 application/json (rewrite /marketplace/:path* -> https://credentagent-demo.vercel.app/:path*)",
+    "side": "before",
+    "session": "before-router",
+    "url": "http://localhost:4290/marketplace/mcp",
+    "at": "2026-10-17T07:54:40.533Z"
+  },
+  {
+    "kind": "events",
+    "session": "before-router",
+    "side": "before",
+    "events": [],
+    "at": "2026-10-17T07:54:40.644Z"
+  },
+  {
+    "kind": "video",
+    "file": "before-router.webm",
+    "caption": "before: summary table, then /robots.txt, /sitemap.xml, /no-such-page, /api/ask, /marketplace/mcp opened in the browser through the emulated router",
+    "side": "before",
+    "session": "before-router",
+    "at": "2026-10-17T07:54:40.645Z"
+  },
+  {
+    "kind": "image",
+    "file": "after-router-01.png",
+    "caption": "after: robots.txt/llms.txt (text/plain) and sitemap.xml (application/xml) return 200 from Pages, /no-such-page gets Pages' own 404, /api/ask still resolves to the function and /marketplace/* still proxies to the demo",
+    "side": "after",
+    "session": "after-router",
+    "url": "about:blank",
+    "at": "2026-10-17T07:54:41.458Z"
+  },
+  {
+    "kind": "image",
+    "file": "after-router-02.png",
+    "caption": "after: GET /robots.txt → 200 text/plain; charset=utf-8 (rewrite /:path* -> https://openmobilehub.org/credentagent/:path*)",
+    "side": "after",
+    "session": "after-router",
+    "url": "http://localhost:4294/robots.txt",
+    "at": "2026-10-17T07:54:42.016Z"
+  },
+  {
+    "kind": "image",
+    "file": "after-router-03.png",
+    "caption": "after: GET /sitemap.xml → 200 application/xml (rewrite /:path* -> https://openmobilehub.org/credentagent/:path*)",
+    "side": "after",
+    "session": "after-router",
+    "url": "http://localhost:4294/sitemap.xml",
+    "at": "2026-10-17T07:54:42.586Z"
+  },
+  {
+    "kind": "image",
+    "file": "after-router-04.png",
+    "caption": "after: GET /no-such-page → 404 text/html; charset=utf-8 (rewrite /:path* -> https://openmobilehub.org/credentagent/:path*)",
+    "side": "after",
+    "session": "after-router",
+    "url": "http://localhost:4294/no-such-page",
+    "at": "2026-10-17T07:54:43.150Z"
+  },
+  {
+    "kind": "image",
+    "file": "after-router-05.png",
+    "caption": "after: GET /api/ask → 200 application/json (function)",
+    "side": "after",
+    "session": "after-router",
+    "url": "http://localhost:4294/api/ask",
+    "at": "2026-10-17T07:54:43.717Z"
+  },
+  {
+    "kind": "image",
+    "file": "after-router-06.png",
+    "caption": "after: GET /marketplace/mcp → 200 application/json (rewrite /marketplace/:path* -> https://credentagent-demo.vercel.app/:path*)",
+    "side": "after",
+    "session": "after-router",
+    "url": "http://localhost:4294/marketplace/mcp",
+    "at": "2026-10-17T07:54:44.283Z"
+  },
+  {
+    "kind": "events",
+    "session": "after-router",
+    "side": "after",
+    "events": [],
+    "at": "2026-10-17T07:54:44.393Z"
+  },
+  {
+    "kind": "video",
+    "file": "after-router.webm",
+    "caption": "after: summary table, then /robots.txt, /sitemap.xml, /no-such-page, /api/ask, /marketplace/mcp opened in the browser through the emulated router",
+    "side": "after",
+    "session": "after-router",
+    "at": "2026-10-17T07:54:44.394Z"
+  },
+  {
+    "kind": "image",
+    "file": "test-proof-01.png",
+    "caption": "Test proof: the pipeline's own gate runs (no failing-test check: the spec found no behavior change)",
+    "side": "proof",
+    "session": "test-proof",
+    "url": "about:blank",
+    "at": "2026-10-17T07:55:04.680Z"
+  },
+  {
+    "kind": "events",
+    "session": "test-proof",
+    "side": "proof",
+    "events": [],
+    "at": "2026-10-17T07:55:06.959Z"
+  },
+  {
+    "kind": "video",
+    "file": "test-proof.webm",
+    "caption": "Test proof: the pipeline's own gate runs (no failing-test check: the spec found no behavior change)",
+    "side": "proof",
+    "session": "test-proof",
+    "at": "2026-10-17T07:55:06.960Z"
+  }
+]
