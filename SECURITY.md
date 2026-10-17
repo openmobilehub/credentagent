@@ -58,18 +58,27 @@ Read the [trust model](./docs/reference/trust-model.md) and the
 [security invariants](./SECURITY-INVARIANTS.md) before you report. They state plainly what
 the gate does and does not verify today.
 
-**Known and expected (not a vulnerability on its own).** Every rail today reports
-`trust_level: "presence-only-demo"`. The wire cryptography is real — WebAuthn, OpenID4VP
-JWE / ECDH-ES decryption with nonce binding, HPKE, ISO-mdoc parsing — but there is **no
-issuer or device-signature trust anchor yet**: mdoc issuer and device signatures are not
-checked against a real certificate authority, and the AP2-shaped mandate is dev-signed (an
-integrity hash, not a key signature). So a self-crafted mdoc passes the gate. Spending
-grants that opt into device signing report `trust_level: "device-signed"`: the wallet's
-signature is really checked, but the payment credential behind it is self-minted, so it has
-no issuer trust anchor either. The
-presence-only gate is a flow demo, not a real safety control. Issuer-verified trust
-(`trust_level: "issuer-verified"`) is planned for v0.2 and is not available yet. A report
-that only shows this gap is already known.
+**Known and expected (not a vulnerability on its own).** The gate itself never verifies an
+issuer's signature, so no level it reports on its own is backed by a real trust anchor:
+
+- The built-in checkout rails (passkey, credential, dc-payment) report
+  `trust_level: "presence-only-demo"`. The wire cryptography is real — WebAuthn, OpenID4VP
+  JWE / ECDH-ES decryption with nonce binding, HPKE, ISO-mdoc parsing — but mdoc issuer and
+  device signatures are not checked against a real certificate authority. So a
+  self-crafted mdoc passes the gate. The AP2-shaped payment mandate is not key-signed
+  either: the passkey rail's carries a dev integrity hash, and the dc-payment rail's
+  carries none.
+- Spending grants that opt into device signing report `trust_level: "device-signed"`: the
+  wallet's signature is really checked, but the payment credential behind it is
+  self-minted, so it has no issuer trust anchor.
+- Grants issued by `DelegatedGate`, and spending grants approved by a click on the server's
+  page, report `trust_level: "server-issued-demo"` by default: the server, not a wallet,
+  vouches for them.
+
+These levels mark flow demos, not real safety controls. In-gate issuer verification is on
+the roadmap. Today, `trust_level: "issuer-verified"` appears only when a host passes an
+external `verifier` to `mount()` and that verifier reports it; the gate relays it unchanged.
+A report that only shows one of these known gaps is already known.
 
 **In scope.** Anything that breaks what the gate *does* claim to enforce today, for
 example:
@@ -82,9 +91,12 @@ example:
 - a presence-only result being reported as `"issuer-verified"`, or any other way the
   `trust_level` overstates what was checked;
 - the usual web and Node.js issues in the packages themselves (injection, cross-site
-  scripting in the ceremony pages, secrets leaking into responses or logs).
+  scripting in the ceremony pages, secrets leaking into responses or logs);
+- the hosted demo marketplace at [credentagent.ai/marketplace](https://credentagent.ai/marketplace),
+  which is built and deployed from [`examples/quickstart`](./examples/quickstart) in this
+  repository.
 
-**Out of scope here.** The hosted demo marketplace and the Utopia Marketplace MCP server
-live in a [separate repository](https://github.com/openwallet-foundation/multipaz-utopia);
-report problems in that code there. Problems in a third-party dependency should go to that
+**Out of scope here.** The Utopia Marketplace MCP server lives in a
+[separate repository](https://github.com/openwallet-foundation/multipaz-utopia); report
+problems in that code there. Problems in a third-party dependency should go to that
 project, though we still want to know if CredentAgent uses it in an unsafe way.
