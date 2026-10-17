@@ -619,7 +619,9 @@ export function recordLinkScript(statusUrl: string | undefined): string {
  * Server-rendered "What was proven" block for a finished order: one line per proof (gate · trust
  * level, or "instant demo"), with the Multipaz Tools links a wallet proof carries (Inspect this
  * presentation, Issuer certificate), one "Check the signatures" link to the Multipaz verifier when
- * any wallet proof is shown, and "Order record ›" to the store's order-status record. Only
+ * any wallet proof is shown, and "Order record ›" to the store's order-status record. Only the
+ * payment step's own proof can carry those links, for the browser that just presented it; stored
+ * proofs never do (#320). Only
  * tools.multipaz.org URLs and a root-relative / https record URL are ever linked; labels are
  * escaped. Empty when there is nothing to show.
  */
