@@ -73,8 +73,9 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
 
 - An agent can no longer lower an order total by adding a line with a negative quantity (#346).
 - Consent pages no longer run script taken from a crafted checkout link (#332). **This affects
-  every published version from 0.3.0 to 0.5.0: upgrade.** Below 1.0 a caret range (`^0.5.0`)
-  never moves you to the next minor version on its own.
+  every published version from 0.2.0 to 0.5.0 (storefront 0.2.1 too): upgrade.** It came in with
+  stateless carts (#32). Below 1.0 a caret range (`^0.5.0`) never moves you to the next minor
+  version on its own.
 - A completed order's status no longer returns the shopper's raw wallet answer (#327).
 
 ### Known issues
