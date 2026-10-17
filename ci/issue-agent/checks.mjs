@@ -61,6 +61,16 @@ export function applyAndCheck(cwd, patch) {
 export const isAgentComment = (body) => /^\s*<!-- issue-agent[\s>-]/.test(String(body)); // every agent comment starts with its marker; a maintainer merely mentioning one is not the agent
 
 /**
+ * Whether a PR the loop refused has left it for good while the agent still had it — a person took
+ * it over (removed agent:in-review) or closed it — so its issue's agent:working label must come off.
+ * Not for a fork or a non-agent branch (no issue of ours), nor for a PR already handed over
+ * (ready / needs-human), which keeps the status the hand-over wrote.
+ */
+export const leftLoop = ({ headRefName, isCrossRepository, labels }) =>
+  !isCrossRepository && Boolean(agentBranch(headRefName))
+  && !labels.includes("agent:ready-for-human") && !labels.includes("agent:needs-human");
+
+/**
  * The comments that become part of the agents' request: written by someone with write access, not
  * by the agent itself (its notices and status carry agent-written text under a trusted account),
  * and not written or edited after the snapshot (the label). Everything else is listed as dropped.

@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   titleAuthor, forbiddenPaths, applyAndCheck, isRunId, isCommitId, publishIssueNumber,
-  isReviewBot, parseVerdict, agentBranch, threadsToAnswer, reviewDecision, sharedChanges, cyclesDone, loopRefusal, latestVerdict, cycleCap, isAgentComment, requestComments,
+  isReviewBot, parseVerdict, agentBranch, threadsToAnswer, reviewDecision, sharedChanges, cyclesDone, loopRefusal, latestVerdict, cycleCap, isAgentComment, requestComments, leftLoop,
 } from "./checks.mjs";
 import { fingerprints, withinBaseline } from "./fingerprints.mjs";
 import { prBody, issueComment, statusBody, STATUS_MARK } from "./report.mjs";
@@ -219,6 +219,15 @@ describe("the review loop", () => {
       c({ __typename: "Bot", login: "dzuluaga" }, "<!-- issue-agent-review cycle=9 sha=z -->"),
     ];
     expect(cyclesDone(comments, isTrusted)).toBe(2);
+  });
+
+  it("says the agent stopped only when a person took the PR over or closed it — not after a hand-over", () => {
+    const pr = { headRefName: "agent/issue-1-202610162031", isCrossRepository: false, labels: [] };
+    expect(leftLoop(pr)).toBe(true); // agent:in-review removed by a person
+    expect(leftLoop({ ...pr, labels: ["agent:ready-for-human"] })).toBe(false);
+    expect(leftLoop({ ...pr, labels: ["agent:needs-human"] })).toBe(false);
+    expect(leftLoop({ ...pr, isCrossRepository: true })).toBe(false);
+    expect(leftLoop({ ...pr, headRefName: "feat/x" })).toBe(false);
   });
 
   it("refuses forks, non-agent branches, closed PRs and PRs out of the loop", () => {

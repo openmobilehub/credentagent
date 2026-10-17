@@ -40,7 +40,7 @@ import { fileURLToPath } from "node:url";
 import { fingerprints, stripAnsi, withinBaseline } from "./fingerprints.mjs";
 import {
   TRUSTED_PERMISSIONS, titleAuthor, forbiddenPaths, applyAndCheck, changedSince, isRunId, isCommitId, publishIssueNumber,
-  isReviewBot, parseVerdict, agentBranch, threadsToAnswer, reviewDecision, sharedChanges, filesBetween, cyclesDone, loopRefusal, latestVerdict, cycleCap, isAgentComment, requestComments,
+  isReviewBot, parseVerdict, agentBranch, threadsToAnswer, reviewDecision, sharedChanges, filesBetween, cyclesDone, loopRefusal, latestVerdict, cycleCap, isAgentComment, requestComments, leftLoop,
 } from "./checks.mjs";
 import { reportHtml, prBody, issueComment, md, statusBody, STATUS_MARK } from "./report.mjs";
 
@@ -725,10 +725,7 @@ function assessReview(prNumber) {
   const skip = (reason, left = false) => ({ pr: pr.number, url: pr.url, issueNumber: agentBranch(pr.headRefName)?.issue, decision: { action: "skip", reason, left } });
   const labels = pr.labels.nodes.map((l) => l.name);
   const refusal = loopRefusal({ ...pr, labels });
-  // "Left the loop" only when the agent hadn't handed it over yet: a person took it over (removed
-  // agent:in-review) or closed it. A PR already handed over (ready / needs-human) keeps its status.
-  const handedOver = labels.includes(LABELS.ready) || labels.includes(LABELS.needsHuman);
-  if (refusal) return skip(refusal, !pr.isCrossRepository && Boolean(agentBranch(pr.headRefName)) && !handedOver);
+  if (refusal) return skip(refusal, leftLoop({ ...pr, labels })); // tested in checks.mjs
   const expected = process.env.ISSUE_AGENT_HEAD_SHA;
   if (expected && expected !== pr.headRefOid) return skip("the PR has moved on since this review ran");
   const branch = agentBranch(pr.headRefName);
