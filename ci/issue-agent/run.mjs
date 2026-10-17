@@ -357,7 +357,7 @@ function runGates(dir, { baseline, stopOnFail = true, test = ROOT_TEST, only } =
     const preexisting = r.code !== 0 && Boolean(base) && !base.green && fps.length > 0 && withinBaseline(fps, base.fingerprints);
     const ok = r.code === 0 || preexisting;
     results.push({ name, ok, green: r.code === 0, preexisting, fingerprints: fps, summary, tail: tail(r.out, 80), ...(name === "test" ? { scope: test.scope } : {}) });
-    if (baseline) RUN.log(`  gate ${name}${name === "test" ? ` (${test.scope === "root" ? "root npm test" : `fast: ${cmd} ${cmdArgs.join(" ")}`})` : ""}: ${r.code === 0 ? "pass" : preexisting ? "pass (only main's own failures)" : "FAIL"}${summary ? ` — ${summary}` : ""}`);
+    if (baseline) RUN.log(`  gate ${name}${name === "test" ? ` (${test.scope === "root" ? "root npm test" : `fast: ${cmd} ${cmdArgs.join(" ")}`})` : ""}: ${r.code === 0 ? "pass" : preexisting ? "pass (only failures the starting code already had)" : "FAIL"}${summary ? ` — ${summary}` : ""}`);
     if (!ok && stopOnFail) break; // later gates on a broken build are noise
   }
   return results;
@@ -440,7 +440,7 @@ function pipelineFacts(r, baseline) {
   const m = r.mutation;
   return `\n\n<pipeline_facts>
 These were measured by the pipeline (not claimed by the implementer):
-- Gates from the repo root (\`test\` is the root \`npm test\`, run once this round after the fix attempts passed): ${r.gates.map((g) => `${g.name} ${g.green ? "green" : g.preexisting ? "red only with main's pre-existing failures" : "RED"}${g.summary ? ` (${g.summary})` : ""}`).join("; ")}.
+- Gates from the repo root (\`test\` is the root \`npm test\`, run once this round after the fix attempts passed): ${r.gates.map((g) => `${g.name} ${g.green ? "green" : g.preexisting ? "red only with failures the starting code already had" : "RED"}${g.summary ? ` (${g.summary})` : ""}`).join("; ")}.
 - The code this change starts from (main, or in a review cycle the PR's head), before the change: ${baseline.map((b) => `${b.name} ${b.green ? "green" : `red: ${b.fingerprints.join("; ")}`}`).join("; ")}. Pre-existing failures are not this change's to fix; a diff that "fixes" them unasked is out of scope.
 - New files are part of \`git diff ${r.base}\` (registered with intent-to-add).
 - Mutation check: ${m.applicable ? `with ${(m.reverted ?? []).join(", ")} reverted to main, the changed test files (${(m.tests ?? []).join(", ")}) ${m.withoutFix.code ? "FAILED" : "PASSED"}; with the change they ${m.withFix.code === 0 ? "pass" : "FAIL"}. This is per FILE: a file fails if any test in it fails, so judge whether each new test case would fail on its own. Output without the change:\n${m.withoutFix.tail.split("\n").slice(-40).join("\n")}` : `not applicable — ${m.reason}`}
