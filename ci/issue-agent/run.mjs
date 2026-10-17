@@ -599,7 +599,7 @@ async function finishImplement({ issue, spec, roles, n, repoDir, base, rounds, l
   }
   await renderHtml({
     outDir: evidenceDir, name: "test-proof", side: "proof",
-    html: proofHtml({ issue, spec, last, base }),
+    html: proofHtml({ issue, spec, last, base, patchSha256: createHash("sha256").update(patch).digest("hex") }),
     caption: last.mutation?.applicable
       ? "Test proof: the pipeline's own gate runs, and the changed tests failing on main's code and passing on the fix"
       : "Test proof: the pipeline's own gate runs (no failing-test check: the spec found no behavior change)",
@@ -663,6 +663,7 @@ function publishRun(dir) {
   const verdict = publishVerdict({ done: report.done === true, last: report.last, patchSha256: report.patchSha256, stopped: report.stopped });
   if (!verdict.open) {
     gh(["issue", "comment", String(n), "-R", REPO, "--body", issueComment({ kind: "needs-human-nopr", reason: verdict.reason, where: actionsRunUrl() })]);
+    setStatus(n, `stopped, no PR — ${verdict.reason}`, { working: false });
     return { n, status: "needs-human", reason: verdict.reason };
   }
   Object.assign(report, { done: verdict.done, stopped: verdict.stopped });

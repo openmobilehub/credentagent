@@ -25,12 +25,18 @@ table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid var(--li
 figcaption{font-size:13px;color:var(--muted);margin-top:4px}`;
 
 const gateWord = (g) => (g.green ? "pass" : g.ok ? "red on main too — not this change" : "FAIL");
+// A `test` entry that isn't the root `npm test` on exactly this patch — only the quick tests ran (a
+// round stopped before the root run), or the root run checked an earlier version — never reads as passed.
+// A failed one still reads as failed: this only softens a pass.
+export const notFullRun = (g, patchSha256) => g.name !== "test" || !g.ok ? ""
+  : g.scope === "fast" ? "quick tests only, not the full run"
+  : g.patchSha256 && patchSha256 && g.patchSha256 !== patchSha256 ? "ran on an earlier version of this change, not this one" : "";
 const specVerdicts = (r) => r.last.reviews?.find((x) => x.lens === "spec")?.criteria ?? [];
 
 // The page the pipeline records as a video for every issue: what it checked, with its own outputs.
-export function proofHtml({ issue, spec, last, base }) {
+export function proofHtml({ issue, spec, last, base, patchSha256 }) {
   const m = last.mutation;
-  const gateRows = last.gates.map((g) => `<tr><td>${esc(g.name)}</td><td class="${g.green ? "ok" : g.ok ? "warn" : "bad"}">${gateWord(g)}</td><td>${esc(g.preexisting ? g.fingerprints.join("; ") : g.summary ?? "")}</td></tr>`).join("");
+  const gateRows = last.gates.map((g) => `<tr><td>${esc(g.name)}</td>${notFullRun(g, patchSha256) ? `<td class="warn">${esc(notFullRun(g, patchSha256))}</td>` : `<td class="${g.green ? "ok" : g.ok ? "warn" : "bad"}">${gateWord(g)}</td>`}<td>${esc(g.preexisting ? g.fingerprints.join("; ") : g.summary ?? "")}</td></tr>`).join("");
   const crit = last.reviews?.find((r) => r.lens === "spec")?.criteria ?? [];
   const critRows = spec.acceptance_criteria.map((ac) => {
     const c = crit.find((x) => x.id === ac.id);
@@ -94,9 +100,7 @@ export function prBody(r, { mediaBase, repo }) {
     if (!items.length) return "";
     return `#### ${title}\n\n${items.map((e) => e.kind === "image" ? `<img src="${mediaBase}${e.file}" width="640" alt="${esc(e.caption)}">\n\n_${md(e.caption)}_` : `🎬 [${md(e.caption)}](${mediaBase}${e.file})`).join("\n\n")}\n`;
   };
-  // A root test that ran on an earlier version of the patch (a later round stopped early) says so.
-  const stale = (x) => Boolean(x.patchSha256 && r.patchSha256 && x.patchSha256 !== r.patchSha256);
-  const g = r.last.gates.map((x) => `\`${x.name}\` ${stale(x) ? "⚠️ ran on an earlier version of this change, not this one" : x.green ? "✅" : x.ok ? "⚠️ red on main too, not this change" : "❌"}${x.summary ? ` ${md(x.summary)}` : ""}`).join(" · ");
+  const g = r.last.gates.map((x) => `\`${x.name}\` ${notFullRun(x, r.patchSha256) ? `⚠️ ${notFullRun(x, r.patchSha256)}` : x.green ? "✅" : x.ok ? "⚠️ red on main too, not this change" : "❌"}${x.summary ? ` ${md(x.summary)}` : ""}`).join(" · ");
   const m = r.last.mutation;
   const findings = (sev) => (r.last.reviews ?? []).flatMap((rv) => rv.findings.filter((f) => f.severity === sev).map((f) => `- **${rv.lens}** ${f.file ? `\`${md(f.file)}${f.line ? `:${f.line}` : ""}\` ` : ""}${md(f.summary)}`));
   const blocking = findings("blocking"), suggestions = findings("suggestion");
@@ -166,8 +170,13 @@ export function issueComment({ kind, reason, prUrl, report, where }) {
     case "pr-in-review": return `${MARK}\n🤖 **Issue agent:** a PR is up and the agent is now working through the Claude review on it: ${prUrl}\n\nIt will ask for a human review once every review is resolved (or say why it stopped).`;
     default: {
       const ok = kind === "pr";
-      const gates = report.last.gates.every((g) => g.green) ? "green"
-        : report.last.gates.every((g) => g.ok) ? `green except what's already red on main (${report.last.gates.filter((g) => !g.green).map((g) => g.name).join(", ")})` : "red";
+      const partial = report.last.gates.filter((g) => notFullRun(g, report.patchSha256));
+      // A failure is said first; the not-full-run note only qualifies gates that otherwise passed.
+      const note = partial.length ? ` (\`test\`: ${partial.map((g) => notFullRun(g, report.patchSha256)).join("; ")})` : "";
+      const gates = !report.last.gates.every((g) => g.ok) ? `red${note}`
+        : partial.length ? `not all run on this change${note}`
+        : report.last.gates.every((g) => g.green) ? "green"
+        : `green except what's already red on main (${report.last.gates.filter((g) => !g.green).map((g) => g.name).join(", ")})`;
       return `${MARK}\n🤖 **Issue agent:** ${ok ? "a draft PR is ready for review" : "a draft PR is up, but it **needs a human**"}: ${prUrl}\n\n${report.spec.acceptance_criteria.length} acceptance criteria · ${report.rounds.length} round(s) · gates ${gates}${report.manifest.some((e) => e.kind === "video") ? " · screenshots and video in the PR" : ""}`;
     }
   }

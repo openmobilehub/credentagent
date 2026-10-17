@@ -15,7 +15,7 @@ import {
 } from "./checks.mjs";
 import { reviewPrompt } from "./roles.mjs";
 import { fingerprints, withinBaseline } from "./fingerprints.mjs";
-import { prBody, issueComment, statusBody, STATUS_MARK } from "./report.mjs";
+import { prBody, proofHtml, issueComment, statusBody, STATUS_MARK } from "./report.mjs";
 
 // Pinned so a contributor's own git config (quotePath off, signed commits) can't change the outcome.
 const git = (cwd, ...args) => {
@@ -122,6 +122,34 @@ describe("agent text in a PR body", () => {
     const stale = prBody({ ...report, patchSha256: "bb", last: { ...report.last, gates: [{ name: "test", ok: true, green: true, patchSha256: "aa" }] } }, { mediaBase: "", repo: "o/r" });
     expect(stale).toMatch(/`test` ⚠️ ran on an earlier version/);
     expect(stale).not.toMatch(/`test` ✅/);
+  });
+  // A round stopped after the quick tests (e.g. by the test-proof check) never reached the root run.
+  const fast = { ...report, done: false, patchSha256: "bb", last: { ...report.last, gates: [{ name: "test", scope: "fast", ok: true, green: true }] } };
+  const staleRoot = { ...report, done: false, patchSha256: "bb", last: { ...report.last, gates: [{ name: "test", scope: "root", ok: true, green: true, patchSha256: "aa" }] } };
+  it("doesn't show a quick-tests-only run as the full test suite passing", () => {
+    const b = prBody(fast, { mediaBase: "", repo: "o/r" });
+    expect(b).toMatch(/`test` ⚠️ quick tests only/);
+    expect(b).not.toMatch(/`test` ✅/);
+  });
+  it("says the same in the test-proof page and the issue comment", () => {
+    for (const r of [fast, staleRoot]) {
+      const html = proofHtml({ issue: r.issue, spec: r.spec, last: r.last, base: "a".repeat(40), patchSha256: r.patchSha256 });
+      expect(html).toMatch(/<td class="warn">(quick tests only|ran on an earlier version)/);
+      expect(html).not.toMatch(/<td class="ok">pass/);
+      const c = issueComment({ kind: "needs-human", prUrl: "https://x/pr/1", report: { ...r, manifest: [] } });
+      expect(c).toMatch(/not all run on this change/);
+      expect(c).not.toMatch(/gates green/);
+    }
+  });
+  it("still shows a failed quick-tests run as a failure everywhere", () => {
+    const failed = { ...fast, last: { ...fast.last, gates: [{ name: "test", scope: "fast", ok: false, green: false }] } };
+    expect(prBody(failed, { mediaBase: "", repo: "o/r" })).toMatch(/`test` ❌/);
+    expect(proofHtml({ issue: failed.issue, spec: failed.spec, last: failed.last, base: "a".repeat(40), patchSha256: "bb" })).toMatch(/<td class="bad">FAIL/);
+    expect(issueComment({ kind: "needs-human", prUrl: "https://x/pr/1", report: { ...failed, manifest: [] } })).toMatch(/gates red/);
+  });
+  it("says red in the issue comment when another gate failed and only the quick tests ran", () => {
+    const r = { ...fast, manifest: [], last: { ...fast.last, gates: [{ name: "build", ok: false, green: false }, { name: "test", scope: "fast", ok: true, green: true }] } };
+    expect(issueComment({ kind: "needs-human", prUrl: "https://x/pr/1", report: r })).toMatch(/gates red \(`test`: quick tests only/);
   });
   it("says why when it skips", () => {
     expect(issueComment({ kind: "skipped", reason: "it is closed" })).toMatch(/not starting this one.*it is closed/);
