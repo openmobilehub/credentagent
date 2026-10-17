@@ -6,7 +6,7 @@ action — a payment, an age gate, an access grant — CredentAgent makes it pro
 one application** — `age.over(21)`, a loyalty membership, a prescription, and
 `payment.in("usd")` are all just credentials in the same policy.
 
-> **v0.2 — real, tested, and published on npm.** Start with the
+> **Real, tested, and published on npm** (both packages are at 0.5.0). Start with the
 > [quickstart](./examples/quickstart) — try it, run it, own it in ~5 minutes.
 
 ## What it is
@@ -90,15 +90,15 @@ For a deployment, pass your public origin: `new CredentAgent({ walletOrigin: "ht
   security-bypass testing bar, and the module conventions.
 - **[docs/deployment.md](./docs/deployment.md)** — running it for real (serverless stores,
   the stable signing key, the settle seam) + a troubleshooting table.
-- **[ROADMAP.md](./ROADMAP.md)** — what binds cryptographically today (Mode A) vs. what's
-  next (Mode B page-less gating, issuer-verified trust).
+- **[ROADMAP.md](./ROADMAP.md)** — what has shipped vs. what's next (Mode B page-less
+  gating, issuer-verified trust).
 
 ## Honest status
 
 Honesty is core to CredentAgent — it's infrastructure meant to be trusted, so we name what
 binds cryptographically and what doesn't.
 
-**`trust_level: "presence-only-demo"`.** The *wire* cryptography is real — WebAuthn on
+**`trust_level: "presence-only-demo"`** on the OpenID4VP rails. The *wire* cryptography is real — WebAuthn on
 the passkey rail (verified against this server's origin / RP-ID, user-verification
 required, nonce/replay-bound), OpenID4VP JWE / ECDH-ES decrypt with nonce binding,
 HPKE, ISO-mdoc parse. But there is **no issuer / device-signature trust anchor yet**:
@@ -107,9 +107,15 @@ the gate enforces **disclosure** (an explicit positive claim such as
 key), but **not trust**. A self-crafted mdoc would pass. The AP2-shaped mandate is
 dev-signed (integrity hash), not key-signed.
 
+**`trust_level: "device-signed"`** on device-signed spending grants. The gate verifies the
+wallet's real signature over the grant's exact terms, but the credential's trust anchor is
+still a self-minted demo credential, not a CA — a self-crafted credential would pass too.
+
 > **This is a flow demo, not a real safety control — never present it as one.**
 > Issuer-verified cryptographic mdoc trust (issuer MSO + device signatures, via
-> Multipaz / `@auth0/mdl`, `trust_level: "issuer-verified"`) is the v0.2+ line.
+> Multipaz / `@auth0/mdl`, `trust_level: "issuer-verified"`) is planned work, not shipped.
+> The gate never reports `"issuer-verified"` itself; only an external verifier plugged into
+> the `delegated` seam may.
 
 The honesty is carried in the **types**, not just prose: `trust_level` and `enforcedAt`
 are part of the contract. See [SECURITY-INVARIANTS.md](./SECURITY-INVARIANTS.md) and the

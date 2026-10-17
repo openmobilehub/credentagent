@@ -8,7 +8,7 @@ in the project's own vocabulary.
 
 The headline:
 
-> **The wire crypto is real. The trust anchor is not.** v0.1 enforces *disclosure* (an
+> **The wire crypto is real. The trust anchor is not.** The OpenID4VP rails enforce *disclosure* (an
 > explicit positive claim) and *binding* (nonce / ephemeral key / origin), but **not
 > trust** (issuer / device signatures against a real CA). A self-crafted mdoc would
 > still pass. This is a flow demo, not a real safety control — never present it as one.
@@ -35,40 +35,37 @@ entry and every mandate.
 enforcedAt: "tool" | "checkout";
 ```
 
-- **`"checkout"`** — v0.1's consolidated **Mode A**. Every gate runs on the checkout page
+- **`"checkout"`** — the consolidated **Mode A**. Every gate runs on the checkout page
   (execution Context 2) and is enforced server-side on the completion path: the MCP tool
   only mints the link and reports requirements; the phone is never in the tool's loop.
   `requirements()` stamps this on every entry (`src/manifest.ts`).
 - **`"tool"`** — the Mode-B *blocking* shape, where a page-less tool refuses inline and
   returns a typed `verification_required` envelope the agent drives. The primitive exists
-  (`gated()`), but the consolidated v0.1 flow is `"checkout"`.
+  (`gated()`), but the consolidated flow is `"checkout"`.
 
-### Axis 2 — `trust_level: "presence-only-demo" | "issuer-verified"`
+### Axis 2 — `trust_level: "presence-only-demo" | "device-signed" | "issuer-verified"`
 
-*How honestly* the presented mdoc is trusted. From `src/types.ts`:
+*How honestly* the presented credential is trusted. From `src/types.ts`:
 
 ```ts
-/**
- * v0.1 enforces *disclosure* (explicit positive claim) and *binding* (nonce /
- * ephemeral key), but NOT *trust* (issuer / device signatures) — a self-crafted
- * mdoc would pass. … it's a flow demo, not a real safety control yet.
- */
-export type TrustLevel = "presence-only-demo" | "issuer-verified";
+export type TrustLevel = "presence-only-demo" | "device-signed" | "issuer-verified";
 ```
 
-Today every code path emits **`"presence-only-demo"`** — the manifest default
+Every checkout rail emits **`"presence-only-demo"`** — the manifest default
 (`src/manifest.ts`), the envelope default (`src/envelope.ts`), and the field hard-coded
 on each mandate (`src/ceremony/mandate.ts`, `dc-payment/verify.ts`,
-`credential-gate/verify.ts`). **`"issuer-verified"`** is reserved for v0.2 (see below) and
-is the *only* value for which the page suppresses the presence-only footer
-(`src/ceremony/checkout-page.ts`).
+`credential-gate/verify.ts`). Device-signed spending grants emit **`"device-signed"`**: the
+holder's signature is really verified, but its anchor is a self-minted demo credential.
+**`"issuer-verified"`** is reserved (see below): the gate never emits it for its own checks;
+only an external verifier on the `delegated` seam may relay it. It is the *only* value for
+which the page suppresses the presence-only footer (`src/ceremony/checkout-page.ts`).
 
 ## What "presence-only" means, precisely
 
-Three things must be true for a gate to be a real safety control. v0.1 has the first two
-and not the third:
+Three things must be true for a gate to be a real safety control. The presence-only rails
+have the first two and not the third:
 
-| Property | Meaning | v0.1 |
+| Property | Meaning | Today |
 | :-- | :-- | :-- |
 | **Disclosure** | the wallet revealed the explicit positive claim (`age_over_21 === true`), not merely "a token was present" | ✅ enforced |
 | **Binding** | the response is bound to *this* request and *this* origin — nonce / ephemeral decryption key / RP-ID, with replay protection | ✅ enforced |
@@ -173,10 +170,10 @@ A useful way to read this table: the **OpenID4VP plumbing is scaffolded and the 
 crypto runs for real** — issuer-trust verification is an *integration* step, not new
 cryptography that has to be invented.
 
-## What `trust_level: "issuer-verified"` (v0.2) would add
+## What `trust_level: "issuer-verified"` would add
 
-`"issuer-verified"` is already a value of `TrustLevel`; v0.2 is what makes a path emit it
-honestly. It adds exactly the missing third property — **trust** — by verifying the mdoc's
+`"issuer-verified"` is already a value of `TrustLevel`; the planned issuer-trust work is what
+would make an in-gate path emit it honestly. It adds exactly the missing third property — **trust** — by verifying the mdoc's
 issuer and device signatures against a real anchor:
 
 - **Issuer-signature verification** — the mdoc's `issuerAuth` (the MSO COSE_Sign1) chains
