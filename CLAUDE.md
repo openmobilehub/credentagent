@@ -277,8 +277,10 @@ With an `AGENT_GH_TOKEN` secret, the agent also works through the Claude review 
 threads, and repeats — labelled `agent:in-review` meanwhile — and **asks for a human review only
 when the review is ✅, or 💬 with nothing open** (`agent:ready-for-human`). After 3 cycles a 💬
 also goes to a human as ready, with the open small notes listed; a ⛔ stops as `agent:needs-human`,
-as does any other stated reason. Don't review an `agent:in-review` PR
-yet; you'll be asked.
+as does any other stated reason. Before any hand-over as ready it checks the issue's acceptance
+criteria on the final code and ticks the PR's checklist. If `main` moves and an agent PR now
+conflicts with it, the loop resolves the conflict itself (a sweep runs on every push to `main`) or
+hands over. Don't review an `agent:in-review` PR yet; you'll be asked.
 To see what it's working on: the 🤖 status comment on the issue (edited at each step), the
 `agent:working` label (`is:open label:agent:working`), and Actions runs named `issue-agent #<n> · …`.
 How it works and how to run it locally: [`ci/issue-agent/README.md`](ci/issue-agent/README.md).

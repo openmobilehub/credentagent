@@ -45,10 +45,12 @@ import { fingerprints, stripAnsi, withinBaseline } from "./fingerprints.mjs";
 import {
   TRUSTED_PERMISSIONS, titleAuthor, forbiddenPaths, applyAndCheck, changedSince, isRunId, isCommitId, publishIssueNumber,
   isReviewBot, parseVerdict, agentBranch, threadsToAnswer, reviewDecision, sharedChanges, filesBetween, cyclesDone, loopRefusal, latestVerdict, cycleCap,
+  parseCriteria, tickCriteria, verifiedFor,
   isAgentComment, requestComments, leftLoop,
   roleModel, testGateCommand, rootTestRefusal, publishVerdict, isMutableSource, sameLockfile,
 } from "./checks.mjs";
 import { reportHtml, prBody, issueComment, md, statusBody, STATUS_MARK } from "./report.mjs";
+import { startMerge, buildResolvedMerge, replayResolution, hasMarkers } from "./merges.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, "../..");
@@ -349,7 +351,7 @@ function runGates(dir, { baseline, stopOnFail = true, test = ROOT_TEST, only } =
     if (only && !only.includes(name)) continue;
     const [cmd, cmdArgs] = name === "test" ? [test.cmd, test.args] : ["npm", args];
     const r = code(cmd, cmdArgs, { cwd: dir, allowFail: true });
-    const summary = name === "test" ? (r.out.match(/Tests\s+.+/g) ?? []).pop()?.trim() : undefined;
+    const summary = name === "test" ? (stripAnsi(r.out).match(/Tests\s+.+/g) ?? []).pop()?.trim() : undefined; // no terminal colour codes in PR text
     const fps = r.code === 0 ? [] : fingerprints(name, r.out, dir);
     const base = baseline?.find((b) => b.name === name);
     const preexisting = r.code !== 0 && Boolean(base) && !base.green && fps.length > 0 && withinBaseline(fps, base.fingerprints);
@@ -394,7 +396,9 @@ function mutationCheck(dir, base, spec) {
   const tests = changed.filter((c) => isTest(c.file) && c.status !== "D").map((c) => c.file);
   const src = changed.filter((c) => !isTest(c.file) && isMutableSource(c.file));
   if (!tests.length) return { applicable: true, ok: false, reason: "behavior changed but no test file was added or changed" };
-  if (!src.length) return { applicable: true, ok: false, reason: "tests changed but no source file did — nothing to revert" };
+  // Only tests changed: there is no behavior here for them to guard, and no retry could change that —
+  // so this isn't a failure to fix (on #362 it cost a whole run of retries), just nothing to check.
+  if (!src.length) return { applicable: false, reason: "only tests changed (no source file the check can revert)" };
 
   const patch = diffPatch(dir, base);
   let without;
@@ -779,17 +783,55 @@ function publishEvidence(n, id, evidenceDir, report) {
 
 const REVIEW_MARK = "<!-- issue-agent-review";
 
+// Start a review-loop run for a PR by hand (workflow_dispatch). With the workflow's own token —
+// GitHub lets a dispatch made with it start a run — passed as ISSUE_AGENT_DISPATCH_TOKEN.
+function dispatchReviewLoop(pr) {
+  if (flag("--dry-run")) return RUN?.log?.(`  dry run — would start a review-loop run for PR #${pr}`);
+  const token = process.env.ISSUE_AGENT_DISPATCH_TOKEN || process.env.GH_TOKEN;
+  const r = sh("gh", ["workflow", "run", "issue-agent-review.yml", "-R", REPO, "-f", `pr=${pr}`], { allowFail: true, env: { ...process.env, GH_TOKEN: token } });
+  if (r.code !== 0) console.error(`(could not start a review-loop run for #${pr}: ${r.out.split("\n")[0]})`);
+}
+
+// After main moves: every PR still in the loop that now conflicts with main gets a conflict cycle
+// (GitHub runs no review on a conflicting PR, so without this it would wait forever).
+function sweepConflicts() {
+  const prs = ghJson(["pr", "list", "-R", REPO, "--state", "open", "--label", LABELS.inReview, "--limit", "50", "--json", "number,headRefName"])
+    .filter((p) => agentBranch(p.headRefName));
+  const started = [];
+  for (const { number } of prs) {
+    const pr = loadPrSettled(number);
+    console.log(`  #${number}: ${pr.mergeable}`);
+    if (pr.mergeable === "CONFLICTING" && !loopRefusal({ ...pr, labels: pr.labels.nodes.map((l) => l.name) })) {
+      dispatchReviewLoop(number);
+      setStatus(agentBranch(pr.headRefName).issue, `main moved and ${pr.url} now conflicts with it — the agent is resolving that`, { working: true });
+      started.push(number);
+    }
+  }
+  return started;
+}
+
 function loadPr(number) {
   const q = `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){
-    number url state isDraft isCrossRepository headRefName headRefOid body title author{login} labels(first:30){nodes{name}}
+    number url state isDraft isCrossRepository mergeable headRefName headRefOid body title author{login} labels(first:30){nodes{name}}
     commits(last:1){nodes{commit{oid committedDate parents{totalCount}}}}
     comments(last:100){nodes{author{__typename login} body createdAt}}
     reviewThreads(first:100){nodes{id isResolved path line comments(first:50){nodes{databaseId author{__typename login} body createdAt}}}}}}}`;
   return ghJson(["api", "graphql", "-f", `query=${q}`, "-f", `o=${OWNER}`, "-f", `r=${NAME}`, "-F", `n=${number}`]).data.repository.pullRequest;
 }
 
+// GitHub computes `mergeable` lazily: right after a push to the PR or to main it says UNKNOWN for a
+// few seconds. Ask again until it knows (or give up and treat it as not conflicting).
+function loadPrSettled(number, { tries = 8, waitMs = 5_000 } = {}) {
+  let pr = loadPr(number);
+  for (let i = 1; i < tries && pr.mergeable === "UNKNOWN"; i++) {
+    spawnSync("sleep", [String(waitMs / 1000)]);
+    pr = loadPr(number);
+  }
+  return pr;
+}
+
 function assessReview(prNumber) {
-  const pr = loadPr(prNumber);
+  const pr = loadPrSettled(prNumber);
   // `left`: the PR is out of the loop for good (closed, merged, or a person took it over) — the
   // issue's agent:working label has to come off; a merely stale review leaves it alone.
   const skip = (reason, left = false) => ({ pr: pr.number, url: pr.url, issueNumber: agentBranch(pr.headRefName)?.issue, decision: { action: "skip", reason, left } });
@@ -807,13 +849,17 @@ function assessReview(prNumber) {
   if (reused) RUN?.log?.("  the head only merges main in; the last review still applies");
   const { answer, ignored } = threadsToAnswer(pr.reviewThreads.nodes.map((t) => ({ ...t, comments: t.comments.nodes })), trusted);
   const cycle = cyclesDone(pr.comments.nodes, trusted);
-  // One decision, every rule in it (tested in checks.mjs) — including "no token: hand over, spend nothing".
-  const decision = reviewDecision({ verdict, open: answer.length, cycle, maxCycles: MAX_REVIEW_CYCLES, conclusion, loopOn: REVIEW_LOOP });
+  // One decision, every rule in it (tested in checks.mjs) — including "no token: hand over, spend
+  // nothing", "conflicts with main: resolve it", and "done: verify the criteria first".
+  const decision = reviewDecision({
+    verdict, open: answer.length, cycle, maxCycles: MAX_REVIEW_CYCLES, conclusion, loopOn: REVIEW_LOOP,
+    conflicting: pr.mergeable === "CONFLICTING", verified: verifiedFor(pr.comments.nodes, pr.headRefOid, trusted),
+  });
   const issue = snapshotIssue(branch.issue).issue ?? { number: branch.issue, title: `Issue #${branch.issue}`, body: "", comments: [], dropped: [] };
   return {
     pr: pr.number, url: pr.url, headRef: pr.headRefName, head: pr.headRefOid, isDraft: pr.isDraft, issueNumber: branch.issue, issue,
     verdict, summary: summary.slice(0, 30_000), threads: answer, ignored, cycle, maxCycles: MAX_REVIEW_CYCLES, decision,
-    labeller, body: pr.body,
+    labeller, body: pr.body, criteria: parseCriteria(pr.body),
   };
 }
 
@@ -832,6 +878,7 @@ function handOver(review, kind, reason) {
   const body = currentBody.replace(/^> \[!NOTE\]\n> \*\*The agent is still working on this[^\n]*\n\n/, "");
   if (body !== currentBody) sh("gh", ["pr", "edit", url, "-R", REPO, "--body", body], { allowFail: true });
   const who = review.labeller ? `@${review.labeller} ` : "";
+  reason = String(reason).charAt(0).toUpperCase() + String(reason).slice(1); // it follows a full stop
   // Open threads, each as a link a reviewer can click: the file and the note's first line.
   const open = (review.threads ?? []).map((t) => {
     const first = String(t.comments[0].body).replace(/[*_`#>]/g, "").split("\n").map((l) => l.trim()).find(Boolean)?.slice(0, 160) ?? "";
@@ -858,49 +905,100 @@ async function fixReview(review, { dir } = {}) {
   const repoDir = join(RUN.dir, "repo");
   git(["fetch", "--quiet", "origin", review.head]);
   checkout(repoDir, review.head);
-  let head = review.head;
-  // If main has since changed files this PR changes too, bring main in first (the review reads the
-  // PR merged onto main). The push job re-does this same merge itself before applying the patch.
+  const mode = review.decision.action === "verify" ? "verify" : review.decision.conflict ? "conflict" : "review";
+  const firstLine = (s) => String(s).replace(/[*_`#>]/g, "").split("\n").map((l) => l.trim()).find(Boolean)?.slice(0, 200) ?? "";
+  const asSpec = (summary, criteria) => ({ actionable: true, summary, acceptance_criteria: criteria, behavior_change: true, touches_ui: false, evidence_plan: "test proof", test_plan: "as asked" });
+  let head = review.head, mergedMain, resolved = [], firstPrompt, schema = roles.IMPLEMENT_SCHEMA, spec, diffBase, verification;
+
+  // Bring main in. A clean merge is committed here and re-done by the push job; a conflicting one is
+  // left in the working tree (markers and all) for the agent to resolve — the push job then rebuilds
+  // the same merge from the resolved files the run hands over.
   const mainSha = git(["rev-parse", "origin/main"], { cwd: repoDir }).out.trim();
   const forkPoint = git(["merge-base", "origin/main", head], { cwd: repoDir }).out.trim();
   const shared = sharedChanges(filesBetween(repoDir, forkPoint, mainSha), filesBetween(repoDir, forkPoint, head));
-  let mergedMain;
-  if (shared.length) {
-    const m = git(["-c", "user.name=issue-agent", "-c", "user.email=issue-agent@localhost", "merge", "--quiet", "--no-ff", "--no-edit", "--signoff", mainSha], { cwd: repoDir, allowFail: true });
-    if (m.code !== 0) {
-      git(["merge", "--abort"], { cwd: repoDir, allowFail: true });
-      return outcome({ status: "needs-human", reason: `main has changed ${shared.join(", ")} since this PR branched off, and merging it conflicts — a human has to resolve that` });
-    }
+  if (mode === "conflict" || shared.length) {
+    const m = startMerge(repoDir, head, mainSha);
     mergedMain = mainSha;
-    head = git(["rev-parse", "HEAD"], { cwd: repoDir }).out.trim();
-    RUN.log(`  merged main ${mainSha.slice(0, 7)} (it changed ${shared.join(", ")})`);
-    code("npm", ["ci", "--no-audit", "--no-fund"], { cwd: repoDir });
+    if (m.clean) {
+      head = git(["rev-parse", "HEAD"], { cwd: repoDir }).out.trim();
+      RUN.log(`  merged main ${mainSha.slice(0, 7)} cleanly`);
+    } else {
+      resolved = m.conflicted;
+      const forbidden = forbiddenPaths(resolved);
+      if (m.failed || forbidden.length) {
+        restorePatch(repoDir, head, "");
+        return outcome({ status: "needs-human", reason: forbidden.length ? `merging main conflicts in ${forbidden.join(", ")}, which the agent never changes` : "merging main failed without conflicts to resolve" });
+      }
+      RUN.log(`  merging main ${mainSha.slice(0, 7)} conflicts in ${resolved.join(", ")} — the agent resolves them`);
+    }
+    code("npm", ["ci", "--no-audit", "--no-fund"], { cwd: repoDir, allowFail: true });
     code("npm", ["run", "build"], { cwd: repoDir, allowFail: true });
   }
-  const mainBase = git(["merge-base", "origin/main", head], { cwd: repoDir }).out.trim();
-  const baseline = baselineFor(repoDir, head, "PR head");
-  RUN.log(`  baseline (PR head ${head.slice(0, 7)}): ${baseline.map((b) => `${b.name} ${b.green ? "green" : `RED (${b.fingerprints.length})`}`).join(" · ")}`);
+  const mainBase = git(["merge-base", "origin/main", resolved.length ? mainSha : head], { cwd: repoDir }).out.trim();
+  const baseline = baselineFor(repoDir, resolved.length ? mainSha : head, resolved.length ? "main" : "PR head");
+  RUN.log(`  baseline: ${baseline.map((b) => `${b.name} ${b.green ? "green" : `RED (${b.fingerprints.length})`}`).join(" · ")}`);
 
-  // The "spec" for this round: every review thread answered (fixed, or declined with a reason).
-  const firstLine = (s) => String(s).replace(/[*_`#>]/g, "").split("\n").map((l) => l.trim()).find(Boolean)?.slice(0, 200) ?? "";
-  const criteria = review.threads.map((t, i) => ({ id: `T${i + 1}`, text: `Review thread ${t.id} (${t.path ?? "general"}${t.line ? `:${t.line}` : ""}) is fixed, or declined with a concrete reason a reviewer would accept — "${firstLine(t.comments[0].body)}"`, verified_by: "review" }));
-  if (!criteria.length) criteria.push({ id: "S1", text: "Every item under 'Fix before merging' in the review summary is fixed, or declined with a concrete reason", verified_by: "review" });
-  const prChangesSource = () => changedSince(repoDir, mainBase).some(isMutableSource);
-  const spec = { actionable: true, summary: `Answer the Claude review of PR #${review.pr} (${review.verdict}).`, acceptance_criteria: criteria, behavior_change: prChangesSource(), touches_ui: false, evidence_plan: "test proof", test_plan: "as the review asks" };
+  if (mode === "verify") {
+    // Check the issue's own acceptance criteria (the checklist publish wrote) on the final code.
+    const criteria = review.criteria ?? [];
+    if (!criteria.length) {
+      writeFileSync(join(RUN.dir, "fix.patch"), "");
+      writeFileSync(join(RUN.dir, "verify.json"), JSON.stringify({ criteria: [], note: "no acceptance-criteria checklist in the PR description" }, null, 2));
+      return outcome({ status: "verified", patchSha256: createHash("sha256").update("").digest("hex"), note: "no acceptance-criteria checklist in the PR description" });
+    }
+    const vspec = asSpec(`Verify issue #${review.issueNumber}'s acceptance criteria on PR #${review.pr}'s final code.`, criteria.map((c) => ({ id: c.id, text: c.text, verified_by: "review" })));
+    const { out } = await agent("review-verify", roles.reviewPrompt("spec", review.issue, vspec, mainBase) + reviewDiff(repoDir, mainBase),
+      { cwd: repoDir, schema: roles.REVIEW_SCHEMA, check: true, maxTurns: 80 });
+    verification = criteria.map((c) => out.criteria?.find((v) => v.id === c.id) ?? { id: c.id, met: false, evidence: "the spec reviewer gave no verdict for it" });
+    writeFileSync(join(RUN.dir, "verify.json"), JSON.stringify({ criteria: verification, findings: out.findings }, null, 2));
+    const unmet = verification.filter((v) => !v.met);
+    RUN.log(`  criteria: ${verification.length - unmet.length}/${verification.length} met`);
+    if (!unmet.length) {
+      writeFileSync(join(RUN.dir, "fix.patch"), "");
+      return outcome({ status: "verified", patchSha256: createHash("sha256").update("").digest("hex") });
+    }
+    // Some aren't: make them true, through the same gates and reviews.
+    spec = asSpec(`Make the unmet acceptance criteria of issue #${review.issueNumber} true.`, unmet.map((v) => ({ id: v.id, text: `${criteria.find((c) => c.id === v.id).text} (not met yet: ${v.evidence})`, verified_by: "review" })));
+    firstPrompt = roles.implementPrompt(review.issue, spec);
+    diffBase = head;
+  } else if (mode === "conflict" && resolved.length) {
+    spec = asSpec(`Resolve the conflicts with main in PR #${review.pr}, keeping both sides' intent.`, [
+      { id: "C1", text: `No conflict markers remain in ${resolved.join(", ")}, and each keeps both main's change and this PR's`, verified_by: "review" },
+      { id: "C2", text: "Nothing outside the conflicted hunks changes unless a gate requires it", verified_by: "review" },
+    ]);
+    firstPrompt = roles.conflictPrompt(review.issue, resolved, mainSha);
+    diffBase = mainSha; // reviewers see the PR's whole change on top of main — where the resolution lives
+  } else {
+    // The "spec" for this round: every review thread answered (fixed, or declined with a reason).
+    const criteria = review.threads.map((t, i) => ({ id: `T${i + 1}`, text: `Review thread ${t.id} (${t.path ?? "general"}${t.line ? `:${t.line}` : ""}) is fixed, or declined with a concrete reason a reviewer would accept — "${firstLine(t.comments[0].body)}"`, verified_by: "review" }));
+    if (!criteria.length) criteria.push({ id: "S1", text: mode === "conflict" ? "main is merged in cleanly and every gate still passes" : "Every item under 'Fix before merging' in the review summary is fixed, or declined with a concrete reason", verified_by: "review" });
+    spec = asSpec(`Answer the Claude review of PR #${review.pr} (${review.verdict}).`, criteria);
+    firstPrompt = roles.reviewFixPrompt(review.issue, review);
+    schema = roles.REVIEW_FIX_SCHEMA;
+    diffBase = head;
+  }
+  spec.behavior_change = changedSince(repoDir, mainBase).some(isMutableSource);
 
   const { rounds, impl, reviewedPatch, stopped } = await iterate({
-    issue: review.issue, spec, roles, repoDir, baseline, diffBase: head, mutationBase: mainBase,
-    firstPrompt: roles.reviewFixPrompt(review.issue, review), schema: roles.REVIEW_FIX_SCHEMA,
+    issue: review.issue, spec, roles, repoDir, baseline, diffBase, mutationBase: mainBase, firstPrompt, schema,
   });
   const last = rounds.at(-1);
-  const patch = reviewedPatch ?? (last ? diffPatch(repoDir, head) : "");
+  let patch = reviewedPatch ?? (last ? diffPatch(repoDir, diffBase) : "");
+  if (resolved.length && last?.clean) {
+    // Hand over the resolution: the resolved files, plus the rest of the change as a patch on top of
+    // the merge commit they make — exactly what the push job rebuilds.
+    const leftover = resolved.filter((f) => hasMarkers(join(repoDir, f)));
+    if (leftover.length) return outcome({ status: "needs-human", reason: `conflict markers remain in ${leftover.join(", ")}` });
+    const merge = buildResolvedMerge({ repo: REPO_ROOT, scratch: join(RUN.dir, "merge-build"), head: review.head, mainSha, conflicted: resolved, resolvedFrom: repoDir, keepDir: join(RUN.dir, "resolved") });
+    patch = diffPatch(repoDir, merge);
+  }
   writeFileSync(join(RUN.dir, "fix.patch"), patch);
   const final = last?.impl ?? impl ?? {};
   writeFileSync(join(RUN.dir, "fix.json"), JSON.stringify({
-    rounds, last, models: RUN.models, responses: final.responses ?? [], summary: final.summary ?? "", summary_items: final.summary_items ?? [],
-    description_update: final.description_update ?? "", open_questions: final.open_questions ?? [], costUsd: RUN.costUsd,
+    mode, rounds, last, models: RUN.models, responses: final.responses ?? [], summary: final.summary ?? "", summary_items: final.summary_items ?? [],
+    description_update: final.description_update ?? "", open_questions: final.open_questions ?? [], costUsd: RUN.costUsd, verification,
   }, null, 2));
-  return outcome({ status: last?.clean ? "ready" : "needs-human", reason: stopped ?? (last?.clean ? undefined : "the fix did not pass the pipeline's own checks and reviews"), patchSha256: createHash("sha256").update(patch).digest("hex"), mergedMain });
+  return outcome({ status: last?.clean ? "ready" : "needs-human", reason: stopped ?? (last?.clean ? undefined : "the fix did not pass the pipeline's own checks and reviews"), patchSha256: createHash("sha256").update(patch).digest("hex"), mergedMain, resolved });
 }
 
 // Trusted: review.json is from the assess job; the run directory is from the agents' job (untrusted).
@@ -918,6 +1016,20 @@ function pushReview(dir, review) {
   if (!existsSync(outcomeFile)) return handOver(review, "needs-human", `the fix job produced nothing${actionsRunUrl() ? ` (logs: ${actionsRunUrl()})` : ""}`);
   const outcome = JSON.parse(readFileSync(outcomeFile, "utf8"));
   if (outcome.pr !== review.pr || outcome.head !== review.head) throw new Error("the fix run is for a different PR or head");
+  // The criteria check, written into the description's checklist whatever its result.
+  const verifyFile = join(dir, "verify.json");
+  if (existsSync(verifyFile)) {
+    const v = JSON.parse(readFileSync(verifyFile, "utf8"));
+    const body = tickCriteria(loadPr(review.pr).body, v.criteria ?? [], md);
+    if (v.criteria?.length) sh("gh", ["pr", "edit", review.url, "-R", REPO, "--body", body], { allowFail: true });
+  }
+  if (outcome.status === "verified") {
+    // Every criterion met on this exact head: mark it verified, then hand over as the review decided.
+    const met = existsSync(verifyFile) ? JSON.parse(readFileSync(verifyFile, "utf8")).criteria?.length ?? 0 : 0;
+    gh(["pr", "comment", review.url, "-R", REPO, "--body", `<!-- issue-agent-verified sha=${review.head} -->\n✔️ **Acceptance criteria checked on the final code (${review.head.slice(0, 7)}):** ${met ? `all ${met} met — the checklist in the description is ticked with the evidence.` : md(outcome.note ?? "nothing to check.")}`]);
+    const then = review.decision.then ?? { reason: "the review is satisfied" };
+    return handOver(review, "ready", `${then.reason}; and the issue's acceptance criteria are met`);
+  }
   if (outcome.status !== "ready") return handOver(review, "needs-human", outcome.reason ?? "the fix did not pass the pipeline's own checks");
   const patch = readFileSync(join(dir, "fix.patch"), "utf8");
   const fix = JSON.parse(readFileSync(join(dir, "fix.json"), "utf8"));
@@ -925,9 +1037,10 @@ function pushReview(dir, review) {
   const k = review.cycle + 1;
   const untested = rootTestRefusal(fix.last, outcome.patchSha256); // "ready" implies it; re-checked on the exact patch
   if (untested) return handOver(review, "needs-human", untested);
+  const resolved = outcome.resolved ?? [];
 
   let sha;
-  if (patch.trim()) {
+  if (patch.trim() || outcome.mergedMain) {
     const email = process.env.GIT_COMMITTER_EMAIL || git(["config", "user.email"], { allowFail: true }).out.trim();
     if (!email) throw new Error("no git identity to sign off with");
     const wt = join(dir, "push");
@@ -940,19 +1053,28 @@ function pushReview(dir, review) {
       if (!isCommitId(outcome.mergedMain)) throw new Error(`not a commit id: ${outcome.mergedMain}`);
       git(["fetch", "--quiet", "origin", "main"]);
       if (git(["merge-base", "--is-ancestor", outcome.mergedMain, "FETCH_HEAD"], { allowFail: true }).code !== 0) throw new Error(`${outcome.mergedMain} is not a commit on main`);
-      if (git(["merge", "--quiet", "--no-ff", "--no-edit", "--signoff", outcome.mergedMain], { cwd: wt, allowFail: true }).code !== 0) {
-        git(["merge", "--abort"], { cwd: wt, allowFail: true });
-        git(["worktree", "remove", "--force", wt], { allowFail: true });
-        return handOver(review, "needs-human", "bringing main into the branch conflicts");
-      }
+      // Rebuild the merge: clean, or exactly the files git says conflict, from the run's resolved copies.
+      const replay = replayResolution(wt, outcome.mergedMain, resolved, join(dir, "resolved"));
+      if (!replay.ok) { git(["worktree", "remove", "--force", wt], { allowFail: true }); return handOver(review, "needs-human", replay.why); }
+      git(["commit", "--quiet", "-s", "-m", `Merge main into ${review.headRef}${resolved.length ? `, resolving conflicts in ${resolved.join(", ")}` : ""}`], { cwd: wt });
     }
-    const { forbidden } = applyAndCheck(wt, patch);
-    if (forbidden.length) { git(["worktree", "remove", "--force", wt], { allowFail: true }); return handOver(review, "needs-human", `the fix touches ${forbidden.join(", ")}, which the agent never publishes`); }
-    const msg = `Address review, cycle ${k}: ${String(fix.summary).split("\n")[0].slice(0, 120)}\n\n${fix.summary}\n\nCo-Authored-By: ${modelName(MODEL)} <noreply@anthropic.com>`;
-    git(["commit", "--quiet", "-s", "-F", "-"], { cwd: wt, input: msg });
+    if (patch.trim()) {
+      const { forbidden } = applyAndCheck(wt, patch);
+      if (forbidden.length) { git(["worktree", "remove", "--force", wt], { allowFail: true }); return handOver(review, "needs-human", `the fix touches ${forbidden.join(", ")}, which the agent never publishes`); }
+      const msg = `Address review, cycle ${k}: ${String(fix.summary).split("\n")[0].slice(0, 120)}\n\n${fix.summary}\n\nCo-Authored-By: ${modelName(MODEL)} <noreply@anthropic.com>`;
+      git(["commit", "--quiet", "-s", "-F", "-"], { cwd: wt, input: msg });
+    }
     sha = git(["rev-parse", "HEAD"], { cwd: wt }).out.trim();
     if (flag("--dry-run")) { RUN.log(`  dry run — would push ${sha} to ${review.headRef}`); git(["worktree", "remove", "--force", wt], { allowFail: true }); return { pr: review.pr, status: "dry-run", sha }; }
     git([...GH_CREDENTIALS, "push", "--quiet", "origin", `HEAD:refs/heads/${review.headRef}`], { cwd: wt }); // fast-forward only: no force
+    // If main moved while the fix was being made, the new head may already conflict — and then GitHub
+    // runs no review on it and the loop would stall. Test it against the latest main; if it conflicts,
+    // start a conflict cycle now instead of waiting for a review that won't come.
+    git(["fetch", "--quiet", "origin", "main"], { cwd: wt });
+    if (git(["merge-tree", "--write-tree", "--quiet", "FETCH_HEAD", "HEAD"], { cwd: wt, allowFail: true }).code === 1) {
+      RUN.log("  the new head conflicts with the latest main — starting a conflict cycle");
+      dispatchReviewLoop(review.pr);
+    }
     git(["worktree", "remove", "--force", wt], { allowFail: true });
   }
 
@@ -982,10 +1104,10 @@ function pushReview(dir, review) {
   const declined = fix.responses.filter((r) => r.action === "declined").length;
   fix.summary_items = fix.summary_items?.length ? fix.summary_items : fix.last?.impl?.summary_items ?? [];
   gh(["pr", "comment", review.url, "-R", REPO, "--body",
-    `${REVIEW_MARK} cycle=${k} sha=${sha ?? "none"} -->\n🔁 **Review cycle ${k}/${review.maxCycles}:** ${sha ? `pushed ${sha.slice(0, 7)}` : "no code change"}${outcome.mergedMain ? ` (with main ${outcome.mergedMain.slice(0, 7)} merged in)` : ""} ·${answered}/${review.threads.length} thread(s) answered and resolved${declined ? ` (${declined} declined with a reason)` : ""}${(fix.summary_items ?? []).length ? ` · summary items: ${md(fix.summary_items.join("; "))}` : ""}.${sha ? " Waiting for the next review." : ""}`]);
+    `${REVIEW_MARK} cycle=${k} sha=${sha ?? "none"} -->\n🔁 **Review cycle ${k}/${review.maxCycles}:** ${sha ? `pushed ${sha.slice(0, 7)}` : "no code change"}${outcome.mergedMain ? ` (with main ${outcome.mergedMain.slice(0, 7)} merged in${resolved.length ? `, conflicts in ${resolved.length} file(s) resolved by the agent` : ""})` : ""}${fix.mode === "verify" ? ` · made ${(fix.verification ?? []).filter((v) => !v.met).map((v) => v.id).join(", ")} true (acceptance criteria that weren't met yet)` : ""} · ${answered}/${review.threads.length} thread(s) answered and resolved${declined ? ` (${declined} declined with a reason)` : ""}${(fix.summary_items ?? []).length ? ` · summary items: ${md(fix.summary_items.join("; "))}` : ""}.${sha ? " Waiting for the next review." : ""}`]);
   // No push means no new review would ever come: hand over now rather than wait forever.
   if (!sha) return handOver({ ...review, cycle: k, threads: review.threads.filter((t) => !byId.has(t.id)) }, "needs-human", "the agent answered the review without changing code, so no new review will run");
-  setStatus(review.issueNumber, `review cycle ${k}/${review.maxCycles}: pushed ${sha.slice(0, 7)} to ${review.url} — waiting for the next Claude review`);
+  setStatus(review.issueNumber, `review cycle ${k}/${review.maxCycles}: pushed ${sha.slice(0, 7)} to ${review.url} — waiting for the next Claude review`, { working: true });
   return { pr: review.pr, status: "pushed", sha };
 }
 
@@ -1028,7 +1150,10 @@ if (mode === "snapshot") {
   console.log(`PR #${review.pr}: ${action} — ${reason}${review.threads ? ` · ${review.threads.length} thread(s) to answer${review.ignored?.length ? `, ignored: ${review.ignored.join("; ")}` : ""}` : ""}`);
   if (!flag("--dry-run")) {
     if (action === "skip" && review.decision.left) setStatus(review.issueNumber, `the agent stopped working on ${review.url}: ${reason}`, { working: false });
-    if (action === "fix") setStatus(review.issueNumber, `review cycle ${review.cycle + 1}/${review.maxCycles}: the review ${review.verdict === "changes" ? "asks for changes" : "has small notes"} — fixing ${review.threads.length} thread(s) on ${review.url}`);
+    if (action === "fix") setStatus(review.issueNumber, review.decision.conflict
+      ? `review cycle ${review.cycle + 1}/${review.maxCycles}: ${review.url} conflicts with main — merging main in and resolving the conflicts`
+      : `review cycle ${review.cycle + 1}/${review.maxCycles}: the review ${review.verdict === "changes" ? "asks for changes" : "has small notes"} — fixing ${review.threads.length} thread(s) on ${review.url}`, { working: true });
+    if (action === "verify") setStatus(review.issueNumber, `the review is satisfied — checking the issue's acceptance criteria on the final code of ${review.url}`, { working: true });
     if (action === "done") handOver(review, "ready", reason);
     if (action === "give-up") handOver(review, "needs-human", reason);
   }
@@ -1036,7 +1161,7 @@ if (mode === "snapshot") {
 } else if (mode === "fix-review") {
   // Review loop, phase 2: agents answer the review. No GitHub calls.
   const review = JSON.parse(readFileSync(resolve(arg), "utf8"));
-  if (review.decision?.action !== "fix") { console.log(`nothing to fix: ${review.decision?.reason}`); process.exit(0); }
+  if (!["fix", "verify"].includes(review.decision?.action)) { console.log(`nothing to fix: ${review.decision?.reason}`); process.exit(0); }
   mkdirSync(RUNS_HOME, { recursive: true });
   const o = await fixReview(review, { dir: opt("--dir") && resolve(opt("--dir")) });
   console.log(`\n━━ PR #${o.pr} ${o.status}${o.reason ? ` — ${o.reason}` : ""} · ${o.dir}`);
@@ -1051,6 +1176,10 @@ if (mode === "snapshot") {
     if (!flag("--dry-run")) handOver(review, "needs-human", `the review loop failed${actionsRunUrl() ? ` (logs: ${actionsRunUrl()})` : ""}: ${e.message.split("\n")[0]}`);
     process.exitCode = 1;
   }
+} else if (mode === "sweep-conflicts") {
+  // After a push to main: give every PR in the loop that now conflicts a conflict cycle.
+  const started = sweepConflicts();
+  console.log(started.length ? `started conflict cycles for ${started.map((n) => `#${n}`).join(", ")}` : "no agent PR in the loop conflicts with main");
 } else if (mode === "publish-evidence") {
   // Re-publish a run's media + report (same paths, so a PR's links keep working).
   const dir = resolve(arg);

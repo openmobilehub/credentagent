@@ -1,6 +1,6 @@
 name: issue-agent-review
 # In the Actions list: which agent branch (it carries the issue number), or which PR when run by hand.
-run-name: "issue-agent-review · ${{ github.event.workflow_run.head_branch || format('PR #{0} (run by hand)', inputs.pr) }}"
+run-name: "issue-agent-review · ${{ github.event_name == 'push' && 'main moved: checking agent PRs for conflicts' || github.event.workflow_run.head_branch || format('PR #{0} (run by hand)', inputs.pr) }}"
 
 # The review loop: after every Claude review of an issue agent's PR (branch agent/issue-*), the agent
 # fixes what the review asks, pushes, replies to and resolves each thread — and the push starts the
@@ -15,11 +15,17 @@ run-name: "issue-agent-review · ${{ github.event.workflow_run.head_branch || fo
 #
 # Requires the AGENT_GH_TOKEN secret: a push made with GITHUB_TOKEN starts no workflow, so the fix
 # would never be reviewed again. Without it the loop hands the PR to a human after the first review.
+#
+# Also on every push to main (`sweep`): a PR in the loop that now conflicts with main gets no review
+# at all (GitHub runs no pull_request workflow on a conflicting PR), so the sweep starts a conflict
+# cycle for it — the agent merges main and resolves the conflicts, or hands over.
 
 on:
   workflow_run:
     workflows: ["Claude Code Review"]
     types: [completed]
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       pr:
@@ -28,12 +34,35 @@ on:
 
 concurrency:
   # By PR number, whether started by a review or by hand, so the two can't run on one PR at once.
-  group: issue-agent-review-${{ github.event.workflow_run.pull_requests[0].number || inputs.pr }}
+  group: issue-agent-review-${{ github.event.workflow_run.pull_requests[0].number || inputs.pr || 'sweep' }}
   cancel-in-progress: false
 
 permissions: {}
 
 jobs:
+  sweep:
+    # main moved: start a conflict cycle (workflow_dispatch) for each PR in the loop that now conflicts.
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: write # the issue's status comment
+      actions: write # to start the conflict cycles
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Check agent PRs against the new main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_AGENT_DISPATCH_TOKEN: ${{ github.token }}
+        run: node ci/issue-agent/run.mjs sweep-conflicts
+
   assess:
     # Only reviews of PRs from agent branches in this repository (run.mjs re-checks: same repo, agent
     # branch, agent:in-review). Any conclusion but "cancelled" (a newer push superseded it): a failed
@@ -95,7 +124,8 @@ jobs:
 
   fix:
     needs: assess
-    if: needs.assess.outputs.decision == 'fix'
+    # fix: answer a review or resolve a conflict; verify: check the issue's criteria before hand-over
+    if: needs.assess.outputs.decision == 'fix' || needs.assess.outputs.decision == 'verify'
     runs-on: ubuntu-latest
     timeout-minutes: 180
     permissions:
@@ -143,13 +173,14 @@ jobs:
 
   push:
     needs: [assess, fix]
-    if: always() && needs.assess.outputs.decision == 'fix'
+    if: always() && (needs.assess.outputs.decision == 'fix' || needs.assess.outputs.decision == 'verify')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: write
       pull-requests: write
       issues: write
+      actions: write # to start a conflict cycle when main moved under the fix
     steps:
       - uses: actions/checkout@v4
         with:
@@ -176,6 +207,7 @@ jobs:
           # The PAT's push starts the next review; without it the loop hands over to a human.
           GH_TOKEN: ${{ secrets.AGENT_GH_TOKEN || github.token }}
           ISSUE_AGENT_REVIEW_LOOP: ${{ secrets.AGENT_GH_TOKEN != '' && 'on' || '' }}
+          ISSUE_AGENT_DISPATCH_TOKEN: ${{ github.token }} # starting a run by hand works with it
           PR: ${{ needs.assess.outputs.pr }}
         run: |
           mkdir -p "$RUNNER_TEMP/issue-agent/fix"
