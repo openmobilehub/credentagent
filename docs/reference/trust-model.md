@@ -14,7 +14,8 @@ The headline:
 > still pass. This is a flow demo, not a real safety control — never present it as one.
 
 That sentence is not marketing copy; it is the literal trust footer shown on every
-ceremony page (`src/ceremony/theme.ts`):
+checkout ceremony page (`src/ceremony/theme.ts`) — the device-signed grant page shows its
+own `device-signed` footer instead:
 
 ```
 🔒 presence-only-demo · secured by CredentAgent · the wire crypto is real; issuer trust anchor is not
@@ -51,14 +52,22 @@ enforcedAt: "tool" | "checkout";
 export type TrustLevel = "presence-only-demo" | "device-signed" | "issuer-verified";
 ```
 
-Every checkout rail emits **`"presence-only-demo"`** — the manifest default
-(`src/manifest.ts`), the envelope default (`src/envelope.ts`), and the field hard-coded
-on each mandate (`src/ceremony/mandate.ts`, `dc-payment/verify.ts`,
-`credential-gate/verify.ts`). Device-signed spending grants emit **`"device-signed"`**: the
-holder's signature is really verified, but its anchor is a self-minted demo credential.
-**`"issuer-verified"`** is reserved (see below): the gate never emits it for its own checks;
-only an external verifier on the `delegated` seam may relay it. It is the *only* value for
-which the page suppresses the presence-only footer (`src/ceremony/checkout-page.ts`).
+Every **built-in** checkout rail (`passkey`, `credential`, `dc-payment`) emits
+**`"presence-only-demo"`** — the manifest default (`src/manifest.ts`), the envelope default
+(`src/envelope.ts`), and the field hard-coded on each mandate (`src/ceremony/mandate.ts`,
+`dc-payment/verify.ts`, `credential-gate/verify.ts`). The `delegated` rail relays its
+external verifier's level verbatim (`delegated-payment/routes.ts`). Device-signed spending
+grants emit **`"device-signed"`**: the holder's signature is really verified, but its anchor
+is a self-minted demo credential. **`"issuer-verified"`** is reserved (see below): the gate
+never emits it for its own checks; only an external verifier on the `delegated` seam may
+relay it. It is the *only* value for which the page suppresses the presence-only footer
+(`src/ceremony/checkout-page.ts`).
+
+One level sits **below** all three, outside `TrustLevel`: **`"server-issued-demo"`**, the
+`trustLevel` of a click-approved page-mode spending grant (`grants.create({ signing: "page" })`)
+and of `DelegatedGate.preApprove` (`src/grants.ts`, `src/delegated.ts`). No credential is
+involved at all — the server takes the human's word for it. It exists for demos, examples
+and CI.
 
 ## What "presence-only" means, precisely
 
@@ -77,9 +86,10 @@ credential inside it. That is the whole gap, and it is the same gap on every rai
 
 ## What is real per rail
 
-`mount()` serves three ceremony rails. They differ in how much cryptography is real
-today — but **all three carry `trust_level: "presence-only-demo"`** because none verifies
-the issuer trust anchor.
+`mount()` serves three built-in ceremony rails, plus a fourth, `delegated`, when you
+configure an external verifier (it relays that verifier's level). The three built-in rails
+differ in how much cryptography is real today — but **all three carry
+`trust_level: "presence-only-demo"`** because none verifies the issuer trust anchor.
 
 ### `passkey` — same-device + cross-device (caBLE)
 
@@ -195,6 +205,7 @@ Until issuer-trust verification lands, every gate that relies on the mdoc is **f
 behind the presence-only-demo mode** and **must not be presented as a real safety
 control** — in the UI, in a demo, or in a pitch. This is a load-bearing security
 invariant (constitution Security Requirements; `CLAUDE.md`), and the honesty tests assert
-the `presence-only-demo` token survives on every page and every mandate. The point of this
+the `presence-only-demo` token survives on every checkout page and every checkout mandate
+(the device-signed grant page carries its own `device-signed` caveat instead). The point of this
 document is that the limitation is stated plainly, in the data and in the words, rather
 than buried.

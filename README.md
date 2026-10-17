@@ -6,7 +6,7 @@ action — a payment, an age gate, an access grant — CredentAgent makes it pro
 one application** — `age.over(21)`, a loyalty membership, a prescription, and
 `payment.in("usd")` are all just credentials in the same policy.
 
-> **Real, tested, and published on npm** (both packages are at 0.5.0). Start with the
+> **Real, tested, and [published on npm](https://www.npmjs.com/package/@openmobilehub/credentagent-gate).** Start with the
 > [quickstart](./examples/quickstart) — try it, run it, own it in ~5 minutes.
 
 ## What it is
@@ -98,18 +98,23 @@ For a deployment, pass your public origin: `new CredentAgent({ walletOrigin: "ht
 Honesty is core to CredentAgent — it's infrastructure meant to be trusted, so we name what
 binds cryptographically and what doesn't.
 
-**`trust_level: "presence-only-demo"`** on the OpenID4VP rails. The *wire* cryptography is real — WebAuthn on
+**`trust_level: "presence-only-demo"`** on the built-in checkout rails (passkey, credential,
+dc-payment). The *wire* cryptography is real — WebAuthn on
 the passkey rail (verified against this server's origin / RP-ID, user-verification
 required, nonce/replay-bound), OpenID4VP JWE / ECDH-ES decrypt with nonce binding,
 HPKE, ISO-mdoc parse. But there is **no issuer / device-signature trust anchor yet**:
 the gate enforces **disclosure** (an explicit positive claim such as
 `age_over_21 === true`, never mere token-presence) and **binding** (nonce / ephemeral
-key), but **not trust**. A self-crafted mdoc would pass. The AP2-shaped mandate is
+key), but **not trust**. A self-crafted mdoc would pass. The checkout Payment Mandate is
 dev-signed (integrity hash), not key-signed.
 
 **`trust_level: "device-signed"`** on device-signed spending grants. The gate verifies the
 wallet's real signature over the grant's exact terms, but the credential's trust anchor is
 still a self-minted demo credential, not a CA — a self-crafted credential would pass too.
+
+**`trustLevel: "server-issued-demo"`** on click-approved page-mode grants and
+`DelegatedGate`. No credential at all — the server takes the human's word for it. For demos,
+examples and CI only.
 
 > **This is a flow demo, not a real safety control — never present it as one.**
 > Issuer-verified cryptographic mdoc trust (issuer MSO + device signatures, via

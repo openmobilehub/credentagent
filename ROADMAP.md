@@ -6,7 +6,8 @@ is one application.** This roadmap is honest about exactly what binds cryptograp
 **today** versus what's next — because a consent layer is only useful if you can trust its
 claims about itself.
 
-Both packages are at **0.5.0**. The release each item first shipped in is noted in brackets.
+The release each item first shipped in is noted in brackets; the current version is on
+[npm](https://www.npmjs.com/package/@openmobilehub/credentagent-gate).
 
 ## Shipping
 
@@ -39,7 +40,8 @@ Both packages are at **0.5.0**. The release each item first shipped in is noted 
   created order travels as the signed mandate, no shared order store). Server-HMAC signed.
 - **Storage and catalog for real deployments** [0.2.x]. Redis persistence via
   `createStorefront({ storage })` (and `redisStorage.fromEnv()` [0.5.0]), a dynamic catalog
-  (Firestore or any database) via `createStorefront({ catalog })` with a `CatalogSource`, and
+  via `createStorefront({ catalog })` with your own `CatalogSource` (e.g. over Firestore or
+  any database), and
   session-scoped carts.
 - **Orders, webhooks and grants** [0.3.0]. `orders.serve(app)` wires the human-present
   checkout in one call; `credentagent.webhooks` sends a real, signed HTTP `order.settled`;
