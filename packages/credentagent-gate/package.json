@@ -40,7 +40,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json && tsc -p tsconfig.test.json",
+    "build": "vite build --config vite.config.cards.ts && tsc -p tsconfig.json && tsc -p tsconfig.test.json",
     "test": "vitest run"
   },
   "keywords": [
@@ -62,12 +62,16 @@
     "jose": "^5.10.0"
   },
   "devDependencies": {
+    "@modelcontextprotocol/ext-apps": "^2.0.0",
     "@types/react": "^19.2.2",
     "@types/react-dom": "^19.2.2",
     "@types/supertest": "^7.2.0",
+    "@vitejs/plugin-react": "^4.3.4",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
-    "supertest": "^7.2.2"
+    "supertest": "^7.2.2",
+    "vite": "^6.0.0",
+    "vite-plugin-singlefile": "^2.3.0"
   },
   "publishConfig": {
     "access": "public"
