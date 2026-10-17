@@ -1,0 +1,47 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Issue #374 report</title><style>
+:root{--bg:#fbfbfa;--fg:#1f2328;--muted:#656d76;--card:#fff;--line:#d0d7de;--ok:#1a7f37;--bad:#cf222e;--warn:#9a6700;--code:#f6f8fa}
+@media (prefers-color-scheme:dark){:root{--bg:#0d1117;--fg:#e6edf3;--muted:#8d96a0;--card:#161b22;--line:#30363d;--ok:#3fb950;--bad:#f85149;--warn:#d29922;--code:#0d1117}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+main{max-width:1100px;margin:0 auto;padding:28px 16px 64px}h1{font-size:24px;margin:0 0 4px}h2{font-size:18px;margin:32px 0 10px}
+.muted{color:var(--muted)}.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin:10px 0}
+.pill{display:inline-block;padding:2px 10px;border-radius:999px;font-weight:600;font-size:13px;border:1px solid currentColor}
+.ok{color:var(--ok)}.bad{color:var(--bad)}.warn{color:var(--warn)}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:10px;overflow:auto;font-size:12px;line-height:1.45;max-height:420px}
+table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid var(--line);padding:6px 8px;text-align:left;vertical-align:top}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px}figure{margin:0}figure img,figure video{width:100%;border:1px solid var(--line);border-radius:8px;background:#fff}
+figcaption{font-size:13px;color:var(--muted);margin-top:4px}</style></head><body><main>
+<p class="muted">Issue agent run 202610170616 · claude-opus-5-5 · ~$1.69 · base 442eb25</p>
+<h1><a href="https://github.com/openmobilehub/credentagent/issues/374">#374</a> Docs still say v0.1/v0.2 while packages ship 0.5.0</h1><p><span class="pill ok">ready for human review</span></p>
+<div class="card">The top-level docs show stale version numbers while both packages ship 0.5.0. README.md says &quot;v0.2 — real, tested, and published on npm&quot; and calls issuer-verified trust &quot;the v0.2+ line&quot;. ROADMAP.md headings say &quot;Shipping (v0.1)&quot; and &quot;Research / v0.2&quot;. SECURITY-INVARIANTS.md says &quot;CredentAgent v0.1 is presence-only-demo&quot; and &quot;Issuer-verified trust is the v0.2 line&quot;, and its line 263 repeats the v0.1 claim. The fix is docs-only. Drop or centralise the version numbers. Bring the ROADMAP &quot;Shipping&quot; list up to what v0.2–v0.5 delivered. Rewrite the SECURITY-INVARIANTS honesty boundary to name the current trust levels from `TrustLevel` in `packages/credentagent-gate/src/types.ts`: `presence-only-demo`, `device-signed`, `issuer-verified`. It must still say clearly that nothing is issuer-verified yet. Nothing may imply issuer-verified trust has shipped (CLAUDE.md honesty fencing). `docs/reference/trust-model.md` has the same stale &quot;v0.1 enforces…&quot; headline. It is not named in the issue, so fix it only if that is a small edit that keeps the docs consistent.</div>
+<h2>What changed</h2><div class="card">This is a docs-only change. The top-level docs no longer show stale version numbers (v0.1 / v0.2) that contradicted the 0.5.0 packages.
+
+- **README.md.** The banner now says the packages are published on npm at 0.5.0. The &quot;Honest status&quot; section now names both trust levels in use:
+  - `presence-only-demo` on the OpenID4VP rails.
+  - `device-signed` on device-signed spending grants: the signature is real, but its trust anchor is a demo credential.
+
+  Issuer-verified trust is now described as planned work that has not shipped. The gate never reports it itself; only an external verifier plugged in through the `delegated` seam may.
+- **ROADMAP.md.** The headings &quot;Shipping (v0.1)&quot; and &quot;Research / v0.2&quot; are gone. The Shipping list now covers what shipped up to 0.5.0, each item tagged with the release it first appeared in. I checked the tags and git history for this:
+  - custom credentials that complete on the phone
+  - the `delegated` verifier rail
+  - Cart Mandate end to end, with the `statelessOrders` transport and Cart ↔ Payment reconciliation
+  - Redis storage (`redisStorage.fromEnv()`), dynamic catalogs and session-scoped carts
+  - orders, webhooks and grants (0.3.0)
+  - device-signed grants (0.5.0)
+  - `doctor()`, `defineHost()` and `{ branding }` (0.4.0)
+  - the demo PKI
+
+  Of the old &quot;Next&quot; items, two had already shipped and moved to Shipping: Cart Mandate end to end and custom-credential completion. Only the Mode B page-less proving ceremony stays under Next, because only the envelope primitive exists today. The user-signed Cart Mandate stays under Research, because the Cart Mandate is still signed with a server HMAC.
+- **SECURITY-INVARIANTS.md.** The honesty boundary now lists all three `TrustLevel` values with what each means. `issuer-verified` is described as reserved and not shipped by the library. The section still says a self-crafted mdoc (or a self-crafted credential on a device-signed grant) would pass, and that a presence-only gate must never be presented as a safety control. The &quot;in v0.1&quot; wording in the invariant 6 note is removed.
+- **docs/reference/trust-model.md.** Small consistency edits:
+  - removed the v0.1/v0.2 wording
+  - replaced the outdated two-value `TrustLevel` snippet with the current three-value union
+  - noted where `device-signed` is emitted
+
+Evidence: before the change, `grep -nE &quot;v0\.[0-9]&quot;` matched README.md:9 and 112, ROADMAP.md:9, 44, 49 and 52, SECURITY-INVARIANTS.md:15, 23 and 263, and 10 lines in trust-model.md. After the change it matches nothing in any of the four files. From the repo root, `npm run build`, `npm run typecheck`, `npm run lint` and `npm test` all passed: 83 files, 1346 tests.<p class="muted">Files: README.md, ROADMAP.md, SECURITY-INVARIANTS.md, docs/reference/trust-model.md</p></div>
+
+
+<h2>Test proof</h2><div class="grid"><figure><a href="https://raw.githubusercontent.com/openmobilehub/credentagent/agent-evidence/issue-374/202610170616/test-proof-01.png"><img src="https://raw.githubusercontent.com/openmobilehub/credentagent/agent-evidence/issue-374/202610170616/test-proof-01.png" alt="Test proof: the pipeline&#39;s own gate runs (no failing-test check: the spec found no behavior change)" loading="lazy"></a><figcaption>Test proof: the pipeline&#39;s own gate runs (no failing-test check: the spec found no behavior change)</figcaption></figure><figure><video controls muted playsinline src="https://raw.githubusercontent.com/openmobilehub/credentagent/agent-evidence/issue-374/202610170616/test-proof.webm"></video><figcaption>🎬 Test proof: the pipeline&#39;s own gate runs (no failing-test check: the spec found no behavior change)</figcaption></figure></div>
+<h2>Reviews (final round)</h2><div class="card"><b>spec</b> — <span class="ok">approve</span><ul><li><span class="warn">suggestion</span> ROADMAP.md:38 Per-item release tags like [0.2.x] and [0.3.0–0.4.0] are not verifiable from this diff. They add new version claims that could go stale again, which is the problem the issue reports. Check them against the changelog or release notes, or drop the vague ranges.</li></ul></div><div class="card"><b>security</b> — <span class="ok">approve</span><ul><li><span class="warn">suggestion</span> ROADMAP.md The per-item version tags ([0.2.x], [0.3.0], [0.5.0]) are hand-written and will go stale at the next release, which is the problem this issue reports. Consider linking to release notes, or keeping only a few tags.</li><li><span class="warn">suggestion</span> SECURITY-INVARIANTS.md The honesty-boundary paragraph now has a stray short line (&quot;shipped. The&quot;) from re-wrapping. This is cosmetic only.</li></ul></div><div class="card"><b>dx</b> — <span class="ok">approve</span><ul><li><span class="warn">suggestion</span> SECURITY-INVARIANTS.md:16 The new `types.ts` link uses `../../packages/...`, but this file is at the repo root, so the link looks broken on GitHub. Existing links in the file use the same prefix, so this predates the change and now has one more instance.</li><li><span class="warn">suggestion</span> README.md:9 The 0.5.0 version is hard-coded in the README banner and in ROADMAP. It will go stale again at the next release.</li></ul></div>
+<h2>Rounds</h2><div class="card"><table><tr><th>#</th><th>gates</th><th>test proof</th><th>reviews</th></tr><tr><td>1</td><td>build ✓ · typecheck ✓ · lint ✓ · test ✓</td><td>n/a</td><td>spec ✓ · security ✓ · dx ✓</td></tr></table></div>
+<h2>Open questions for a human</h2><ul><li>README.md and ROADMAP.md still cite `@auth0/mdl` as an integration target. I left that alone because it is tracked separately in #302.</li><li>docs/reference/trust-model.md still says the gate has &#39;three ceremony rails&#39;, and its per-rail table does not cover the delegated rail or device-signed grants. Beyond the version fixes, I only added a short device-signed note to that file, to keep this change small. A fuller rewrite could be a follow-up.</li><li>SECURITY-INVARIANTS.md links use `../../packages/...` paths that look wrong for a file at the repo root. The new link I added follows the same pattern so the file stays consistent. This existing problem is out of scope here.</li></ul>
+</main></body></html>

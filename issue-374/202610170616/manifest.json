@@ -1,0 +1,26 @@
+[
+  {
+    "kind": "image",
+    "file": "test-proof-01.png",
+    "caption": "Test proof: the pipeline's own gate runs (no failing-test check: the spec found no behavior change)",
+    "side": "proof",
+    "session": "test-proof",
+    "url": "about:blank",
+    "at": "2026-10-17T06:23:18.192Z"
+  },
+  {
+    "kind": "events",
+    "session": "test-proof",
+    "side": "proof",
+    "events": [],
+    "at": "2026-10-17T06:23:20.814Z"
+  },
+  {
+    "kind": "video",
+    "file": "test-proof.webm",
+    "caption": "Test proof: the pipeline's own gate runs (no failing-test check: the spec found no behavior change)",
+    "side": "proof",
+    "session": "test-proof",
+    "at": "2026-10-17T06:23:20.815Z"
+  }
+]
