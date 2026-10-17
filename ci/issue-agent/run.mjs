@@ -50,7 +50,7 @@ import {
   roleModel, testGateCommand, rootTestRefusal, publishVerdict, isMutableSource, sameLockfile,
 } from "./checks.mjs";
 import { reportHtml, prBody, issueComment, md, statusBody, STATUS_MARK } from "./report.mjs";
-import { startMerge, buildResolvedMerge, replayResolution, hasMarkers, treeOf } from "./merges.mjs";
+import { startMerge, buildResolvedMerge, rebuildForPush, hasMarkers, treeOf } from "./merges.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, "../..");
@@ -381,7 +381,7 @@ function baselineFor(dir, sha, label) {
 const baselineNote = (baseline) => {
   const red = baseline.filter((b) => !b.green);
   return red.length
-    ? `\n\nNOTE — main is already red before your change. These failures are NOT yours: do not fix them, do not touch their files unless the issue requires it (the pipeline ignores exactly these, and no more of them):\n${red.map((b) => `- ${b.name}: ${b.fingerprints.join("; ") || "(failed with no parsable detail)"}`).join("\n")}`
+    ? `\n\nNOTE — the code you start from (main, or in a review cycle the PR's head) is already red before your change. These failures are NOT yours: do not fix them, do not touch their files unless the issue requires it (the pipeline ignores exactly these, and no more of them):\n${red.map((b) => `- ${b.name}: ${b.fingerprints.join("; ") || "(failed with no parsable detail)"}`).join("\n")}`
     : "";
 };
 
@@ -936,7 +936,14 @@ async function fixReview(review, { dir } = {}) {
       RUN.log(`  merging main ${mainSha.slice(0, 7)} conflicts in ${resolved.join(", ")} — the agent resolves them`);
       // A conflict found while answering a review or checking criteria: resolve it first, telling the
       // agent so (the review threads and criteria come back on the next cycle).
-      if (mode !== "conflict") { RUN.log(`  (this ${mode} cycle becomes a conflict cycle)`); mode = "conflict"; }
+      if (mode !== "conflict") {
+        // ...but never a cycle past the cap: there, a conflict goes to a human.
+        if (review.cycle >= review.maxCycles) {
+          restorePatch(repoDir, head, "");
+          return outcome({ status: "needs-human", reason: `the PR conflicts with main (in ${resolved.join(", ")}) and ${review.maxCycles} review cycles are done` });
+        }
+        RUN.log(`  (this ${mode} cycle becomes a conflict cycle)`); mode = "conflict";
+      }
     }
     code("npm", ["ci", "--no-audit", "--no-fund"], { cwd: repoDir, allowFail: true });
     code("npm", ["run", "build"], { cwd: repoDir, allowFail: true });
@@ -1068,27 +1075,20 @@ function pushReview(dir, review) {
     git(["fetch", "--quiet", "origin", review.head]);
     git(["worktree", "add", "--quiet", "--detach", wt, review.head]);
     if (outcome.mergedMain) {
-      // Re-do the fix job's merge of main here, from a commit we check is really on main — the
-      // patch was made on top of exactly that merge.
+      // The patch was made on top of a merge of exactly this main commit: check it really is on main.
       if (!isCommitId(outcome.mergedMain)) throw new Error(`not a commit id: ${outcome.mergedMain}`);
       git(["fetch", "--quiet", "origin", "main"]);
       if (git(["merge-base", "--is-ancestor", outcome.mergedMain, "FETCH_HEAD"], { allowFail: true }).code !== 0) throw new Error(`${outcome.mergedMain} is not a commit on main`);
-      // Rebuild the merge: clean, or exactly the files git says conflict, from the run's resolved copies.
-      const replay = replayResolution(wt, outcome.mergedMain, resolved, join(dir, "resolved"), outcome.deleted ?? []);
-      if (!replay.ok) { git(["worktree", "remove", "--force", wt], { allowFail: true }); return handOver(review, "needs-human", replay.why); }
-      git(["commit", "--quiet", "-s", "-m", `Merge main into ${review.headRef}${resolved.length ? `, resolving conflicts in ${resolved.join(", ")}` : ""}`], { cwd: wt });
     }
-    if (patch.trim()) {
-      const { forbidden } = applyAndCheck(wt, patch);
-      if (forbidden.length) { git(["worktree", "remove", "--force", wt], { allowFail: true }); return handOver(review, "needs-human", `the fix touches ${forbidden.join(", ")}, which the agent never publishes`); }
-      const msg = `Address review, cycle ${k}: ${String(fix.summary).split("\n")[0].slice(0, 120)}\n\n${fix.summary}\n\nCo-Authored-By: ${modelName(MODEL)} <noreply@anthropic.com>`;
-      git(["commit", "--quiet", "-s", "-F", "-"], { cwd: wt, input: msg });
-    }
-    sha = git(["rev-parse", "HEAD"], { cwd: wt }).out.trim();
-    if (outcome.tree && git(["rev-parse", "HEAD^{tree}"], { cwd: wt }).out.trim() !== outcome.tree) {
-      git(["worktree", "remove", "--force", wt], { allowFail: true });
-      return handOver(review, "needs-human", "the change rebuilt for pushing differs from the one the pipeline tested");
-    }
+    // Rebuild — main merged in (clean, or the replayed resolution), the patch applied — and push only
+    // if it is byte-for-byte the tree the fix job tested (merges.mjs, tested end to end).
+    const rebuilt = rebuildForPush({
+      wt, mainSha: outcome.mergedMain, resolved, resolvedDir: join(dir, "resolved"), deleted: outcome.deleted ?? [], patch, expectedTree: outcome.tree,
+      mergeMessage: `Merge main into ${review.headRef}${resolved.length ? `, resolving conflicts in ${resolved.join(", ")}` : ""}`,
+      fixMessage: `Address review, cycle ${k}: ${String(fix.summary).split("\n")[0].slice(0, 120)}\n\n${fix.summary}\n\nCo-Authored-By: ${modelName(MODEL)} <noreply@anthropic.com>`,
+    });
+    if (!rebuilt.ok) { git(["worktree", "remove", "--force", wt], { allowFail: true }); return handOver(review, "needs-human", rebuilt.why); }
+    sha = rebuilt.sha;
     if (flag("--dry-run")) { RUN.log(`  dry run — would push ${sha} to ${review.headRef}`); git(["worktree", "remove", "--force", wt], { allowFail: true }); return { pr: review.pr, status: "dry-run", sha }; }
     git([...GH_CREDENTIALS, "push", "--quiet", "origin", `HEAD:refs/heads/${review.headRef}`], { cwd: wt }); // fast-forward only: no force
     // If main moved while the fix was being made, the new head may already conflict — and then GitHub

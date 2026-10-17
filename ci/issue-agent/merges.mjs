@@ -81,6 +81,35 @@ export function buildResolvedMerge({ repo, scratch, head, mainSha, conflicted, r
  * a forbidden or escaping path, and never with markers left. Leaves the merge staged, uncommitted
  * (the caller commits it, signed off). Returns { ok: true } or { ok: false, why } (merge aborted).
  */
+/**
+ * The push job's whole rebuild, in `wt` (a clean checkout of the PR head): bring main in (clean, or
+ * replaying the resolution), apply the hand-over patch, commit each step with `commitArgs` (the
+ * caller's signed-off identity) — and refuse unless the result is byte-for-byte `expectedTree`, the
+ * tree the fix job tested. Returns { ok: true, sha } or { ok: false, why }.
+ */
+export function rebuildForPush({ wt, mainSha, resolved = [], resolvedDir, deleted = [], patch = "", expectedTree, mergeMessage, fixMessage, commitArgs = [] }) {
+  const commit = (message) => {
+    const r = spawnSync("git", ["-c", "core.hooksPath=/dev/null", ...commitArgs, "commit", "--quiet", "-s", "-F", "-"], { cwd: wt, input: message, encoding: "utf8" });
+    if (r.status !== 0) throw new Error(`git commit failed: ${r.stderr}`);
+  };
+  if (mainSha) {
+    const replay = replayResolution(wt, mainSha, resolved, resolvedDir, deleted);
+    if (!replay.ok) return replay;
+    commit(mergeMessage);
+  }
+  if (patch.trim()) {
+    const a = spawnSync("git", ["-c", "core.hooksPath=/dev/null", "apply", "--index", "--whitespace=nowarn", "-"], { cwd: wt, input: patch, encoding: "utf8" });
+    if (a.status !== 0) return { ok: false, why: `the fix's patch doesn't apply: ${a.stderr.split("\n")[0]}` };
+    const staged = run(wt, ["diff", "--cached", "--name-only", "--no-renames", "-z"]).out.split("\0").filter(Boolean);
+    const forbidden = forbiddenPaths(staged);
+    if (forbidden.length) return { ok: false, why: `the fix touches ${forbidden.join(", ")}, which the agent never publishes` };
+    commit(fixMessage);
+  }
+  const tree = run(wt, ["rev-parse", "HEAD^{tree}"]).out.trim();
+  if (!expectedTree || tree !== expectedTree) return { ok: false, why: "the change rebuilt for pushing differs from the one the pipeline tested" };
+  return { ok: true, sha: run(wt, ["rev-parse", "HEAD"]).out.trim() };
+}
+
 export function replayResolution(wt, mainSha, resolved, resolvedDir, deleted = []) {
   const m = run(wt, [...anon, "merge", "--quiet", "--no-ff", "--no-commit", mainSha], { allowFail: true });
   const fail = (why) => { run(wt, ["merge", "--abort"], { allowFail: true }); return { ok: false, why }; };

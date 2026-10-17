@@ -15,7 +15,7 @@ import {
   parseCriteria, tickCriteria, verifiedFor, afterVerification, acceptVerified,
 } from "./checks.mjs";
 import { reviewPrompt } from "./roles.mjs";
-import { startMerge, buildResolvedMerge, replayResolution, treeOf } from "./merges.mjs";
+import { startMerge, buildResolvedMerge, replayResolution, rebuildForPush, treeOf } from "./merges.mjs";
 import { fingerprints, withinBaseline } from "./fingerprints.mjs";
 import { prBody, proofHtml, issueComment, statusBody, STATUS_MARK } from "./report.mjs";
 
@@ -130,9 +130,14 @@ describe("bringing main into a conflicting PR (merges.mjs)", () => {
     return { work, keep, conflicted: m.conflicted, deleted: merge.deleted, patch, want: treeOf(work) };
   };
   let pushes = 0;
-  const pushJob = (conflicted, keep, patch, deleted = []) => {
+  const freshCheckout = () => {
     const wt = join(repo, "..", `${repo.split("/").pop()}-push${++pushes}`);
     git(repo, "worktree", "add", "-q", "--detach", wt, prHead);
+    return wt;
+  };
+  // The replay half alone (its refusals)...
+  const pushJob = (conflicted, keep, patch, deleted = []) => {
+    const wt = freshCheckout();
     const replay = noIdentity(() => replayResolution(wt, mainSha, conflicted, keep, deleted));
     if (replay.ok) {
       git(wt, "commit", "-q", "-m", "merge main");
@@ -140,6 +145,26 @@ describe("bringing main into a conflicting PR (merges.mjs)", () => {
     }
     return { wt, replay };
   };
+  // ...and the push job's whole rebuild, exactly as run.mjs calls it.
+  const rebuild = (fx, over = {}) => noIdentity(() => rebuildForPush({
+    wt: freshCheckout(), mainSha, resolved: fx.conflicted, resolvedDir: fx.keep, deleted: fx.deleted, patch: fx.patch, expectedTree: fx.want,
+    mergeMessage: "merge main", fixMessage: "fix", commitArgs: ["-c", "user.name=t", "-c", "user.email=t@example.com"], ...over,
+  }));
+
+  it("pushes only the exact tree that was tested: the whole rebuild, end to end", () => {
+    const fx = fixJob();
+    const ok = rebuild(fx);
+    expect(ok).toMatchObject({ ok: true });
+    expect(git(repo, "rev-parse", `${ok.sha}^{tree}`).trim()).toBe(fx.want);
+    // a hand-over patch carrying one change more than what was tested is refused
+    const tampered = fx.patch + "diff --git a/e.txt b/e.txt\nnew file mode 100644\nindex 0000000..e69de29\n";
+    expect(rebuild(fx, { patch: tampered })).toMatchObject({ ok: false, why: expect.stringMatching(/differs from the one the pipeline tested/) });
+    // no tested tree to compare with: refused, never pushed unchecked
+    expect(rebuild(fx, { expectedTree: undefined })).toMatchObject({ ok: false, why: expect.stringMatching(/differs/) });
+    // a patch that reaches into .github/ is refused before any commit
+    const sneaky = "diff --git a/.github/x.yml b/.github/x.yml\nnew file mode 100644\nindex 0000000..e69de29\n";
+    expect(rebuild(fx, { patch: sneaky })).toMatchObject({ ok: false, why: expect.stringMatching(/never publishes/) });
+  });
 
   it("rebuilds, in the push job, exactly the tree the agent's resolution made — and it no longer conflicts", () => {
     const fx = fixJob();
