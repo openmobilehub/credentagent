@@ -194,6 +194,12 @@ export function tickCriteria(body, verdicts, escape = (s) => s) {
 }
 
 /**
+ * A review or verify cycle that meets a conflict with main: it becomes a conflict cycle — unless
+ * the cycle cap is already reached, where the PR goes to a human instead of a cycle past it.
+ */
+export const conflictMidCycle = ({ cycle, maxCycles }) => (cycle >= maxCycles ? "give-up" : "resolve");
+
+/**
  * What follows a criteria check: all met → verified; some not → a fix cycle to make them true — but
  * not past the cycle cap, where the PR goes to a human with the unmet ones named.
  */
