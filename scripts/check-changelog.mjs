@@ -6,16 +6,16 @@
 //   node scripts/check-changelog.mjs 0.6.0 --file path/to/CHANGELOG.md
 //   node scripts/check-changelog.mjs --tag v0.6.0   # release mode: the tag must also equal
 //                                                   # the packages' version
+//   … --root path/to/repo                            # read the packages from another checkout (tests)
 //
-// Passes only if the changelog has a `## [X.Y.Z] - YYYY-MM-DD` heading with at least one
-// non-blank line under it. Exits 1 otherwise, saying why. The root `npm test` runs it against
-// the real changelog (scripts/check-changelog.test.ts), and publish.yml runs `npm test` before
-// any `npm publish` — so a version bump without its changelog entry cannot reach npm.
+// Passes only if the changelog has a `## [X.Y.Z] - YYYY-MM-DD` heading with at least one entry
+// under it (a line that isn't blank or a heading). Exits 1 otherwise, saying why.
+// The guard: publish.yml runs `--tag <release tag>` before it installs or builds, so a release
+// without its changelog entry — or tagged with a version the packages don't carry — never reaches
+// npm. The root `npm test` also runs it against the real changelog (scripts/check-changelog.test.ts).
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-
-const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const PACKAGES = ["credentagent-gate", "credentagent-storefront"];
 
 function fail(message) {
@@ -40,7 +40,9 @@ function option(args, name) {
   return { value: args[at + 1], rest: args.filter((_, i) => i !== at && i !== at + 1) };
 }
 
-const { value: fileArg, rest: afterFile } = option(process.argv.slice(2), "--file");
+const { value: rootArg, rest: afterRoot } = option(process.argv.slice(2), "--root");
+const root = rootArg ? resolve(rootArg) : join(dirname(fileURLToPath(import.meta.url)), "..");
+const { value: fileArg, rest: afterFile } = option(afterRoot, "--file");
 const { value: tag, rest: positional } = option(afterFile, "--tag");
 const file = fileArg ?? join(root, "CHANGELOG.md");
 let version = (positional[0] ?? packageVersion()).replace(/^v/, "");
@@ -63,6 +65,9 @@ if (start === -1) {
 }
 const next = lines.findIndex((line, i) => i > start && /^## /.test(line));
 const body = lines.slice(start + 1, next === -1 ? undefined : next);
-if (!body.some((line) => line.trim() !== "")) fail(`the [${version}] section in ${file} is empty`);
+// A heading alone (`### Added` with nothing under it) is not an entry.
+if (!body.some((line) => line.trim() !== "" && !/^#{1,6}\s/.test(line.trim()))) {
+  fail(`the [${version}] section in ${file} is empty`);
+}
 
 console.log(`check-changelog: CHANGELOG.md has an entry for ${version}`);

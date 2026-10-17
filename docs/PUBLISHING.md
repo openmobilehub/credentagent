@@ -41,9 +41,10 @@ path also skips the record: 0.3.0/0.3.1 shipped tagless and had to be backfilled
    under a new `## [X.Y.Z] - YYYY-MM-DD` heading** (the release date), leave an empty
    `[Unreleased]` above it, and add the `[X.Y.Z]` compare link at the bottom. Mark every
    change that needs callers to edit their code **BREAKING**. `node scripts/check-changelog.mjs`
-   checks it (`--tag vX.Y.Z` also checks that the tag matches the packages' version); the
-   root `npm test` runs that check, and `publish.yml` runs `npm test` before
-   any `npm publish`, so a release with no entry for its version fails before reaching npm.
+   checks it (`--tag vX.Y.Z` also checks that the tag matches the packages' version).
+   `publish.yml` runs it with the release's tag before it installs or builds anything, so a
+   release with no entry for its version, or tagged with a version the packages don't carry,
+   fails before reaching npm. The root `npm test` also runs it against the packages' version.
    The section is also the starting point for the release notes.
 2. **Tag + release — this is the publish.** One lightweight tag per release on the merged bump
    commit (lockstep versions ⇒ one tag marks both), then publish the release:

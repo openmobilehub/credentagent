@@ -18,8 +18,8 @@ especially for the policy DSL (`age` / `membership` / `payment` / `defineCredent
 OpenID4VP rails check that the wallet *disclosed* the right claim and that the answer is *bound*
 to this order (nonce, ephemeral key) — but they do **not** check who issued the credential. A
 self-crafted mdoc would pass. Issuer-verified trust built into the gate has **not shipped** in any
-version here; it is reachable only by plugging in an external verifier (the `verifier` seam),
-whose verdict the gate relays.
+version here. From 0.4.0 on, the gate can relay the verdict of an external verifier you plug in
+(the delegated verifier); before 0.4.0 nothing in the packages could produce `issuer-verified`.
 
 **npm can lag `main`.** `[Unreleased]` lists what is merged but not yet in a release. Check what
 npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
@@ -30,7 +30,9 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
 
 - AP2 delegation end to end: an agent spends a phone-signed spending permission with its own
   key, and a merchant can verify it (#195, #235). The phone now signs the Agent Payments
-  Protocol's own Mandate Content rather than a format this project invented (#189).
+  Protocol's own Mandate Content rather than a format this project invented, and the optional
+  `grant.mandate.mandates` holds what it signed (#189).
+- `@openmobilehub/credentagent-gate/cards` — the grant card gallery as its own export (#258).
 - `inspectPresentations` — links each wallet answer to Multipaz Tools so you can inspect it (#223),
   and an order proof receipt that keeps each proof with its order (#224, #225).
 - The store's checkout and consent pages can be served under a path prefix (#228).
@@ -40,18 +42,29 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
 
 ### Changed
 
+- **BREAKING:** a grant's `mandate.credentialDoctype` is now **`mandate.credentialType`**. It holds
+  an SD-JWT VC type (`vct`), not an ISO-mdoc doctype. Rename the field wherever you read it (#189).
+- **BREAKING:** `buildIntentSignRequest` and `verifyIntentPresentation` (the phone-signing
+  functions) now **require** `merchantUrl`: the store's public address with its path
+  (`https://shop.example/coffee`), as an absolute http(s) URL. A missing or invalid one makes the
+  request throw and the verify refuse. With it, a spending permission for one store no longer works
+  at another store on the same host (#334).
+  **Migration:** a store served under a path now reports a merchant id (`ap2.merchant.id`) that
+  includes the path, so grants whose key the agent holds (`grants.create({ agentKey })`) signed
+  before this change are refused there. Create a new grant and have the person sign it (an
+  authorized grant can't be re-signed). A store at the root of the same host keeps accepting the old
+  ones until they expire. Each deployment needs its own `walletOrigin`.
 - The package READMEs were brought in line with what the next release ships (#329, #310).
 
 ### Removed
 
 - **BREAKING (storefront):** the `@openmobilehub/credentagent-storefront/firestore` entry point.
-  It was declared in 0.4.0 and 0.5.0 but never built, so importing it always failed with
-  "Cannot find module". The `CatalogSource` option stays; the README shows how to write one over
-  your own database (#314).
+  It was declared in every published version (0.2.0–0.5.0) but never built, so importing it always
+  failed with "Cannot find module". The `CatalogSource` option stays; the README shows how to write
+  one over your own database (#314).
 
 ### Fixed
 
-- A spending permission for one store no longer works at another store on the same host (#334).
 - A store served under a path publishes its signing key where clients look for it (#347).
 - The storefront empties the cart when the order completes on another instance (#227), keeps the
   picker on one cart (#211), and refuses MCP listen streams that only burn serverless time (#215).
@@ -59,8 +72,15 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
 ### Security
 
 - An agent can no longer lower an order total by adding a line with a negative quantity (#346).
-- Consent pages no longer run script taken from a crafted checkout link (#332).
+- Consent pages no longer run script taken from a crafted checkout link (#332). **This affects
+  every published version from 0.3.0 to 0.5.0: upgrade.** Below 1.0 a caret range (`^0.5.0`)
+  never moves you to the next minor version on its own.
 - A completed order's status no longer returns the shopper's raw wallet answer (#327).
+
+### Known issues
+
+- Two stores on one host that share a checkout signing key can accept each other's price quotes.
+  Give each store its own `checkoutSigningKey` (#335).
 
 ## [0.5.0] - 2026-09-26
 
@@ -76,7 +96,6 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
 - `list-products` and batch product lookups in the storefront (#190).
 - `redisStorage.fromEnv()` — storefront storage from standard deployment environment variables
   (#128).
-- The spec and the SD-JWT credential needed for AP2 delegated intent (#188).
 
 ### Changed
 
@@ -110,7 +129,7 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
 
 - **BREAKING:** the `DelegatedVerifier` contract published in 0.3.x. `consume()` no longer settles;
   settlement moves to a new `settle()` that the gate calls only after its own checks pass.
-  `DelegatedVerdict.settlement` is removed, and `binding.payee` is now required (#103, #161).
+  `DelegatedVerdict.settlement` is removed, and `binding.payee` is now required (#103; issue #161).
 
 ### Fixed
 
@@ -123,10 +142,15 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
 
 ## [0.3.1] - 2026-07-26
 
+### Added
+
+- Storefront: `createStorefront({ grants, merchant })` puts the spending-grant tools on the MCP
+  server, so an agent can use a grant from any MCP client (#118).
+
 ### Fixed
 
 - `browse-products` includes product ids in its text, so an agent with no widget can add items to
-  the cart instead of getting stuck (#121). No API change.
+  the cart instead of getting stuck (#121).
 
 ## [0.3.0] - 2026-07-25
 
@@ -146,18 +170,15 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
 - A demo PKI toolkit for trust roots and test credentials (#100).
 - The checkout page reflects intermediate ceremony steps from another device (#76) and polls the
   order status, so an open tab shows completion (#66).
-- Storefront: Redis persistence (`createStorefront({ storage })`, #33), a dynamic catalog
-  (`createStorefront({ catalog })`, #36), per-session carts (#35), and stateless orders carried in
-  a signed Cart Mandate (#32).
 - Storefront `statelessMcp` option for multi-instance serverless hosts (first shipped as
-  storefront 0.2.1 on 2026-07-12, which had no tag) (#56).
+  storefront 0.2.1, published to npm on 2026-07-13 with no tag) (#56).
 
 ### Changed
 
-- **BREAKING:** the packages were renamed from `@openmobilehub/attestomcp-*` to
-  `@openmobilehub/credentagent-*`, the class `AttestoMCP` to `CredentAgent`, and the ceremony
-  routes from `/attestomcp/*` to `/credentagent/*` (#38, tagged `v0.2.0-credentagent` on
-  2026-07-08).
+- **BREAKING:** a policy the checkout can't enforce now throws when you build it.
+  `optional(gate())` and `optional(payment)` throw, because an optional gate would be shown but
+  never enforced. `required(discount())` throws, because a discount can't block completion. Every
+  other combination (required gates, optional discounts) is unchanged (#42).
 - `OrderDoor.code` is typed as a union of known codes, not a plain string (#111).
 
 ### Fixed
@@ -165,19 +186,37 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
 - The age request accepts an mDL **or** an EU PID, not both (#77).
 - The checkout stepper shows only the ceremony steps the order actually needs (#62, #74).
 
-## [0.2.0] - 2026-07-01
+## [0.2.0] - 2026-07-08
+
+The first release under the name `@openmobilehub/credentagent-*`, and the first on npm under it
+(tag `v0.2.0-credentagent`). The storefront also published 0.2.1 on 2026-07-13 (untagged) with the
+`statelessMcp` option listed under 0.3.0.
 
 ### Changed
+
+- **BREAKING:** the packages were renamed from `@openmobilehub/attestomcp-*` to
+  `@openmobilehub/credentagent-*`, the class `AttestoMCP` to `CredentAgent`, and the ceremony
+  routes from `/attestomcp/*` to `/credentagent/*` (#38).
+
+### Added
+
+- Storefront: Redis persistence (`createStorefront({ storage })`, #33), a dynamic catalog
+  (`createStorefront({ catalog })`, #36), per-session carts (#35), and stateless orders carried in
+  a signed Cart Mandate (#32).
+
+## Before the rename: `@openmobilehub/attestomcp-*`
+
+These versions were published under the earlier package names, which are no longer updated.
+
+### attestomcp 0.2.0 — 2026-07-01 (tag `v0.2.0`)
 
 - **BREAKING:** the exported class `AttestoMcp` is now `AttestoMCP`, and `AttestoMcpOptions` is
   now `AttestoMCPOptions`. Package names, routes and instance variables are unchanged (#30).
 
-## [0.1.0] - 2026-06-28
+### attestomcp 0.1.0 — 2026-06-28 (tags `v0.1.0`, `v0.1.0-attestomcp`)
 
 First release, under the name `@openmobilehub/attesto-*` (renamed to `attestomcp-*` the next day,
-#8).
-
-### Added
+#8). It included:
 
 - The Gate: the client, `requirements()` — which runs `.when()` server-side and emits the
   JSON-safe `requires` manifest — and the `age` / `membership` / `payment` / `defineCredential`
@@ -194,6 +233,5 @@ First release, under the name `@openmobilehub/attesto-*` (renamed to `attestomcp
 [0.5.0]: https://github.com/openmobilehub/credentagent/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/openmobilehub/credentagent/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/openmobilehub/credentagent/compare/v0.3.0...v0.3.1
-[0.3.0]: https://github.com/openmobilehub/credentagent/compare/v0.2.0...v0.3.0
-[0.2.0]: https://github.com/openmobilehub/credentagent/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/openmobilehub/credentagent/releases/tag/v0.1.0
+[0.3.0]: https://github.com/openmobilehub/credentagent/compare/v0.2.0-credentagent...v0.3.0
+[0.2.0]: https://github.com/openmobilehub/credentagent/compare/v0.2.0...v0.2.0-credentagent
