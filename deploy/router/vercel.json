@@ -5,8 +5,21 @@
   "outputDirectory": ".",
   "functions": { "api/ask.mjs": { "maxDuration": 30 } },
   "rewrites": [
+    {
+      "source": "/",
+      "has": [{ "type": "header", "key": "accept", "value": ".*text/markdown.*" }],
+      "destination": "https://openmobilehub.org/credentagent/index.md"
+    },
     { "source": "/", "destination": "https://openmobilehub.org/credentagent/" },
     { "source": "/marketplace-dev/:path*", "destination": "https://credentagent-demo-dev.vercel.app/:path*" },
     { "source": "/marketplace/:path*", "destination": "https://credentagent-demo.vercel.app/:path*" }
+  ],
+  "headers": [
+    { "source": "/", "headers": [{ "key": "Vary", "value": "Accept, Accept-Encoding" }] },
+    {
+      "source": "/",
+      "has": [{ "type": "header", "key": "accept", "value": ".*text/markdown.*" }],
+      "headers": [{ "key": "Content-Type", "value": "text/markdown; charset=utf-8" }]
+    }
   ]
 }
