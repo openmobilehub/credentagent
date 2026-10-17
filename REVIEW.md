@@ -21,10 +21,12 @@ enforces mechanically:
   state lives behind `VerificationStore` (invariant 4);
 - no `Math.random()` in the gate package — randomness in the security surface comes
   from `node:crypto` (invariant 6-adjacent);
-- no `JSON.stringify(…)` interpolated directly into a ceremony page template — values
-  inside a page's `<script>` go through `scriptJson()` (page integrity, invariant
-  6-adjacent; #330). It does not see a wrapped or precomputed `JSON.stringify`, a raw
-  value in a script, or an unencoded `cart` join, so review those by hand.
+- no `JSON.stringify(…)` anywhere inside a ceremony page template expression, wrapped
+  or not — values inside a page's `<script>` go through `scriptJson()` (page integrity,
+  invariant 6-adjacent; #330, #343). A legitimate non-script use needs an
+  `eslint-disable` with a one-line reason. It does not see a precomputed
+  `JSON.stringify` (assigned to a variable, then interpolated), a raw value in a
+  script, or an unencoded `cart` join, so review those by hand.
 
 Spend zero review attention re-checking those. **Do** review any new
 `eslint-disable` in the diff: it must carry a one-line justification, and the
