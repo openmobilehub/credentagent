@@ -49,10 +49,12 @@ import {
   TRUSTED_PERMISSIONS, titleAuthor, forbiddenPaths, applyAndCheck, changedSince, isRunId, isCommitId, publishIssueNumber,
   isReviewBot, parseVerdict, agentBranch, threadsToAnswer, reviewDecision, sharedChanges, filesBetween, cyclesDone, loopRefusal, latestVerdict, cycleCap,
   parseCriteria, tickCriteria, verifiedFor, afterVerification, acceptVerified, conflictMidCycle,
-  isAgentComment, requestComments, leftLoop,
+  isAgentComment, requestComments, leftLoop, isLoopAuthor,
   roleModel, testGateCommand, rootTestRefusal, publishVerdict, isMutableSource, sameLockfile, publishRefusalHint,
 } from "./checks.mjs";
 import { reportHtml, prBody, issueComment, md, statusBody, STATUS_MARK } from "./report.mjs";
+import { briefBody, replyBody, challengeBody, briefState, planRun, specFromBrief, splitConversation, LABEL_AWAITING, LABEL_APPROVED, BRIEF_MARK } from "./brief.mjs";
+import { cardProblems, isPrivate } from "./card.mjs";
 import { loadConfig, testLabel } from "./config.mjs";
 import { startMerge, buildResolvedMerge, rebuildForPush, hasMarkers, treeOf } from "./merges.mjs";
 
@@ -86,7 +88,11 @@ const EVIDENCE_BRANCH = "agent-evidence";
 // other workflows (AGENT_GH_TOKEN); with GITHUB_TOKEN a pushed fix would never be reviewed again.
 const REVIEW_LOOP = process.env.ISSUE_AGENT_REVIEW_LOOP === "on";
 const MAX_REVIEW_CYCLES = cycleCap(process.env.ISSUE_AGENT_MAX_REVIEW_CYCLES); // unset ("") or not a whole number ≥ 1 → 3
-const LABELS = { working: "agent:working", inReview: "agent:in-review", ready: "agent:ready-for-human", needsHuman: "agent:needs-human" };
+const LABELS = { working: "agent:working", inReview: "agent:in-review", ready: "agent:ready-for-human", needsHuman: "agent:needs-human", awaiting: LABEL_AWAITING, approved: LABEL_APPROVED };
+// Briefs first (config `brief: "pause"`): what started this run — the `agent` label, `agent:approved`,
+// a comment while a brief waits, or a run by hand (README.md, "The brief").
+const PAUSE = CONFIG.brief === "pause";
+const TRIGGER = process.env.ISSUE_AGENT_TRIGGER || "label:agent";
 
 const RUNS_HOME = resolve(opt("--runs", process.env.ISSUE_AGENT_HOME ?? join(process.env.RUNNER_TEMP ?? tmpdir(), "credentagent-issue-agent")));
 const REPO = opt("--repo", process.env.GITHUB_REPOSITORY ?? ghRepoFromRemote());
@@ -135,15 +141,21 @@ const ensureLabels = () => {
     [LABELS.inReview, "FBCA04", "Issue agent: still iterating with the Claude reviewer — not ready for a human yet"],
     [LABELS.ready, "0E8A16", "Issue agent: every review is resolved — ready for a human review"],
     [LABELS.needsHuman, "D93F0B", "Issue agent: stopped — a human has to take this over"],
+    ...(PAUSE ? [
+      [LABELS.awaiting, "C5DEF5", "Issue agent: a brief is waiting — approve it, or reply to it"],
+      [LABELS.approved, "0E8A16", "Issue agent: a person approved the latest brief — build it (never added by the agent)"],
+    ] : []),
   ]) sh("gh", ["label", "create", name, "-R", REPO, "--color", color, "--description", description, "--force"], { allowFail: true });
 };
 
 let RUN; // per issue: { id, dir, costUsd, log() }
-const newRun = (n, dir) => {
+// `quiet`: the log goes to run.log only, not the job's public console (a brief may turn out to be about
+// a security hole, which is never described in public — see briefIssue).
+const newRun = (n, dir, { quiet = false } = {}) => {
   const id = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 12);
   dir ??= join(RUNS_HOME, `issue-${n}-${id}`);
   mkdirSync(dir, { recursive: true });
-  return { id, dir, costUsd: 0, models: {}, log: (s) => { console.log(s); appendFileSync(join(dir, "run.log"), s + "\n"); } };
+  return { id, dir, costUsd: 0, models: {}, log: (s) => { if (!quiet) console.log(s); appendFileSync(join(dir, "run.log"), s + "\n"); } };
 };
 
 // ── the issue's live status (README, "Seeing what it's working on") ─────────────────────────────
@@ -190,7 +202,7 @@ function snapshotIssue(n, snapshotAt = new Date().toISOString()) {
   const q = `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issue(number:$n){
     number title body url state lastEditedAt author{login} labels(first:50){nodes{name}} assignees(first:10){nodes{login}}
     timelineItems(itemTypes:[RENAMED_TITLE_EVENT], last:20){nodes{... on RenamedTitleEvent{createdAt actor{login}}}}
-    comments(last:100){nodes{author{login} body createdAt lastEditedAt}}}}}`;
+    comments(last:100){nodes{author{login __typename} body createdAt lastEditedAt}}}}}`;
   const i = ghJson(["api", "graphql", "-f", `query=${q}`, "-f", `o=${OWNER}`, "-f", `r=${NAME}`, "-F", `n=${n}`]).data.repository.issue;
   const after = (t) => Boolean(t) && Date.parse(t) > Date.parse(snapshotAt);
   const dropped = [];
@@ -204,12 +216,25 @@ function snapshotIssue(n, snapshotAt = new Date().toISOString()) {
   let body = i.body ?? "";
   if (!trusted(i.author?.login)) { dropped.push(`the issue body (by ${i.author?.login ?? "a deleted user"}, who has no write access)`); body = ""; }
   else if (after(i.lastEditedAt)) return { skip: `the issue was edited after it was labelled (${i.lastEditedAt}); remove and re-add the \`${TRIGGER_LABEL}\` label to run on the current text` };
-  const { comments, dropped: droppedComments } = requestComments(i.comments.nodes, { isTrusted: trusted, snapshotAt });
+  const nodes = i.comments.nodes;
+  const { comments, dropped: droppedComments } = requestComments(nodes, { isTrusted: trusted, snapshotAt });
   dropped.push(...droppedComments);
   const issue = { number: i.number, title, body, url: i.url, state: i.state, author: i.author?.login,
     labels: i.labels.nodes.map((l) => l.name), assignees: i.assignees.nodes.map((a) => a.login), comments, dropped, snapshotAt };
   if (!body.trim() && !comments.length) return { issue, skip: "nothing on this issue was written by someone with write access — a maintainer can restate the request in a comment, then re-add the label" };
-  return { issue, skip: preflight(issue) };
+  // Briefs first: what this trigger starts, and the talk so far. The request is what came before the
+  // first brief; everything after it is the conversation, the agents' own answers included.
+  const state = briefState(nodes, trusted);
+  const plan = planRun({ trigger: TRIGGER, pause: PAUSE, labels: issue.labels, state, issueEditedAt: i.lastEditedAt });
+  if (plan.skip) return { issue, skip: plan.skip, quiet: plan.quiet };
+  if (PAUSE && state.firstAt) {
+    const { before, conversation } = splitConversation(nodes, { isTrusted: trusted, isOurs: (a) => isLoopAuthor(a, trusted), snapshotAt });
+    issue.comments = requestComments(before, { isTrusted: trusted, snapshotAt }).comments;
+    issue.conversation = conversation;
+    issue.previousBrief = state.latest;
+  }
+  if (plan.brief) issue.brief = plan.brief;
+  return { issue, phase: plan.phase, skip: preflight(issue) };
 }
 
 function openPrsFor(n) {
@@ -225,12 +250,14 @@ function openPrsFor(n) {
 function preflight(issue) {
   if (flag("--force")) return null;
   if (issue.state !== "OPEN") return `the issue is ${issue.state.toLowerCase()}`;
-  const blocking = issue.labels.filter((l) => BLOCKING_LABELS.includes(l));
+  // With briefs, a decision is what the brief is for: approving it decides.
+  const blocking = issue.labels.filter((l) => BLOCKING_LABELS.includes(l) && !(PAUSE && l === "needs-decision"));
   if (blocking.length) return `it is labelled ${blocking.join(", ")} — a maintainer has to act first`;
   // Someone else has taken it: don't race them. (Assigned to whoever labelled it is fine.)
   const labeller = process.env.ISSUE_AGENT_LABELLER;
+  // Checked when work starts; a reply to a brief or its approval continues what that check allowed.
   const others = (issue.assignees ?? []).filter((a) => a !== labeller);
-  if (others.length) return `it is assigned to ${others.join(", ")} — unassign them first if the agent should take it`;
+  if (others.length && (TRIGGER === "label:agent" || TRIGGER === "dispatch")) return `it is assigned to ${others.join(", ")} — unassign them first if the agent should take it`;
   const prs = openPrsFor(issue.number);
   if (prs.length) return `it already has an open pull request: ${prs.map((p) => p.url).join(", ")}`;
   return null;
@@ -504,16 +531,24 @@ async function implementIssue(issue, { dir } = {}) {
   const baseline = baselineFor(repoDir, base, "main");
   RUN.log(`  baseline (main ${base.slice(0, 7)}): ${baseline.map((b) => `${b.name} ${b.green ? "green" : `RED (${b.fingerprints.length})`}`).join(" · ")}`);
 
-  const { out: spec } = await agent("spec", roles.specPrompt(issue), { cwd: repoDir, schema: roles.SPEC_SCHEMA, maxTurns: 60 });
+  // An approved brief IS the spec, word for word (brief.mjs); without one, the spec agent writes it.
+  const spec = issue.brief
+    ? { ...specFromBrief(issue.brief.brief), from_brief: issue.brief.v }
+    : (await agent("spec", roles.specPrompt(issue), { cwd: repoDir, schema: roles.SPEC_SCHEMA, maxTurns: 60 })).out;
+  if (issue.brief) { RUN.log(`  spec: the approved brief v${issue.brief.v} (${spec.acceptance_criteria.length} criteria)`); writeFileSync(join(RUN.dir, "spec.json"), JSON.stringify(spec, null, 2)); }
   if (!spec.actionable) {
     RUN.log(`  not actionable: ${spec.blocker}`);
     return outcome({ status: "blocked", reason: spec.blocker, spec });
   }
 
-  const { rounds, reviewedPatch, stopped } = await iterate({
+  const { rounds, reviewedPatch, stopped, challenge } = await iterate({
     issue, spec, roles, repoDir, baseline, diffBase: base, mutationBase: base,
-    firstPrompt: roles.implementPrompt(issue, spec), schema: roles.IMPLEMENT_SCHEMA,
+    firstPrompt: roles.implementPrompt(issue, spec), schema: roles.IMPLEMENT_SCHEMA, allowChallenge: Boolean(spec.from_brief),
   });
+  if (challenge) {
+    RUN.log(`  the implementer challenges ${challenge.criterion} of the approved brief — back to the maintainer`);
+    return outcome({ status: "challenged", challenge, brief: issue.brief.v, reason: `${challenge.criterion}: ${challenge.why}` });
+  }
   if (!rounds.length) return outcome({ status: "needs-human", reason: stopped ?? "no implementation round completed" });
   const last = rounds.at(-1);
   const done = Boolean(last.clean);
@@ -530,9 +565,10 @@ async function implementIssue(issue, { dir } = {}) {
 // catches. Shared by a new issue and by the review loop:
 //   diffBase      what the reviewers diff against and the patch is taken from (main, or the PR head)
 //   mutationBase  what the test-proof check reverts the source to (always main's merge base)
-async function iterate({ issue, spec, roles, repoDir, baseline, diffBase, mutationBase, firstPrompt, schema }) {
+//   allowChallenge  the first build of an approved brief: the implementer may hand a criterion back
+async function iterate({ issue, spec, roles, repoDir, baseline, diffBase, mutationBase, firstPrompt, schema, allowChallenge = false }) {
   const base = diffBase;
-  let impl, session, feedback, reviewedPatch, stopped;
+  let impl, session, feedback, reviewedPatch, stopped, challenge;
   const rounds = [];
   try {
     for (let round = 1; round <= MAX_ROUNDS; round++) {
@@ -543,6 +579,8 @@ async function iterate({ issue, spec, roles, repoDir, baseline, diffBase, mutati
         ({ out: impl, sessionId: session } = await agent(`implement-r${round}${attempt ? `-fix${attempt}` : ""}`,
           (first ? firstPrompt : roles.fixPrompt(feedback)) + baselineNote(baseline),
           { cwd: repoDir, schema, write: true, resume: first ? undefined : session, maxTurns: 200 }));
+        // A criterion of an approved brief is the maintainer's to change, not the implementer's.
+        if (allowChallenge && impl.challenge?.criterion) { challenge = impl.challenge; break; }
         trackNew(repoDir);
         // Between attempts, only the tests of what changed; the root test run comes once, below.
         const fast = testGateCommand({ phase: "fix", changed: changedSince(repoDir, mutationBase) }, CONFIG);
@@ -571,6 +609,7 @@ async function iterate({ issue, spec, roles, repoDir, baseline, diffBase, mutati
         r.mechanicalOk = true;
         break;
       }
+      if (challenge) break;
       rounds.push(r);
       if (!r.mechanicalOk) { RUN.log(`  round ${round}: gates/test proof still red after ${MAX_FIXES} fixes`); continue; }
 
@@ -606,7 +645,7 @@ async function iterate({ issue, spec, roles, repoDir, baseline, diffBase, mutati
     stopped = e.message;
     RUN.log(`  stopped: ${stopped}`);
   }
-  return { rounds, impl, reviewedPatch, stopped };
+  return { rounds, impl, reviewedPatch, stopped, challenge };
 }
 
 async function finishImplement({ issue, spec, roles, n, repoDir, base, rounds, last, done, patch, touched, forbidden, stopped, outcome, renderHtml, proofHtml }) {
@@ -646,6 +685,42 @@ async function finishImplement({ issue, spec, roles, n, repoDir, base, rounds, l
   return outcome({ status: report.done ? "ready" : "needs-human", reason: report.stopped, report: join(evidenceDir, "index.html") });
 }
 
+// ══ 2b. brief (agents; needs NO GitHub access) — README.md, "The brief" ═══════════════════════════
+//
+// Before any code: an agent reproduces the problem on main, works out how bad it is and how to fix it,
+// and writes the brief a person approves. The plain-language check (card.mjs) sends the card back
+// until it passes (twice at most; publish posts what's left flagged). Everything it writes in the
+// checkout is thrown away: only the brief's text leaves this job.
+//
+// A brief about a security hole in code people can use today (isPrivate) is never posted: the run
+// keeps nothing but its outcome, and its log never reaches the job's public console.
+async function briefIssue(issue, { dir } = {}) {
+  const roles = (await import("./roles.mjs")).forRepo(CONFIG);
+  const n = issue.number;
+  RUN = newRun(n, dir, { quiet: true });
+  console.log(`━━ issue #${n} · brief · run ${RUN.id} — the log is in run.log, not here: a brief can be about a security hole`);
+  const outcome = (o) => { writeFileSync(join(RUN.dir, "outcome.json"), JSON.stringify({ n, id: RUN.id, ...o }, null, 2)); return { n, dir: RUN.dir, ...o }; };
+  const repoDir = join(RUN.dir, "repo");
+  checkout(repoDir, "origin/main");
+  const base = git(["rev-parse", "HEAD"], { cwd: repoDir }).out.trim();
+  const previous = issue.previousBrief;
+  const problemsOf = (b) => (b.actionable ? cardProblems(b.card, { criteria: b.acceptance_criteria, behaviorChange: b.behavior_change }) : []);
+  let { out: brief, sessionId } = await agent("brief", roles.briefPrompt(issue, { previous }), { cwd: repoDir, schema: roles.BRIEF_SCHEMA, write: true, maxTurns: 100 });
+  let problems = problemsOf(brief);
+  for (let fix = 1; problems.length && fix <= 2; fix++) {
+    RUN.log(`  plain-language check: ${problems.length} problem(s) — rewrite ${fix}: ${problems.join("; ")}`);
+    ({ out: brief } = await agent(`brief-fix${fix}`, roles.briefFixPrompt(problems), { cwd: repoDir, schema: roles.BRIEF_SCHEMA, write: true, resume: sessionId, maxTurns: 30 }));
+    problems = problemsOf(brief);
+  }
+  if (brief.actionable && isPrivate(brief.card)) {
+    for (const f of readdirSync(RUN.dir)) if (f !== "repo") rmSync(join(RUN.dir, f), { recursive: true, force: true });
+    return outcome({ status: "security-stop" });
+  }
+  if (!brief.actionable) return outcome({ status: "blocked", reason: brief.blocker ?? "the brief agent found it isn't actionable" });
+  writeFileSync(join(RUN.dir, "brief-result.json"), JSON.stringify({ brief, base }, null, 2));
+  return outcome({ status: "brief", revised: !previous || brief.revised !== false });
+}
+
 // ══ 3. publish (trusted; GitHub write access; never runs agent-written code) ══════════════════════
 //
 // Applies the reviewed patch to a clean checkout of the run's base, so nothing else from the run's
@@ -668,6 +743,15 @@ function publishRun(dir) {
   const n = publishIssueNumber(trustedN, outcome.n);
   if (!isRunId(outcome.id)) throw new Error(`not a run id: ${outcome.id}`);
   RUN ??= { id: outcome.id, dir, costUsd: 0, log: (s) => { console.log(s); appendFileSync(join(dir, "run.log"), s + "\n"); } };
+  if (outcome.status === "challenged") {
+    // The implementer questions a criterion of the approved brief: back to the maintainer, nothing built.
+    const v = Number(outcome.brief);
+    if (!Number.isInteger(v) || v < 1) throw new Error(`not a brief version: ${outcome.brief}`);
+    gh(["issue", "comment", String(n), "-R", REPO, "--body", challengeBody({ v, criterion: outcome.challenge?.criterion, why: outcome.challenge?.why })]);
+    relabel(n, { add: [LABELS.awaiting], remove: [LABELS.approved] });
+    setStatus(n, `stopped before building — the agents question part of brief v${v}; reply to settle it`, { working: false });
+    return { n, status: "challenged" };
+  }
   if (outcome.status === "blocked") {
     gh(["issue", "comment", String(n), "-R", REPO, "--body", issueComment({ kind: "blocked", reason: outcome.reason })]);
     setStatus(n, `not started — not actionable yet: ${outcome.reason}`, { working: false });
@@ -766,6 +850,123 @@ function publishRun(dir) {
   }
   RUN.log(`  PR → ${prUrl}`);
   return { n, status: done ? "pr-open" : "needs-human", pr: prUrl };
+}
+
+// ── publishing a brief (trusted; GitHub write access; never runs agent-written code) ──────────────
+// The run directory is untrusted input, as for publishRun: the issue number must match, the brief is
+// re-checked here (its shape, the plain-language rules, and whether it may be public at all), and the
+// version comes from the issue's own comments.
+const issueComments = (n) => {
+  const q = `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issue(number:$n){comments(last:100){nodes{id author{login __typename} body createdAt lastEditedAt}}}}}`;
+  return ghJson(["api", "graphql", "-f", `query=${q}`, "-f", `o=${OWNER}`, "-f", `r=${NAME}`, "-F", `n=${n}`]).data.repository.issue.comments.nodes;
+};
+const relabel = (n, { add = [], remove = [] }) => {
+  if (flag("--dry-run") || flag("--no-publish")) return;
+  ensureLabels();
+  for (const l of remove) sh("gh", ["issue", "edit", String(n), "-R", REPO, "--remove-label", l], { allowFail: true });
+  for (const l of add) {
+    if (l === LABELS.approved) throw new Error("the pipeline never approves a brief"); // only a person does (README, "The brief")
+    sh("gh", ["issue", "edit", String(n), "-R", REPO, "--add-label", l], { allowFail: true });
+  }
+};
+const postComment = (n, body, dir) => {
+  if (flag("--dry-run") || flag("--no-publish")) { writeFileSync(join(dir, "comment.md"), body); return RUN?.log?.(`  dry run — comment → ${join(dir, "comment.md")}`); }
+  const file = join(dir, "comment.md");
+  writeFileSync(file, body);
+  gh(["issue", "comment", String(n), "-R", REPO, "--body-file", file]);
+};
+
+function securityStopNotice(n, dir) {
+  postComment(n, issueComment({ kind: "security-stop" }), dir);
+  relabel(n, { add: [LABELS.needsHuman], remove: [LABELS.working, LABELS.awaiting, LABELS.approved] });
+  setStatus(n, "stopped — this looks like a security problem in code people use today; it is handled privately, not here");
+  return { n, status: "security-stop" };
+}
+
+// The live-discussion link (README, "Talking it through"): a Claude Code routine the maintainer set up,
+// fired with the issue and the brief's version; it answers with the session's URL. Optional, and never
+// fatal — without it the brief says "reply here".
+async function fireDiscuss(n, v) {
+  const routine = process.env.ISSUE_AGENT_DISCUSS_ROUTINE, token = process.env.ISSUE_AGENT_DISCUSS_TOKEN;
+  if (!routine || !token || flag("--dry-run") || flag("--no-publish")) return undefined;
+  try {
+    if (!/^trig_[A-Za-z0-9]+$/.test(routine)) throw new Error("ISSUE_AGENT_DISCUSS_ROUTINE is not a routine id (trig_…)");
+    const r = await fetch(`https://api.anthropic.com/v1/claude_code/routines/${routine}/fire`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "anthropic-beta": "experimental-cc-routine-2026-04-01", "anthropic-version": "2023-06-01", "content-type": "application/json" },
+      body: JSON.stringify({ text: `Repository: ${REPO}\nIssue: https://github.com/${REPO}/issues/${n}\nBrief: version ${v}, the comment on that issue starting with "${BRIEF_MARK} v=${v} " (posted moments after this message).` }),
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const url = (await r.json()).claude_code_session_url;
+    if (!/^https:\/\/claude\.ai\/\S+$/.test(String(url))) throw new Error("no session URL in the answer");
+    return url;
+  } catch (e) {
+    console.error(`(no live-discussion link: ${e.message}) — the brief goes up without it`);
+    return undefined;
+  }
+}
+
+async function publishBrief(dir) {
+  const trustedN = opt("--issue") ? Number(opt("--issue")) : undefined;
+  const outcomeFile = join(dir, "outcome.json");
+  if (!existsSync(outcomeFile)) {
+    if (trustedN) postComment(trustedN, issueComment({ kind: "error", where: actionsRunUrl() }), dir);
+    setStatus(trustedN, "the brief run failed before it wrote anything", { working: false });
+    return { n: trustedN, status: "error", reason: "the brief phase produced no outcome" };
+  }
+  const outcome = JSON.parse(readFileSync(outcomeFile, "utf8"));
+  const n = publishIssueNumber(trustedN, outcome.n);
+  RUN ??= { id: outcome.id, dir, costUsd: 0, log: (s) => { console.log(s); appendFileSync(join(dir, "publish.log"), s + "\n"); } };
+  if (outcome.status === "security-stop") return securityStopNotice(n, dir);
+  if (outcome.status === "blocked") {
+    postComment(n, issueComment({ kind: "blocked", reason: outcome.reason }), dir);
+    relabel(n, { remove: [LABELS.awaiting] });
+    setStatus(n, `not started — not actionable yet: ${outcome.reason}`, { working: false });
+    return { n, status: "blocked", reason: outcome.reason };
+  }
+  const file = join(dir, "brief-result.json");
+  if (!existsSync(file)) throw new Error("the brief run left no brief");
+  const { brief, base } = JSON.parse(readFileSync(file, "utf8"));
+  if (!brief?.card || typeof brief.card !== "object" || !Array.isArray(brief.acceptance_criteria)) throw new Error("brief-result.json is not a brief");
+  if (!isCommitId(base)) throw new Error(`not a commit id: ${base}`);
+  if (isPrivate(brief.card)) return securityStopNotice(n, dir); // decided here again, never taken from the run
+  const state = briefState(issueComments(n), trusted);
+  if (state.latest && outcome.revised === false && String(brief.reply ?? "").trim()) {
+    postComment(n, replyBody({ v: state.latest.v, reply: brief.reply }), dir);
+    relabel(n, { add: [LABELS.awaiting], remove: [LABELS.working] });
+    setStatus(n, `answered your comment — brief v${state.latest.v} stands: approve it, or reply again`, { working: false });
+    return { n, status: "replied", v: state.latest.v };
+  }
+  const v = state.versions + 1;
+  const lintProblems = cardProblems(brief.card, { criteria: brief.acceptance_criteria, behaviorChange: brief.behavior_change });
+  const discussUrl = await fireDiscuss(n, v);
+  postComment(n, briefBody({ v, brief, base, lintProblems, ...(discussUrl ? { discussUrl } : {}) }), dir);
+  // Older versions fold away (GitHub's "outdated"), so the thread reads as the latest brief plus the talk.
+  if (!flag("--dry-run") && !flag("--no-publish")) {
+    for (const c of issueComments(n)) {
+      if (!String(c.body).startsWith(`${BRIEF_MARK} v=`) || String(c.body).startsWith(`${BRIEF_MARK} v=${v} `) || !isLoopAuthor(c.author, trusted)) continue;
+      sh("gh", ["api", "graphql", "-f", `query=mutation($id:ID!){minimizeComment(input:{subjectId:$id,classifier:OUTDATED}){minimizedComment{isMinimized}}}`, "-f", `id=${c.id}`], { allowFail: true });
+    }
+  }
+  relabel(n, { add: [LABELS.awaiting], remove: [LABELS.working, LABELS.approved] });
+  setStatus(n, `brief v${v} posted — waiting for your approval (\`${LABELS.approved}\`) or your reply`, { working: false });
+  return { n, status: "brief", v };
+}
+
+// The safety net for a lost comment event: every hour, an issue whose brief waits on a comment the
+// agents haven't answered (and that no run has picked up in 30 minutes) gets a brief run.
+function sweepBriefs() {
+  if (!PAUSE) return [];
+  const started = [];
+  for (const { number } of ghJson(["issue", "list", "-R", REPO, "--state", "open", "--label", LABELS.awaiting, "--limit", "100", "--json", "number"])) {
+    const state = briefState(issueComments(number), trusted);
+    if (!state.unanswered || Date.now() - state.lastPersonAt < 30 * 60_000) continue;
+    const r = sh("gh", ["workflow", "run", "issue-agent.yml", "-R", REPO, "-f", `issue=${number}`, "-f", "trigger=comment"], { allowFail: true });
+    if (r.code === 0) started.push(number);
+    else console.error(`(could not start a brief run for #${number}: ${r.out.trim().split("\n")[0]})`);
+  }
+  return started;
 }
 
 // Evidence goes on a separate orphan branch so the PR's diff stays code-only; the PR embeds it from
@@ -1169,12 +1370,18 @@ const [mode, arg] = argv;
 if (mode === "snapshot") {
   // CI phase 1. Exit 0 either way; `skip` in the output tells the workflow to stop.
   const n = Number(arg);
-  const { issue, skip } = snapshotIssue(n, process.env.ISSUE_AGENT_SNAPSHOT_AT || undefined);
-  writeFileSync(resolve(opt("--out", "issue.json")), JSON.stringify({ issue, skip }, null, 2));
-  console.log(skip ? `skip #${n}: ${skip}` : `snapshot #${n}: ${issue.comments.length} trusted comment(s)${issue.dropped.length ? `; left out: ${issue.dropped.join("; ")}` : ""}`);
-  if (skip && flag("--comment")) gh(["issue", "comment", String(n), "-R", REPO, "--body", issueComment({ kind: "skipped", reason: skip })]);
-  if (!skip && flag("--comment")) setStatus(n, "working on it — spec, implementation, checks and three internal reviews (usually 10–40 min); the PR comes next", { working: true });
-  if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `skip=${skip ? "true" : "false"}\n`);
+  const { issue, skip, quiet, phase } = snapshotIssue(n, process.env.ISSUE_AGENT_SNAPSHOT_AT || undefined);
+  writeFileSync(resolve(opt("--out", "issue.json")), JSON.stringify({ issue, skip, phase }, null, 2));
+  console.log(skip ? `skip #${n}: ${skip}` : `snapshot #${n} (${TRIGGER} → ${phase}): ${issue.comments.length} trusted comment(s)${issue.conversation?.length ? `, ${issue.conversation.length} in the talk about the brief` : ""}${issue.dropped.length ? `; left out: ${issue.dropped.join("; ")}` : ""}`);
+  if (skip && !quiet && flag("--comment")) gh(["issue", "comment", String(n), "-R", REPO, "--body", issueComment({ kind: "skipped", reason: skip })]);
+  if (!skip && flag("--comment")) {
+    if (phase === "brief") setStatus(n, issue.previousBrief ? "reading your comment — an answer or a new version of the brief comes next (usually 5–15 min)" : "reproducing the problem and writing a brief for you to approve (usually 10–20 min) — nothing is built before you approve it", { working: true });
+    else {
+      if (issue.brief) sh("gh", ["issue", "edit", String(n), "-R", REPO, "--remove-label", LABELS.awaiting], { allowFail: true });
+      setStatus(n, issue.brief ? `building the approved brief v${issue.brief.v} — implementation, checks and three internal reviews (usually 10–40 min); the PR comes next` : "working on it — spec, implementation, checks and three internal reviews (usually 10–40 min); the PR comes next", { working: true });
+    }
+  }
+  if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `skip=${skip ? "true" : "false"}\nphase=${phase ?? ""}\n`);
 } else if (mode === "implement") {
   // CI phase 2. No GitHub calls; the run directory is the hand-off to `publish`.
   const { issue, skip } = JSON.parse(readFileSync(resolve(arg), "utf8"));
@@ -1182,6 +1389,27 @@ if (mode === "snapshot") {
   mkdirSync(RUNS_HOME, { recursive: true });
   const o = await implementIssue(issue, { dir: opt("--dir") && resolve(opt("--dir")) });
   console.log(`\n━━ #${o.n} ${o.status}${o.reason ? ` — ${o.reason}` : ""} · ${o.dir}`);
+} else if (mode === "brief") {
+  // CI phase 2 with briefs on: reproduce and write the brief. No GitHub calls.
+  const { issue, skip } = JSON.parse(readFileSync(resolve(arg), "utf8"));
+  if (skip) { console.log(`skip: ${skip}`); process.exit(0); }
+  mkdirSync(RUNS_HOME, { recursive: true });
+  const o = await briefIssue(issue, { dir: opt("--dir") && resolve(opt("--dir")) });
+  console.log(`\n━━ #${o.n} ${o.status === "security-stop" ? "stopped (nothing is said here about why)" : o.status}`);
+} else if (mode === "publish-brief") {
+  try {
+    const o = await publishBrief(resolve(arg));
+    console.log(`\n━━ #${o.n} ${o.status}${o.v ? ` v${o.v}` : ""}`);
+  } catch (e) {
+    console.error(e);
+    const n = Number(opt("--issue"));
+    if (n && !flag("--dry-run")) sh("gh", ["issue", "comment", String(n), "-R", REPO, "--body", issueComment({ kind: "error", where: actionsRunUrl() })], { allowFail: true });
+    setStatus(n, "the run failed while posting the brief", { working: false });
+    process.exitCode = 1;
+  }
+} else if (mode === "sweep-briefs") {
+  const started = sweepBriefs();
+  console.log(started.length ? `started brief runs for ${started.map((n) => `#${n}`).join(", ")}` : "no brief waits on an unanswered comment");
 } else if (mode === "publish") {
   // CI phase 3 (also `run.mjs publish <dir>` after a local --no-publish run). Any failure still
   // tells the issue, so a run never ends silently.
@@ -1245,15 +1473,21 @@ if (mode === "snapshot") {
     ? ghJson(["issue", "list", "-R", REPO, "--state", "open", "--label", TRIGGER_LABEL, "--limit", "50", "--json", "number"]).map((i) => i.number)
     : argv.filter((a) => /^\d+$/.test(a)).map(Number);
   if (!numbers.length) {
-    console.error("usage: run.mjs <issue>… | --poll  [--no-publish] [--force] [--repo owner/name] [--runs dir]\n       run.mjs snapshot <n> --out f | implement <f> | publish <run-dir> | publish-evidence <run-dir>");
+    console.error("usage: run.mjs <issue>… | --poll  [--no-publish] [--force] [--repo owner/name] [--runs dir]\n       run.mjs snapshot <n> --out f | implement <f> | publish <run-dir> | publish-evidence <run-dir>\n       run.mjs brief <f> | publish-brief <run-dir> | sweep-briefs   (briefs: config \"brief\": \"pause\")");
     process.exit(flag("--poll") ? 0 : 2);
   }
   mkdirSync(RUNS_HOME, { recursive: true });
   const outcomes = [];
   for (const n of numbers) {
     try {
-      const { issue, skip } = snapshotIssue(n);
+      const { issue, skip, phase } = snapshotIssue(n);
       if (skip) { console.log(`\n━━ #${n} skipped — ${skip}`); outcomes.push({ n, status: "skipped", reason: skip }); continue; }
+      if (phase === "brief") {
+        setStatus(n, "writing a brief (run locally) — nothing is built before you approve it", { working: true });
+        const o = await briefIssue(issue);
+        outcomes.push(flag("--no-publish") ? o : { ...o, ...(await publishBrief(o.dir)) });
+        continue;
+      }
       setStatus(n, "working on it (run locally) — spec, implementation, checks and internal reviews", { working: true });
       const o = await implementIssue(issue);
       outcomes.push(flag("--no-publish") ? o : { ...o, ...publishRun(o.dir) });

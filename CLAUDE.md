@@ -273,8 +273,14 @@ anticipate it when authoring:
 Labelling an issue **`agent`** (write access needed) runs `.github/workflows/issue-agent.yml`:
 agents spec, implement and review it, and it comes back as a **draft PR** with acceptance criteria,
 the pipeline's own gate runs, a mutation check (the changed tests fail with the fix reverted),
-three review verdicts, and before/after screenshots + video. It skips an issue that is closed,
-labelled `needs-decision`, `epic`, `wontfix`, `duplicate` or `question`, assigned to someone other
+three review verdicts, and before/after screenshots + video. **Here, it briefs before it builds**
+(`.github/issue-agent.json`, `"brief": "pause"`): the label gets a **brief** on the issue first — the
+problem reproduced on `main`, how bad it is, the fix (or options), what you're approving, how you'll
+know it's fixed, in plain words, with the acceptance criteria below. Reply to it in a comment and the
+agents answer or post a new version; add **`agent:approved`** and they build exactly that version. A
+security hole in a release or the hosted demo is never briefed in public (SECURITY.md). See
+[`ci/issue-agent/README.md`](ci/issue-agent/README.md), "The brief". It skips an issue that is closed,
+labelled `needs-decision` (unless briefs are on: approving the brief is the decision), `epic`, `wontfix`, `duplicate` or `question`, assigned to someone other
 than whoever labelled it, or already has an open PR,
 and says why in a comment on the issue. **Only words by people with write access reach the agents**
 (the title and body if their author has it, and such people's comments, frozen at the label) — so to give

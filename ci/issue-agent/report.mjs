@@ -120,7 +120,7 @@ ${r.done ? "" : `> [!WARNING]\n> **Not finished${r.stopped ? `: ${md(r.stopped)}
 
 ${md(r.spec.summary)}
 
-Fixes #${r.issue.number} — ${md(r.issue.title)}.
+Fixes #${r.issue.number} — ${md(r.issue.title)}.${r.spec.from_brief ? ` Built from **brief v${r.spec.from_brief}**, which you approved on the issue: its acceptance criteria are the checklist below, word for word.` : ""}
 
 ## What you're approving
 
@@ -150,7 +150,7 @@ ${show("proof", "Test proof")}
 ### Acceptance criteria (checked by the spec reviewer)
 
 ${acs}
-
+${(r.spec.after_merge ?? []).length ? `\n### For you to check after it merges\n\n${r.spec.after_merge.map((c) => `- [ ] ${md(c.id)}: ${md(c.text)}`).join("\n")}\n\n_Not part of the agents' checklist (it can't be checked before the merge)._\n` : ""}
 ${blocking.length ? `### Open blocking findings\n\n${blocking.join("\n")}\n\n` : ""}${suggestions.length ? `<details><summary>Reviewer suggestions (non-blocking)</summary>\n\n${suggestions.join("\n")}\n</details>\n\n` : ""}${(r.last.impl.open_questions ?? []).length ? `### Open questions\n\n${r.last.impl.open_questions.map((q) => `- ${md(q)}`).join("\n")}\n\n` : ""}<sub>Opened by the issue agent (\`ci/issue-agent\` in ${harnessRepo}) · run \`${r.id}\` · ${r.rounds.length} round(s) · ${r.model} · ~$${r.costUsd.toFixed(2)}. Draft until a human has read it.</sub>
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
@@ -177,6 +177,9 @@ export function issueComment({ kind, reason, prUrl, report, where }) {
     // `reason`: a failure the pipeline recognised (checks.mjs, publishRefusalHint) — it says what to do.
     case "error": return `${MARK}\n🤖 **Issue agent: the run failed before it could open a PR.**${reason ? ` ${md(reason)}.` : ""}${where ? ` Logs: ${where}` : ""}\n\n${retry}`;
     case "needs-human-nopr": return `${MARK}\n🤖 **Issue agent: no PR** — ${md(reason ?? "the run stopped early")}.${where ? ` Logs and transcripts: ${where}` : ""}\n\n${retry}`;
+    // A brief that turned out to be about a security hole in code people use today (card.mjs, isPrivate):
+    // nothing about it is said here — SECURITY.md says it is reported privately.
+    case "security-stop": return `${MARK}\n🤖 **Issue agent: stopped.** This looks like a security problem in code people use today, so the agents posted nothing about it, and the run kept only its outcome. A maintainer should move it to a private security advisory (the repository's Security tab) and fix it there — see SECURITY.md.`;
     case "pr-in-review": return `${MARK}\n🤖 **Issue agent:** a PR is up and the agent is now working through the Claude review on it: ${prUrl}\n\nIt will ask for a human review once every review is resolved (or say why it stopped).`;
     default: {
       const ok = kind === "pr";

@@ -1,6 +1,6 @@
 name: issue-agent
 # In the Actions list: which issue, and what started it (a run for another label shows that label and is skipped).
-run-name: "issue-agent #${{ github.event.issue.number || inputs.issue }} · ${{ github.event_name == 'workflow_dispatch' && 'run by hand' || format('labelled {0} · {1}', github.event.label.name, github.event.issue.title) }}"
+run-name: "issue-agent #${{ github.event.issue.number || inputs.issue }} · ${{ github.event_name == 'schedule' && 'checking for unanswered comments on briefs' || github.event_name == 'workflow_dispatch' && format('run by hand ({0})', inputs.trigger) || github.event_name == 'issue_comment' && format('comment · {0}', github.event.issue.title) || format('labelled {0} · {1}', github.event.label.name, github.event.issue.title) }}"
 
 # Label an issue `agent` → agents implement it and a draft PR comes back with the evidence.
 # How it works and what it trusts: ci/issue-agent/README.md. The three jobs (snapshot, implement,
@@ -9,10 +9,18 @@ run-name: "issue-agent #${{ github.event.issue.number || inputs.issue }} · ${{ 
 # Auth: the repo variable CLAUDE_AUTH, as for agent-e2e. Unset → the subscription login
 # (CLAUDE_CODE_OAUTH_TOKEN); "api" → ANTHROPIC_API_KEY. An AGENT_GH_TOKEN secret lets the PR start CI,
 # the Claude review and the review loop (issue-agent-review.yml) on its own.
+#
+# Briefs (.github/issue-agent.json `"brief": "pause"`, README "The brief"): the `agent` label gets a
+# brief first; a maintainer's comment while it waits gets an answer or a new version; `agent:approved`
+# starts the build. The hourly schedule catches a comment whose event was lost.
 
 on:
   issues:
     types: [labeled]
+  issue_comment:
+    types: [created, edited]
+  schedule:
+    - cron: "17 * * * *"
   workflow_dispatch:
     inputs:
       issue:
@@ -22,16 +30,31 @@ on:
         description: "Skip the preflight (labels / existing PRs)"
         type: boolean
         default: false
+      trigger:
+        description: "dispatch (as if labelled agent) or comment (answer the latest comment on a brief)"
+        type: choice
+        options: [dispatch, comment]
+        default: dispatch
 
+# One run per issue at a time. Comments get their own group, and a newer comment replaces a waiting or
+# running answer — so three quick comments get one answer that covers all three.
 concurrency:
-  group: issue-agent-${{ github.event.issue.number || inputs.issue }}
-  cancel-in-progress: false
+  group: issue-agent-${{ github.event.issue.number || inputs.issue || 'sweep' }}${{ (github.event_name == 'issue_comment' || inputs.trigger == 'comment') && '-talk' || '' }}
+  cancel-in-progress: ${{ github.event_name == 'issue_comment' || inputs.trigger == 'comment' }}
 
 permissions: {}
 
 jobs:
   run:
-    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'agent'
+    # A comment counts only on an issue (not a PR) whose brief waits, from a member or collaborator, and
+    # not the agents' own (every agent comment starts with its marker). The script re-checks all of it.
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || (github.event_name == 'issues' && (github.event.label.name == 'agent' || github.event.label.name == 'agent:approved'))
+      || (github.event_name == 'issue_comment' && !github.event.issue.pull_request
+          && contains(github.event.issue.labels.*.name, 'agent:awaiting-approval')
+          && !startsWith(github.event.comment.body, '<!-- issue-agent')
+          && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
     # This commit's copy: a change to the jobs is tested by this repo's own runs before others pick it up.
     uses: ./.github/workflows/issue-agent-run.yml
     # The most any job gets; each narrows it (the agents' job: contents read, no token).
@@ -42,10 +65,35 @@ jobs:
     with:
       issue: ${{ format('{0}', github.event.issue.number || inputs.issue) }}
       sender: ${{ github.event.sender.login || github.actor }}
-      snapshot_at: ${{ github.event.issue.updated_at }}
+      # A comment run reads everything up to when it starts (its wait folds in quick follow-ups).
+      snapshot_at: ${{ github.event_name == 'issues' && github.event.issue.updated_at || '' }}
+      trigger: ${{ github.event_name == 'issues' && format('label:{0}', github.event.label.name) || github.event_name == 'issue_comment' && 'comment' || inputs.trigger }}
+      wait_seconds: ${{ (github.event_name == 'issue_comment' || inputs.trigger == 'comment') && 120 || 0 }}
       force: ${{ inputs.force == true }}
       claude_auth: ${{ vars.CLAUDE_AUTH }}
       max_review_cycles: ${{ vars.ISSUE_AGENT_MAX_REVIEW_CYCLES }}
       harness_repo: ${{ github.repository }}
       harness_ref: ${{ github.event.repository.default_branch }}
     secrets: inherit
+
+  # The safety net: an issue whose brief waits on an unanswered comment gets a run.
+  sweep:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: read
+      actions: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Answer what was missed
+        env:
+          # The run it starts is a comment run: it answers only comments by people with write access.
+          GH_TOKEN: ${{ github.token }}
+        run: node ci/issue-agent/run.mjs sweep-briefs

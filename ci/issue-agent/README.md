@@ -82,6 +82,92 @@ different agent before it reaches the PR:
   opens as `[needs human]` with the open findings (and, when it applies, that the root `npm test`
   never passed on it), or the issue gets a comment saying why.
 
+## The brief — nothing is built until you approve it
+
+With `"brief": "pause"` in `.github/issue-agent.json` (on in this repo; off by default, so another repo
+keeps building on the label), the `agent` label doesn't start a build. It starts a **brief**:
+
+```
+issue labelled `agent`
+  ├─ brief      reproduce the problem on main, for real · how bad is it · 2–3 ways to fix it ·       (agent)
+  │             the acceptance criteria · what's NOT in scope
+  ├─ check      the card is in plain words (card.mjs) — or the agent rewrites it, twice at most       (script)
+  └─ post       the brief as a comment on the issue; label agent:awaiting-approval                    (script)
+                  │
+       you reply ─┤→ the agents answer (and post v2, v3… if anything changes)   ← back to waiting
+                  │
+  you add `agent:approved`
+  └─ build      the pipeline above, with the approved brief as the spec, word for word
+```
+
+**The card** is the top of the brief: five lines for a person who never read the code.
+
+| Line | What it says |
+| --- | --- |
+| **What's wrong** | one real moment, with real numbers — what a person sees, not what the code does |
+| **How bad** | always in this order: **Unsafe / Broken / Awkward / Internal** · lets something through, or fails safe · where it's live · who |
+| **The fix** (or **Options** A/B/C with a recommendation) | what people will see afterwards |
+| **What you're approving** | what saying yes costs: what changes for current users, the worst case, whether it can be undone |
+| **How you'll know it's fixed** | "do X, see Y" — for a safety fix, every bad case refused and the good case still working |
+
+`card.mjs` refuses code formatting, file paths, function names, issue and rule numbers, unexplained
+abbreviations, sentences over 30 words, words that claim more than the gate checks ("secure",
+"guarantees", "proves age") and phrases that play a problem down ("just a demo", "none known").
+Below the divider: what the agent ran to reproduce it and what that printed, the acceptance criteria
+(each marked as checked by a test, screenshots, a reviewer, or *you, after it merges*), what's out of
+scope, and the agents' plan.
+
+**What you can do with a brief:**
+
+| You want to… | Do this |
+| --- | --- |
+| approve it | add `agent:approved` — that approves **this version** (with options: the recommended one) |
+| pick another option, correct it, ask a question | reply in your own words. The agents answer within minutes; a question gets an answer, anything else gets a new version that opens with "Changed since v1". Older versions fold away |
+| give them a fact they couldn't find | paste it; they re-check against the code |
+| talk it through properly | the brief's **talk it through live** link (below), if it's set up |
+| stop | remove the `agent` label, or close the issue |
+
+**What keeps it honest:**
+
+- **You approve exactly what you read.** The brief's comment carries its own data; approval re-renders
+  it and compares. A brief edited by hand, a comment you haven't had an answer to, or an issue edited
+  since the brief — each refuses the approval and says why.
+- **The approved brief is the contract.** Its criteria become the build's checklist word for word
+  (after-merge checks go to you in the PR instead). If the implementer thinks one is wrong, it doesn't
+  reword it: it stops, says why on the issue, and the brief goes back to waiting for you.
+- **Only a person approves.** The pipeline refuses to add `agent:approved` itself (a test pins it).
+  Until the agents have their own GitHub identity, their comments appear under the `AGENT_GH_TOKEN`
+  user's name; the hidden marker every agent comment starts with is what tells them apart.
+- **A security hole is never briefed in public.** When the brief finds something **Unsafe** that a
+  release or a hosted demo lets through, nothing about it is posted (SECURITY.md): the issue gets a
+  short note to move it to a private advisory, the run keeps only its outcome, and the brief's log
+  never reaches the job's public console.
+- `needs-decision` doesn't stop a brief: approving it *is* the decision.
+
+**Replies arrive by themselves.** A comment by a member or collaborator on an issue labelled
+`agent:awaiting-approval` starts a run; it waits two minutes first, and a newer comment replaces it, so
+three quick comments get one answer. After 6 versions it stops and suggests approving or talking it
+through live. Every hour, a check starts a run for any comment whose event was lost (as the workflow's
+own bot — allowed for comment runs only, which answer nothing but write-access people's comments).
+
+### Talking it through live (optional)
+
+Comments are fine for "go with B"; for a real back-and-forth, each brief can carry a **talk it through
+live** link that opens a Claude Code session, on the web or in the Claude app, already pointed at the
+issue and the brief. It uses a [routine](https://code.claude.com/docs/en/routines) (a research preview
+— its API may change):
+
+1. At claude.ai/code/routines, create a routine on this repository with a prompt like: *"A maintainer
+   wants to discuss an issue agent's brief. Read the issue and the brief named in the message, reproduce
+   anything that's in doubt, then answer their questions. When you agree on a change, post it on the
+   issue as a comment in plain words — the issue agent turns that into the next version of the brief."*
+2. Add an **API trigger**, generate its token, and store the routine's id (`trig_…`) and the token as the
+   repo secrets `ISSUE_AGENT_DISCUSS_ROUTINE` and `ISSUE_AGENT_DISCUSS_TOKEN`.
+
+Each brief then fires the routine once and links the session it returns. Without the secrets (or if the
+call fails) the brief just says "reply here". Whatever you agree in the session reaches the agents the
+same way as any comment: on the issue.
+
 ## Seeing what it's working on
 
 - **On the issue:** one 🤖 status comment, edited in place — the current state on top, a timestamped
@@ -190,7 +276,7 @@ execute it. So the design limits **what that code can reach** and **who can stee
 | | |
 | --- | --- |
 | **Who can start it** | Anyone who can add a label — and the workflow then requires **write access**. |
-| **Whose words reach the agents** | Only the title, body and comments **by people with write access** (for the title: its author, or whoever renamed it last), frozen at the label. Anything by others, or written/edited after the label, is left out and listed in the report; an outsider's title becomes "Issue #n". An issue edited or renamed after its label is refused until re-labelled. |
+| **Whose words reach the agents** | Only the title, body and comments **by people with write access** (for the title: its author, or whoever renamed it last), frozen at the label (with briefs: at the comment or the approval). The agents' own earlier briefs and replies come back marked as theirs — never as a maintainer's words. Anything by others, or written/edited after the label, is left out and listed in the report; an outsider's title becomes "Issue #n". An issue edited or renamed after its label is refused until re-labelled. |
 | **GitHub credentials** | **None in the job that runs agent code** (CI): the `implement` job has read-only access, its checkout keeps no credential, and no token is in its environment — the same for the review loop's `fix` job. Only the trusted jobs hold a write token (`publish`, and the review loop's `assess` and `push`), all run from `main`, and none installs or runs anything the agents wrote — they apply a patch. |
 | **What publish takes from the agents' job** | Treated as untrusted input. The issue number comes from the workflow and must match; the title is re-read from GitHub through the same filter; the base must be a commit on `main`; the files touched are read from git after the patch is applied (not from the patch's own headers), and a change touching `.github/` is never pushed. Code running in the agents' job *could* rewrite the patch or the report it hands over (the recorded sha256 catches accidents, not that) — so what reaches GitHub is a PR — a draft, or with the review loop on, an `agent:in-review` PR the Claude review reads first — that a human approves like any other before it merges. The agent never merges. |
 | **Claude credential** | The agents need one to run, so it is in *their* environment — an agent's tools can read it. Code the agents wrote (npm scripts, tests, builds) runs with **every** credential stripped. |
@@ -260,7 +346,9 @@ is the worked example:
 
 2. **A caller workflow** — `.github/workflows/issue-agent.yml` with the same triggers as ours, whose job
    is `uses: openmobilehub/credentagent/.github/workflows/issue-agent-run.yml@main` with
-   `secrets: inherit` and the inputs `issue`, `sender`, `snapshot_at`, `force`, `claude_auth`. Pass
+   `secrets: inherit` and the inputs `issue`, `sender`, `snapshot_at`, `force`, `claude_auth` (with
+   briefs on, also `trigger` and `wait_seconds`, and the comment and `agent:approved` triggers — copy
+   ours). Pass
    `review_loop: false` unless the repo also runs the Claude review and `issue-agent-review.yml`:
    without them nothing would pick up a PR opened for the loop, so it stays a draft for a human.
 
@@ -306,6 +394,7 @@ is left, so together they can't pass the cap. A run that hits its cap stops and 
 | `ISSUE_AGENT_RUN_BUDGET_USD` | `100` | per-run cap |
 | `ISSUE_AGENT_LABEL` | `agent` | the label `--poll` looks for |
 | `ISSUE_AGENT_MAX_REVIEW_CYCLES` | `3` | review-loop fix cycles; at the cap 💬 → `agent:ready-for-human` (notes listed), ⛔ → `agent:needs-human` |
+| `ISSUE_AGENT_DISCUSS_ROUTINE`, `ISSUE_AGENT_DISCUSS_TOKEN` | — | secrets: the brief's "talk it through live" routine ("The brief") |
 
 Secrets/variables: `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` (+ `CLAUDE_AUTH`), and
 **`AGENT_GH_TOKEN`** (used by the trusted jobs that write: `publish`, and the review loop's `push`;
@@ -319,7 +408,10 @@ has to merge in; without it GitHub refuses that push and the loop hands the PR t
 ## Files
 
 - `run.mjs` — the orchestrator: `snapshot`, `implement`, `publish` (CI runs them as three jobs; locally
-  they run back to back).
+  they run back to back) — and with briefs on, `brief` / `publish-brief` in the same three jobs.
+- `brief.mjs` — the brief: its comment (and reading it back exactly), where the conversation stands,
+  what approval refuses, what each trigger starts. `card.mjs` — the card's plain-language check.
+  `brief.test.mjs` — their tests; each fails if its check is removed.
 - `config.mjs` — what the pipeline needs to know about the repo it works on (`.github/issue-agent.json`,
   "Using it in another repo"); the defaults are this repo's.
 - `roles.mjs` — each agent's prompt and output schema, built for the repo's config (`forRepo`).
