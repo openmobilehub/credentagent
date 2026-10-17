@@ -136,9 +136,10 @@ describe("CT5 — the widget ui:// resource is registered", () => {
 });
 
 describe("#372 — both widget registrations declare a specific-origin-only CSP", () => {
-  // Bypass guard: re-adding `data:` to either registration, or dropping the skybridge
-  // copy's `_meta.ui.csp`, fails this test. Hosts' default view CSP already allows
-  // `img-src data:`, so the generated SVG images don't need it declared.
+  // Bypass guard: re-adding `data:` to either `_meta.ui.csp`, or dropping the skybridge
+  // copy's `_meta.ui.csp`, fails this test. The MCP Apps default view CSP allows
+  // `img-src data:`; ChatGPT's default isn't documented to, so its own `openai/widgetCSP`
+  // keeps `data:` — dropping it (blank pictures in ChatGPT) fails this test too.
   const BARE = /^(\*|[a-z][a-z0-9+.-]*:)$/i;
   const IMAGES = ["https://picsum.photos", "https://fastly.picsum.photos"];
 
@@ -153,15 +154,14 @@ describe("#372 — both widget registrations declare a specific-origin-only CSP"
       expect(csp, `${uri} _meta.ui.csp`).toBeTruthy();
       expect(csp.resourceDomains, uri).toEqual(IMAGES);
       expect(csp.connectDomains, uri).toEqual(["https://shop.example"]);
-      const entries: string[] = [...csp.resourceDomains, ...csp.connectDomains];
-      const openai = meta["openai/widgetCSP"];
+      for (const e of [...csp.resourceDomains, ...csp.connectDomains]) expect(e, `${uri} CSP entry`).not.toMatch(BARE);
       if (uri.endsWith(".skybridge.html")) {
+        // ChatGPT's own key: the same origins, plus `data:` so the inline SVG images render there.
+        const openai = meta["openai/widgetCSP"];
         expect(openai, `${uri} openai/widgetCSP`).toBeTruthy();
-        expect(openai.resource_domains).toEqual(IMAGES);
+        expect(openai.resource_domains).toEqual([...IMAGES, "data:"]);
         expect(openai.connect_domains).toEqual(["https://shop.example"]);
-        entries.push(...openai.resource_domains, ...openai.connect_domains);
       }
-      for (const e of entries) expect(e, `${uri} CSP entry`).not.toMatch(BARE);
     }
   });
 });

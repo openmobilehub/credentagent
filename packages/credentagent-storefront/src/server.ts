@@ -303,10 +303,12 @@ export interface Storefront {
 // ── widget bundle (single-file html, built by vite into dist/ui/) ───────────
 
 const SKYBRIDGE_MIME = "text/html+skybridge";
-// Product images are self-contained `data:` URIs. They need no CSP entry: the MCP Apps
-// default view CSP already has `img-src 'self' data:`, and scanners that grade the
-// declared policy refuse bare schemes. Picsum stays allowlisted in case a custom
-// catalog uses remote images.
+// Product images are self-contained `data:` URIs. The MCP Apps `_meta.ui.csp` declares no
+// `data:`: its default view CSP already has `img-src 'self' data:`, and scanners that grade
+// the declared policy refuse bare schemes. ChatGPT's default widget CSP is not documented
+// to allow `data:` images, so ChatGPT's own `openai/widgetCSP` keeps declaring `data:`
+// (spec 002, T017) rather than risk blank pictures there. Picsum stays allowlisted in case
+// a custom catalog uses remote images.
 const IMAGE_DOMAINS = ["https://picsum.photos", "https://fastly.picsum.photos"];
 
 function bundleCandidates(): string[] {
@@ -1391,9 +1393,10 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
 
     // ── widget resource — two registrations from one bundle ─────────────────
     // Claude / MCP-Apps hosts read RESOURCE_URI; ChatGPT reads the skybridge URI.
-    // Both declare the same specific-origin policy (`_meta.ui.csp`, plus `openai/widgetCSP`
-    // for ChatGPT). No `data:`: the hosts' default already allows `data:` images, so the
-    // inline SVG image placeholder (FR-014) still renders.
+    // Both declare the same specific-origin `_meta.ui.csp` — no `data:`, because the MCP Apps
+    // default view CSP already allows `data:` images. The skybridge copy also carries
+    // ChatGPT's own `openai/widgetCSP`, which keeps `data:` (see IMAGE_DOMAINS) so the inline
+    // SVG product images and placeholder (spec 002 FR-014) render there too.
     registerAppResource(
       server,
       RESOURCE_URI,
@@ -1408,7 +1411,7 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
       SKYBRIDGE_URI,
       { mimeType: SKYBRIDGE_MIME },
       async (): Promise<ReadResourceResult> => ({
-        contents: [{ uri: SKYBRIDGE_URI, mimeType: SKYBRIDGE_MIME, text: await loadBundle(), _meta: { ui: { csp: { resourceDomains: IMAGE_DOMAINS, connectDomains: cspOrigin(baseUrl) } }, "openai/widgetCSP": { connect_domains: cspOrigin(baseUrl), resource_domains: IMAGE_DOMAINS } } }],
+        contents: [{ uri: SKYBRIDGE_URI, mimeType: SKYBRIDGE_MIME, text: await loadBundle(), _meta: { ui: { csp: { resourceDomains: IMAGE_DOMAINS, connectDomains: cspOrigin(baseUrl) } }, "openai/widgetCSP": { connect_domains: cspOrigin(baseUrl), resource_domains: [...IMAGE_DOMAINS, "data:"] } } }],
       }),
     );
 
