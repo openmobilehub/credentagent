@@ -152,7 +152,9 @@ thing we don't do here.
 - **Small and safe → fix it** in your PR (a one-line guard, an obvious typo, a mislabeled string).
 - **Bigger, risky, or out of scope → open an issue** (or leave a review comment) that names it. The
   bar for surfacing is deliberately low: a one-sentence "spotted this, out of scope, filed #NN" is
-  enough. The point is that nothing broken goes **unrecorded**.
+  enough in the PR. The point is that nothing broken goes **unrecorded**. The issue itself still
+  needs **steps to reproduce, through the SDK or the UI**: every issue must be reproducible (the
+  forms in `.github/ISSUE_TEMPLATE/` ask for them).
 
 The guardrail is to **keep PRs focused** — don't balloon your change to chase everything you find.
 The issue tracker is the pressure valve: fix the small thing inline, spin the rest into its own issue.
