@@ -272,6 +272,13 @@ and says why in a comment on the issue. **Only words by people with write access
 it a request from an outside contributor, restate it in a comment. The agents run in a job with no
 GitHub token; a separate job publishes their reviewed change. It never merges; its PRs go through
 the same human review as any other. Media lives on the `agent-evidence` branch — never merge it.
+With an `AGENT_GH_TOKEN` secret, the agent also works through the Claude review on its own PR
+(`.github/workflows/issue-agent-review.yml`): it fixes or answers every thread, pushes, resolves the
+threads, and repeats — labelled `agent:in-review` meanwhile — and **asks for a human review only
+when the review is ✅, or 💬 with nothing open** (`agent:ready-for-human`). After 3 cycles a 💬
+also goes to a human as ready, with the open small notes listed; a ⛔ stops as `agent:needs-human`,
+as does any other stated reason. Don't review an `agent:in-review` PR
+yet; you'll be asked.
 How it works and how to run it locally: [`ci/issue-agent/README.md`](ci/issue-agent/README.md).
 
 Apache-2.0 · part of [Open Mobile Hub](https://openmobilehub.org) (Linux Foundation).

@@ -7,7 +7,10 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { titleAuthor, forbiddenPaths, applyAndCheck, isRunId, isCommitId, publishIssueNumber } from "./checks.mjs";
+import {
+  titleAuthor, forbiddenPaths, applyAndCheck, isRunId, isCommitId, publishIssueNumber,
+  isReviewBot, parseVerdict, agentBranch, threadsToAnswer, reviewDecision, sharedChanges, cyclesDone, loopRefusal, latestVerdict, cycleCap,
+} from "./checks.mjs";
 import { fingerprints, withinBaseline } from "./fingerprints.mjs";
 import { prBody, issueComment } from "./report.mjs";
 
@@ -114,5 +117,128 @@ describe("agent text in a PR body", () => {
   });
   it("says why when it skips", () => {
     expect(issueComment({ kind: "skipped", reason: "it is closed" })).toMatch(/not starting this one.*it is closed/);
+  });
+});
+
+describe("the review loop", () => {
+  const bot = { __typename: "Bot", login: "claude" };
+  const maintainer = { __typename: "User", login: "dzuluaga" };
+  const outsider = { __typename: "User", login: "mallory" };
+  const isTrusted = (login) => login === "dzuluaga";
+
+  it("reads the review's verdict", () => {
+    expect(parseVerdict("## Claude review\n**Verdict: ✅ Ready to merge**")).toBe("ready");
+    expect(parseVerdict("**Verdict: 💬 Ready — small notes**")).toBe("notes");
+    expect(parseVerdict("**Verdict: ⛔ Needs changes**")).toBe("changes");
+    expect(parseVerdict("no verdict here")).toBeUndefined();
+  });
+
+  it("touches only issue-agent branches", () => {
+    expect(agentBranch("agent/issue-286-202610161901")).toEqual({ issue: 286, run: "202610161901" });
+    expect(agentBranch("feat/issue-agent")).toBeUndefined();
+    expect(agentBranch("agent/issue-286-202610161901/../main")).toBeUndefined();
+  });
+
+  it("trusts the review bot, not a user who calls themselves claude", () => {
+    expect(isReviewBot(bot)).toBe(true);
+    expect(isReviewBot({ __typename: "User", login: "claude" })).toBe(false);
+  });
+
+  it("answers threads from the bot and maintainers only, and drops outsiders' replies", () => {
+    const thread = (id, root, ...replies) => ({ id, isResolved: false, path: "a.ts", line: 1, comments: [root, ...replies].map((author, i) => ({ databaseId: i, author, body: `${author.login} says` })) });
+    const { answer, ignored } = threadsToAnswer([
+      thread("T1", bot, outsider, maintainer),
+      thread("T2", outsider),
+      { ...thread("T3", bot), isResolved: true },
+      thread("T4", maintainer),
+    ], isTrusted);
+    expect(answer.map((t) => t.id)).toEqual(["T1", "T4"]);
+    expect(answer[0].comments.map((c) => c.author)).toEqual(["claude", "dzuluaga"]);
+    expect(ignored).toEqual(["a thread started by mallory (no write access)"]);
+  });
+
+  it("counts pushed cycles — not hand-overs, outsiders' copies, or another bot's", () => {
+    const c = (author, body) => ({ author, body });
+    const comments = [
+      c(maintainer, "<!-- issue-agent-review cycle=1 sha=abc -->\n🔁"),
+      c({ __typename: "Bot", login: "github-actions" }, "<!-- issue-agent-review cycle=2 sha=def -->\n🔁"),
+      c(maintainer, "<!-- issue-agent-review stopped -->\n⚠️"),
+      c(outsider, "<!-- issue-agent-review cycle=9 sha=x -->"),
+      c({ __typename: "Bot", login: "some-other-app" }, "<!-- issue-agent-review cycle=9 sha=y -->"),
+      c({ __typename: "Bot", login: "dzuluaga" }, "<!-- issue-agent-review cycle=9 sha=z -->"),
+    ];
+    expect(cyclesDone(comments, isTrusted)).toBe(2);
+  });
+
+  it("refuses forks, non-agent branches, closed PRs and PRs out of the loop", () => {
+    const pr = { headRefName: "agent/issue-1-202610162031", isCrossRepository: false, state: "OPEN", labels: ["agent:in-review"] };
+    expect(loopRefusal(pr)).toBeUndefined();
+    expect(loopRefusal({ ...pr, isCrossRepository: true })).toMatch(/fork/);
+    expect(loopRefusal({ ...pr, headRefName: "feat/x" })).toMatch(/not an issue-agent branch/);
+    expect(loopRefusal({ ...pr, state: "MERGED" })).toMatch(/merged/);
+    expect(loopRefusal({ ...pr, labels: ["agent:needs-human"] })).toMatch(/isn't in the review loop/);
+  });
+
+  it("brings main in only when main changed a file the PR changes too", () => {
+    expect(sharedChanges(["README.md", "docs/a.md"], ["README.md", "src/x.ts"])).toEqual(["README.md"]);
+    expect(sharedChanges(["docs/a.md"], ["src/x.ts"])).toEqual([]);
+  });
+
+  // The loop's normal state: the token is there. (loopOn has no default — forgetting it means "off".)
+  const rd = (o) => reviewDecision({ loopOn: true, ...o });
+
+  it("hands over only when the review is satisfied and nothing is open", () => {
+    const d = (verdict, open, cycle = 0) => rd({ verdict, open, cycle, maxCycles: 3 }).action;
+    expect(d("ready", 0)).toBe("done");
+    expect(d("notes", 0)).toBe("done");
+    expect(d("notes", 2)).toBe("fix"); // small notes still get fixed before a human is asked
+    expect(d("ready", 1)).toBe("fix");
+    expect(d("changes", 0)).toBe("fix");
+    expect(d(undefined, 0)).toBe("wait");
+  });
+
+  it("finds the verdict for the head — reusing the last one only when the head just merges main in", () => {
+    const s = (createdAt, v) => ({ createdAt, body: `## Claude review\n**Verdict: ${v}**` });
+    const summaries = [s("2026-10-16T10:00:00Z", "⛔ Needs changes"), s("2026-10-16T12:00:00Z", "💬 Ready — small notes")];
+    expect(latestVerdict({ summaries, headAt: "2026-10-16T11:00:00Z", headIsMerge: false, conclusion: "success" }).verdict).toBe("notes");
+    // a commit time in the committer's zone: 13:30+02:00 is 11:30Z — still before the 12:00Z summary
+    expect(latestVerdict({ summaries, headAt: "2026-10-16T13:30:00+02:00", headIsMerge: false, conclusion: "success" }).verdict).toBe("notes");
+    // a newer fix commit with no review of it yet: no verdict
+    expect(latestVerdict({ summaries, headAt: "2026-10-16T13:00:00Z", headIsMerge: false, conclusion: "success" }).verdict).toBeUndefined();
+    // "Update branch" (a merge of main, which the review skips): the last verdict still applies
+    expect(latestVerdict({ summaries, headAt: "2026-10-16T13:00:00Z", headIsMerge: true, conclusion: "success" })).toMatchObject({ verdict: "notes", reused: true });
+    // …but not when the review failed
+    expect(latestVerdict({ summaries, headAt: "2026-10-16T13:00:00Z", headIsMerge: true, conclusion: "failure" }).verdict).toBeUndefined();
+  });
+
+  it("hands a PR over, spending nothing, when the loop has no token", () => {
+    expect(reviewDecision({ loopOn: false, verdict: "changes", open: 3, cycle: 0, maxCycles: 3 })).toMatchObject({ action: "give-up", reason: expect.stringMatching(/AGENT_GH_TOKEN/) });
+    expect(reviewDecision({ verdict: "changes", open: 3, cycle: 0, maxCycles: 3 }).action).toBe("give-up"); // not told it's on → off
+    expect(rd({ verdict: "changes", open: 3, cycle: 0, maxCycles: 3 }).action).toBe("fix");
+  });
+
+  it("reads the cycle cap as a whole number ≥ 1, never as no cap", () => {
+    expect(cycleCap("4")).toBe(4);
+    expect(cycleCap("")).toBe(3);
+    expect(cycleCap(undefined)).toBe(3);
+    expect(cycleCap("four")).toBe(3);
+    expect(cycleCap("2.5")).toBe(3);
+    expect(cycleCap("0")).toBe(3);
+  });
+
+  it("hands a PR over when the review failed or gave no verdict, instead of waiting forever", () => {
+    expect(rd({ verdict: undefined, open: 0, cycle: 0, maxCycles: 3, conclusion: "failure" })).toMatchObject({ action: "give-up", reason: expect.stringMatching(/failed/) });
+    expect(rd({ verdict: undefined, open: 0, cycle: 0, maxCycles: 3, conclusion: "success" })).toMatchObject({ action: "give-up", reason: expect.stringMatching(/without a verdict/) });
+    expect(rd({ verdict: undefined, open: 0, cycle: 0, maxCycles: 3 }).action).toBe("wait"); // started by hand, no review finished
+  });
+
+  it("at the cycle cap, counts 💬 as ready (notes listed) but never ⛔", () => {
+    const at = (verdict, open) => rd({ verdict, open, cycle: 3, maxCycles: 3 });
+    expect(at("notes", 2)).toMatchObject({ action: "done", notes: 2 });
+    expect(at("ready", 1)).toMatchObject({ action: "done", notes: 1 });
+    expect(at("changes", 0).action).toBe("give-up");
+    expect(at("changes", 4).action).toBe("give-up");
+    // before the cap, open notes are still fixed
+    expect(rd({ verdict: "notes", open: 2, cycle: 2, maxCycles: 3 }).action).toBe("fix");
   });
 });

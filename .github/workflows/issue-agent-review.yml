@@ -1,0 +1,180 @@
+name: issue-agent-review
+
+# The review loop: after every Claude review of an issue agent's PR (branch agent/issue-*), the agent
+# fixes what the review asks, pushes, replies to and resolves each thread — and the push starts the
+# next review. It hands the PR to a human only when the review is ✅ Ready to merge, or 💬 with every
+# thread resolved, or when it stops (cycle cap, budget, a change it may not publish), saying why.
+# How it works and what it trusts: ci/issue-agent/README.md, "The review loop".
+#
+# Same three-job split as issue-agent.yml, so code an agent writes never shares a job with a token:
+#   assess  trusted code: reads the review (bot + write-access people only); hands over when done
+#   fix     the agents and the gates; NO GitHub token
+#   push    trusted code: applies the checked fix, pushes (no force), answers and resolves threads
+#
+# Requires the AGENT_GH_TOKEN secret: a push made with GITHUB_TOKEN starts no workflow, so the fix
+# would never be reviewed again. Without it the loop hands the PR to a human after the first review.
+
+on:
+  workflow_run:
+    workflows: ["Claude Code Review"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: "Agent PR number"
+        required: true
+
+concurrency:
+  # By PR number, whether started by a review or by hand, so the two can't run on one PR at once.
+  group: issue-agent-review-${{ github.event.workflow_run.pull_requests[0].number || inputs.pr }}
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  assess:
+    # Only reviews of PRs from agent branches in this repository (run.mjs re-checks: same repo, agent
+    # branch, agent:in-review). Any conclusion but "cancelled" (a newer push superseded it): a failed
+    # or verdict-less review is handed to a human rather than left waiting.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.event == 'pull_request' &&
+       github.event.workflow_run.conclusion != 'cancelled' &&
+       github.event.workflow_run.head_repository.full_name == github.repository &&
+       startsWith(github.event.workflow_run.head_branch, 'agent/issue-'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write # labels, reviewer request, the hand-over comment
+      issues: write
+    outputs:
+      decision: ${{ steps.assess.outputs.decision }}
+      pr: ${{ steps.pr.outputs.number }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }} # trusted code from main, even when started by hand from another branch
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Which PR
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_PR: ${{ inputs.pr }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          if [ -n "$INPUT_PR" ]; then n="$INPUT_PR"; else
+            n=$(gh pr list -R "$GITHUB_REPOSITORY" --head "$HEAD_BRANCH" --state open --json number --jq '.[0].number // empty')
+          fi
+          case "$n" in ''|*[!0-9]*) echo "::notice::No open PR for this review."; n="" ;; esac
+          echo "number=$n" >> "$GITHUB_OUTPUT"
+      - name: Read the review
+        id: assess
+        if: steps.pr.outputs.number != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ steps.pr.outputs.number }}
+          ISSUE_AGENT_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          ISSUE_AGENT_REVIEW_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          # The cycle cap: the repo variable if set (e.g. raise it, then run by hand), else 3.
+          ISSUE_AGENT_MAX_REVIEW_CYCLES: ${{ vars.ISSUE_AGENT_MAX_REVIEW_CYCLES }}
+          # Off without a token whose pushes start workflows: then no fix session is spent at all.
+          ISSUE_AGENT_REVIEW_LOOP: ${{ secrets.AGENT_GH_TOKEN != '' && 'on' || '' }}
+        run: node ci/issue-agent/run.mjs assess-review "$PR" --out review.json
+      - if: steps.pr.outputs.number != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-agent-review
+          path: review.json
+          retention-days: 30
+
+  fix:
+    needs: assess
+    if: needs.assess.outputs.decision == 'fix'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }} # the harness itself comes from main
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install the harness
+        working-directory: ci/issue-agent
+        run: npm ci --no-audit --no-fund
+      - uses: actions/download-artifact@v4
+        with:
+          name: issue-agent-review
+      - name: Answer the review
+        env:
+          CLAUDE_AUTH: ${{ vars.CLAUDE_AUTH }}
+          API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          # Export only the chosen Claude credential. No GitHub token exists in this job.
+          if [ "$CLAUDE_AUTH" = "api" ]; then
+            [ -n "$API_KEY" ] || { echo "::error::CLAUDE_AUTH is \"api\" but ANTHROPIC_API_KEY is not set."; exit 1; }
+            export ANTHROPIC_API_KEY="$API_KEY"
+          else
+            [ -n "$OAUTH_TOKEN" ] || { echo "::error::CLAUDE_CODE_OAUTH_TOKEN is not set."; exit 1; }
+            export CLAUDE_CODE_OAUTH_TOKEN="$OAUTH_TOKEN"
+          fi
+          unset API_KEY OAUTH_TOKEN
+          node ci/issue-agent/run.mjs fix-review review.json --dir "$RUNNER_TEMP/issue-agent/fix"
+      - name: Hand the fix to push (and keep it)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-agent-fix
+          path: |
+            ${{ runner.temp }}/issue-agent/fix/
+            !${{ runner.temp }}/issue-agent/fix/repo/
+          retention-days: 30
+
+  push:
+    needs: [assess, fix]
+    if: always() && needs.assess.outputs.decision == 'fix'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }} # trusted code from main holds the PAT
+          fetch-depth: 0
+          persist-credentials: false # pushes go through `gh auth git-credential`
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/download-artifact@v4
+        with:
+          name: issue-agent-review
+      - uses: actions/download-artifact@v4
+        continue-on-error: true # a fix job that died before uploading still gets a hand-over
+        with:
+          name: issue-agent-fix
+          path: ${{ runner.temp }}/issue-agent/fix
+      - name: Git identity (commits are DCO signed off)
+        run: |
+          git config --global user.name "credentagent-issue-agent[bot]"
+          git config --global user.email "issue-agent@users.noreply.github.com"
+      - name: Push the fix and answer the review
+        env:
+          # The PAT's push starts the next review; without it the loop hands over to a human.
+          GH_TOKEN: ${{ secrets.AGENT_GH_TOKEN || github.token }}
+          ISSUE_AGENT_REVIEW_LOOP: ${{ secrets.AGENT_GH_TOKEN != '' && 'on' || '' }}
+          PR: ${{ needs.assess.outputs.pr }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/issue-agent/fix"
+          node ci/issue-agent/run.mjs push-review "$RUNNER_TEMP/issue-agent/fix" --review review.json --pr "$PR"

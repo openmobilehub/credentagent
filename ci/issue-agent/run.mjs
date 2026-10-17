@@ -38,8 +38,11 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { fingerprints, stripAnsi, withinBaseline } from "./fingerprints.mjs";
-import { TRUSTED_PERMISSIONS, titleAuthor, forbiddenPaths, applyAndCheck, changedSince, isRunId, isCommitId, publishIssueNumber } from "./checks.mjs";
-import { reportHtml, prBody, issueComment } from "./report.mjs";
+import {
+  TRUSTED_PERMISSIONS, titleAuthor, forbiddenPaths, applyAndCheck, changedSince, isRunId, isCommitId, publishIssueNumber,
+  isReviewBot, parseVerdict, agentBranch, threadsToAnswer, reviewDecision, sharedChanges, filesBetween, cyclesDone, loopRefusal, latestVerdict, cycleCap,
+} from "./checks.mjs";
+import { reportHtml, prBody, issueComment, md } from "./report.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, "../..");
@@ -51,6 +54,11 @@ const RUN_BUDGET_USD = Number(process.env.ISSUE_AGENT_RUN_BUDGET_USD ?? 100);
 const TRIGGER_LABEL = process.env.ISSUE_AGENT_LABEL ?? "agent";
 const BLOCKING_LABELS = ["needs-decision", "epic", "wontfix", "duplicate", "question"];
 const EVIDENCE_BRANCH = "agent-evidence";
+// The review loop (README, "The review loop") — on when the workflow has a token whose pushes start
+// other workflows (AGENT_GH_TOKEN); with GITHUB_TOKEN a pushed fix would never be reviewed again.
+const REVIEW_LOOP = process.env.ISSUE_AGENT_REVIEW_LOOP === "on";
+const MAX_REVIEW_CYCLES = cycleCap(process.env.ISSUE_AGENT_MAX_REVIEW_CYCLES); // unset ("") or not a whole number ≥ 1 → 3
+const LABELS = { inReview: "agent:in-review", ready: "agent:ready-for-human", needsHuman: "agent:needs-human" };
 
 // ── args ─────────────────────────────────────────────────────────────────────────────────────────
 const argv = process.argv.slice(2);
@@ -97,6 +105,13 @@ const modelName = (id) => {
   return m ? `Claude ${m[1][0].toUpperCase()}${m[1].slice(1)} ${m[2]}.${m[3]}` : "Claude";
 };
 const actionsRunUrl = () => process.env.GITHUB_RUN_ID ? `${process.env.GITHUB_SERVER_URL ?? "https://github.com"}/${REPO}/actions/runs/${process.env.GITHUB_RUN_ID}` : undefined;
+const ensureLabels = () => {
+  for (const [name, color, description] of [
+    [LABELS.inReview, "FBCA04", "Issue agent: still iterating with the Claude reviewer — not ready for a human yet"],
+    [LABELS.ready, "0E8A16", "Issue agent: every review is resolved — ready for a human review"],
+    [LABELS.needsHuman, "D93F0B", "Issue agent: stopped — a human has to take this over"],
+  ]) sh("gh", ["label", "create", name, "-R", REPO, "--color", color, "--description", description, "--force"], { allowFail: true });
+};
 
 let RUN; // per issue: { id, dir, costUsd, log() }
 const newRun = (n, dir) => {
@@ -273,6 +288,11 @@ function restorePatch(dir, base, patch) {
   if (patch) git(["apply", "--whitespace=nowarn", "-"], { cwd: dir, input: patch });
   trackNew(dir);
 }
+// Point HEAD (and the index) back at `base` without touching the working tree.
+function restoreHead(dir, base) {
+  git(["reset", "--quiet", "--mixed", base], { cwd: dir });
+  trackNew(dir);
+}
 
 // ── gates (this script runs them; an agent's claim that they pass is never taken) ────────────────
 // Each failure becomes fingerprints (fingerprints.mjs). A gate passes when it is green, or when every
@@ -389,8 +409,28 @@ async function implementIssue(issue, { dir } = {}) {
     return outcome({ status: "blocked", reason: spec.blocker, spec });
   }
 
-  // implement → [gates → mutation, fixed in place up to MAX_FIXES times] → review, until clean or out of
-  // rounds. Mechanical failures are fixed inside a round, so review rounds go to what only a reviewer catches.
+  const { rounds, reviewedPatch, stopped } = await iterate({
+    issue, spec, roles, repoDir, baseline, diffBase: base, mutationBase: base,
+    firstPrompt: roles.implementPrompt(issue, spec), schema: roles.IMPLEMENT_SCHEMA,
+  });
+  if (!rounds.length) return outcome({ status: "needs-human", reason: stopped ?? "no implementation round completed" });
+  const last = rounds.at(-1);
+  const done = Boolean(last.clean);
+  const patch = reviewedPatch ?? diffPatch(repoDir, base);
+  trackNew(repoDir);
+  const touched = changedSince(repoDir, base);
+  const forbidden = forbiddenPaths(touched);
+  writeFileSync(join(RUN.dir, "change.patch"), patch);
+  return finishImplement({ issue, spec, roles, n, repoDir, base, rounds, last, done, patch, touched, forbidden, stopped, outcome, renderHtml, proofHtml });
+}
+
+// implement → [gates → mutation, fixed in place up to MAX_FIXES times] → review, until clean or out of
+// rounds. Mechanical failures are fixed inside a round, so review rounds go to what only a reviewer
+// catches. Shared by a new issue and by the review loop:
+//   diffBase      what the reviewers diff against and the patch is taken from (main, or the PR head)
+//   mutationBase  what the test-proof check reverts the source to (always main's merge base)
+async function iterate({ issue, spec, roles, repoDir, baseline, diffBase, mutationBase, firstPrompt, schema }) {
+  const base = diffBase;
   let impl, session, feedback, reviewedPatch, stopped;
   const rounds = [];
   try {
@@ -400,8 +440,8 @@ async function implementIssue(issue, { dir } = {}) {
       for (let attempt = 0; attempt <= MAX_FIXES; attempt++) {
         const first = round === 1 && attempt === 0;
         ({ out: impl, sessionId: session } = await agent(`implement-r${round}${attempt ? `-fix${attempt}` : ""}`,
-          (first ? roles.implementPrompt(issue, spec) : roles.fixPrompt(feedback)) + baselineNote(baseline),
-          { cwd: repoDir, schema: roles.IMPLEMENT_SCHEMA, write: true, resume: first ? undefined : session, maxTurns: 200 }));
+          (first ? firstPrompt : roles.fixPrompt(feedback)) + baselineNote(baseline),
+          { cwd: repoDir, schema, write: true, resume: first ? undefined : session, maxTurns: 200 }));
         trackNew(repoDir);
         const g = runGates(repoDir, { baseline });
         r = { round, attempt, base, gates: g, impl };
@@ -412,7 +452,8 @@ async function implementIssue(issue, { dir } = {}) {
           feedback = `The \`npm run ${bad.name}\` gate FAILED when the pipeline ran it from the repo root.${fresh.length ? `\nFailures your change introduced:\n${fresh.map((f) => `- ${f}`).join("\n")}` : ""}\n\n\`\`\`\n${bad.tail}\n\`\`\``;
           continue;
         }
-        r.mutation = mutationCheck(repoDir, base, spec);
+        r.mutation = mutationCheck(repoDir, mutationBase, spec);
+        if (mutationBase !== base) restoreHead(repoDir, base); // mutationCheck leaves HEAD at its base
         if (r.mutation.applicable && !r.mutation.ok) {
           feedback = `Test-proof check failed: ${r.mutation.reason}.\nThe pipeline reverted your source changes (${(r.mutation.reverted ?? []).join(", ") || "none"}) and ran ${(r.mutation.tests ?? []).join(", ") || "no tests"}.\n\n\`\`\`\n${r.mutation.withoutFix?.tail ?? ""}\n\`\`\`\nA behavior change needs a test that fails without it.`;
           continue;
@@ -455,14 +496,10 @@ async function implementIssue(issue, { dir } = {}) {
     stopped = e.message;
     RUN.log(`  stopped: ${stopped}`);
   }
-  if (!rounds.length) return outcome({ status: "needs-human", reason: stopped ?? "no implementation round completed" });
-  const last = rounds.at(-1);
-  const done = Boolean(last.clean);
-  const patch = reviewedPatch ?? diffPatch(repoDir, base);
-  trackNew(repoDir);
-  const touched = changedSince(repoDir, base);
-  const forbidden = forbiddenPaths(touched);
-  writeFileSync(join(RUN.dir, "change.patch"), patch);
+  return { rounds, impl, reviewedPatch, stopped };
+}
+
+async function finishImplement({ issue, spec, roles, n, repoDir, base, rounds, last, done, patch, touched, forbidden, stopped, outcome, renderHtml, proofHtml }) {
 
   // evidence — after the patch is frozen, so nothing the evidence agent does can reach the PR
   const evidenceDir = join(RUN.dir, "evidence");
@@ -587,11 +624,18 @@ function publishRun(dir) {
   const existing = ghJson(["pr", "list", "-R", REPO, "--head", branch, "--state", "all", "--json", "url"]);
   let prUrl = existing[0]?.url;
   if (!prUrl) {
+    // With the review loop on, a converged change opens as a real (non-draft) PR so the Claude review
+    // runs on it — labelled agent:in-review and bannered as not ready for a human until the loop
+    // hands it over. Without the loop (or not converged), it stays a draft for a human, as before.
+    const loop = REVIEW_LOOP && done;
+    const labeller = process.env.ISSUE_AGENT_LABELLER;
     const bodyFile = join(dir, "pr-body.md");
-    writeFileSync(bodyFile, prBody(report, { mediaBase, repo: REPO }));
-    prUrl = gh(["pr", "create", "-R", REPO, "--draft", "--base", "main", "--head", branch,
+    const banner = loop ? `> [!NOTE]\n> **The agent is still working on this with the Claude reviewer** — it fixes each review, replies to and resolves the threads, and asks for a human review only once the review is ✅/💬 with nothing left open (at most ${MAX_REVIEW_CYCLES} cycles). No need to review it yet.\n\n` : "";
+    writeFileSync(bodyFile, banner + prBody(report, { mediaBase, repo: REPO }) + (labeller ? `\n<!-- issue-agent labeller=${labeller} -->\n` : ""));
+    prUrl = gh(["pr", "create", "-R", REPO, ...(loop ? [] : ["--draft"]), "--base", "main", "--head", branch,
       "--title", done ? issue.title : `[needs human] ${issue.title}`, "--body-file", bodyFile]);
-    gh(["issue", "comment", String(n), "-R", REPO, "--body", issueComment({ kind: done ? "pr" : "needs-human", prUrl, report })]);
+    if (loop) { ensureLabels(); gh(["pr", "edit", prUrl, "-R", REPO, "--add-label", LABELS.inReview]); }
+    gh(["issue", "comment", String(n), "-R", REPO, "--body", issueComment({ kind: loop ? "pr-in-review" : done ? "pr" : "needs-human", prUrl, report })]);
   }
   RUN.log(`  PR → ${prUrl}`);
   return { n, status: done ? "pr-open" : "needs-human", pr: prUrl };
@@ -632,6 +676,216 @@ function publishEvidence(n, id, evidenceDir, report) {
   return mediaBase;
 }
 
+// ══ 4. the review loop (README, "The review loop") ════════════════════════════════════════════════
+//
+// After every Claude review of an agent PR: assess (trusted) → fix (agents, no GitHub token) → push
+// (trusted). The loop hands the PR to a human only when the review is ✅, or 💬 with every thread
+// resolved — or when it stops (cycle cap, budget, a change it may not publish), saying why.
+
+const REVIEW_MARK = "<!-- issue-agent-review";
+
+function loadPr(number) {
+  const q = `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){
+    number url state isDraft isCrossRepository headRefName headRefOid body title author{login} labels(first:30){nodes{name}}
+    commits(last:1){nodes{commit{oid committedDate parents{totalCount}}}}
+    comments(last:100){nodes{author{__typename login} body createdAt}}
+    reviewThreads(first:100){nodes{id isResolved path line comments(first:50){nodes{databaseId author{__typename login} body createdAt}}}}}}}`;
+  return ghJson(["api", "graphql", "-f", `query=${q}`, "-f", `o=${OWNER}`, "-f", `r=${NAME}`, "-F", `n=${number}`]).data.repository.pullRequest;
+}
+
+function assessReview(prNumber) {
+  const pr = loadPr(prNumber);
+  const skip = (reason) => ({ pr: pr.number, decision: { action: "skip", reason } });
+  const labels = pr.labels.nodes.map((l) => l.name);
+  const refusal = loopRefusal({ ...pr, labels });
+  if (refusal) return skip(refusal);
+  const expected = process.env.ISSUE_AGENT_HEAD_SHA;
+  if (expected && expected !== pr.headRefOid) return skip("the PR has moved on since this review ran");
+  const branch = agentBranch(pr.headRefName);
+  const labeller = pr.body.match(/<!-- issue-agent labeller=([A-Za-z0-9-]+) -->/)?.[1];
+  const head = pr.commits.nodes[0].commit;
+  const summaries = pr.comments.nodes.filter((c) => isReviewBot(c.author) && c.body.startsWith("## Claude review"));
+  const conclusion = process.env.ISSUE_AGENT_REVIEW_CONCLUSION || undefined;
+  const { verdict, summary, reused } = latestVerdict({ summaries, headAt: head.committedDate, headIsMerge: head.parents.totalCount > 1, conclusion });
+  if (reused) RUN?.log?.("  the head only merges main in; the last review still applies");
+  const { answer, ignored } = threadsToAnswer(pr.reviewThreads.nodes.map((t) => ({ ...t, comments: t.comments.nodes })), trusted);
+  const cycle = cyclesDone(pr.comments.nodes, trusted);
+  // One decision, every rule in it (tested in checks.mjs) — including "no token: hand over, spend nothing".
+  const decision = reviewDecision({ verdict, open: answer.length, cycle, maxCycles: MAX_REVIEW_CYCLES, conclusion, loopOn: REVIEW_LOOP });
+  const issue = snapshotIssue(branch.issue).issue ?? { number: branch.issue, title: `Issue #${branch.issue}`, body: "", comments: [], dropped: [] };
+  return {
+    pr: pr.number, url: pr.url, headRef: pr.headRefName, head: pr.headRefOid, isDraft: pr.isDraft, issueNumber: branch.issue, issue,
+    verdict, summary: summary.slice(0, 30_000), threads: answer, ignored, cycle, maxCycles: MAX_REVIEW_CYCLES, decision,
+    labeller, body: pr.body,
+  };
+}
+
+// Hand the PR to a human: ready (every review resolved) or needs-human (the loop stopped).
+function handOver(review, kind, reason) {
+  ensureLabels();
+  const url = review.url;
+  if (kind === "ready" && review.isDraft) sh("gh", ["pr", "ready", url, "-R", REPO], { allowFail: true });
+  sh("gh", ["pr", "edit", url, "-R", REPO, "--remove-label", LABELS.inReview, "--add-label", kind === "ready" ? LABELS.ready : LABELS.needsHuman], { allowFail: true });
+  const current = loadPr(review.pr);
+  // GitHub won't request a review from a PR's own author (the token's owner, when it opened the PR);
+  // the @-mention below reaches them either way.
+  if (review.labeller && review.labeller !== current.author?.login) sh("gh", ["pr", "edit", url, "-R", REPO, "--add-reviewer", review.labeller], { allowFail: true });
+  // Drop the "still working" banner from the CURRENT body (push may have just written a description update).
+  const currentBody = current.body;
+  const body = currentBody.replace(/^> \[!NOTE\]\n> \*\*The agent is still working on this[^\n]*\n\n/, "");
+  if (body !== currentBody) sh("gh", ["pr", "edit", url, "-R", REPO, "--body", body], { allowFail: true });
+  const who = review.labeller ? `@${review.labeller} ` : "";
+  // Open threads, each as a link a reviewer can click: the file and the note's first line.
+  const open = (review.threads ?? []).map((t) => {
+    const first = String(t.comments[0].body).replace(/[*_`#>]/g, "").split("\n").map((l) => l.trim()).find(Boolean)?.slice(0, 160) ?? "";
+    return `- [${md(t.path ?? "general")}${t.line ? `:${t.line}` : ""}](${url}#discussion_r${t.comments[0].databaseId}) — ${md(first)}`;
+  }).join("\n");
+  const text = kind === "ready"
+    ? (review.threads?.length
+      ? `${REVIEW_MARK} done -->\n✅ **${who}this is ready for your review — with ${review.threads.length} small note(s) left open.** ${md(reason)}. The reviewer calls it safe to merge; each review of a fix found a new, smaller note, so the agent stopped at the cycle cap rather than chase them:\n\n${open}`
+      : `${REVIEW_MARK} done -->\n✅ **Every review is resolved — ${who}this is ready for your review.** ${md(reason)} after ${review.cycle} fix cycle(s).`)
+    : `${REVIEW_MARK} stopped -->\n⚠️ **The agent stopped iterating — ${who}this needs a human.** ${md(reason)}.${open ? `\n\nStill open:\n${open}` : ""}`;
+  gh(["pr", "comment", url, "-R", REPO, "--body", text]);
+  RUN?.log?.(`  handed over (${kind}): ${reason}`);
+  return { pr: review.pr, status: kind === "ready" ? "ready-for-human" : "needs-human", reason };
+}
+
+async function fixReview(review, { dir } = {}) {
+  const roles = await import("./roles.mjs");
+  RUN = newRun(review.issueNumber, dir);
+  RUN.log(`\n━━ PR #${review.pr} review cycle ${review.cycle + 1}/${review.maxCycles} · ${review.threads.length} thread(s) · verdict ${review.verdict} · ${RUN.dir}`);
+  const outcome = (o) => { writeFileSync(join(RUN.dir, "outcome.json"), JSON.stringify({ pr: review.pr, id: RUN.id, head: review.head, ...o }, null, 2)); return { pr: review.pr, dir: RUN.dir, ...o }; };
+  const repoDir = join(RUN.dir, "repo");
+  git(["fetch", "--quiet", "origin", review.head]);
+  checkout(repoDir, review.head);
+  let head = review.head;
+  // If main has since changed files this PR changes too, bring main in first (the review reads the
+  // PR merged onto main). The push job re-does this same merge itself before applying the patch.
+  const mainSha = git(["rev-parse", "origin/main"], { cwd: repoDir }).out.trim();
+  const forkPoint = git(["merge-base", "origin/main", head], { cwd: repoDir }).out.trim();
+  const shared = sharedChanges(filesBetween(repoDir, forkPoint, mainSha), filesBetween(repoDir, forkPoint, head));
+  let mergedMain;
+  if (shared.length) {
+    const m = git(["-c", "user.name=issue-agent", "-c", "user.email=issue-agent@localhost", "merge", "--quiet", "--no-ff", "--no-edit", "--signoff", mainSha], { cwd: repoDir, allowFail: true });
+    if (m.code !== 0) {
+      git(["merge", "--abort"], { cwd: repoDir, allowFail: true });
+      return outcome({ status: "needs-human", reason: `main has changed ${shared.join(", ")} since this PR branched off, and merging it conflicts — a human has to resolve that` });
+    }
+    mergedMain = mainSha;
+    head = git(["rev-parse", "HEAD"], { cwd: repoDir }).out.trim();
+    RUN.log(`  merged main ${mainSha.slice(0, 7)} (it changed ${shared.join(", ")})`);
+    code("npm", ["ci", "--no-audit", "--no-fund"], { cwd: repoDir });
+    code("npm", ["run", "build"], { cwd: repoDir, allowFail: true });
+  }
+  const mainBase = git(["merge-base", "origin/main", head], { cwd: repoDir }).out.trim();
+  const baseline = runGates(repoDir, { stopOnFail: false });
+  RUN.log(`  baseline (PR head ${head.slice(0, 7)}): ${baseline.map((b) => `${b.name} ${b.green ? "green" : `RED (${b.fingerprints.length})`}`).join(" · ")}`);
+
+  // The "spec" for this round: every review thread answered (fixed, or declined with a reason).
+  const firstLine = (s) => String(s).replace(/[*_`#>]/g, "").split("\n").map((l) => l.trim()).find(Boolean)?.slice(0, 200) ?? "";
+  const criteria = review.threads.map((t, i) => ({ id: `T${i + 1}`, text: `Review thread ${t.id} (${t.path ?? "general"}${t.line ? `:${t.line}` : ""}) is fixed, or declined with a concrete reason a reviewer would accept — "${firstLine(t.comments[0].body)}"`, verified_by: "review" }));
+  if (!criteria.length) criteria.push({ id: "S1", text: "Every item under 'Fix before merging' in the review summary is fixed, or declined with a concrete reason", verified_by: "review" });
+  const prChangesSource = () => changedSince(repoDir, mainBase).some((f) => /^(packages|examples)\//.test(f) && !/\.md$/.test(f) && !/\.test\.[mc]?[jt]sx?$/.test(f));
+  const spec = { actionable: true, summary: `Answer the Claude review of PR #${review.pr} (${review.verdict}).`, acceptance_criteria: criteria, behavior_change: prChangesSource(), touches_ui: false, evidence_plan: "test proof", test_plan: "as the review asks" };
+
+  const { rounds, impl, reviewedPatch, stopped } = await iterate({
+    issue: review.issue, spec, roles, repoDir, baseline, diffBase: head, mutationBase: mainBase,
+    firstPrompt: roles.reviewFixPrompt(review.issue, review), schema: roles.REVIEW_FIX_SCHEMA,
+  });
+  const last = rounds.at(-1);
+  const patch = reviewedPatch ?? (last ? diffPatch(repoDir, head) : "");
+  writeFileSync(join(RUN.dir, "fix.patch"), patch);
+  const final = last?.impl ?? impl ?? {};
+  writeFileSync(join(RUN.dir, "fix.json"), JSON.stringify({
+    rounds, last, responses: final.responses ?? [], summary: final.summary ?? "", summary_items: final.summary_items ?? [],
+    description_update: final.description_update ?? "", open_questions: final.open_questions ?? [], costUsd: RUN.costUsd,
+  }, null, 2));
+  return outcome({ status: last?.clean ? "ready" : "needs-human", reason: stopped ?? (last?.clean ? undefined : "the fix did not pass the pipeline's own checks and reviews"), patchSha256: createHash("sha256").update(patch).digest("hex"), mergedMain });
+}
+
+// Trusted: review.json is from the assess job; the run directory is from the agents' job (untrusted).
+function pushReview(dir, review) {
+  const prN = Number(opt("--pr"));
+  if (prN && prN !== review.pr) throw new Error(`review.json is for PR ${review.pr}, this run is for PR ${prN}`);
+  RUN ??= { id: "push", dir, costUsd: 0, log: console.log };
+  const pr = loadPr(review.pr);
+  if (pr.headRefOid !== review.head) return { pr: review.pr, status: "skipped", reason: "the PR moved on while the fix was being made" };
+  if (pr.headRefName !== review.headRef) throw new Error(`unexpected PR branch ${pr.headRefName}`);
+  const refusal = loopRefusal({ ...pr, labels: pr.labels.nodes.map((l) => l.name) });
+  if (refusal) return { pr: review.pr, status: "skipped", reason: refusal }; // re-checked here: push holds the write token
+  if (!REVIEW_LOOP) return handOver(review, "needs-human", "the review loop needs an AGENT_GH_TOKEN secret: a fix pushed with the default token would never be reviewed again");
+  const outcomeFile = join(dir, "outcome.json");
+  if (!existsSync(outcomeFile)) return handOver(review, "needs-human", `the fix job produced nothing${actionsRunUrl() ? ` (logs: ${actionsRunUrl()})` : ""}`);
+  const outcome = JSON.parse(readFileSync(outcomeFile, "utf8"));
+  if (outcome.pr !== review.pr || outcome.head !== review.head) throw new Error("the fix run is for a different PR or head");
+  if (outcome.status !== "ready") return handOver(review, "needs-human", outcome.reason ?? "the fix did not pass the pipeline's own checks");
+  const patch = readFileSync(join(dir, "fix.patch"), "utf8");
+  const fix = JSON.parse(readFileSync(join(dir, "fix.json"), "utf8"));
+  if (createHash("sha256").update(patch).digest("hex") !== outcome.patchSha256) throw new Error("fix.patch does not match the checked patch");
+  const k = review.cycle + 1;
+
+  let sha;
+  if (patch.trim()) {
+    const email = process.env.GIT_COMMITTER_EMAIL || git(["config", "user.email"], { allowFail: true }).out.trim();
+    if (!email) throw new Error("no git identity to sign off with");
+    const wt = join(dir, "push");
+    if (existsSync(wt)) git(["worktree", "remove", "--force", wt], { allowFail: true });
+    git(["fetch", "--quiet", "origin", review.head]);
+    git(["worktree", "add", "--quiet", "--detach", wt, review.head]);
+    if (outcome.mergedMain) {
+      // Re-do the fix job's merge of main here, from a commit we check is really on main — the
+      // patch was made on top of exactly that merge.
+      if (!isCommitId(outcome.mergedMain)) throw new Error(`not a commit id: ${outcome.mergedMain}`);
+      git(["fetch", "--quiet", "origin", "main"]);
+      if (git(["merge-base", "--is-ancestor", outcome.mergedMain, "FETCH_HEAD"], { allowFail: true }).code !== 0) throw new Error(`${outcome.mergedMain} is not a commit on main`);
+      if (git(["merge", "--quiet", "--no-ff", "--no-edit", "--signoff", outcome.mergedMain], { cwd: wt, allowFail: true }).code !== 0) {
+        git(["merge", "--abort"], { cwd: wt, allowFail: true });
+        git(["worktree", "remove", "--force", wt], { allowFail: true });
+        return handOver(review, "needs-human", "bringing main into the branch conflicts");
+      }
+    }
+    const { forbidden } = applyAndCheck(wt, patch);
+    if (forbidden.length) { git(["worktree", "remove", "--force", wt], { allowFail: true }); return handOver(review, "needs-human", `the fix touches ${forbidden.join(", ")}, which the agent never publishes`); }
+    const msg = `Address review, cycle ${k}: ${String(fix.summary).split("\n")[0].slice(0, 120)}\n\n${fix.summary}\n\nCo-Authored-By: ${modelName(MODEL)} <noreply@anthropic.com>`;
+    git(["commit", "--quiet", "-s", "-F", "-"], { cwd: wt, input: msg });
+    sha = git(["rev-parse", "HEAD"], { cwd: wt }).out.trim();
+    if (flag("--dry-run")) { RUN.log(`  dry run — would push ${sha} to ${review.headRef}`); git(["worktree", "remove", "--force", wt], { allowFail: true }); return { pr: review.pr, status: "dry-run", sha }; }
+    git([...GH_CREDENTIALS, "push", "--quiet", "origin", `HEAD:refs/heads/${review.headRef}`], { cwd: wt }); // fast-forward only: no force
+    git(["worktree", "remove", "--force", wt], { allowFail: true });
+  }
+
+  // Reply to every thread the review loop was given, with the agent's answer; resolve the answered ones.
+  const byId = new Map(fix.responses.map((r) => [r.thread_id, r]));
+  let answered = 0;
+  for (const t of review.threads) {
+    const r = byId.get(t.id);
+    const root = t.comments[0].databaseId;
+    const body = r
+      ? `${md(r.reply)}\n\n— ${r.action === "fixed" ? (sha ? `fixed in ${sha.slice(0, 7)}` : "fixed") : "declined"} (issue agent, review cycle ${k})`
+      : `Not addressed in review cycle ${k} — the agent gave no answer for this thread. (issue agent)`;
+    sh("gh", ["api", `repos/${REPO}/pulls/${review.pr}/comments/${root}/replies`, "-f", `body=${body}`], { allowFail: true });
+    if (r) { gh(["api", "graphql", "-f", `query=mutation{resolveReviewThread(input:{threadId:"${t.id}"}){thread{isResolved}}}`]); answered++; }
+  }
+  // The agent can't edit the PR description; this trusted job writes its corrections into it, as
+  // one "Updated after review" section that each cycle replaces (escaped like all agent text).
+  const update = String(fix.description_update ?? fix.last?.impl?.description_update ?? "").trim().replace(/^#{1,6} [^\n]*\n+/, ""); // our heading, not the agent's
+  if (update) {
+    const section = `<!-- issue-agent-update -->\n### Updated after review cycle ${k}\n\n${md(update)}\n<!-- /issue-agent-update -->`;
+    const current = loadPr(review.pr).body;
+    const body = /<!-- issue-agent-update -->[\s\S]*?<!-- \/issue-agent-update -->/.test(current)
+      ? current.replace(/<!-- issue-agent-update -->[\s\S]*?<!-- \/issue-agent-update -->/, () => section) // a function: `$&` in agent text stays literal
+      : current.replace(/\n## In plain terms\n/, () => `\n${section}\n\n## In plain terms\n`);
+    if (body !== current) sh("gh", ["pr", "edit", review.url, "-R", REPO, "--body", body], { allowFail: true });
+  }
+  const declined = fix.responses.filter((r) => r.action === "declined").length;
+  fix.summary_items = fix.summary_items?.length ? fix.summary_items : fix.last?.impl?.summary_items ?? [];
+  gh(["pr", "comment", review.url, "-R", REPO, "--body",
+    `${REVIEW_MARK} cycle=${k} sha=${sha ?? "none"} -->\n🔁 **Review cycle ${k}/${review.maxCycles}:** ${sha ? `pushed ${sha.slice(0, 7)}` : "no code change"}${outcome.mergedMain ? ` (with main ${outcome.mergedMain.slice(0, 7)} merged in)` : ""} ·${answered}/${review.threads.length} thread(s) answered and resolved${declined ? ` (${declined} declined with a reason)` : ""}${(fix.summary_items ?? []).length ? ` · summary items: ${md(fix.summary_items.join("; "))}` : ""}.${sha ? " Waiting for the next review." : ""}`]);
+  // No push means no new review would ever come: hand over now rather than wait forever.
+  if (!sha) return handOver({ ...review, cycle: k, threads: review.threads.filter((t) => !byId.has(t.id)) }, "needs-human", "the agent answered the review without changing code, so no new review will run");
+  return { pr: review.pr, status: "pushed", sha };
+}
+
 // ══ main ══════════════════════════════════════════════════════════════════════════════════════════
 const [mode, arg] = argv;
 if (mode === "snapshot") {
@@ -659,6 +913,35 @@ if (mode === "snapshot") {
     console.error(e);
     const n = Number(opt("--issue"));
     if (n && !flag("--dry-run")) sh("gh", ["issue", "comment", String(n), "-R", REPO, "--body", issueComment({ kind: "error", where: actionsRunUrl() })], { allowFail: true });
+    process.exitCode = 1;
+  }
+} else if (mode === "assess-review") {
+  // Review loop, phase 1 (trusted): what does the latest review ask for — and is the PR done?
+  const review = assessReview(Number(arg));
+  writeFileSync(resolve(opt("--out", "review.json")), JSON.stringify(review, null, 2));
+  const { action, reason } = review.decision;
+  console.log(`PR #${review.pr}: ${action} — ${reason}${review.threads ? ` · ${review.threads.length} thread(s) to answer${review.ignored?.length ? `, ignored: ${review.ignored.join("; ")}` : ""}` : ""}`);
+  if (!flag("--dry-run")) {
+    if (action === "done") handOver(review, "ready", reason);
+    if (action === "give-up") handOver(review, "needs-human", reason);
+  }
+  if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `decision=${action}\n`);
+} else if (mode === "fix-review") {
+  // Review loop, phase 2: agents answer the review. No GitHub calls.
+  const review = JSON.parse(readFileSync(resolve(arg), "utf8"));
+  if (review.decision?.action !== "fix") { console.log(`nothing to fix: ${review.decision?.reason}`); process.exit(0); }
+  mkdirSync(RUNS_HOME, { recursive: true });
+  const o = await fixReview(review, { dir: opt("--dir") && resolve(opt("--dir")) });
+  console.log(`\n━━ PR #${o.pr} ${o.status}${o.reason ? ` — ${o.reason}` : ""} · ${o.dir}`);
+} else if (mode === "push-review") {
+  // Review loop, phase 3 (trusted): push the checked fix, answer and resolve the threads.
+  const review = JSON.parse(readFileSync(resolve(opt("--review", "review.json")), "utf8"));
+  try {
+    const o = pushReview(resolve(arg), review);
+    console.log(`\n━━ PR #${o.pr} ${o.status}${o.sha ? ` ${o.sha}` : ""}${o.reason ? ` — ${o.reason}` : ""}`);
+  } catch (e) {
+    console.error(e);
+    if (!flag("--dry-run")) handOver(review, "needs-human", `the review loop failed${actionsRunUrl() ? ` (logs: ${actionsRunUrl()})` : ""}: ${e.message.split("\n")[0]}`);
     process.exitCode = 1;
   }
 } else if (mode === "publish-evidence") {

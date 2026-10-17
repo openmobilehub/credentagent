@@ -73,6 +73,7 @@ jobs:
           esac
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.repository.default_branch }} # trusted code from main, even when started by hand from another branch
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
@@ -102,6 +103,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.repository.default_branch }}
           fetch-depth: 0
           persist-credentials: false # nothing in .git/config for an agent to find
       - uses: actions/setup-node@v4
@@ -154,6 +156,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.repository.default_branch }} # trusted code from main holds the write token
           fetch-depth: 0
           persist-credentials: false # pushes go through `gh auth git-credential`
       - uses: actions/setup-node@v4
@@ -171,6 +174,11 @@ jobs:
       - name: Publish the reviewed change
         env:
           GH_TOKEN: ${{ secrets.AGENT_GH_TOKEN || github.token }}
+          # With a token whose events start workflows, the PR opens for the Claude review and the
+          # review loop (issue-agent-review.yml) takes it from there; without one it opens as a draft.
+          ISSUE_AGENT_REVIEW_LOOP: ${{ secrets.AGENT_GH_TOKEN != '' && 'on' || '' }}
+          ISSUE_AGENT_LABELLER: ${{ github.event.sender.login || github.actor }}
+          ISSUE_AGENT_MAX_REVIEW_CYCLES: ${{ vars.ISSUE_AGENT_MAX_REVIEW_CYCLES }} # the banner states the cap
         run: |
           mkdir -p "$RUNNER_TEMP/issue-agent/run"
           node ci/issue-agent/run.mjs publish "$RUNNER_TEMP/issue-agent/run" --issue "$ISSUE"
