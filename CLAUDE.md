@@ -156,7 +156,8 @@ Quick gate for any new/changed public API (full list in the rubric):
 - **Verify with the ROOT `npm test`, not a per-workspace run.** `storefront-gate.test.ts`
   lives at the repo root — it checks that the two published packages compose with zero
   glue, so it belongs to neither workspace and neither workspace's vitest picks it up. The
-  root run therefore includes exactly one more file than the per-package runs: that one. A
+  root run therefore includes files the per-package runs don't: that one, and repo-level
+  checks such as `scripts/check-changelog.test.ts` (the release's changelog guard). A
   per-workspace run is a legitimate fast inner loop; it is **not** a verification. Claiming
   green off one is how issue #184 happened — a contributor ran every test CLAUDE.md told
   them to run, saw it all pass, and CI failed on the cross-package file they never ran.
