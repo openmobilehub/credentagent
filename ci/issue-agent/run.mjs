@@ -45,7 +45,7 @@ import { fingerprints, stripAnsi, withinBaseline } from "./fingerprints.mjs";
 import {
   TRUSTED_PERMISSIONS, titleAuthor, forbiddenPaths, applyAndCheck, changedSince, isRunId, isCommitId, publishIssueNumber,
   isReviewBot, parseVerdict, agentBranch, threadsToAnswer, reviewDecision, sharedChanges, filesBetween, cyclesDone, loopRefusal, latestVerdict, cycleCap,
-  parseCriteria, tickCriteria, verifiedFor, afterVerification, acceptVerified,
+  parseCriteria, tickCriteria, verifiedFor, afterVerification, acceptVerified, conflictMidCycle,
   isAgentComment, requestComments, leftLoop,
   roleModel, testGateCommand, rootTestRefusal, publishVerdict, isMutableSource, sameLockfile,
 } from "./checks.mjs";
@@ -441,7 +441,7 @@ function pipelineFacts(r, baseline) {
   return `\n\n<pipeline_facts>
 These were measured by the pipeline (not claimed by the implementer):
 - Gates from the repo root (\`test\` is the root \`npm test\`, run once this round after the fix attempts passed): ${r.gates.map((g) => `${g.name} ${g.green ? "green" : g.preexisting ? "red only with main's pre-existing failures" : "RED"}${g.summary ? ` (${g.summary})` : ""}`).join("; ")}.
-- Main before the change: ${baseline.map((b) => `${b.name} ${b.green ? "green" : `red: ${b.fingerprints.join("; ")}`}`).join("; ")}. Pre-existing failures are not this change's to fix; a diff that "fixes" them unasked is out of scope.
+- The code this change starts from (main, or in a review cycle the PR's head), before the change: ${baseline.map((b) => `${b.name} ${b.green ? "green" : `red: ${b.fingerprints.join("; ")}`}`).join("; ")}. Pre-existing failures are not this change's to fix; a diff that "fixes" them unasked is out of scope.
 - New files are part of \`git diff ${r.base}\` (registered with intent-to-add).
 - Mutation check: ${m.applicable ? `with ${(m.reverted ?? []).join(", ")} reverted to main, the changed test files (${(m.tests ?? []).join(", ")}) ${m.withoutFix.code ? "FAILED" : "PASSED"}; with the change they ${m.withFix.code === 0 ? "pass" : "FAIL"}. This is per FILE: a file fails if any test in it fails, so judge whether each new test case would fail on its own. Output without the change:\n${m.withoutFix.tail.split("\n").slice(-40).join("\n")}` : `not applicable — ${m.reason}`}
 </pipeline_facts>`;
@@ -937,8 +937,8 @@ async function fixReview(review, { dir } = {}) {
       // A conflict found while answering a review or checking criteria: resolve it first, telling the
       // agent so (the review threads and criteria come back on the next cycle).
       if (mode !== "conflict") {
-        // ...but never a cycle past the cap: there, a conflict goes to a human.
-        if (review.cycle >= review.maxCycles) {
+        // ...but never a cycle past the cap: there, a conflict goes to a human (tested in checks.mjs).
+        if (conflictMidCycle(review) === "give-up") {
           restorePatch(repoDir, head, "");
           return outcome({ status: "needs-human", reason: `the PR conflicts with main (in ${resolved.join(", ")}) and ${review.maxCycles} review cycles are done` });
         }
