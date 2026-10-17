@@ -27,14 +27,16 @@ pages use root paths); then set `PUBLIC_URL=https://credentagent.ai/marketplace`
 **Markdown for agents on `/` (#370):** a request for `/` whose `Accept` header contains
 `text/markdown` is rewritten to `https://openmobilehub.org/credentagent/index.md` and answered with
 `Content-Type: text/markdown; charset=utf-8`; every other request (browsers, `Accept: text/html`, no
-`Accept`) still gets the HTML page. `/` always carries `Vary: Accept, Accept-Encoding`, so a cache never
-serves one copy to the other. The Markdown file is published by the website
+`Accept`) still gets the HTML page. `/` always carries `Vary: Accept, Accept-Encoding`, which tells a
+cache to keep the two copies apart. The Markdown file is published by the website
 (openmobilehub/credentagent-website#33); until it is live, the Markdown request gets that site's error.
 `config.test.mjs` (run by the root `npm test`) resolves `vercel.json` the way Vercel does and pins both
-answers. After a deploy, check them live:
+answers as configured. Two things only the live site shows: whether Vercel applies the `Content-Type`
+override on this external rewrite, and whether the website serves the file. The `deploy-prod` smoke
+test does not check them yet, so after a deploy that touches the router, run both by hand:
 
 ```sh
-curl -sSL -i -H 'Accept: text/markdown' https://credentagent.ai/   # 200, text/markdown, Vary: Accept, Markdown body
+curl -sSL -i -H 'Accept: text/markdown' https://credentagent.ai/   # 200, text/markdown, Vary: Accept, Accept-Encoding, Markdown body
 curl -sSL -i -H 'Accept: text/html'     https://credentagent.ai/   # 200, text/html
 ```
 
