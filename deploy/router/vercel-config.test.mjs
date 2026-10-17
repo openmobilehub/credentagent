@@ -30,8 +30,9 @@ describe('router vercel.json', () => {
     expect(rewrites.find((r) => matches(r.source, '/marketplace-dev/mcp'))?.destination).toBe('https://credentagent-demo-dev.vercel.app/:path*');
   });
 
-  it('still serves / from the Pages product page', () => {
+  it('still serves / from the Pages product page, ahead of the catch-all', () => {
     expect(rewrites).toContainEqual({ source: '/', destination: `${PAGES}/` });
+    expect(indexOf('/')).toBeLessThan(indexOf(CATCH_ALL.source));
   });
 
   it('leaves /api/ask to its function: declared, and no rewrite before the catch-all matches it', () => {
