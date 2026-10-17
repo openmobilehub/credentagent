@@ -119,22 +119,30 @@ worse, an under-charge that one rail blesses slips through another. Amount bindi
 point of binding the wallet's signature to a transaction; a divergent discount silently
 unbinds it.
 
-**How it's enforced.** Both rails compute the discount identically from a single shared
-constant (`DEFAULT_LOYALTY_DISCOUNT_PCT` in
-[`ceremony/mandate.ts`](../../packages/credentagent-gate/src/ceremony/mandate.ts)) and require it to
-be **exactly zero or exactly the configured percentage** of the re-summed line total — an
-arbitrary discount is refused:
+**How it's enforced.** Both rails run one shared check, `checkAmounts` in
+[`ceremony/mandate.ts`](../../packages/credentagent-gate/src/ceremony/mandate.ts). It re-sums the
+lines and requires the discount to be **exactly zero or exactly this order's policy percent** of
+that sum (the `membership.discount(N)` that `requirements()` resolved for the order; absent ⇒
+`DEFAULT_LOYALTY_DISCOUNT_PCT`, 10) — an arbitrary discount is refused, and so is a percent
+outside 0–100. Every amount is compared in **whole minor units** (`toMinorUnits` from
+[`ap2/money.ts`](../../packages/credentagent-gate/src/ap2/money.ts)), so float noise such as
+3 × 4.90 = 14.700000000000001 reads as 1470 cents, while a real fraction of a cent, a non-finite
+amount or an unknown currency is refused, never rounded:
 
 ```ts
-const discount = cart.discount ?? 0;
-const discountOk = discount === 0 || discount === round2(lineSum * (pct / 100));
-const payable = round2(lineSum - discount);
-const amountOk = discountOk && payable === cart.total && payable === mandate.payment.amount;
+const lineSumMinor = cart.lines.reduce((sum, l) => sum + cents(l.lineTotal), 0);
+const discountMinor = cents(discountIn);
+const discountOk = discountMinor === 0 || discountMinor === cents(loyaltyDiscount(lineSum, pct, cart.currency));
+const payableMinor = lineSumMinor - discountMinor;
+const ok = discountOk && presented.every((a) => cents(a) === payableMinor);
 ```
 
-The `dc-payment` rail additionally re-checks `payable` against the amount inside the
-device-signed `transaction_data`
+The passkey rail passes the cart total and the authorized payment amount as `presented`; the
+`dc-payment` rail also passes the amount inside the device-signed `transaction_data`
 ([`ceremony/dc-payment/verify.ts`](../../packages/credentagent-gate/src/ceremony/dc-payment/verify.ts)).
+When a signed Cart Mandate rides along, `reconcileCartPayment`
+([`ceremony/reconciliation.ts`](../../packages/credentagent-gate/src/ceremony/reconciliation.ts))
+compares its sealed total with the re-derived total and the payment in the same whole minor units.
 Critically, a discount only *exists* when **this order's** verification opted into it:
 `completeOrder()` reads `verification.loyalty.applied` and re-prices with that flag, so a token
 merely *claiming* the discounted total reprices higher (no loyalty applied) and is refused

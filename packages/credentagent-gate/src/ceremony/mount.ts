@@ -108,11 +108,12 @@ export interface CeremonySeams {
    *  URL a rail page fetches, links or redirects to carries it. Normally derived from a
    *  `walletOrigin` that includes the path. Absent ⇒ "" (served at the root). */
   basePath?: string;
-  /** The loyalty discount percent THIS order's policy grants (e.g. 15 for
-   *  `membership.discount(15)`), which the payment rails' amount check holds the order's
-   *  discount to. `orders.serve` sets it from the stored policy. Absent, or `undefined` for an
-   *  order ⇒ `DEFAULT_LOYALTY_DISCOUNT_PCT` (10), as before. */
-  loyaltyDiscountPct?: (orderId: string) => MaybePromise<number | undefined>;
+  /** INTERNAL — not a host option (`MountCeremony` omits it). The discount percent THIS order's
+   *  policy grants (e.g. 15 for `membership.discount(15)`), which the payment rails' amount check
+   *  holds the order's discount to (#360). `CredentAgent.mount()` fills it from the policy
+   *  `requirements()` resolved; `orders.serve` from the stored order. Absent, or `undefined` for
+   *  an order ⇒ `DEFAULT_LOYALTY_DISCOUNT_PCT` (10), as before. */
+  discountPercentFor?: (orderId: string) => MaybePromise<number | undefined>;
 }
 
 /** The resolved context each rail receives (every required seam present). */
@@ -149,8 +150,8 @@ export interface CeremonyContext {
   inspectPresentations?: boolean;
   /** The browser-visible path prefix every page URL carries ("" at the root). */
   basePath?: string;
-  /** The order's loyalty discount percent for the amount check (absent ⇒ the default 10). */
-  loyaltyDiscountPct?: (orderId: string) => MaybePromise<number | undefined>;
+  /** The order's policy discount percent for the amount check (absent ⇒ the default 10). */
+  discountPercentFor?: (orderId: string) => MaybePromise<number | undefined>;
 }
 
 /** A rail attaches its routes to the host app given the resolved context. */
@@ -190,7 +191,7 @@ export function mountCeremony(app: CeremonyApp, options: Partial<CeremonySeams> 
   const branding = options.branding ?? locals.branding;
   const inspectPresentations = options.inspectPresentations ?? locals.inspectPresentations ?? false;
   const basePath = (options.basePath ?? locals.basePath ?? "").replace(/\/+$/, "");
-  const loyaltyDiscountPct = options.loyaltyDiscountPct ?? locals.loyaltyDiscountPct;
+  const discountPercentFor = options.discountPercentFor ?? locals.discountPercentFor;
   let signingKey = options.signingKey ?? locals.signingKey;
 
   // Fail fast (CT2) — a load-bearing seam must never silently default. (`origin`
@@ -205,6 +206,10 @@ export function mountCeremony(app: CeremonyApp, options: Partial<CeremonySeams> 
       `[credentagent] mount(): missing required ceremony seam(s): ${missing.join(", ")}. ` +
         `Provide them via credentagent.mount(app, { ... }) or app.locals.credentagent.`,
     );
+  }
+  // Fail fast on a wrong shape here, not as a 400/500 on every payment.
+  if (discountPercentFor !== undefined && typeof discountPercentFor !== "function") {
+    throw new TypeError(`[credentagent] mount(): 'discountPercentFor' must be a function (orderId) => percent, got ${typeof discountPercentFor}.`);
   }
 
   // The challenge HMAC must survive an instance split (options→verify may hit
@@ -254,7 +259,7 @@ export function mountCeremony(app: CeremonyApp, options: Partial<CeremonySeams> 
     ...(branding ? { branding } : {}),
     ...(inspectPresentations ? { inspectPresentations } : {}),
     ...(basePath ? { basePath } : {}),
-    ...(loyaltyDiscountPct ? { loyaltyDiscountPct } : {}),
+    ...(discountPercentFor ? { discountPercentFor } : {}),
   };
 
   // Re-expose the resolved seams on app.locals so the storefront's gate routes

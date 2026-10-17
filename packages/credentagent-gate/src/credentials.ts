@@ -19,6 +19,11 @@ export function gate(): Effect {
   return { kind: "gate" };
 }
 export function discount(opts: { percent?: number; amount?: number }): Effect {
+  // Fail fast when the policy is built: the payment checks hold an order's discount to this
+  // percent, so 150 would complete an order at a negative price and -10 would overcharge.
+  if (opts.percent !== undefined && !(Number.isFinite(opts.percent) && opts.percent >= 0 && opts.percent <= 100)) {
+    throw new RangeError(`[credentagent] discount percent must be between 0 and 100, got ${opts.percent}`);
+  }
   return { kind: "discount", ...opts };
 }
 export function authorize(): Effect {

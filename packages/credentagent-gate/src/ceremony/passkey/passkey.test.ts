@@ -35,6 +35,8 @@ import { buildRegistrationOptions, verifyPasskeyAssertion } from "./verify.js";
 import { renderPasskeyPage } from "./page.js";
 import { issueChallenge } from "../challengeToken.js";
 import type { CeremonyCatalog, CeremonyOrder, CompletionInput } from "../types.js";
+import { CredentAgent } from "../../client.js";
+import { membership, optional, payment, required } from "../../credentials.js";
 
 // ── Catalog (source of truth for price + age restriction) ─────────────────────
 
@@ -247,11 +249,12 @@ describe("CT6 — the four deterministic gates run on a real passkey ceremony", 
     expect(JSON.stringify(h.records.get("ORD-LEGACY"))).not.toContain("LEGACY-RAW");
   });
 
-  // Invariant 3 — a host whose membership grants 15% (not the rails' default 10%) tells the rail
-  // the order's percent through the `loyaltyDiscountPct` seam; the passkey /verify route must
-  // check the discount at THAT percent, or every such member is refused at payment.
-  it("a 15% member discount completes over the passkey route when the seam supplies the order's percent", async () => {
-    const verificationStore = new MemoryVerificationStore();
+  // Invariant 3 — a host whose policy grants 15% (not the rails' default 10%) wires nothing extra:
+  // `requirements()` remembers the order's percent and the public `mount(app, seams)` hands it to
+  // the rails. The passkey /verify route must check the discount at THAT percent, or every such
+  // member is refused at payment.
+  it("a 15% member discount completes over the passkey route of a plain mount(app, seams) host", async () => {
+    const ca = new CredentAgent({ walletOrigin: ORIGIN });
     const records = new Map<string, CompletedRecord>();
     const catalog15: CeremonyCatalog = {
       createOrder(items, orderId, opts) {
@@ -262,18 +265,20 @@ describe("CT6 — the four deterministic gates run on a real passkey ceremony", 
     };
     const stored = catalog15.createOrder([{ productId: "aurora-headphones", quantity: 1 }], "ORD-15");
     const app = express();
-    mountCeremony(app as never, {
-      verificationStore,
+    ca.mount(app as never, {
       orderStore: { read: async (id) => (id === "ORD-15" ? stored : null) },
       catalog: catalog15,
       completion: (input) => completeOrder(input, {
-        catalog: catalog15, verificationStore, cart: { clear: async () => {} },
+        catalog: catalog15, verificationStore: ca.store, cart: { clear: async () => {} },
         records: { read: async (id) => records.get(id), write: async (rec) => void records.set(rec.orderId, rec) },
       }),
       signingKey: SIGNING_KEY,
-      loyaltyDiscountPct: (id) => (id === "ORD-15" ? 15 : undefined),
     });
-    await verificationStore.write("ORD-15", { loyalty: { applied: true, membershipNumber: "M-1" } });
+    ca.requirements(
+      { id: "ORD-15", total: 199, currency: "USD", lines: [{ id: "aurora-headphones", quantity: 1, unitPrice: 199 }] },
+      [optional(membership.discount(15)), required(payment.in("usd"))],
+    );
+    await ca.store.write("ORD-15", { loyalty: { applied: true, membershipNumber: "M-1" } });
     const res = await authorize({ app } as Harness, "ORD-15");
     expect(res.body.gates.find((g: { gate: string }) => g.gate === "Amount integrity")?.pass).toBe(true);
     expect(res.body.completed).toBe(true);
@@ -401,6 +406,13 @@ describe("CT7 — a tampered amount is refused by the amount-integrity gate", ()
     const order = floatOrder(20, 1, 3); // $20 − 15% = $17
     expect(amountGate(order, 17, 15).pass).toBe(true);
     expect(amountGate(order, 17).pass).toBe(false); // the rails' default 10% expects $2 off
+  });
+
+  it("a discount percent outside 0–100 is REFUSED — 150% would bless a negative price", () => {
+    const negative = floatOrder(10, 1, 15); // $10 − 150% = −$5, every amount agreeing at −500 cents
+    const gate = amountGate(negative, -5, 150);
+    expect(gate.pass).toBe(false);
+    expect(gate.detail).toContain("outside 0–100");
   });
 
   it("resolveOrder re-prices a hand-edited (tampered) stored total from the catalog, never the token", async () => {

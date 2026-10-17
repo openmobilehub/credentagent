@@ -289,7 +289,7 @@ The server-priced order. Re-derived server-side; **never the order token**.
 ```ts
 interface GateOrder {
   id: string;        // stable per checkout
-  total: number;     // cents; re-derived server-side
+  total: number;     // major units (14.7 = $14.70); re-derived server-side
   currency: string;  // ISO 4217
   lines: OrderLine[];
 }
@@ -297,7 +297,7 @@ interface GateOrder {
 interface OrderLine {
   id: string;             // product id
   quantity: number;
-  unitPrice: number;      // cents; authoritative (catalog)
+  unitPrice: number;      // major units (4.9 = $4.90); authoritative (catalog)
   minimumAge?: number;    // per-product age threshold (e.g. 21), re-derived onto the line
   category?: string;      // available to custom .when() predicates
   requiresRx?: boolean;   // example custom flag a `prescription` appliesTo reads

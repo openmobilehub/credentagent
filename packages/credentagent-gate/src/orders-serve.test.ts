@@ -401,4 +401,20 @@ describe("orders.serve — amounts that are not exact in binary (#360)", () => {
     const done = await ca.orders.retrieve(id);
     expect(done.ok && done.completion.amount).toBe(13.23);
   });
+
+  // Invariant 1 — a 21+ line gates the order even when the policy has no age step: the rails'
+  // completion refuses an unproven age-restricted line, so the demo place path must too.
+  it("BYPASS: the instant-demo place path REFUSES an order with a minimumAge line and no age step in the policy", async () => {
+    const ca = new CredentAgent({ walletOrigin: "http://localhost:4000" });
+    const app = fakeApp();
+    ca.orders.serve(app);
+    const { id } = await ca.orders.create({
+      order: { id: "", total: 30, currency: "USD", lines: [{ id: "whiskey", name: "Whiskey", quantity: 1, unitPrice: 30, minimumAge: 21 }] },
+      policy: [optional(membership.discount(10))],
+    });
+    const res = fakeRes();
+    await app._post.get("/credentagent/orders/:id/place")!({ params: { id } }, res);
+    expect(res._status).toBe(403);
+    expect((await ca.orders.retrieve(id)).ok).toBe(false); // nothing recorded
+  });
 });

@@ -133,11 +133,11 @@ export const registerDcPaymentGate: RailRegistrar = (app: CeremonyApp, ctx: Cere
     if (!order) { res.status(400).json({ completed: false, error: "missing or invalid order" }); return; }
 
     const origin = originOf(ctx, req);
-    // The discount percent THIS order's policy grants, for the amount check (absent ⇒ 10).
-    const loyaltyDiscountPct = await ctx.loyaltyDiscountPct?.(order.id);
     let mandate: DcMandate;
     let gates: GateResult[];
     try {
+      // The discount percent THIS order's policy grants, for the amount check (absent ⇒ 10).
+      const loyaltyDiscountPct = await ctx.discountPercentFor?.(order.id);
       const result = body.result as { protocol?: string; data?: unknown } | undefined;
       if (result && typeof result === "object") {
         // REAL OpenID4VP presentation — decrypt the wallet's response, re-check the

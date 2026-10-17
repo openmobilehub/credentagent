@@ -14,6 +14,17 @@ import type {
   VerificationManifestEntry,
 } from "./types.js";
 
+/** The discount percent a policy grants (its `discount` step), if any — what the payment rails
+ *  hold a discounted order's discount to (#360). */
+export function discountPercentOf(policy: readonly Step[]): number | undefined {
+  for (const s of policy) {
+    if (s.credential.effect.kind === "discount") {
+      return s.credential.effect.percent ?? s.credential.params?.percent;
+    }
+  }
+  return undefined;
+}
+
 export interface ResolveContext {
   /** Origin the per-order approve link binds to. */
   walletOrigin: string;

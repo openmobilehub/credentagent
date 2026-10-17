@@ -20,9 +20,12 @@ function round2(n: number): number {
 // The demo's whole-cart loyalty discount; the host can override via runGates opts.
 export const DEFAULT_LOYALTY_DISCOUNT_PCT = 10;
 
-/** The loyalty discount Gate 1 expects on a line sum: `pct` percent, rounded half-up to the
- *  currency's minor unit (`round2(lineSum × pct/100)` for USD). The ONE formula — a re-pricer
- *  that builds its discount with it can never disagree with the check (invariant 3). */
+/** The loyalty discount Gate 1 expects on a line sum: the FLOAT product `lineSum × pct/100`,
+ *  rounded to the currency's minor unit (`round2(lineSum × pct/100)` for USD — the formula the
+ *  rails have always checked, and the one `orders.serve` and the storefront's `priceCart` price
+ *  with). Because the product is a float, a half-cent case can round down (14.7 × 15% → 2.20, not
+ *  2.21). A host that computes the discount in integer cents, as `delegated.ts` does, can differ
+ *  by a cent on such a total and is refused — keep a host's re-pricer on this formula. */
 export function loyaltyDiscount(lineSum: number, pct: number, currency: string): number {
   // An unknown currency is refused by Gate 1 itself; here it only needs not to throw.
   let f = 100;
@@ -65,6 +68,8 @@ export interface AmountCheck {
 export function checkAmounts(cart: CeremonyOrder, pct: number, presented: number[]): AmountCheck {
   const discountIn = cart.discount ?? 0;
   try {
+    // A percent outside 0–100 would bless a negative price or an overcharge; refuse it outright.
+    if (!(Number.isFinite(pct) && pct >= 0 && pct <= 100)) throw new RangeError(`discount percent ${pct} is outside 0–100`);
     const cents = (n: number) => toMinorUnits(n, cart.currency);
     const lineSumMinor = cart.lines.reduce((sum, l) => sum + cents(l.lineTotal), 0);
     const lineSum = toMajorUnits(lineSumMinor, cart.currency);

@@ -19,6 +19,7 @@
 import { mountCeremony, type CeremonyApp } from "./ceremony/mount.js";
 import { basePathOf } from "./ceremony/origin.js";
 import { inMinorUnits, loyaltyDiscount } from "./ceremony/mandate.js";
+import { discountPercentOf as discountPctOf } from "./manifest.js";
 import { completeOrder, type CompletedRecord, type CompletedOrderStore } from "./ceremony/completion.js";
 import { renderRequirements, type RenderOrder } from "./ceremony/checkout-page.js";
 import type { CartItemRef, CeremonyCatalog, CeremonyOrder, CeremonyOrderStore, RepriceOpts } from "./ceremony/types.js";
@@ -74,16 +75,6 @@ type OrdersHandler = (req: OrdersRequest, res: OrdersResponse) => void | Promise
 
 // ── Order shape mapping (the stored GateOrder is the authority) ────────────────
 
-/** The discount percent a policy grants (a `discount` step), if any. */
-function discountPctOf(policy: Step[]): number | undefined {
-  for (const s of policy) {
-    if (s.credential.effect.kind === "discount") {
-      return s.credential.effect.percent ?? s.credential.params?.percent;
-    }
-  }
-  return undefined;
-}
-
 /** GateOrder line → CeremonyOrder line (compute lineTotal; carry the fields the gates read). */
 function toCeremonyLine(l: GateOrder["lines"][number], currency: string) {
   return {
@@ -111,7 +102,7 @@ function repriceStored(created: CreatedOrder, items: CartItemRef[], opts?: Repri
   // Every figure as the whole minor units it denotes (float noise like 3 × 4.90 dropped; a real
   // fraction of a cent kept, so the rails refuse it), and the discount from Gate 1's own
   // formula at this policy's percent — the percent the rails check it against
-  // (`loyaltyDiscountPct` below), so total === the payable they re-derive.
+  // (`discountPercentFor` below), so total === the payable they re-derive.
   const subtotal = inMinorUnits(lines.reduce((s, l) => s + l.lineTotal, 0), currency);
   const pct = discountPctOf(created.policy);
   const discount = opts?.loyaltyApplied && pct ? loyaltyDiscount(subtotal, pct, currency) : 0;
@@ -139,9 +130,13 @@ function toRenderOrder(o: CeremonyOrder): RenderOrder {
 
 /** An order is "gated" when its policy needs a ceremony — any blocking gate or payment
  *  authorize. Gated orders complete ONLY through the fail-closed rails; the instant-demo
- *  place path is refused for them (invariant 1 — enforced server-side, not by hiding a button). */
-function isGated(manifest: VerificationManifestEntry[]): boolean {
-  return manifest.some((e) => e.effect === "gate" || e.effect === "authorize");
+ *  place path is refused for them (invariant 1 — enforced server-side, not by hiding a button).
+ *  A line with a `minimumAge` gates the order too, even when the policy has no age step: the
+ *  rails' shared completion refuses an unproven age-restricted line, and the demo path must not
+ *  be the one door that skips that check. */
+function isGated(manifest: VerificationManifestEntry[], order: GateOrder): boolean {
+  return manifest.some((e) => e.effect === "gate" || e.effect === "authorize") ||
+    order.lines.some((l) => typeof l.minimumAge === "number" && l.minimumAge > 0);
 }
 
 // ── Wire it all ───────────────────────────────────────────────────────────────
@@ -227,7 +222,7 @@ export function serveOrders(app: CeremonyApp, deps: ServeOrdersDeps): void {
     basePath: basePathOf(deps.walletOrigin),
     // The payment rails hold the discount to THIS order's policy percent (a `discount(15)`
     // order is checked at 15, not the rails' default 10) — the same percent repriceStored uses.
-    loyaltyDiscountPct: async (id) => {
+    discountPercentFor: async (id) => {
       const created = await deps.created.read(id);
       return created ? discountPctOf(created.policy) : undefined;
     },
@@ -254,7 +249,7 @@ export function serveOrders(app: CeremonyApp, deps: ServeOrdersDeps): void {
 
     const manifest = deps.requirements(created.order, created.policy); // re-homed approve links (mounted)
     const done = await deps.completed.read(id);
-    const gated = isGated(manifest);
+    const gated = isGated(manifest, created.order);
     const verification = { ageVerified, loyaltyApplied, ...(v.verifiedGates ? { verifiedGates: v.verifiedGates } : {}) };
     const paid = done ? { amount: done.amount ?? order.total, currency: done.currency ?? order.currency, ...(done.method ? { method: done.method } : {}), ...(done.proofs?.length ? { proofs: done.proofs } : {}) } : null;
 
@@ -285,7 +280,7 @@ export function serveOrders(app: CeremonyApp, deps: ServeOrdersDeps): void {
     if (created) {
       warm.set(id, created);
       const manifest = deps.requirements(created.order, created.policy);
-      if (isGated(manifest)) {
+      if (isGated(manifest, created.order)) {
         res.status(403).type("html").send(html("<h1>Verification required</h1><p>This order has age / payment requirements — complete it on the checkout page. It can't be placed from the instant-demo path.</p>"));
         return;
       }

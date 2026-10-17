@@ -15,6 +15,7 @@
 // projects `amount`/`currency` from its `mandate.payment`); this check only adds a
 // requirement when a Cart Mandate ALSO rides along, and never relaxes one.
 import type { CartMandate } from "./cartMandate.js";
+import { toMinorUnits } from "../ap2/money.js";
 
 /** The Payment Mandate's bound fields as they reach the completion seam — each rail
  *  projects them from its verified `mandate.payment` (+ the id of the order the
@@ -42,8 +43,11 @@ export type ReconcileVerdict = { ok: true } | { ok: false; reason: ReconcileRefu
  *      (a Cart Mandate swapped onto another order's payment is refused);
  *   2. currency — the cart and the payment settle in the same currency;
  *   3. amount — `cart.total === rederivedTotal === payment.amount`, a single bound
- *      figure (a cart sealed for X against a payment for Y≠X is refused; a discount
- *      reconciles only when the re-derived total already reflects it — invariant 3).
+ *      figure in whole minor units (a cart sealed for X against a payment for Y≠X is
+ *      refused; a discount reconciles only when the re-derived total already reflects
+ *      it — invariant 3). Float noise is absorbed (a sealed 14.700000000000001 and a
+ *      paid 14.7 are both 1470 cents, #360); a real fraction of a cent, a non-finite
+ *      amount or an unknown currency is refused.
  * Returns a typed verdict; it never throws.
  */
 export function reconcileCartPayment(
@@ -53,6 +57,13 @@ export function reconcileCartPayment(
 ): ReconcileVerdict {
   if (cart.orderId !== payment.orderId) return { ok: false, reason: "order-id" };
   if (cart.currency !== payment.currency) return { ok: false, reason: "currency" };
-  if (cart.total !== rederivedTotal || cart.total !== payment.amount) return { ok: false, reason: "amount" };
+  try {
+    const total = toMinorUnits(cart.total, cart.currency);
+    if (total !== toMinorUnits(rederivedTotal, cart.currency) || total !== toMinorUnits(payment.amount, cart.currency)) {
+      return { ok: false, reason: "amount" };
+    }
+  } catch {
+    return { ok: false, reason: "amount" }; // not whole minor units at all — fail closed
+  }
   return { ok: true };
 }
