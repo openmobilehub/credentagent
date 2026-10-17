@@ -94,8 +94,8 @@ const checkedGates = (gates) => {
   return `the ${others.length ? `${others.join(", ")} and ` : ""}full test suite`;
 };
 
-// `commands`: the repo's "How to test" (config.mjs `reproduce`, and `focusedTest` with <file>); this
-// repo's own by default. `harnessRepo`: where ci/issue-agent lives, when it isn't the PR's repo.
+// `commands`: the repo's "How to test" (config.mjs `reproduce`, `focusedTest` with <file>, and
+// `build: false` when it has no build step); this repo's own by default. `harnessRepo`: where ci/issue-agent lives, when it isn't the PR's repo.
 export function prBody(r, { mediaBase, repo, harnessRepo = repo, commands ={ reproduce: "npm ci && npm run build && npm test", focused: "npx vitest run <file>" } }) {
   const verdicts = specVerdicts(r);
   const acs = r.spec.acceptance_criteria.map((ac) => {
@@ -136,7 +136,7 @@ ${md(r.last.impl.summary)}
 \`\`\`sh
 gh pr checkout <this PR> && ${commands.reproduce}
 \`\`\`
-${m?.applicable && m.tests?.length ? `\nThe changed tests: \`${commands.focused.replace("<file>", m.tests.join(" "))}\`. To see them catch the problem, undo the source change (\`git checkout origin/main -- ${(m.reverted ?? []).join(" ")}\`), rebuild, and run them again: they fail.\n` : ""}
+${m?.applicable && m.tests?.length ? `\nThe changed tests: \`${commands.focused.replace("<file>", m.tests.join(" "))}\`. To see them catch the problem, undo the source change (\`git checkout origin/main -- ${(m.reverted ?? []).join(" ")}\`), ${commands.build === false ? "" : "rebuild, "}and run them again: they fail.\n` : ""}
 ${r.evidence ? `\n**What the recordings show:** ${md(r.evidence.demonstrates)}${r.evidence.limitations ? `\n\n_What they don't show:_ ${md(r.evidence.limitations)}` : ""}\n` : ""}
 ${show("before", "Before (main)")}
 ${show("after", "After (this change)")}

@@ -70,7 +70,7 @@ const CONFIG = loadConfig(REPO_ROOT);
 const TEST = testLabel(CONFIG); // the authoritative test command, as people type it
 // The PR's "How to test" (publish reads the config from its own trusted checkout), and where this
 // harness lives when it isn't the target repo (the PR's footer links it).
-const PR_COMMANDS = { reproduce: CONFIG.reproduce, focused: CONFIG.focusedTest };
+const PR_COMMANDS = { reproduce: CONFIG.reproduce, focused: CONFIG.focusedTest, build: Boolean(CONFIG.build) };
 const HARNESS_REPO = process.env.ISSUE_AGENT_HARNESS_REPO || undefined;
 const MODEL = process.env.ISSUE_AGENT_MODEL || "claude-opus-5-5"; // the implementer (and evidence)
 const REVIEW_MODEL = process.env.ISSUE_AGENT_REVIEW_MODEL || "claude-sonnet-5-5"; // the spec agent and the three reviewers

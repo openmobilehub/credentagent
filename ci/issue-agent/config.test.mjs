@@ -169,9 +169,10 @@ describe("the PR's How to test, from the repo's config", () => {
       mutation: { applicable: true, ok: true, tests: ["tests/a.test.mjs"], reverted: ["index.html"] } },
   };
   it("prints the repo's commands and names only the gates it ran", () => {
-    const body = prBody(report, { mediaBase: "", repo: "o/r", commands: { reproduce: SITE.reproduce, focused: SITE.focusedTest } });
+    const body = prBody(report, { mediaBase: "", repo: "o/r", commands: { reproduce: SITE.reproduce, focused: SITE.focusedTest, build: false } });
     expect(body).toContain('gh pr checkout <this PR> && node --test "tests/*.test.mjs"');
     expect(body).toContain("`node --test tests/a.test.mjs`");
+    expect(body).toContain("-- index.html`), and run them again"); // no build step to redo
     expect(body).toContain("the full test suite (");
     expect(body).not.toMatch(/npm|vitest|typecheck/);
   });
@@ -184,6 +185,7 @@ describe("the PR's How to test, from the repo's config", () => {
     const body = prBody(lib, { mediaBase: "", repo: "o/r" });
     expect(body).toContain("gh pr checkout <this PR> && npm ci && npm run build && npm test");
     expect(body).toContain("`npx vitest run tests/a.test.mjs`");
+    expect(body).toContain("rebuild, and run them again");
     expect(body).toContain("the build, typecheck, lint and full test suite (");
   });
 });
