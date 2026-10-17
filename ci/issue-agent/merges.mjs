@@ -8,7 +8,7 @@ import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { forbiddenPaths } from "./checks.mjs";
+import { applyAndCheck, forbiddenPaths } from "./checks.mjs";
 
 const run = (cwd, args, { allowFail = false, env } = {}) => {
   const r = spawnSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", ...args], { cwd, encoding: "utf8", env: env ? { ...process.env, ...env } : process.env });
@@ -76,12 +76,6 @@ export function buildResolvedMerge({ repo, scratch, head, mainSha, conflicted, r
 }
 
 /**
- * In the push job's clean checkout `wt` (the PR head): merge `mainSha` and, if it conflicts, rebuild
- * the resolution from `resolvedDir` — but only for exactly the files git itself says conflict, never
- * a forbidden or escaping path, and never with markers left. Leaves the merge staged, uncommitted
- * (the caller commits it, signed off). Returns { ok: true } or { ok: false, why } (merge aborted).
- */
-/**
  * The push job's whole rebuild, in `wt` (a clean checkout of the PR head): bring main in (clean, or
  * replaying the resolution), apply the hand-over patch, commit each step with `commitArgs` (the
  * caller's signed-off identity) — and refuse unless the result is byte-for-byte `expectedTree`, the
@@ -98,10 +92,9 @@ export function rebuildForPush({ wt, mainSha, resolved = [], resolvedDir, delete
     commit(mergeMessage);
   }
   if (patch.trim()) {
-    const a = spawnSync("git", ["-c", "core.hooksPath=/dev/null", "apply", "--index", "--whitespace=nowarn", "-"], { cwd: wt, input: patch, encoding: "utf8" });
-    if (a.status !== 0) return { ok: false, why: `the fix's patch doesn't apply: ${a.stderr.split("\n")[0]}` };
-    const staged = run(wt, ["diff", "--cached", "--name-only", "--no-renames", "-z"]).out.split("\0").filter(Boolean);
-    const forbidden = forbiddenPaths(staged);
+    let forbidden;
+    try { ({ forbidden } = applyAndCheck(wt, patch)); } // the same apply-and-check publish uses — one copy of the rule
+    catch (e) { return { ok: false, why: `the fix's patch doesn't apply: ${e.message.split("\n")[0]}` }; }
     if (forbidden.length) return { ok: false, why: `the fix touches ${forbidden.join(", ")}, which the agent never publishes` };
     commit(fixMessage);
   }
@@ -110,6 +103,12 @@ export function rebuildForPush({ wt, mainSha, resolved = [], resolvedDir, delete
   return { ok: true, sha: run(wt, ["rev-parse", "HEAD"]).out.trim() };
 }
 
+/**
+ * In the push job's clean checkout `wt` (the PR head): merge `mainSha` and, if it conflicts, rebuild
+ * the resolution from `resolvedDir` — but only for exactly the files git itself says conflict, never
+ * a forbidden or escaping path, and never with markers left. Leaves the merge staged, uncommitted
+ * (the caller commits it, signed off). Returns { ok: true } or { ok: false, why } (merge aborted).
+ */
 export function replayResolution(wt, mainSha, resolved, resolvedDir, deleted = []) {
   const m = run(wt, [...anon, "merge", "--quiet", "--no-ff", "--no-commit", mainSha], { allowFail: true });
   const fail = (why) => { run(wt, ["merge", "--abort"], { allowFail: true }); return { ok: false, why }; };

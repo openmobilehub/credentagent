@@ -12,7 +12,7 @@ import {
   isReviewBot, parseVerdict, agentBranch, threadsToAnswer, reviewDecision, sharedChanges, cyclesDone, loopRefusal, latestVerdict, cycleCap,
   isAgentComment, requestComments, leftLoop,
   roleModel, testGateCommand, rootTestRefusal, publishVerdict, isMutableSource, sameLockfile,
-  parseCriteria, tickCriteria, verifiedFor, afterVerification, acceptVerified,
+  parseCriteria, tickCriteria, verifiedFor, afterVerification, acceptVerified, conflictMidCycle,
 } from "./checks.mjs";
 import { reviewPrompt } from "./roles.mjs";
 import { startMerge, buildResolvedMerge, replayResolution, rebuildForPush, treeOf } from "./merges.mjs";
@@ -430,6 +430,11 @@ describe("the review loop", () => {
     expect(ticked).toContain("- [x] **AC1** one thing — _a\\_b.ts:3_");
     expect(ticked).toContain("- [ ] **AC2** other — _missing_"); // old evidence replaced, not stacked
     expect(ticked).toContain("- [ ] not a criterion");
+  });
+
+  it("a conflict met mid-cycle is resolved — or, at the cap, handed over instead of a cycle past it", () => {
+    expect(conflictMidCycle({ cycle: 2, maxCycles: 3 })).toBe("resolve");
+    expect(conflictMidCycle({ cycle: 3, maxCycles: 3 })).toBe("give-up");
   });
 
   it("after a criteria check: verified, a fix cycle — or a hand-over at the cap, never a cycle past it", () => {
