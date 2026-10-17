@@ -87,7 +87,16 @@ ${(r.last.impl.open_questions ?? []).length ? `<h2>Open questions for a human</h
 
 // The PR body follows .github/pull_request_template.md: plain terms, what you're approving, how to
 // test, then the detail below the divider.
-export function prBody(r, { mediaBase, repo }) {
+// The gates a round ran, in words: "the build, typecheck, lint and full test suite" here; another repo
+// names its own (config.mjs).
+const checkedGates = (gates) => {
+  const others = gates.filter((x) => x.name !== "test").map((x) => md(x.name));
+  return `the ${others.length ? `${others.join(", ")} and ` : ""}full test suite`;
+};
+
+// `commands`: the repo's "How to test" (config.mjs `reproduce`, and `focusedTest` with <file>); this
+// repo's own by default. `harnessRepo`: where ci/issue-agent lives, when it isn't the PR's repo.
+export function prBody(r, { mediaBase, repo, harnessRepo = repo, commands ={ reproduce: "npm ci && npm run build && npm test", focused: "npx vitest run <file>" } }) {
   const verdicts = specVerdicts(r);
   const acs = r.spec.acceptance_criteria.map((ac) => {
     const c = verdicts.find((x) => x.id === ac.id);
@@ -118,16 +127,16 @@ Fixes #${r.issue.number} — ${md(r.issue.title)}.
 ${md(r.last.impl.summary)}
 
 - **Changes:** ${files || "none"}.
-- **Checked by a machine, not by the agent that wrote it:** the build, typecheck, lint and full test suite (${g}); ${m?.applicable ? (m.ok ? `with the source change undone, the changed tests **fail** — so they guard it (${(m.tests ?? []).map((t) => `\`${t}\``).join(", ")}). That is checked per test file: a reviewer should still confirm each new test case would fail on its own.` : `❌ the test-proof check failed: ${md(m.reason)}.`) : `no test-proof check (${md(m?.reason ?? "not run")}).`}
+- **Checked by a machine, not by the agent that wrote it:** ${checkedGates(r.last.gates)} (${g}); ${m?.applicable ? (m.ok ? `with the source change undone, the changed tests **fail** — so they guard it (${(m.tests ?? []).map((t) => `\`${t}\``).join(", ")}). That is checked per test file: a reviewer should still confirm each new test case would fail on its own.` : `❌ the test-proof check failed: ${md(m.reason)}.`) : `no test-proof check (${md(m?.reason ?? "not run")}).`}
 - **Reviewed by three agents that didn't write it** (spec, security, developer experience): ${(r.last.reviews ?? []).map((v) => `${v.lens} ${v.verdict === "approve" ? "✅" : "❌"}`).join(" · ") || "not reached"}.
 - **Not a substitute for your review.** Agents wrote this from the issue text${r.issue.dropped?.length ? `, leaving out: ${md(r.issue.dropped.join("; "))}` : ""}.
 
 ## How to test
 
 \`\`\`sh
-gh pr checkout <this PR> && npm ci && npm run build && npm test
+gh pr checkout <this PR> && ${commands.reproduce}
 \`\`\`
-${m?.applicable && m.tests?.length ? `\nThe changed tests: \`npx vitest run ${m.tests.join(" ")}\`. To see them catch the problem, undo the source change (\`git checkout origin/main -- ${(m.reverted ?? []).join(" ")}\`), rebuild, and run them again: they fail.\n` : ""}
+${m?.applicable && m.tests?.length ? `\nThe changed tests: \`${commands.focused.replace("<file>", m.tests.join(" "))}\`. To see them catch the problem, undo the source change (\`git checkout origin/main -- ${(m.reverted ?? []).join(" ")}\`), rebuild, and run them again: they fail.\n` : ""}
 ${r.evidence ? `\n**What the recordings show:** ${md(r.evidence.demonstrates)}${r.evidence.limitations ? `\n\n_What they don't show:_ ${md(r.evidence.limitations)}` : ""}\n` : ""}
 ${show("before", "Before (main)")}
 ${show("after", "After (this change)")}
@@ -142,7 +151,7 @@ ${show("proof", "Test proof")}
 
 ${acs}
 
-${blocking.length ? `### Open blocking findings\n\n${blocking.join("\n")}\n\n` : ""}${suggestions.length ? `<details><summary>Reviewer suggestions (non-blocking)</summary>\n\n${suggestions.join("\n")}\n</details>\n\n` : ""}${(r.last.impl.open_questions ?? []).length ? `### Open questions\n\n${r.last.impl.open_questions.map((q) => `- ${md(q)}`).join("\n")}\n\n` : ""}<sub>Opened by the issue agent (\`ci/issue-agent\` in ${repo}) · run \`${r.id}\` · ${r.rounds.length} round(s) · ${r.model} · ~$${r.costUsd.toFixed(2)}. Draft until a human has read it.</sub>
+${blocking.length ? `### Open blocking findings\n\n${blocking.join("\n")}\n\n` : ""}${suggestions.length ? `<details><summary>Reviewer suggestions (non-blocking)</summary>\n\n${suggestions.join("\n")}\n</details>\n\n` : ""}${(r.last.impl.open_questions ?? []).length ? `### Open questions\n\n${r.last.impl.open_questions.map((q) => `- ${md(q)}`).join("\n")}\n\n` : ""}<sub>Opened by the issue agent (\`ci/issue-agent\` in ${harnessRepo}) · run \`${r.id}\` · ${r.rounds.length} round(s) · ${r.model} · ~$${r.costUsd.toFixed(2)}. Draft until a human has read it.</sub>
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 `;

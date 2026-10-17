@@ -284,6 +284,10 @@ hands over. Don't review an `agent:in-review` PR yet; you'll be asked.
 To see what it's working on: the 🤖 status comment on the issue (edited at each step), the
 `agent:working` label (`is:open label:agent:working`), and Actions runs named `issue-agent #<n> · …`.
 How it works and how to run it locally: [`ci/issue-agent/README.md`](ci/issue-agent/README.md).
+Other repos run the same pipeline through `.github/workflows/issue-agent-run.yml` and their own
+`.github/issue-agent.json` (README, "Using it in another repo") — so a change to `ci/issue-agent/` or
+that workflow reaches them too (today: credentagent-website). With no config file, the defaults are this
+repo's own setup.
 
 Apache-2.0 · part of [Open Mobile Hub](https://openmobilehub.org) (Linux Foundation).
 
