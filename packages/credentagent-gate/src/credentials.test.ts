@@ -206,8 +206,8 @@ describe("required/optional reject a policy the seam can't honor (item 4)", () =
   // outside 0–100 would complete at a negative price (150) or overcharge (-10).
   it("membership.discount() / discount() refuse a percent outside 0–100 when the policy is built", () => {
     for (const bad of [150, 100.5, -10, Number.NaN, Number.POSITIVE_INFINITY]) {
-      expect(() => membership.discount(bad)).toThrow(/between 0 and 100/);
-      expect(() => discount({ percent: bad })).toThrow(/between 0 and 100/);
+      expect(() => membership.discount(bad)).toThrow(/^membership\.discount\(.*\): percent must be between 0 and 100/);
+      expect(() => discount({ percent: bad })).toThrow(/^discount\(\{ percent: .* \}\): percent must be between 0 and 100/);
     }
     for (const ok of [0, 15, 100]) expect(() => membership.discount(ok)).not.toThrow();
   });

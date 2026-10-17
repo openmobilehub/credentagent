@@ -204,6 +204,10 @@ app.get("/orders/:id", async (req, res) => res.json(await credentagent.orders.re
 > `completedOrderStore`) and read `orders.retrieve(id)` as the durable, cross-instance signal — or
 > register a **webhook** (next section) so a different service gets the signed HTTP `POST`.
 
+`orders.create()` throws if a line has a `minimumAge` but the policy has no age step that applies to
+the order: payment refuses an age-restricted line until age is proven, so that order could never be
+paid. Add `required(age.over(n))`.
+
 `orders.retrieve(id)` is the one result **door**: `{ ok: true, completion }` once paid, `{ ok: false,
 pending: true, approveUrl }` while it's open, or `{ ok: false, code }` for an unknown id. The amount and
 the age threshold are re-derived from the order you stored server-side — never trusted from the link
@@ -559,7 +563,7 @@ Built-ins, custom credentials, and effects are one shape (`Credential` + `Effect
 | Builder | Effect | Verifies |
 | :-- | :-- | :-- |
 | `age.over(n)` | `gate()` | the explicit positive `age_over_${n} === true` (an 18+ proof never satisfies a 21+ gate) |
-| `membership.discount(n)` | `discount({ percent: n })` | a non-empty `membership_number`; applies the discount once. `n` must be 0–100 (throws otherwise); the payment rails hold the order's discount to exactly `n`% of its lines |
+| `membership.discount(n)` | `discount({ percent: n })` | a non-empty `membership_number`; applies the discount once. `n` must be 0–100 (throws otherwise). On `orders.serve` checkouts the order is priced, and the payment rails check it, at exactly `n`%. On `mount()` hosts your catalog prices the discount and the payment rails still check the default 10%: a catalog pricing any other percent is refused at payment, and `createStorefront()` always prices 10%, whatever `n` says |
 | `payment.in(cur)` | `authorize()` | `authorized === true`; settles last, amount derived from the order |
 
 Wrap each in `required(c)` or `optional(c)` to build the ordered policy array. Attach a call-site

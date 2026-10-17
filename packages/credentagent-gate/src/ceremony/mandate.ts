@@ -24,8 +24,9 @@ export const DEFAULT_LOYALTY_DISCOUNT_PCT = 10;
  *  rounded to the currency's minor unit (`round2(lineSum × pct/100)` for USD — the formula the
  *  rails have always checked, and the one `orders.serve` and the storefront's `priceCart` price
  *  with). Because the product is a float, a half-cent case can round down (14.7 × 15% → 2.20, not
- *  2.21). A host that computes the discount in integer cents, as `delegated.ts` does, can differ
- *  by a cent on such a total and is refused — keep a host's re-pricer on this formula. */
+ *  2.21). A host re-pricer that computes the discount in integer cents (like the formula in
+ *  `delegated.ts`, whose spend path never reaches this check) can differ by a cent on such a total
+ *  and is refused by this check — keep a host's re-pricer on this formula. */
 export function loyaltyDiscount(lineSum: number, pct: number, currency: string): number {
   // An unknown currency is refused by Gate 1 itself; here it only needs not to throw.
   let f = 100;

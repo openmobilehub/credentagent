@@ -14,10 +14,12 @@ import type {
   VerificationManifestEntry,
 } from "./types.js";
 
-/** The discount percent a policy grants (its `discount` step), if any — what the payment rails
- *  hold a discounted order's discount to (#360). */
-export function discountPercentOf(policy: readonly Step[]): number | undefined {
+/** The discount percent a policy grants THIS order (its first `discount` step that applies — the
+ *  same `appliesTo` / `.when()` filter `resolveRequirements` uses), if any. What `orders.serve`
+ *  prices a member's discount at and the payment rails hold it to (#360). */
+export function discountPercentOf(order: GateOrder, policy: readonly Step[]): number | undefined {
   for (const s of policy) {
+    if (s.credential.appliesTo && !s.credential.appliesTo(order)) continue;
     if (s.credential.effect.kind === "discount") {
       return s.credential.effect.percent ?? s.credential.params?.percent;
     }

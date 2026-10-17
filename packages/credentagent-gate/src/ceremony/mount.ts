@@ -110,9 +110,10 @@ export interface CeremonySeams {
   basePath?: string;
   /** INTERNAL — not a host option (`MountCeremony` omits it). The discount percent THIS order's
    *  policy grants (e.g. 15 for `membership.discount(15)`), which the payment rails' amount check
-   *  holds the order's discount to (#360). `CredentAgent.mount()` fills it from the policy
-   *  `requirements()` resolved; `orders.serve` from the stored order. Absent, or `undefined` for
-   *  an order ⇒ `DEFAULT_LOYALTY_DISCOUNT_PCT` (10), as before. */
+   *  holds the order's discount to (#360). Only `orders.serve` fills it, from the created-order
+   *  store (which also prices the order at that percent). `CredentAgent.mount()` leaves it unset:
+   *  there the host's catalog prices the discount, and the rails check the default. Absent, or
+   *  `undefined` for an order ⇒ `DEFAULT_LOYALTY_DISCOUNT_PCT` (10), as before. */
   discountPercentFor?: (orderId: string) => MaybePromise<number | undefined>;
 }
 
@@ -206,10 +207,6 @@ export function mountCeremony(app: CeremonyApp, options: Partial<CeremonySeams> 
       `[credentagent] mount(): missing required ceremony seam(s): ${missing.join(", ")}. ` +
         `Provide them via credentagent.mount(app, { ... }) or app.locals.credentagent.`,
     );
-  }
-  // Fail fast on a wrong shape here, not as a 400/500 on every payment.
-  if (discountPercentFor !== undefined && typeof discountPercentFor !== "function") {
-    throw new TypeError(`[credentagent] mount(): 'discountPercentFor' must be a function (orderId) => percent, got ${typeof discountPercentFor}.`);
   }
 
   // The challenge HMAC must survive an instance split (options→verify may hit

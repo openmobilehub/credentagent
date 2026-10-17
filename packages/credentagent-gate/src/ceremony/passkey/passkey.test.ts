@@ -249,40 +249,33 @@ describe("CT6 — the four deterministic gates run on a real passkey ceremony", 
     expect(JSON.stringify(h.records.get("ORD-LEGACY"))).not.toContain("LEGACY-RAW");
   });
 
-  // Invariant 3 — a host whose policy grants 15% (not the rails' default 10%) wires nothing extra:
-  // `requirements()` remembers the order's percent and the public `mount(app, seams)` hands it to
-  // the rails. The passkey /verify route must check the discount at THAT percent, or every such
-  // member is refused at payment.
-  it("a 15% member discount completes over the passkey route of a plain mount(app, seams) host", async () => {
+  // #360 review — on a plain `mount(app, seams)` host the HOST's catalog prices the member
+  // discount (like the storefront's priceCart, at a fixed 10%), whatever percent the policy names.
+  // The passkey rail must check what that catalog priced, not the policy's percent: holding a 10%
+  // catalog order to a `membership.discount(15)` policy refused every member payment.
+  it("a member payment on a plain mount(app, seams) host completes at the catalog's discount, whatever the policy's percent", async () => {
     const ca = new CredentAgent({ walletOrigin: ORIGIN });
     const records = new Map<string, CompletedRecord>();
-    const catalog15: CeremonyCatalog = {
-      createOrder(items, orderId, opts) {
-        const priced = catalog.createOrder(items, orderId);
-        const discount = opts?.loyaltyApplied ? round2(priced.subtotal * 0.15) : 0;
-        return { ...priced, discount, total: round2(priced.subtotal - discount) };
-      },
-    };
-    const stored = catalog15.createOrder([{ productId: "aurora-headphones", quantity: 1 }], "ORD-15");
+    const stored = catalog.createOrder([{ productId: "aurora-headphones", quantity: 1 }], "ORD-M", { loyaltyApplied: true });
     const app = express();
     ca.mount(app as never, {
-      orderStore: { read: async (id) => (id === "ORD-15" ? stored : null) },
-      catalog: catalog15,
+      orderStore: { read: async (id) => (id === "ORD-M" ? stored : null) },
+      catalog,
       completion: (input) => completeOrder(input, {
-        catalog: catalog15, verificationStore: ca.store, cart: { clear: async () => {} },
+        catalog, verificationStore: ca.store, cart: { clear: async () => {} },
         records: { read: async (id) => records.get(id), write: async (rec) => void records.set(rec.orderId, rec) },
       }),
       signingKey: SIGNING_KEY,
     });
     ca.requirements(
-      { id: "ORD-15", total: 199, currency: "USD", lines: [{ id: "aurora-headphones", quantity: 1, unitPrice: 199 }] },
+      { id: "ORD-M", total: 199, currency: "USD", lines: [{ id: "aurora-headphones", quantity: 1, unitPrice: 199 }] },
       [optional(membership.discount(15)), required(payment.in("usd"))],
     );
-    await ca.store.write("ORD-15", { loyalty: { applied: true, membershipNumber: "M-1" } });
-    const res = await authorize({ app } as Harness, "ORD-15");
+    await ca.store.write("ORD-M", { loyalty: { applied: true, membershipNumber: "M-1" } });
+    const res = await authorize({ app } as Harness, "ORD-M");
     expect(res.body.gates.find((g: { gate: string }) => g.gate === "Amount integrity")?.pass).toBe(true);
     expect(res.body.completed).toBe(true);
-    expect(records.get("ORD-15")?.amount).toBe(169.15); // $199 − 15%
+    expect(records.get("ORD-M")?.amount).toBe(179.1); // $199 − the catalog's 10%
   });
 
   it("a replayed verify is idempotent — it records/settles nothing twice", async () => {

@@ -104,7 +104,7 @@ function repriceStored(created: CreatedOrder, items: CartItemRef[], opts?: Repri
   // formula at this policy's percent — the percent the rails check it against
   // (`discountPercentFor` below), so total === the payable they re-derive.
   const subtotal = inMinorUnits(lines.reduce((s, l) => s + l.lineTotal, 0), currency);
-  const pct = discountPctOf(created.policy);
+  const pct = discountPctOf(created.order, created.policy);
   const discount = opts?.loyaltyApplied && pct ? loyaltyDiscount(subtotal, pct, currency) : 0;
   return {
     id: created.order.id,
@@ -224,7 +224,7 @@ export function serveOrders(app: CeremonyApp, deps: ServeOrdersDeps): void {
     // order is checked at 15, not the rails' default 10) — the same percent repriceStored uses.
     discountPercentFor: async (id) => {
       const created = await deps.created.read(id);
-      return created ? discountPctOf(created.policy) : undefined;
+      return created ? discountPctOf(created.order, created.policy) : undefined;
     },
   });
 

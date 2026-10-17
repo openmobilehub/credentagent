@@ -98,7 +98,8 @@ itself dependency-free and never imports `express`. CredentAgent injects **its o
 Three modes:
 
 1. **With `ceremony` seams** — `{ orderStore, catalog, completion, signingKey, … }`
-   (a `MountCeremony` = `Partial<CeremonySeams>` minus `verificationStore`). Validates
+   (a `MountCeremony` = `Partial<CeremonySeams>` minus `verificationStore` and the internal
+   `discountPercentFor`). Validates
    the seams, **fails fast** on a missing required one, and attaches each rail.
 2. **Zero-arg compose** (the quickstart) — a composing host such as
    `createStorefront()` has already published the seams on `app.locals.credentagent`;
@@ -145,6 +146,7 @@ membership.discount(percent: number): Credential
 Optional credential (`effect: discount({ percent })`) that verifies a non-empty
 `membership_number`; presenting it applies the discount once. The request asks for the
 `org.multipaz.loyalty.1` doctype (`membership_number`, `tier`). Sets `params.percent`.
+Throws a `RangeError` when `percent` is not a number from 0 to 100.
 
 ```ts
 optional(membership.discount(10));   // 10% off if a loyalty credential is presented
@@ -249,7 +251,7 @@ The three effects the resolver interprets — the only effects a credential may 
 
 ```ts
 gate(): Effect                                            // { kind: "gate" }
-discount(opts: { percent?: number; amount?: number }): Effect  // { kind: "discount", ... }
+discount(opts: { percent?: number; amount?: number }): Effect  // { kind: "discount", ... }; throws if percent is outside 0–100
 authorize(): Effect                                       // { kind: "authorize" } — settles last
 ```
 
@@ -397,7 +399,7 @@ interface VerificationStore {
 
 ```ts
 interface ExpressApp { locals: Record<string, unknown>; }   // structural — no `express` dependency
-type MountCeremony = Omit<Partial<CeremonySeams>, "verificationStore">;  // host never passes the store
+type MountCeremony = Omit<Partial<CeremonySeams>, "verificationStore" | "discountPercentFor">;  // host never passes the store (or the internal discount seam)
 ```
 
 ---

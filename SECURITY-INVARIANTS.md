@@ -122,8 +122,10 @@ unbinds it.
 **How it's enforced.** Both rails run one shared check, `checkAmounts` in
 [`ceremony/mandate.ts`](../../packages/credentagent-gate/src/ceremony/mandate.ts). It re-sums the
 lines and requires the discount to be **exactly zero or exactly this order's policy percent** of
-that sum (the `membership.discount(N)` that `requirements()` resolved for the order; absent ⇒
-`DEFAULT_LOYALTY_DISCOUNT_PCT`, 10) — an arbitrary discount is refused, and so is a percent
+that sum. On `orders.serve` checkouts that is the order's own `membership.discount(N)`, read
+from the created-order store, which also prices the order at N. On `mount()` hosts the host's
+catalog prices the discount and the rails check `DEFAULT_LOYALTY_DISCOUNT_PCT` (10). An arbitrary
+discount is refused, and so is a percent
 outside 0–100. Every amount is compared in **whole minor units** (`toMinorUnits` from
 [`ap2/money.ts`](../../packages/credentagent-gate/src/ap2/money.ts)), so float noise such as
 3 × 4.90 = 14.700000000000001 reads as 1470 cents, while a real fraction of a cent, a non-finite

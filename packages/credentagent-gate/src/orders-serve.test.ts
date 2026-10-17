@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { CredentAgent } from "./client.js";
 import { age, payment, membership, required, optional, defineCredential, dcql, gate } from "./credentials.js";
 import type { CompletionInput, CompletionResult } from "./ceremony/types.js";
-import { Orders, MemoryOrderStore, type CompletedOrder } from "./orders.js";
+import { Orders, MemoryOrderStore, type CompletedOrder, type CreatedOrder } from "./orders.js";
 import * as jose from "jose";
 import { Encoder, Tag } from "cbor-x";
 
@@ -384,6 +384,19 @@ describe("orders.serve — amounts that are not exact in binary (#360)", () => {
     expect((await pay(25.5)).completed).toBe(true); // 3 × $10 − 15%
   });
 
+  // Invariant 3 — a tiered discount is priced and checked at the tier whose .when() applies to
+  // THIS order, not the first discount step in the policy (which would charge 15% off a $30 order).
+  it("a tiered member discount charges the tier that applies (10% on a $30 order), not the first one", async () => {
+    const { ca, id, pay } = await setup(10, [
+      optional(membership.discount(15).when((o) => o.total > 100)),
+      optional(membership.discount(10).when((o) => o.total <= 100)),
+      required(payment.in("usd")),
+    ]);
+    await ca.store.write(id, { loyalty: { applied: true, membershipNumber: "M-1" } });
+    expect((await pay(25.5)).completed).toBe(false); // the 15% tier doesn't apply
+    expect((await pay(27)).completed).toBe(true); // 3 × $10 − 10%
+  });
+
   // A real fraction of a cent is refused, never rounded (ap2/money.ts) — 3 × $0.002 is not $0.01.
   it("REFUSES a sub-cent order rather than rounding it to whole cents", async () => {
     const { ca, id, pay } = await setup(0.002);
@@ -402,16 +415,30 @@ describe("orders.serve — amounts that are not exact in binary (#360)", () => {
     expect(done.ok && done.completion.amount).toBe(13.23);
   });
 
-  // Invariant 1 — a 21+ line gates the order even when the policy has no age step: the rails'
-  // completion refuses an unproven age-restricted line, so the demo place path must too.
-  it("BYPASS: the instant-demo place path REFUSES an order with a minimumAge line and no age step in the policy", async () => {
+  const whiskey = { id: "", total: 30, currency: "USD", lines: [{ id: "whiskey", name: "Whiskey", quantity: 1, unitPrice: 30, minimumAge: 21 }] };
+
+  // A 21+ line with no age step in the policy could never be paid (payment refuses it for age and
+  // the page offers no age step), so create() refuses it up front with the fix in the message.
+  it("orders.create() REFUSES an order with a minimumAge line when the policy has no age step for it", async () => {
     const ca = new CredentAgent({ walletOrigin: "http://localhost:4000" });
+    await expect(ca.orders.create({ order: whiskey, policy: [optional(membership.discount(10))] }))
+      .rejects.toThrow(/line "whiskey" has minimumAge 21.*required\(age\.over\(21\)\)/);
+    await expect(ca.orders.create({ order: whiskey, policy: [required(age.over(21).when(() => false))] }))
+      .rejects.toThrow(/no age step/); // an age step whose .when() skips this order doesn't count
+    await expect(ca.orders.create({ order: whiskey, policy: [required(age.over(21))] })).resolves.toHaveProperty("id");
+  });
+
+  // Invariant 1 — a 21+ line gates the order even when the policy has no age step: the rails'
+  // completion refuses an unproven age-restricted line, so the demo place path must too. create()
+  // refuses such an order now; this one is written to the store directly (e.g. stored before
+  // that check, or by another instance's version).
+  it("BYPASS: the instant-demo place path REFUSES an order with a minimumAge line and no age step in the policy", async () => {
+    const orderStore = new MemoryOrderStore<CreatedOrder>();
+    const ca = new CredentAgent({ walletOrigin: "http://localhost:4000", orderStore });
     const app = fakeApp();
     ca.orders.serve(app);
-    const { id } = await ca.orders.create({
-      order: { id: "", total: 30, currency: "USD", lines: [{ id: "whiskey", name: "Whiskey", quantity: 1, unitPrice: 30, minimumAge: 21 }] },
-      policy: [optional(membership.discount(10))],
-    });
+    const id = "ORD-W";
+    orderStore.write(id, { order: { ...whiskey, id }, policy: [optional(membership.discount(10))] });
     const res = fakeRes();
     await app._post.get("/credentagent/orders/:id/place")!({ params: { id } }, res);
     expect(res._status).toBe(403);

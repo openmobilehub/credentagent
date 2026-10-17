@@ -96,12 +96,6 @@ describe("mountCeremony — fail fast on missing seams (CT2)", () => {
     const ctx = mountCeremony(fakeApp(), validSeams());
     expect(ctx.readerIdentity).toBeUndefined();
   });
-
-  it("throws at mount when the internal discountPercentFor seam is not a function (not a 400/500 on every payment)", () => {
-    const app = fakeApp();
-    app.locals.credentagent = { ...validSeams(), discountPercentFor: 15 };
-    expect(() => mountCeremony(app)).toThrow(/discountPercentFor.*function/);
-  });
 });
 
 describe("CredentAgent.mount — back-compat + ceremony delegation (T008)", () => {
@@ -126,10 +120,12 @@ describe("CredentAgent.mount — back-compat + ceremony delegation (T008)", () =
     expect(() => a.mount(app, { orderStore: { read: async () => null }, catalog, completion: async () => ({ completed: true }) })).toThrow(/signingKey/);
   });
 
-  // #360 — the payment rails hold a discounted order to ITS policy's percent. Every mount path
-  // (explicit seams, and the zero-arg compose that defineHost hosts and the storefront use) must
-  // hand the rails the percent requirements() resolved — with no host wiring.
-  it("every mount path hands the rails the percent the order's policy declares (membership.discount(15) → 15)", () => {
+  // #360 review — on the mount() paths the HOST's catalog prices the member discount (the
+  // storefront's priceCart always takes 10%), so the rails must keep checking their default
+  // rather than the policy's percent: holding a storefront order priced at 10% to a policy's 15%
+  // refused every member payment. Only orders.serve, which prices at the policy percent itself,
+  // hands the rails a per-order percent.
+  it("no mount path hands the rails a per-order percent — the host's catalog prices the discount there", () => {
     const order = { id: "ORD-15", total: 20, currency: "USD", lines: [{ id: "drill", quantity: 1, unitPrice: 20 }] };
     const percentFor = (app: { locals: Record<string, unknown> }) =>
       (app.locals.credentagent as Pick<CeremonyContext, "discountPercentFor">).discountPercentFor;
@@ -137,14 +133,13 @@ describe("CredentAgent.mount — back-compat + ceremony delegation (T008)", () =
     const a = { locals: {} as Record<string, unknown> };
     explicit.mount(a, { orderStore: { read: async () => null }, catalog, completion: async () => ({ completed: true }), signingKey: "k" });
     explicit.requirements(order, [optional(membership.discount(15))]);
-    expect(percentFor(a)?.("ORD-15")).toBe(15);
-    expect(percentFor(a)?.("ORD-OTHER")).toBeUndefined(); // an unseen order ⇒ the rails' default
+    expect(percentFor(a)).toBeUndefined();
 
     const composed = new CredentAgent({ walletOrigin: "https://shop.example" });
     const b = { locals: { credentagent: { orderStore: { read: async () => null }, catalog, completion: async () => ({ completed: true }), signingKey: "k" } } as Record<string, unknown> };
     composed.mount(b);
     composed.requirements(order, [optional(membership.discount(15))]);
-    expect(percentFor(b)?.("ORD-15")).toBe(15);
+    expect(percentFor(b)).toBeUndefined();
   });
 });
 
