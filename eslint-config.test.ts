@@ -9,6 +9,8 @@ const PAGE = "packages/credentagent-gate/src/ceremony/credential-gate/page.ts";
 
 async function scriptJsonErrors(code: string, filePath = PAGE) {
   const [result] = await eslint.lintText(code, { filePath });
+  // A parse error has ruleId null and would slip past the filter; fail on it so a clean case can't pass vacuously.
+  expect(result?.fatalErrorCount).toBe(0);
   return (result?.messages ?? []).filter(
     (m) => m.ruleId === "no-restricted-syntax" && m.message.includes("scriptJson()"),
   );
