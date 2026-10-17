@@ -1,0 +1,2 @@
+# No blank issues: every issue goes through a form, and every form requires steps to reproduce.
+blank_issues_enabled: false

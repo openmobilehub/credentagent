@@ -177,6 +177,14 @@ Quick gate for any new/changed public API (full list in the rubric):
   cross-references (never a bare `#85` or `invariant 4`), prefer everyday use cases, use at
   most one universal analogy and only for an abstract idea, and keep the technical detail
   below a divider. Follow `.github/pull_request_template.md`; the review enforces it (REVIEW.md §5).
+- **Every issue must be reproducible, through the SDK or the UI.** Give steps someone else can
+  follow and see the same result: for the SDK, a minimal runnable snippet or command against the
+  packages or an `examples/` script; for the UI, the URL and each click in order (storefront
+  widget, checkout / wallet pages, hosted marketplace). Add what happens, what should happen,
+  and the version or commit. For an enhancement, the steps show today's behavior. Follow
+  `.github/ISSUE_TEMPLATE/`. `gh issue create` skips those forms, so write their sections
+  (Reproduce via · Steps to reproduce · What happens · What should happen · Version or commit)
+  into the body yourself.
 
 ## Code review
 
