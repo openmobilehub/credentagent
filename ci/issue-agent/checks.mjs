@@ -86,13 +86,32 @@ export function threadsToAnswer(threads, isTrusted) {
 }
 
 /**
+ * The review verdict that applies to the PR's head. `summaries` are the review bot's summary
+ * comments, oldest first. Times are compared as instants (GitHub reports a commit's time in the
+ * committer's own zone). A head that only merges main in (two parents) gets no new summary — the
+ * review skips a push that leaves the PR's own diff unchanged — so the last verdict still applies.
+ */
+export function latestVerdict({ summaries, headAt, headIsMerge, conclusion }) {
+  const fresh = summaries.filter((s) => Date.parse(s.createdAt) >= Date.parse(headAt)).at(-1);
+  if (fresh) return { verdict: parseVerdict(fresh.body), summary: fresh.body };
+  const previous = summaries.at(-1);
+  if (headIsMerge && conclusion === "success" && previous) return { verdict: parseVerdict(previous.body), summary: previous.body, reused: true };
+  return { verdict: undefined, summary: "" };
+}
+
+/**
  * What the loop does after a review. It keeps fixing until the reviewer is satisfied (✅, or 💬
  * with nothing left open). At the cycle cap, 💬 counts as ready — the reviewer calls it safe to
  * merge, and each review of a fix tends to find a new, smaller note — so the PR goes to a human
  * with the open notes listed. ⛔ at the cap is never "ready": the loop stops and says why.
  */
-export function reviewDecision({ verdict, open, cycle, maxCycles }) {
-  if (!verdict) return { action: "wait", reason: "there is no Claude review verdict for the PR's latest commit yet" };
+export function reviewDecision({ verdict, open, cycle, maxCycles, conclusion }) {
+  if (!verdict) {
+    // No verdict for the head: wait if no review has finished (started by hand), otherwise hand the
+    // PR to a human — a failed or verdict-less review would leave it "in review" forever.
+    if (!conclusion) return { action: "wait", reason: "there is no Claude review verdict for the PR's latest commit yet" };
+    return { action: "give-up", reason: conclusion === "success" ? "the Claude review finished without a verdict for the latest commit (it may be paused)" : `the Claude review ${conclusion === "failure" ? "failed" : `ended as ${conclusion}`} on the latest commit` };
+  }
   if ((verdict === "ready" || verdict === "notes") && open === 0) return { action: "done", reason: verdict === "ready" ? "the review says ✅ Ready to merge and every thread is resolved" : "the review says 💬 Ready — small notes, and every thread is resolved" };
   if (cycle >= maxCycles) {
     if (verdict === "ready" || verdict === "notes") return { action: "done", notes: open, reason: `after ${maxCycles} review cycles the review says ${verdict === "ready" ? "✅ Ready to merge" : "💬 Ready — small notes"}, with ${open} small note(s) still open (listed below)` };

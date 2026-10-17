@@ -40,7 +40,7 @@ import { fileURLToPath } from "node:url";
 import { fingerprints, stripAnsi, withinBaseline } from "./fingerprints.mjs";
 import {
   TRUSTED_PERMISSIONS, titleAuthor, forbiddenPaths, applyAndCheck, changedSince, isRunId, isCommitId, publishIssueNumber,
-  isReviewBot, parseVerdict, agentBranch, threadsToAnswer, reviewDecision, sharedChanges, filesBetween, cyclesDone, loopRefusal,
+  isReviewBot, parseVerdict, agentBranch, threadsToAnswer, reviewDecision, sharedChanges, filesBetween, cyclesDone, loopRefusal, latestVerdict,
 } from "./checks.mjs";
 import { reportHtml, prBody, issueComment, md } from "./report.mjs";
 
@@ -687,7 +687,7 @@ const REVIEW_MARK = "<!-- issue-agent-review";
 function loadPr(number) {
   const q = `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){
     number url state isDraft isCrossRepository headRefName headRefOid body title labels(first:30){nodes{name}}
-    commits(last:1){nodes{commit{oid committedDate}}}
+    commits(last:1){nodes{commit{oid committedDate parents{totalCount}}}}
     comments(last:100){nodes{author{__typename login} body createdAt}}
     reviewThreads(first:100){nodes{id isResolved path line comments(first:50){nodes{databaseId author{__typename login} body createdAt}}}}}}}`;
   return ghJson(["api", "graphql", "-f", `query=${q}`, "-f", `o=${OWNER}`, "-f", `r=${NAME}`, "-F", `n=${number}`]).data.repository.pullRequest;
@@ -699,29 +699,30 @@ function assessReview(prNumber) {
   const labels = pr.labels.nodes.map((l) => l.name);
   const refusal = loopRefusal({ ...pr, labels });
   if (refusal) return skip(refusal);
-  // No token whose pushes start workflows → a fix could never be reviewed: don't spend a fix session.
-  if (!REVIEW_LOOP) return skip("the review loop is off (no AGENT_GH_TOKEN)");
-  const branch = agentBranch(pr.headRefName);
   const expected = process.env.ISSUE_AGENT_HEAD_SHA;
   if (expected && expected !== pr.headRefOid) return skip("the PR has moved on since this review ran");
+  const branch = agentBranch(pr.headRefName);
+  const labeller = pr.body.match(/<!-- issue-agent labeller=([A-Za-z0-9-]+) -->/)?.[1];
+  // No token whose pushes start workflows → a fix could never be reviewed: spend no fix session,
+  // and hand the PR (still marked in-review) to a human rather than leave it stranded.
+  if (!REVIEW_LOOP) {
+    return { pr: pr.number, url: pr.url, isDraft: pr.isDraft, labeller, body: pr.body, threads: [], cycle: 0,
+      decision: { action: "give-up", reason: "the review loop is off — there is no AGENT_GH_TOKEN, so a pushed fix would never be reviewed again" } };
+  }
 
-  const headAt = pr.commits.nodes[0].commit.committedDate;
-  const summary = pr.comments.nodes.filter((c) => isReviewBot(c.author) && c.body.startsWith("## Claude review") && c.createdAt >= headAt).at(-1);
-  const verdict = parseVerdict(summary?.body);
+  const head = pr.commits.nodes[0].commit;
+  const summaries = pr.comments.nodes.filter((c) => isReviewBot(c.author) && c.body.startsWith("## Claude review"));
+  const conclusion = process.env.ISSUE_AGENT_REVIEW_CONCLUSION || undefined;
+  const { verdict, summary, reused } = latestVerdict({ summaries, headAt: head.committedDate, headIsMerge: head.parents.totalCount > 1, conclusion });
+  if (reused) RUN?.log?.("  the head only merges main in; the last review still applies");
   const { answer, ignored } = threadsToAnswer(pr.reviewThreads.nodes.map((t) => ({ ...t, comments: t.comments.nodes })), trusted);
   const cycle = cyclesDone(pr.comments.nodes, trusted);
-  let decision = reviewDecision({ verdict, open: answer.length, cycle, maxCycles: MAX_REVIEW_CYCLES });
-  // A review that failed, or produced no verdict for this commit (paused, skipped), would otherwise
-  // leave the PR marked "don't review yet" forever: hand it to a human instead.
-  const conclusion = process.env.ISSUE_AGENT_REVIEW_CONCLUSION;
-  if (decision.action === "wait" && conclusion) {
-    decision = { action: "give-up", reason: conclusion === "success" ? "the Claude review finished without a verdict for the latest commit (it may be paused or have skipped it)" : `the Claude review ${conclusion === "failure" ? "failed" : `ended as ${conclusion}`} on the latest commit` };
-  }
+  const decision = reviewDecision({ verdict, open: answer.length, cycle, maxCycles: MAX_REVIEW_CYCLES, conclusion });
   const issue = snapshotIssue(branch.issue).issue ?? { number: branch.issue, title: `Issue #${branch.issue}`, body: "", comments: [], dropped: [] };
   return {
     pr: pr.number, url: pr.url, headRef: pr.headRefName, head: pr.headRefOid, isDraft: pr.isDraft, issueNumber: branch.issue, issue,
-    verdict, summary: (summary?.body ?? "").slice(0, 30_000), threads: answer, ignored, cycle, maxCycles: MAX_REVIEW_CYCLES, decision,
-    labeller: pr.body.match(/<!-- issue-agent labeller=([A-Za-z0-9-]+) -->/)?.[1], body: pr.body,
+    verdict, summary: summary.slice(0, 30_000), threads: answer, ignored, cycle, maxCycles: MAX_REVIEW_CYCLES, decision,
+    labeller, body: pr.body,
   };
 }
 

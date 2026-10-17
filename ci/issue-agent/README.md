@@ -88,10 +88,15 @@ Claude review finishes on an agent/issue-* PR
   cycle 3; its fourth cycle was started by hand).
 - **Only PRs the loop opened, only from this repository.** It acts only on `agent/issue-*` branches
   in this repository that carry `agent:in-review` (so a PR a human has taken over is left alone),
-  and spends nothing at all when `AGENT_GH_TOKEN` is missing. Both workflows run their trusted
-  jobs from `main`, even when started by hand from another branch.
-- **Never stranded.** A review that fails, or ends with no verdict for the latest commit (paused,
-  skipped), hands the PR to a human with that reason instead of leaving it "in review" forever.
+  and spends no fix session when `AGENT_GH_TOKEN` is missing. Every job checks out `main`'s harness
+  code (`run.mjs`), even when started by hand from another branch — but a hand-started run uses
+  *that branch's workflow file* (which steps run, where secrets go), so only people with write
+  access, who can start runs, can choose it.
+- **Never stranded.** A review that fails, or ends with no verdict for the latest commit (paused),
+  hands the PR to a human with that reason — and so does a PR still in the loop once
+  `AGENT_GH_TOKEN` is gone. A head that only merges `main` in (GitHub's *Update branch*) isn't
+  reviewed again — the review skips a push that leaves the PR's diff unchanged — so the last
+  verdict still applies.
 - **Main is brought in when it matters.** If `main` has changed a file the PR also changes, the fix
   job merges `main` first (the review reads the PR merged onto main, so a stale copy of such a file
   can only be fixed by a merge); the push job re-does that merge from a commit it checks is on
@@ -102,7 +107,9 @@ Claude review finishes on an agent/issue-* PR
   workflow, so the fix would never be reviewed again. PRs then open as drafts, as before.
 - **To run it by hand:** *Actions → issue-agent-review → Run workflow* with the PR number, or
   locally: `run.mjs assess-review <pr> --dry-run`, `run.mjs fix-review review.json`,
-  `run.mjs push-review <fix-dir> --review review.json --pr <pr> --dry-run`.
+  `run.mjs push-review <fix-dir> --review review.json --pr <pr> --dry-run`. A PR that was already
+  handed over needs its `agent:in-review` label back first (swap it for `agent:needs-human` or
+  `agent:ready-for-human`); to give it more cycles than the cap, set `ISSUE_AGENT_MAX_REVIEW_CYCLES`.
 
 ## What it trusts — and what it doesn't
 
@@ -182,8 +189,11 @@ is left, so together they can't pass the cap. A run that hits its cap stops and 
 | `ISSUE_AGENT_MAX_REVIEW_CYCLES` | `3` | review-loop fix cycles; at the cap 💬 → `agent:ready-for-human` (notes listed), ⛔ → `agent:needs-human` |
 
 Secrets/variables: `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` (+ `CLAUDE_AUTH`), and optionally
-**`AGENT_GH_TOKEN`** (used only by the publish job) — without it, PRs are opened by `GITHUB_TOKEN`,
-and GitHub doesn't start CI or the Claude review on those until someone marks the draft ready.
+**`AGENT_GH_TOKEN`** (used by the trusted jobs that write: `publish`, and the review loop's `push`;
+`assess` only checks whether it's set) — without it, PRs are opened by `GITHUB_TOKEN`, GitHub
+doesn't start CI or the Claude review on those until someone marks the draft ready, and the review
+loop is off. Give it the **Workflows** permission too if `main` may carry workflow changes the loop
+has to merge in; without it GitHub refuses that push and the loop hands the PR to a human.
 
 ## Files
 

@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   titleAuthor, forbiddenPaths, applyAndCheck, isRunId, isCommitId, publishIssueNumber,
-  isReviewBot, parseVerdict, agentBranch, threadsToAnswer, reviewDecision, sharedChanges, cyclesDone, loopRefusal,
+  isReviewBot, parseVerdict, agentBranch, threadsToAnswer, reviewDecision, sharedChanges, cyclesDone, loopRefusal, latestVerdict,
 } from "./checks.mjs";
 import { fingerprints, withinBaseline } from "./fingerprints.mjs";
 import { prBody, issueComment } from "./report.mjs";
@@ -192,6 +192,26 @@ describe("the review loop", () => {
     expect(d("ready", 1)).toBe("fix");
     expect(d("changes", 0)).toBe("fix");
     expect(d(undefined, 0)).toBe("wait");
+  });
+
+  it("finds the verdict for the head — reusing the last one only when the head just merges main in", () => {
+    const s = (createdAt, v) => ({ createdAt, body: `## Claude review\n**Verdict: ${v}**` });
+    const summaries = [s("2026-10-16T10:00:00Z", "⛔ Needs changes"), s("2026-10-16T12:00:00Z", "💬 Ready — small notes")];
+    expect(latestVerdict({ summaries, headAt: "2026-10-16T11:00:00Z", headIsMerge: false, conclusion: "success" }).verdict).toBe("notes");
+    // a commit time in the committer's zone: 13:30+02:00 is 11:30Z — still before the 12:00Z summary
+    expect(latestVerdict({ summaries, headAt: "2026-10-16T13:30:00+02:00", headIsMerge: false, conclusion: "success" }).verdict).toBe("notes");
+    // a newer fix commit with no review of it yet: no verdict
+    expect(latestVerdict({ summaries, headAt: "2026-10-16T13:00:00Z", headIsMerge: false, conclusion: "success" }).verdict).toBeUndefined();
+    // "Update branch" (a merge of main, which the review skips): the last verdict still applies
+    expect(latestVerdict({ summaries, headAt: "2026-10-16T13:00:00Z", headIsMerge: true, conclusion: "success" })).toMatchObject({ verdict: "notes", reused: true });
+    // …but not when the review failed
+    expect(latestVerdict({ summaries, headAt: "2026-10-16T13:00:00Z", headIsMerge: true, conclusion: "failure" }).verdict).toBeUndefined();
+  });
+
+  it("hands a PR over when the review failed or gave no verdict, instead of waiting forever", () => {
+    expect(reviewDecision({ verdict: undefined, open: 0, cycle: 0, maxCycles: 3, conclusion: "failure" })).toMatchObject({ action: "give-up", reason: expect.stringMatching(/failed/) });
+    expect(reviewDecision({ verdict: undefined, open: 0, cycle: 0, maxCycles: 3, conclusion: "success" })).toMatchObject({ action: "give-up", reason: expect.stringMatching(/without a verdict/) });
+    expect(reviewDecision({ verdict: undefined, open: 0, cycle: 0, maxCycles: 3 }).action).toBe("wait"); // started by hand, no review finished
   });
 
   it("at the cycle cap, counts 💬 as ready (notes listed) but never ⛔", () => {
