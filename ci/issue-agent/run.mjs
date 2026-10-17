@@ -40,7 +40,7 @@ import { fileURLToPath } from "node:url";
 import { fingerprints, stripAnsi, withinBaseline } from "./fingerprints.mjs";
 import {
   TRUSTED_PERMISSIONS, titleAuthor, forbiddenPaths, applyAndCheck, changedSince, isRunId, isCommitId, publishIssueNumber,
-  isReviewBot, parseVerdict, agentBranch, threadsToAnswer, reviewDecision, sharedChanges, filesBetween, cyclesDone, loopRefusal, latestVerdict, cycleCap,
+  isReviewBot, parseVerdict, agentBranch, threadsToAnswer, reviewDecision, sharedChanges, filesBetween, cyclesDone, loopRefusal, latestVerdict, cycleCap, isAgentComment, requestComments,
 } from "./checks.mjs";
 import { reportHtml, prBody, issueComment, md, statusBody, STATUS_MARK } from "./report.mjs";
 
@@ -136,12 +136,13 @@ function setStatus(n, state, { working } = {}) {
     const body = statusBody(mine?.body, state, { link: actionsRunUrl() });
     if (mine) gh(["api", "-X", "PATCH", `repos/${REPO}/issues/comments/${mine.id}`, "-f", `body=${body}`]);
     else gh(["issue", "comment", String(n), "-R", REPO, "--body", body]);
-    if (working !== undefined) {
-      ensureLabels();
-      sh("gh", ["issue", "edit", String(n), "-R", REPO, working ? "--add-label" : "--remove-label", LABELS.working], { allowFail: true });
-    }
   } catch (e) {
-    console.error(`(status update for #${n} failed: ${e.message.split("\n")[0]})`);
+    console.error(`(status comment for #${n} failed: ${e.message.split("\n")[0]})`);
+  }
+  // Separately, so a failed comment write can't leave the label stale.
+  if (working !== undefined) {
+    ensureLabels();
+    sh("gh", ["issue", "edit", String(n), "-R", REPO, working ? "--add-label" : "--remove-label", LABELS.working], { allowFail: true });
   }
 }
 
@@ -167,7 +168,7 @@ function snapshotIssue(n, snapshotAt = new Date().toISOString()) {
     timelineItems(itemTypes:[RENAMED_TITLE_EVENT], last:20){nodes{... on RenamedTitleEvent{createdAt actor{login}}}}
     comments(last:100){nodes{author{login} body createdAt lastEditedAt}}}}}`;
   const i = ghJson(["api", "graphql", "-f", `query=${q}`, "-f", `o=${OWNER}`, "-f", `r=${NAME}`, "-F", `n=${n}`]).data.repository.issue;
-  const after = (t) => t && t > snapshotAt;
+  const after = (t) => Boolean(t) && Date.parse(t) > Date.parse(snapshotAt);
   const dropped = [];
   // The title is words too: it's trusted when whoever wrote it last (the author, or the last renamer)
   // has write access. A rename after the label is refused like a body edit (lastEditedAt misses renames).
@@ -179,14 +180,8 @@ function snapshotIssue(n, snapshotAt = new Date().toISOString()) {
   let body = i.body ?? "";
   if (!trusted(i.author?.login)) { dropped.push(`the issue body (by ${i.author?.login ?? "a deleted user"}, who has no write access)`); body = ""; }
   else if (after(i.lastEditedAt)) return { skip: `the issue was edited after it was labelled (${i.lastEditedAt}); remove and re-add the \`${TRIGGER_LABEL}\` label to run on the current text` };
-  const comments = [];
-  for (const c of i.comments.nodes) {
-    if (c.body.includes("<!-- issue-agent -->")) continue;
-    const who = c.author?.login;
-    if (!trusted(who)) { dropped.push(`a comment by ${who ?? "a deleted user"} (no write access)`); continue; }
-    if (after(c.createdAt) || after(c.lastEditedAt)) { dropped.push(`a comment by ${who} written or edited after the label`); continue; }
-    comments.push({ author: who, body: c.body });
-  }
+  const { comments, dropped: droppedComments } = requestComments(i.comments.nodes, { isTrusted: trusted, snapshotAt });
+  dropped.push(...droppedComments);
   const issue = { number: i.number, title, body, url: i.url, state: i.state, author: i.author?.login,
     labels: i.labels.nodes.map((l) => l.name), assignees: i.assignees.nodes.map((a) => a.login), comments, dropped, snapshotAt };
   if (!body.trim() && !comments.length) return { issue, skip: "nothing on this issue was written by someone with write access — a maintainer can restate the request in a comment, then re-add the label" };
@@ -725,10 +720,12 @@ function loadPr(number) {
 
 function assessReview(prNumber) {
   const pr = loadPr(prNumber);
-  const skip = (reason) => ({ pr: pr.number, decision: { action: "skip", reason } });
+  // `left`: the PR is out of the loop for good (closed, merged, or a person took it over) — the
+  // issue's agent:working label has to come off; a merely stale review leaves it alone.
+  const skip = (reason, left = false) => ({ pr: pr.number, url: pr.url, issueNumber: agentBranch(pr.headRefName)?.issue, decision: { action: "skip", reason, left } });
   const labels = pr.labels.nodes.map((l) => l.name);
   const refusal = loopRefusal({ ...pr, labels });
-  if (refusal) return skip(refusal);
+  if (refusal) return skip(refusal, !pr.isCrossRepository && Boolean(agentBranch(pr.headRefName))); // closed / taken over
   const expected = process.env.ISSUE_AGENT_HEAD_SHA;
   if (expected && expected !== pr.headRefOid) return skip("the PR has moved on since this review ran");
   const branch = agentBranch(pr.headRefName);
@@ -958,6 +955,7 @@ if (mode === "snapshot") {
   const { action, reason } = review.decision;
   console.log(`PR #${review.pr}: ${action} — ${reason}${review.threads ? ` · ${review.threads.length} thread(s) to answer${review.ignored?.length ? `, ignored: ${review.ignored.join("; ")}` : ""}` : ""}`);
   if (!flag("--dry-run")) {
+    if (action === "skip" && review.decision.left) setStatus(review.issueNumber, `the agent stopped working on ${review.url}: ${reason}`, { working: false });
     if (action === "fix") setStatus(review.issueNumber, `review cycle ${review.cycle + 1}/${review.maxCycles}: the review ${review.verdict === "changes" ? "asks for changes" : "has small notes"} — fixing ${review.threads.length} thread(s) on ${review.url}`);
     if (action === "done") handOver(review, "ready", reason);
     if (action === "give-up") handOver(review, "needs-human", reason);
@@ -1008,6 +1006,7 @@ if (mode === "snapshot") {
     } catch (e) {
       console.error(e);
       outcomes.push({ n, status: "error", reason: e.message.split("\n")[0], dir: RUN?.dir });
+      setStatus(n, `the run failed: ${e.message.split("\n")[0]}`, { working: false });
     }
   }
   console.log("\n━━ outcomes");

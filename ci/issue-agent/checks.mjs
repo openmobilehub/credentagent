@@ -52,6 +52,32 @@ export function applyAndCheck(cwd, patch) {
   return { files, forbidden: forbiddenPaths(files) };
 }
 
+/**
+ * The agent's own comments — its notices (`<!-- issue-agent -->`), its live status
+ * (`<!-- issue-agent-status -->`), its review-loop notes (`<!-- issue-agent-review … -->`). They're
+ * posted under a trusted account but carry text the agents wrote, so they must never come back to
+ * the agents as a maintainer's instructions.
+ */
+export const isAgentComment = (body) => /<!-- issue-agent[\s>-]/.test(String(body));
+
+/**
+ * The comments that become part of the agents' request: written by someone with write access, not
+ * by the agent itself (its notices and status carry agent-written text under a trusted account),
+ * and not written or edited after the snapshot (the label). Everything else is listed as dropped.
+ */
+export function requestComments(comments, { isTrusted, snapshotAt }) {
+  const after = (t) => Boolean(t) && Date.parse(t) > Date.parse(snapshotAt);
+  const kept = [], dropped = [];
+  for (const c of comments) {
+    if (isAgentComment(c.body)) continue; // never instructions — not even "dropped": it isn't a request
+    const who = c.author?.login;
+    if (!isTrusted(who)) { dropped.push(`a comment by ${who ?? "a deleted user"} (no write access)`); continue; }
+    if (after(c.createdAt) || after(c.lastEditedAt)) { dropped.push(`a comment by ${who} written or edited after the label`); continue; }
+    kept.push({ author: who, body: c.body });
+  }
+  return { comments: kept, dropped };
+}
+
 // ── the review loop ──────────────────────────────────────────────────────────────────────────────
 
 /** The Claude review's GitHub App account: a Bot, never a user who happens to be called "claude". */

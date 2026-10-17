@@ -148,8 +148,10 @@ export const STATUS_MARK = "<!-- issue-agent-status -->";
 export function statusBody(previous, state, { at = new Date(), link, max = 25 } = {}) {
   const rows = String(previous ?? "").split("\n").filter((l) => /^\| \d{2}-\d{2} \d{2}:\d{2} \|/.test(l));
   const when = at.toISOString().slice(5, 16).replace("T", " "); // MM-DD HH:MM, UTC
-  rows.push(`| ${when} | ${md(state).replace(/\|/g, "\\|").replace(/\n/g, " ")}${link ? ` · [run](${link})` : ""} |`);
-  return `${STATUS_MARK}\n🤖 **Issue agent:** ${md(state)}\n\n| UTC | step |\n| --- | --- |\n${rows.slice(-max).join("\n")}\n`;
+  // One line, everywhere it's shown: a line break in a reason could otherwise plant a fake history row.
+  const line = md(String(state).replace(/[\r\n]+/g, " "));
+  rows.push(`| ${when} | ${line.replace(/\|/g, "\\|")}${link ? ` · [run](${link})` : ""} |`);
+  return `${STATUS_MARK}\n🤖 **Issue agent:** ${line}\n\n| UTC | step |\n| --- | --- |\n${rows.slice(-max).join("\n")}\n`;
 }
 
 export function issueComment({ kind, reason, prUrl, report, where }) {
