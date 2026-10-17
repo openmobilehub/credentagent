@@ -8,7 +8,7 @@
 import type { KeyObject } from "node:crypto";
 import { digestToken, sdJwtInstance, SD_HASH_ALG } from "./sdjwt.js";
 import { signCompactJwt } from "./jwt.js";
-import { lineItemsProblem } from "./from-gate.js";
+import { checkLineItems } from "./from-gate.js";
 import { CHECKOUT_KEY_FRAGMENT, ephemeralSigningKey, type GateSigningKey, type PublicJwkP256 } from "./keys.js";
 import {
   VCT,
@@ -156,16 +156,16 @@ export class Ap2Issuer {
    * another merchant is refused, because no permission would ever match it.
    *
    * Every line must be a real purchase: a quantity that is a whole number of at least 1, an item
-   * price that is a whole number of minor units above 0, and a line total of price × quantity —
-   * with at most `MAX_CART_UNITS` units in all. A cart with any other line is refused — a line of
+   * price that is a whole number of minor units above 0, and a line total of price × quantity.
+   * A cart with any other line is refused — a line of
    * −1 tea would lower the total without breaking any limit (#286).
    *
    * @throws Error when a line is not a real purchase, or the cart names another merchant. Check a
-   * cart built from an agent's request with `lineItemsProblem` first, and answer the agent with a 400.
+   * cart built from an agent's request with `checkLineItems` first, and answer by its `code`.
    */
   signCheckout(checkout: UcpCheckout): string {
-    const lines = lineItemsProblem(checkout.line_items);
-    if (lines) throw new Error(`refusing to quote this cart: ${lines}`);
+    const lines = checkLineItems(checkout.line_items);
+    if (!lines.ok) throw new Error(`refusing to quote this cart: ${lines.detail}`);
     const merchant = checkout.merchant ?? this.#merchant;
     if (!merchant) throw new Error("the cart names no merchant — pass checkout.merchant, or construct Ap2Issuer with { merchant }");
     if (this.#merchant && merchant.id !== this.#merchant.id) {

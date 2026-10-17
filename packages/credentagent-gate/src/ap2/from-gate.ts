@@ -4,7 +4,7 @@
 //
 // The adapters decide nothing. A `CeremonyOrder` arriving with a wrong total produces a
 // Checkout with a wrong total — re-pricing (security invariant 2) is upstream, and putting
-// a number into a mandate has never made it true. The one exception is `lineItemsProblem`:
+// a number into a mandate has never made it true. The one exception is `checkLineItems`:
 // the shape every cart line must have, which the quoting and the verifying store both refuse by.
 import { amountOfMinor, sumAmounts, toMinorUnits } from "./money.js";
 import type { CeremonyOrder } from "../ceremony/types.js";
@@ -51,22 +51,23 @@ export function merchantFor(origin: string, name?: string): Merchant {
  */
 export function checkoutFromOrder(order: CeremonyOrder, merchant: Merchant): UcpCheckout {
   const currency = order.currency.toUpperCase();
-  const line_items: UcpLineItem[] = order.lines.map((l) => ({
-    id: l.id,
-    item: {
+  const line_items: UcpLineItem[] = order.lines.map((l) => {
+    // A checkout LINE quotes a real price (`ap2/types/item.json` requires one). A CONSTRAINT's
+    // item deliberately does not — see `checkoutConstraintsFromGrant`, and `ConstraintItem`.
+    const price = toMinorUnits(l.unitPrice, currency);
+    // A line's total is price × quantity, which is what `checkLineItems` requires (#286). A
+    // discount is never folded into a line: it is the checkout's own `discount` entry, below.
+    const lineTotal = price * l.quantity;
+    return {
       id: l.id,
-      title: l.name ?? l.id,
-      // A checkout LINE quotes a real price (`ap2/types/item.json` requires one). A CONSTRAINT's
-      // item deliberately does not — see `checkoutConstraintsFromGrant`, and `ConstraintItem`.
-      price: toMinorUnits(l.unitPrice, currency),
-      ...(typeof l.minimumAge === "number" ? { minimum_age: l.minimumAge } : {}),
-    },
-    quantity: l.quantity,
-    totals: [
-      { type: "subtotal", amount: toMinorUnits(l.unitPrice * l.quantity, currency) },
-      { type: "total", amount: toMinorUnits(l.lineTotal, currency) },
-    ],
-  }));
+      item: { id: l.id, title: l.name ?? l.id, price, ...(typeof l.minimumAge === "number" ? { minimum_age: l.minimumAge } : {}) },
+      quantity: l.quantity,
+      totals: [
+        { type: "subtotal", amount: lineTotal },
+        { type: "total", amount: lineTotal },
+      ],
+    };
+  });
 
   const subtotal = sumAmounts(line_items.map((l) => lineTotalOf(l, currency)), currency);
   const discount = toMinorUnits(order.discount ?? 0, currency);
@@ -89,48 +90,53 @@ export function checkoutFromOrder(order: CeremonyOrder, merchant: Merchant): Ucp
 
 /** A line's own payable `total` entry. Throws rather than read a line that has none. */
 function lineTotalOf(line: UcpLineItem, currency: string): Amount {
-  const total = line.totals.find((t) => t.type === "total");
+  const total = line.totals.find((t) => t?.type === "total");
   if (!total) throw new Error(`line ${line.id} has no \`total\` entry — UCP requires one per line`);
   return amountOfMinor(total.amount, currency);
 }
 
 /**
- * The most units one cart may hold, across all its lines. Checking a cart against a permission's
- * `checkout.line_items` places it one unit at a time, so a cart of a billion coffees would stall
- * the store's server; past this, the cart is refused as malformed instead.
+ * Why {@link checkLineItems} refused a cart. Whose mistake it is decides the answer:
+ * - `"quantity"` — a line's quantity is not a whole number of at least 1. The quantity is what the
+ *   agent asked for, so this is a bad request (a 400).
+ * - `"price"` — an item's price is not a whole number of minor units above 0, and
+ * - `"line-total"` — a line's `total` is not its price × quantity. Both come from your own catalog
+ *   and quote code, so they are your bug (a 500), not the agent's.
+ * - `"malformed"` — no `line_items` list, or a line with no item id: the cart is not a UCP cart.
  */
-export const MAX_CART_UNITS = 1000;
+export type LineItemsRefusal = "quantity" | "price" | "line-total" | "malformed";
+
+/** {@link checkLineItems}'s answer. `detail` is for logs, never for a decision — branch on `code`. */
+export type LineItemsCheck = { ok: true } | { ok: false; code: LineItemsRefusal; detail: string };
 
 /**
  * What every cart line needs before anything adds it up: an item id, a whole quantity of at
  * least 1, a unit price that is a whole number of minor units above 0, and a `total` entry equal
- * to price × quantity — the number the cart total is actually summed from. And at most
- * {@link MAX_CART_UNITS} units in all. `undefined` when the cart passes; otherwise what is wrong.
+ * to price × quantity — the number the cart total is actually summed from.
  *
  * One rule for the store that quotes a cart (`Ap2Issuer.signCheckout`) and the store that verifies
  * one (`verifyDelegatedPurchase`). A line of quantity −1 is skipped by the `checkout.line_items`
  * limit yet still subtracted from the total — "1 coffee and −1 tea" would fit every limit and
  * match an honest catalog's price (#286). So such a line is refused, never read.
  *
- * Exported so a store can check a cart built from an agent's request and answer it with a 400,
+ * Exported so a store can check a cart built from an agent's request and answer it by `code`,
  * rather than catch `signCheckout`'s throw.
  */
-export function lineItemsProblem(lines: unknown): string | undefined {
-  if (!Array.isArray(lines)) return "the checkout has no line_items list";
-  let units = 0;
-  for (const line of lines as UcpLineItem[]) {
-    if (!line?.item || typeof line.item.id !== "string") return "a checkout line has no item id";
+export function checkLineItems(lines: readonly UcpLineItem[]): LineItemsCheck {
+  const no = (code: LineItemsRefusal, detail: string): LineItemsCheck => ({ ok: false, code, detail });
+  // The verifier passes a cart decoded off the wire, so nothing here trusts the type.
+  if (!Array.isArray(lines)) return no("malformed", "the checkout has no line_items list");
+  for (const line of lines) {
+    if (!line?.item || typeof line.item.id !== "string") return no("malformed", "a checkout line has no item id");
     if (!Number.isSafeInteger(line.quantity) || line.quantity < 1)
-      return `line ${line.id} has quantity ${line.quantity} — each line's quantity must be a whole number of at least 1`;
+      return no("quantity", `line ${line.id} has quantity ${line.quantity} — each line's quantity must be a whole number of at least 1`);
     if (!Number.isSafeInteger(line.item.price) || line.item.price < 1)
-      return `line ${line.id} has price ${line.item.price} — each item's price must be a whole number of minor units above 0`;
+      return no("price", `line ${line.id} has price ${line.item.price} — each item's price must be a whole number of minor units above 0`);
     const expected = line.item.price * line.quantity;
-    const total = Array.isArray(line.totals) ? line.totals.find((t) => t?.type === "total")?.amount : undefined;
-    if (total !== expected) return `line ${line.id} has total ${total} — each line's total must be its price × quantity, ${expected}`;
-    units += line.quantity;
-    if (units > MAX_CART_UNITS) return `the cart holds more than ${MAX_CART_UNITS} units`;
+    const total = Array.isArray(line.totals) ? line.totals.find((t: UcpTotal | undefined) => t?.type === "total")?.amount : undefined;
+    if (total !== expected) return no("line-total", `line ${line.id} has total ${total} — each line's total must be its price × quantity, ${expected}`);
   }
-  return undefined;
+  return { ok: true };
 }
 
 /** The `total` entry — the one number a payment must match. Throws if the cart has none. */

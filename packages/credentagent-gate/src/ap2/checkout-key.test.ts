@@ -10,7 +10,7 @@ import { Ap2Issuer } from "./issue.js";
 import { CHECKOUT_KEY_FRAGMENT, KEY_FRAGMENT, publicJwkFromDidDocument, resolveSigningKey, type PrivateJwkP256 } from "./keys.js";
 import { signCompactJwt, verifyCompactJwt } from "./jwt.js";
 import type { UcpCheckout } from "./types.js";
-import { lineItemsProblem, MAX_CART_UNITS } from "../index.js";
+import { checkLineItems, type LineItemsRefusal, type UcpLineItem } from "../index.js";
 
 const ORIGIN = "https://shop.example";
 const privateJwk = () =>
@@ -76,23 +76,25 @@ describe("the merchant's checkout key (FR-6)", () => {
     const ap2 = new Ap2Issuer(resolveSigningKey(ORIGIN));
     const coffee = cart.line_items[0];
     const tea = { ...coffee, id: "li_2", item: { id: "tea", title: "Tea", price: 950 }, totals: [{ type: "total" as const, amount: 950 }] };
-    for (const bad of [
-      { ...tea, quantity: -1, totals: [{ type: "total" as const, amount: -950 }] },
-      { ...tea, quantity: 0, totals: [{ type: "total" as const, amount: 0 }] },
-      { ...tea, quantity: 1.5 },
-      { ...tea, item: { ...tea.item, price: 0 } },
-      { ...tea, item: { ...tea.item, price: -950 } },
-      { ...tea, totals: [{ type: "total" as const, amount: -950 }] },
-      { ...tea, totals: [] },
-    ]) {
+    const cases: Array<[LineItemsRefusal, UcpLineItem]> = [
+      ["quantity", { ...tea, quantity: -1, totals: [{ type: "total" as const, amount: -950 }] }],
+      ["quantity", { ...tea, quantity: 0, totals: [{ type: "total" as const, amount: 0 }] }],
+      ["quantity", { ...tea, quantity: 1.5 }],
+      ["price", { ...tea, item: { ...tea.item, price: 0 } }],
+      ["price", { ...tea, item: { ...tea.item, price: -950 } }],
+      ["line-total", { ...tea, totals: [{ type: "total" as const, amount: -950 }] }],
+      ["line-total", { ...tea, totals: [] }],
+    ];
+    for (const [code, bad] of cases) {
       expect(() => ap2.signCheckout({ ...cart, line_items: [coffee, bad] })).toThrow(/line li_2/);
-      // The pre-check a store answers 400 with is the same rule, word for word.
-      expect(lineItemsProblem([coffee, bad])).toMatch(/^line li_2/);
+      // The pre-check a store answers with is the same rule, coded by whose mistake it is.
+      expect(checkLineItems([coffee, bad])).toMatchObject({ ok: false, code, detail: expect.stringMatching(/^line li_2/) });
     }
-    const bulk = { ...tea, quantity: MAX_CART_UNITS, totals: [{ type: "total" as const, amount: 950 * MAX_CART_UNITS }] };
-    expect(() => ap2.signCheckout({ ...cart, line_items: [coffee, bulk] })).toThrow(/units/);
+    // Many units are fine: the permission check counts per item, so a big cart costs no more to check.
+    const bulk = { ...tea, quantity: 5000, totals: [{ type: "total" as const, amount: 950 * 5000 }] };
+    expect(() => ap2.signCheckout({ ...cart, line_items: [coffee, bulk] })).not.toThrow();
     expect(() => ap2.signCheckout({ ...cart, line_items: [coffee, tea] })).not.toThrow();
-    expect(lineItemsProblem([coffee, tea])).toBeUndefined();
+    expect(checkLineItems([coffee, tea])).toEqual({ ok: true });
   });
 
   it("publishes both keys at /.well-known/did.json — the mandate key first", async () => {

@@ -107,7 +107,7 @@ export interface UcpLineItem {
   id: string;
   item: UcpItem;
   quantity: number;
-  /** Per-line breakdown, same shape as the checkout's. Its `total` must equal `item.price × quantity`, or the cart is refused. */
+  /** Per-line breakdown, same shape as the checkout's. Its `total` must equal `item.price × quantity`, or `signCheckout` and `verifyDelegatedPurchase` refuse the cart (`checkLineItems`). */
   totals: UcpTotal[];
   parent_id?: string;
 }

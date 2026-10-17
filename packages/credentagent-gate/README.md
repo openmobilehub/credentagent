@@ -415,17 +415,24 @@ expiry. Bound it with `budget` and `perSpend`, which every merchant enforces.
 
 **Every cart line must be a real purchase:** a quantity that is a whole number of at least 1, an item
 price that is a whole number of minor units above 0 (so a free item can't be quoted), and a line `total`
-equal to price × quantity — with at most `MAX_CART_UNITS` (1000) units in the whole cart. `signCheckout`
-throws on any other cart, and `verifyDelegatedPurchase` refuses it with `"malformed"` before any limit,
-amount or price check. A line of −1 tea would otherwise lower the total while every limit still held
+equal to price × quantity. `signCheckout` throws on any other cart, and `verifyDelegatedPurchase`
+refuses it with `"malformed"` before any limit, amount or price check. A line of −1 tea would otherwise
+lower the total while every limit still held
 ([#286](https://github.com/openmobilehub/credentagent/issues/286)). So if you build the quote from
-quantities the agent sends, check the cart first and answer a bad request with a 400:
+quantities the agent sends, check the cart with `checkLineItems` first. Its `code` says whose mistake
+it is: `"quantity"` is the agent's request (a 400); `"price"`, `"line-total"` and `"malformed"` are
+your own catalog or quote code (a bug to fix):
 
 ```ts
-import { lineItemsProblem } from "@openmobilehub/credentagent-gate";
+import { checkLineItems } from "@openmobilehub/credentagent-gate";
 
-const problem = lineItemsProblem(ucpCheckout.line_items);   // the same rule signCheckout applies
-if (problem) return res.status(400).json({ error: problem });   // e.g. "line li_2 has quantity -1 — …"
+app.post("/quote", (req, res) => {
+  const cart = cartFrom(req.body.items);              // YOUR code: the agent's items, priced from your catalog
+  const lines = checkLineItems(cart.line_items);      // the same rule signCheckout applies
+  if (!lines.ok && lines.code === "quantity") return res.status(400).json({ error: lines.detail });
+  if (!lines.ok) throw new Error(lines.detail);       // your catalog's bug, not the agent's
+  res.json({ checkoutJwt: credentagent.ap2.signCheckout(cart), nonce: issueNonce() });
+});
 ```
 
 **What a verified purchase means:** every link of both chains verifies against the key the link before it
@@ -1019,6 +1026,7 @@ verifyMandate(token, { publicJwk, … })  ·  didWebFor(origin)  ·  didDocument
 // Agent purchases — the store's side (the agent's side is the /agent entry point below)
 verifyDelegatedPurchase(proof, { trust: "presence-only-demo", audience, nonce, checkoutKey, price, spent?, nowMs? })
   → PurchaseVerdict | PurchaseRefusal   // { ok: false, code, detail, violations? }
+checkLineItems(cart.line_items) → { ok: true } | { ok: false, code: "quantity" | "price" | "line-total" | "malformed", detail }
 
 // Money — an Amount is integer minor units; converting to minor units refuses rather than rounds
 amountFrom · amountOfMinor · amountsEqual · formatAmount · sumAmounts · toMajorUnits · toMinorUnits · exponentFor

@@ -115,43 +115,79 @@ function wellFormed<C extends { type: string }>(constraints: unknown, out: Viola
 /**
  * Can every unit in the cart be assigned to a requirement that accepts it, within that
  * requirement's quantity? A bipartite max-flow, because an item several requirements accept must
- * go wherever capacity remains — first-fit refuses carts the mandate allows. Carts are small, so
- * a plain augmenting-path search is enough.
+ * go wherever capacity remains — first-fit refuses carts the mandate allows.
+ *
+ * The flow runs on per-item COUNTS, not on units (Dinic's algorithm: source → item, capacity its
+ * quantity; item → each requirement that accepts it; requirement → sink, capacity its quantity).
+ * Its cost depends on how many items and requirements there are, never on the quantities — so
+ * neither a cart of a billion coffees nor a self-made permission of a thousand one-unit limits
+ * can stall the check (#325).
  */
 function lineItemsFit(checkout: UcpCheckout, requirements: LineItemRequirement[]): string | undefined {
   const qty = new Map<string, number>();
   for (const line of checkout.line_items) qty.set(line.item.id, (qty.get(line.item.id) ?? 0) + line.quantity);
   if ([...qty.values()].every((q) => q <= 0)) return "an empty cart does not satisfy a line_items constraint";
+  if ([...qty.values()].some((q) => !Number.isSafeInteger(q))) return "the cart holds more units than can be counted exactly";
 
   const accepts = (r: LineItemRequirement, sku: string) => r.acceptable_items.length === 0 || r.acceptable_items.some((i) => i.id === sku);
-  const unacceptable = [...qty.keys()].filter((sku) => !requirements.some((r) => accepts(r, sku)));
+  const skus = [...qty.keys()];
+  const unacceptable = skus.filter((sku) => !requirements.some((r) => accepts(r, sku)));
   if (unacceptable.length) return `${unacceptable.join(", ")} not accepted by any requirement`;
 
-  // Units, one at a time: each unit of each sku looks for a requirement with room, re-routing
-  // earlier assignments when it has to (Kuhn's augmenting path, on unit capacities).
-  const room = requirements.map((r) => r.quantity);
-  const holders: string[][] = requirements.map(() => []);
-  const place = (sku: string, seen: Set<number>): boolean => {
-    for (let j = 0; j < requirements.length; j++) {
-      if (seen.has(j) || !accepts(requirements[j], sku)) continue;
-      seen.add(j);
-      if (room[j] > 0) {
-        room[j]--;
-        holders[j].push(sku);
-        return true;
+  // Nodes: 0 the source, 1..S the items, S+1..S+R the requirements, S+R+1 the sink. Edges are
+  // stored in pairs, so edge e's reverse is e ^ 1.
+  const S = skus.length;
+  const sink = S + requirements.length + 1;
+  const to: number[] = [];
+  const cap: number[] = [];
+  const adj: number[][] = Array.from({ length: sink + 1 }, () => []);
+  const edge = (from: number, dest: number, c: number): number => {
+    adj[from].push(to.length);
+    to.push(dest);
+    cap.push(c);
+    adj[dest].push(to.length);
+    to.push(from);
+    cap.push(0);
+    return to.length - 2;
+  };
+  const fromSource = skus.map((sku, i) => edge(0, 1 + i, qty.get(sku)!));
+  skus.forEach((sku, i) => requirements.forEach((r, j) => accepts(r, sku) && edge(1 + i, 1 + S + j, Infinity)));
+  requirements.forEach((r, j) => edge(1 + S + j, sink, r.quantity));
+
+  const level: number[] = new Array(sink + 1);
+  const next: number[] = new Array(sink + 1);
+  const push = (v: number, limit: number): number => {
+    if (v === sink) return limit;
+    for (; next[v] < adj[v].length; next[v]++) {
+      const e = adj[v][next[v]];
+      if (cap[e] <= 0 || level[to[e]] !== level[v] + 1) continue;
+      const pushed = push(to[e], Math.min(limit, cap[e]));
+      if (pushed > 0) {
+        cap[e] -= pushed;
+        cap[e ^ 1] += pushed;
+        return pushed;
       }
-      for (let k = 0; k < holders[j].length; k++) {
-        const moved = holders[j][k];
-        if (place(moved, seen)) {
-          holders[j][k] = sku;
-          return true;
+    }
+    return 0;
+  };
+  for (;;) {
+    level.fill(-1);
+    level[0] = 0;
+    const queue = [0];
+    for (let h = 0; h < queue.length; h++) {
+      for (const e of adj[queue[h]]) {
+        if (cap[e] > 0 && level[to[e]] < 0) {
+          level[to[e]] = level[queue[h]] + 1;
+          queue.push(to[e]);
         }
       }
     }
-    return false;
-  };
-  const unplaced: string[] = [];
-  for (const [sku, n] of qty) for (let u = 0; u < n; u++) if (!place(sku, new Set())) unplaced.push(sku);
+    if (level[sink] < 0) break;
+    next.fill(0);
+    while (push(0, Infinity) > 0);
+  }
+  // Whatever is left on an item's source edge is the part of it no requirement has room for.
+  const unplaced = skus.filter((_, i) => cap[fromSource[i]] > 0);
   return unplaced.length ? `no requirement has room for ${unplaced.join(", ")}` : undefined;
 }
 

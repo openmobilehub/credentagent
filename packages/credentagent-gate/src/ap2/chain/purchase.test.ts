@@ -10,7 +10,7 @@ import type { Spent } from "./constraints.js";
 import { CHECKOUT_KEY_FRAGMENT, resolveSigningKey } from "../keys.js";
 import { signCompactJwt } from "../jwt.js";
 import { Ap2Issuer } from "../issue.js";
-import { MAX_CART_UNITS, merchantFor } from "../from-gate.js";
+import { merchantFor } from "../from-gate.js";
 import { newWallet, testGrant, GATE_ORIGIN } from "./test-wallet.js";
 import { p256 } from "../../ceremony/intent-sign/dev-wallet.js";
 import { VCT, type UcpCheckout } from "../types.js";
@@ -540,15 +540,6 @@ describe("malformed input is refused, never thrown", () => {
     expect(v).toMatchObject({ ok: false, code: "malformed", detail: expect.stringMatching(/total/) });
   });
 
-  // Checking a cart against `checkout.line_items` places it one unit at a time; a cart of a billion
-  // coffees would hold the event loop, and a self-minted permission can declare room for all of them.
-  it(`refuses a cart of more than ${MAX_CART_UNITS} units before placing any of them`, async () => {
-    const v = await cartOf([
-      ["coffee", MAX_CART_UNITS, 1],
-      ["tea", 1, 1],
-    ]);
-    expect(v).toMatchObject({ ok: false, code: "malformed", detail: expect.stringMatching(/units/) });
-  });
 });
 
 describe("one permission, one id — however its signature is spelled", () => {

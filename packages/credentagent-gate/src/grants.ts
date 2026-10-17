@@ -747,7 +747,8 @@ export class Grants {
         // prices exactly one item, so a multi-item array must not silently drop items past the first.
         if (!Array.isArray(items) || items.length !== 1) return { ok: false, code: "invalid-request" };
         // A fractional qty would price at a fraction of the item — half a coffee at half price (#286).
-        // Zero and negative stay `invalid-amount`: they price at or below 0, and say so.
+        // The engine (`DelegatedGrant.spend`) refuses it too, as `invalid-amount`; here it refuses before the
+        // key is consumed. A whole zero or negative qty stays `invalid-amount`: it prices at or below 0.
         const qty0 = items[0]?.qty;
         if (qty0 !== undefined && !Number.isInteger(qty0)) return { ok: false, code: "invalid-request" };
 
