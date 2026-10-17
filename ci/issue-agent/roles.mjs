@@ -195,8 +195,8 @@ const LENSES = {
 // The checks the Claude review on GitHub runs (REVIEW.md), stated in every lens: what that review
 // would find, an internal round should find first — each GitHub review round costs minutes.
 const REVIEW_RULES = `Every lens applies these checks from REVIEW.md — the checklist the Claude review on GitHub runs after you:
-- §2, the bypass-test rule: for each new or changed control, and each new or changed test, ask "Which test fails if this line is reverted?" No answer → blocking. A test that would still pass with the thing it guards removed is not a useful test.
-- §5, fix it or flag it: anything broken the author must have seen is either fixed inline (small and safe) or filed as an issue — never silently ignored. Flag what the diff walked past.
+- §2, the bypass-test rule: for each new or changed security control (a gate, a claim check, an amount binding, state keying, an origin/nonce check — or a check this pipeline itself enforces), ask "Which test fails if this line is reverted?" No answer → blocking. A test that would still pass with the control removed is not a useful test. For other changed behavior, a test that guards nothing is a suggestion.
+- §5, fix it or flag it: anything broken the author must have seen is either fixed inline (small and safe) or filed as an issue — never silently ignored. Flag what the diff walked past — as a suggestion: §5 is "flag, don't block alone".
 - §6, review what ships, not just the diff: a changed public API, README, behavior or dependency range puts its callers, \`examples/\`, and docs (READMEs, comments, the file's own header) in scope. Grep for them; stale ones are findings.
 - §7: read every changed file in full, plus the callers and callees a finding depends on.`;
 

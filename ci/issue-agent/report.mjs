@@ -94,7 +94,9 @@ export function prBody(r, { mediaBase, repo }) {
     if (!items.length) return "";
     return `#### ${title}\n\n${items.map((e) => e.kind === "image" ? `<img src="${mediaBase}${e.file}" width="640" alt="${esc(e.caption)}">\n\n_${md(e.caption)}_` : `🎬 [${md(e.caption)}](${mediaBase}${e.file})`).join("\n\n")}\n`;
   };
-  const g = r.last.gates.map((x) => `\`${x.name}\` ${x.green ? "✅" : x.ok ? "⚠️ red on main too, not this change" : "❌"}${x.summary ? ` ${md(x.summary)}` : ""}`).join(" · ");
+  // A root test that ran on an earlier version of the patch (a later round stopped early) says so.
+  const stale = (x) => Boolean(x.patchSha256 && r.patchSha256 && x.patchSha256 !== r.patchSha256);
+  const g = r.last.gates.map((x) => `\`${x.name}\` ${stale(x) ? "⚠️ ran on an earlier version of this change, not this one" : x.green ? "✅" : x.ok ? "⚠️ red on main too, not this change" : "❌"}${x.summary ? ` ${md(x.summary)}` : ""}`).join(" · ");
   const m = r.last.mutation;
   const findings = (sev) => (r.last.reviews ?? []).flatMap((rv) => rv.findings.filter((f) => f.severity === sev).map((f) => `- **${rv.lens}** ${f.file ? `\`${md(f.file)}${f.line ? `:${f.line}` : ""}\` ` : ""}${md(f.summary)}`));
   const blocking = findings("blocking"), suggestions = findings("suggestion");

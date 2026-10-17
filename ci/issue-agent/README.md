@@ -37,16 +37,23 @@ different agent before it reaches the PR:
 
 - **Gates** run from the repo root. Failures are compared against a baseline of `main`'s own, **by
   count**: a red `main` isn't charged to the change, and the change can't add even one more failure
-  of a kind `main` already has. The baseline is measured once per `main` commit and kept under the
-  runs folder (`baselines/<sha>.json`); a later run on the same commit reuses it (`run.log` says
-  "reused"), a different commit is measured afresh.
+  of a kind `main` already has. The baseline is measured once per commit **per process**: a local run
+  that works through several issues (`--poll`, or `run.mjs 286 287`) reuses it for a later issue on
+  the same `main` commit (`run.log` says "reused"). It is kept in memory only, never on disk — the
+  agents' code runs unsandboxed between runs, and a file it could write would let one run's code tell
+  the next which failures are "main's own". In CI every job starts on a fresh machine and measures
+  its own.
 - **Fast tests while fixing, the root `npm test` once per round.** Between fix attempts the test gate
   runs only the tests of what changed — each touched workspace (`packages/<name>/`,
-  `ci/issue-agent/`) and any changed root-level test file, or `npm run test:workspaces` when nothing
-  narrows it down. Once those and the mutation check pass, the authoritative root `npm test`
-  (CLAUDE.md's verification run) runs once, before the reviews; if it fails, the round goes back to
-  fixing and isn't reviewed. **Publish refuses** a change whose last round has no passing root run —
-  a fast run never counts — and so does the review loop's push.
+  `ci/issue-agent/`) and any changed root-level test file, or every workspace when nothing narrows
+  it down — always `npx vitest run --passWithNoTests …` from the repo root, so failure paths match
+  the baseline's and a filter that matches nothing isn't a failure. Once those and the mutation check
+  pass, the authoritative root `npm test` (CLAUDE.md's verification run) runs once, before the
+  reviews; if it fails, the round goes back to fixing and isn't reviewed. The pipeline records the
+  exact patch that root run tested. **Publish refuses** to open a change as ready unless a root run
+  passed on exactly the patch being published — a fast run never counts — and so does the review
+  loop's push. An unfinished change still opens as a `[needs human]` draft (below), and its
+  description says the root `npm test` didn't pass on it and which gate stopped the round.
 - **The mutation check** enforces CLAUDE.md's "a test that would still pass with the security control
   removed is not a useful test": every changed source file (under `packages/`, `examples/` or
   `ci/issue-agent/`; not tests or docs) is reverted to `main` (new ones deleted),
@@ -72,7 +79,8 @@ different agent before it reaches the PR:
   agent, a test run or a server leaves behind *in the working tree* can reach the PR. A patch
   touching `.github/` is never pushed. (What the publish job does and doesn't trust is below.)
 - If the agents don't converge (or a budget runs out, or a reviewer can't finish), the PR still
-  opens as `[needs human]` with the open findings, or the issue gets a comment saying why.
+  opens as `[needs human]` with the open findings (and, when it applies, that the root `npm test`
+  never passed on it), or the issue gets a comment saying why.
 
 ## The review loop
 

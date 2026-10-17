@@ -18,11 +18,11 @@
 //   spec       an agent reads the request + code → acceptance criteria (or "not actionable")
 //   implement  an agent writes the failing test first, then the fix
 //   gates      this script runs build, typecheck, lint and the tests of what changed — measured against
-//              main's own failures (measured once per main commit, then reused), so a red main is
-//              never charged to the change
+//              main's own failures (measured once per commit per process, so `--poll` reuses it), so a
+//              red main is never charged to the change
 //   mutation   this script reverts the source change and re-runs the changed tests: they must FAIL
-//   root test  once per round, before the reviews: the authoritative root `npm test` (publish refuses
-//              a change without a passing one)
+//   root test  once per round, before the reviews: the authoritative root `npm test` (publish opens
+//              nothing as ready without a passing one on exactly the published patch)
 //   review     three agents in parallel — spec / security / DX, grounded in REVIEW.md and handed the
 //              diff — blocking findings → back to implement
 //   evidence   before/after screenshots + video in a real browser (anything browser-visible), and a
@@ -45,7 +45,7 @@ import { fingerprints, stripAnsi, withinBaseline } from "./fingerprints.mjs";
 import {
   TRUSTED_PERMISSIONS, titleAuthor, forbiddenPaths, applyAndCheck, changedSince, isRunId, isCommitId, publishIssueNumber,
   isReviewBot, parseVerdict, agentBranch, threadsToAnswer, reviewDecision, sharedChanges, filesBetween, cyclesDone, loopRefusal, latestVerdict, cycleCap,
-  roleModel, testGateCommand, rootTestRefusal, isMutableSource, sameLockfile,
+  roleModel, testGateCommand, rootTestRefusal, publishVerdict, isMutableSource, sameLockfile,
 } from "./checks.mjs";
 import { reportHtml, prBody, issueComment, md } from "./report.mjs";
 
@@ -341,22 +341,18 @@ function runGates(dir, { baseline, stopOnFail = true, test = ROOT_TEST, only } =
   return results;
 }
 
-// A commit's own gate results (the baseline) don't change: measure each commit once, and reuse it from
-// RUNS_HOME on a later run — only for the exact same sha and the same gate commands.
+// A commit's own gate results (the baseline) don't change: measure each commit once per process, and
+// reuse it for a later run in the same process (`--poll` working through several issues on one main).
+// Kept in memory, never on disk: agent-written code runs unsandboxed between runs, and a file it could
+// write would let one run's code tell the next which failures are "main's own".
+const BASELINES = new Map();
 function baselineFor(dir, sha, label) {
-  const file = isCommitId(sha) ? join(RUNS_HOME, "baselines", `${sha}.json`) : undefined;
-  const gates = JSON.stringify(GATES);
-  if (file && existsSync(file)) {
-    try {
-      const cached = JSON.parse(readFileSync(file, "utf8"));
-      if (cached.sha === sha && cached.gates === gates && Array.isArray(cached.baseline)) {
-        RUN.log(`  baseline (${label} ${sha.slice(0, 7)}): reused from ${file} — this commit was already measured`);
-        return cached.baseline;
-      }
-    } catch { /* unreadable: measure afresh */ }
+  if (isCommitId(sha) && BASELINES.has(sha)) {
+    RUN.log(`  baseline (${label} ${sha.slice(0, 7)}): reused — this commit was already measured in this process`);
+    return BASELINES.get(sha);
   }
   const baseline = runGates(dir, { stopOnFail: false });
-  if (file) { mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, JSON.stringify({ sha, gates, baseline }, null, 2)); }
+  if (isCommitId(sha)) BASELINES.set(sha, baseline);
   return baseline;
 }
 
@@ -517,8 +513,9 @@ async function iterate({ issue, spec, roles, repoDir, baseline, diffBase, mutati
           continue;
         }
         // Once per round, before the reviews: the authoritative root `npm test` (CLAUDE.md). It replaces
-        // the fast run in the round's record — publish refuses a round without a passing one.
+        // the fast run in the round's record — publish won't open as ready a patch it didn't pass on.
         const [root] = runGates(repoDir, { baseline, only: ["test"] });
+        root.patchSha256 = createHash("sha256").update(diffPatch(repoDir, base)).digest("hex"); // what it ran on
         r.gates = [...g.filter((x) => x.name !== "test"), root];
         if (!root.ok) { feedback = gateFailed(root); continue; }
         r.mechanicalOk = true;
@@ -637,12 +634,14 @@ function publishRun(dir) {
     gh(["issue", "comment", String(n), "-R", REPO, "--body", issueComment({ kind: "needs-human-nopr", reason: "the agents produced no change", where: actionsRunUrl() })]);
     return { n, status: "needs-human", reason: "empty change" };
   }
-  // Never a change whose last round didn't pass the root `npm test` (a fast run doesn't count).
-  const untested = rootTestRefusal(report.last);
-  if (untested) {
-    gh(["issue", "comment", String(n), "-R", REPO, "--body", issueComment({ kind: "needs-human-nopr", reason: untested, where: actionsRunUrl() })]);
-    return { n, status: "needs-human", reason: untested };
+  // Never a "ready" change that didn't pass the root `npm test` on exactly this patch (a fast run
+  // doesn't count); an unfinished one still opens as a `[needs human]` draft, saying it wasn't run.
+  const verdict = publishVerdict({ done: report.done === true, last: report.last, patchSha256: report.patchSha256, stopped: report.stopped });
+  if (!verdict.open) {
+    gh(["issue", "comment", String(n), "-R", REPO, "--body", issueComment({ kind: "needs-human-nopr", reason: verdict.reason, where: actionsRunUrl() })]);
+    return { n, status: "needs-human", reason: verdict.reason };
   }
+  Object.assign(report, { done: verdict.done, stopped: verdict.stopped });
   // Re-derived here, not taken from the report.
   if (!isCommitId(report.base)) throw new Error(`not a commit id: ${report.base}`);
   git(["fetch", "--quiet", "origin", "main"]);
@@ -892,7 +891,7 @@ function pushReview(dir, review) {
   const fix = JSON.parse(readFileSync(join(dir, "fix.json"), "utf8"));
   if (createHash("sha256").update(patch).digest("hex") !== outcome.patchSha256) throw new Error("fix.patch does not match the checked patch");
   const k = review.cycle + 1;
-  const untested = rootTestRefusal(fix.last);
+  const untested = rootTestRefusal(fix.last, outcome.patchSha256); // "ready" implies it; re-checked on the exact patch
   if (untested) return handOver(review, "needs-human", untested);
 
   let sha;
