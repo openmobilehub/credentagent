@@ -159,12 +159,16 @@ Claude review finishes on an agent/issue-* PR   (or: main moved, and the PR now 
   was fixing. In a conflict cycle the agent resolves the conflict markers (keeping both sides'
   intent) through the same gates and reviews; the push job then rebuilds the very same merge commit
   from `main` and the resolved files (`merges.mjs` — only the files git itself says conflict, never
-  a forbidden path, never with markers left; tested on a real conflict), signed off, and pushes it.
-  At the cycle cap a conflicting PR goes to a human instead.
+  a forbidden path, never with markers left, never a lost file read as a deletion; tested on a real
+  conflict), signed off, and pushes it only if the result is byte-for-byte the tree that was tested.
+  A conflict found mid-cycle turns that cycle into a conflict cycle (its review threads wait for the
+  next one). At the cycle cap a conflicting PR goes to a human instead.
 - **"Ready" means the issue is done, not just that the reviewer is quiet.** Before handing over, the
   spec reviewer checks the PR description's acceptance-criteria checklist (the issue's own, written
   at publish) against the final code, once per head. All met → the boxes are ticked with the
-  evidence and a "✔️ criteria checked on <sha>" comment is left; any unmet → a cycle makes them true.
+  evidence and an "✔️ Acceptance criteria checked on the final code (<sha>)" comment is left; any
+  unmet → a cycle makes them true — or, at the cycle cap, the PR goes to a human with the unmet ones
+  named. A PR whose description has no checklist is handed over saying there was nothing to check.
 - **The PR description stays true.** The agent can't edit it; it returns corrections, and the push
   job writes them into one "Updated after review cycle k" section.
 - **Without `AGENT_GH_TOKEN`** the loop can't work — a push made with `GITHUB_TOKEN` starts no

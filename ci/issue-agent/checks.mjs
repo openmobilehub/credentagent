@@ -193,6 +193,28 @@ export function tickCriteria(body, verdicts, escape = (s) => s) {
   });
 }
 
+/**
+ * What follows a criteria check: all met → verified; some not → a fix cycle to make them true — but
+ * not past the cycle cap, where the PR goes to a human with the unmet ones named.
+ */
+export function afterVerification({ verdicts, cycle, maxCycles }) {
+  const unmet = verdicts.filter((v) => !v.met);
+  if (!unmet.length) return { action: "verified" };
+  if (cycle >= maxCycles) return { action: "give-up", reason: `${maxCycles} review cycles are done and these acceptance criteria aren't met yet: ${unmet.map((v) => v.id).join(", ")}` };
+  return { action: "fix", unmet };
+}
+
+/**
+ * Whether the push job may believe a "verified" result from the agents' job: only when the trusted
+ * decision asked for verification, and only if every criterion in it is met — or the trusted assess
+ * step found no checklist at all (then nothing was claimed).
+ */
+export function acceptVerified({ decision, checklist, verdicts }) {
+  if (decision !== "verify") return false;
+  if (!checklist.length) return true;
+  return checklist.every((c) => verdicts.find((v) => v.id === c.id)?.met === true);
+}
+
 /** Whether the loop already verified the criteria on exactly this head (a marker comment by the loop). */
 export const verifiedFor = (comments, head, isTrusted) =>
   comments.some((c) => String(c.body).startsWith(`<!-- issue-agent-verified sha=${head} `) && isLoopAuthor(c.author, isTrusted));

@@ -4,7 +4,7 @@
 
 import { describe, it, expect, beforeEach } from "vitest";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -12,10 +12,10 @@ import {
   isReviewBot, parseVerdict, agentBranch, threadsToAnswer, reviewDecision, sharedChanges, cyclesDone, loopRefusal, latestVerdict, cycleCap,
   isAgentComment, requestComments, leftLoop,
   roleModel, testGateCommand, rootTestRefusal, publishVerdict, isMutableSource, sameLockfile,
-  parseCriteria, tickCriteria, verifiedFor,
+  parseCriteria, tickCriteria, verifiedFor, afterVerification, acceptVerified,
 } from "./checks.mjs";
 import { reviewPrompt } from "./roles.mjs";
-import { startMerge, buildResolvedMerge, replayResolution } from "./merges.mjs";
+import { startMerge, buildResolvedMerge, replayResolution, treeOf } from "./merges.mjs";
 import { fingerprints, withinBaseline } from "./fingerprints.mjs";
 import { prBody, proofHtml, issueComment, statusBody, STATUS_MARK } from "./report.mjs";
 
@@ -93,38 +93,47 @@ describe("bringing main into a conflicting PR (merges.mjs)", () => {
   // (and makes one more fix); the push job must rebuild exactly the same tree from what it hands over.
   let repo, prHead, mainSha;
   const write = (dir, f, s) => { mkdirSync(join(dir, f, ".."), { recursive: true }); writeFileSync(join(dir, f), s); };
-  const tree = (dir) => { git(dir, "add", "-A"); return git(dir, "write-tree").trim(); };
-  beforeEach(() => {
+  // Like a CI runner: git may not invent an identity, so a merge helper that leans on one fails here.
+  const noIdentity = (fn) => {
+    const saved = { ...process.env };
+    Object.assign(process.env, { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "user.useConfigOnly", GIT_CONFIG_VALUE_0: "true" });
+    try { return fn(); } finally { for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k]; Object.assign(process.env, saved); }
+  };
+  const makeRepo = (pr, main) => {
     repo = mkdtempSync(join(tmpdir(), "issue-agent-merge-"));
     git(repo, "init", "-q", "-b", "main");
     write(repo, "a.txt", "one\nshared\nthree\n");
     git(repo, "add", "-A"); git(repo, "commit", "-q", "-m", "base");
     git(repo, "checkout", "-q", "-b", "pr");
-    write(repo, "a.txt", "one\nPR version\nthree\n"); write(repo, "b.txt", "the PR's file\n");
+    for (const [f, s] of Object.entries(pr)) write(repo, f, s);
     git(repo, "add", "-A"); git(repo, "commit", "-q", "-m", "pr");
     prHead = git(repo, "rev-parse", "HEAD").trim();
     git(repo, "checkout", "-q", "main");
-    write(repo, "a.txt", "one\nmain version\nthree\n"); write(repo, "c.txt", "main's file\n");
+    for (const [f, s] of Object.entries(main)) write(repo, f, s);
     git(repo, "add", "-A"); git(repo, "commit", "-q", "-m", "main moved");
     mainSha = git(repo, "rev-parse", "HEAD").trim();
-  });
-  const fixJob = () => {
+  };
+  beforeEach(() => makeRepo(
+    { "a.txt": "one\nPR version\nthree\n", "b.txt": "the PR's file\n" },
+    { "a.txt": "one\nmain version\nthree\n", "c.txt": "main's file\n" },
+  ));
+  const fixJob = (resolve = (work) => write(work, "a.txt", "one\nmain version + PR version\nthree\n")) => {
     const work = join(repo, "..", `${repo.split("/").pop()}-work`);
     git(repo, "worktree", "add", "-q", "--detach", work, prHead);
-    const m = startMerge(work, prHead, mainSha);
-    write(work, "a.txt", "one\nmain version + PR version\nthree\n"); // the agent's resolution
+    const m = noIdentity(() => startMerge(work, prHead, mainSha));
+    resolve(work); // the agent's resolution
     write(work, "d.txt", "an extra fix\n"); // and one more change, made in the same round
     const keep = join(repo, "..", `${repo.split("/").pop()}-resolved`);
-    const merge = buildResolvedMerge({ repo, scratch: join(repo, "..", `${repo.split("/").pop()}-scratch`), head: prHead, mainSha, conflicted: m.conflicted, resolvedFrom: work, keepDir: keep });
+    const merge = noIdentity(() => buildResolvedMerge({ repo, scratch: join(repo, "..", `${repo.split("/").pop()}-scratch`), head: prHead, mainSha, conflicted: m.conflicted, resolvedFrom: work, keepDir: keep }));
     git(work, "add", "--all", "--intent-to-add");
-    const patch = git(work, "diff", "--binary", merge);
-    return { work, keep, conflicted: m.conflicted, patch, want: tree(work) };
+    const patch = git(work, "diff", "--binary", merge.sha);
+    return { work, keep, conflicted: m.conflicted, deleted: merge.deleted, patch, want: treeOf(work) };
   };
   let pushes = 0;
-  const pushJob = (conflicted, keep, patch) => {
+  const pushJob = (conflicted, keep, patch, deleted = []) => {
     const wt = join(repo, "..", `${repo.split("/").pop()}-push${++pushes}`);
     git(repo, "worktree", "add", "-q", "--detach", wt, prHead);
-    const replay = replayResolution(wt, mainSha, conflicted, keep);
+    const replay = noIdentity(() => replayResolution(wt, mainSha, conflicted, keep, deleted));
     if (replay.ok) {
       git(wt, "commit", "-q", "-m", "merge main");
       if (patch.trim()) { spawnSync("git", ["apply", "--index", "-"], { cwd: wt, input: patch }); git(wt, "commit", "-q", "-m", "fix"); }
@@ -139,16 +148,39 @@ describe("bringing main into a conflicting PR (merges.mjs)", () => {
     expect(fx.patch).not.toMatch(/a\.txt/);
     const { wt, replay } = pushJob(fx.conflicted, fx.keep, fx.patch);
     expect(replay).toEqual({ ok: true });
-    expect(git(wt, "rev-parse", "HEAD^{tree}").trim()).toBe(fx.want);
+    expect(git(wt, "rev-parse", "HEAD^{tree}").trim()).toBe(fx.want); // what push builds is what was tested
     const check = spawnSync("git", ["merge-tree", "--write-tree", "--quiet", mainSha, "HEAD"], { cwd: wt });
     expect(check.status).toBe(0); // merges cleanly into main now
   });
 
-  it("refuses a resolution for the wrong files, one with markers left, or one for a merge that's clean", () => {
+  it("carries a resolution that deletes a file — and never reads a lost copy as a deletion", () => {
+    const fx = fixJob((work) => rmSync(join(work, "a.txt")));
+    expect(fx.deleted).toEqual(["a.txt"]);
+    const ok = pushJob(fx.conflicted, fx.keep, fx.patch, fx.deleted);
+    expect(ok.replay).toEqual({ ok: true });
+    expect(git(ok.wt, "rev-parse", "HEAD^{tree}").trim()).toBe(fx.want);
+    expect(pushJob(fx.conflicted, fx.keep, "", []).replay).toMatchObject({ ok: false, why: expect.stringMatching(/copy of a\.txt is missing/) });
+  });
+
+  it("refuses a resolution for the wrong files, or one with markers left", () => {
     const fx = fixJob();
     expect(pushJob(["b.txt"], fx.keep, "").replay).toMatchObject({ ok: false, why: expect.stringMatching(/not in the files the fix resolved/) });
     writeFileSync(join(fx.keep, "a.txt"), "<<<<<<< HEAD\nx\n=======\ny\n>>>>>>> main\n");
     expect(pushJob(fx.conflicted, fx.keep, "").replay).toMatchObject({ ok: false, why: expect.stringMatching(/markers/) });
+  });
+
+  it("refuses a resolution handed over for a merge that is clean", () => {
+    makeRepo({ "b.txt": "the PR's file\n" }, { "c.txt": "main's file\n" }); // nothing conflicts
+    const keep = mkdtempSync(join(tmpdir(), "issue-agent-keep-"));
+    writeFileSync(join(keep, "a.txt"), "smuggled\n");
+    expect(pushJob(["a.txt"], keep, "").replay).toMatchObject({ ok: false, why: expect.stringMatching(/merges cleanly/) });
+  });
+
+  it("refuses a resolution under .github/, even when git says it conflicts", () => {
+    makeRepo({ ".github/workflows/x.yml": "on: push # PR\n" }, { ".github/workflows/x.yml": "on: pull_request # main\n" });
+    const keep = mkdtempSync(join(tmpdir(), "issue-agent-keep-"));
+    write(keep, ".github/workflows/x.yml", "on: [push, pull_request]\n");
+    expect(pushJob([".github/workflows/x.yml"], keep, "").replay).toMatchObject({ ok: false, why: expect.stringMatching(/never changes/) });
   });
 });
 
@@ -373,6 +405,23 @@ describe("the review loop", () => {
     expect(ticked).toContain("- [x] **AC1** one thing — _a\\_b.ts:3_");
     expect(ticked).toContain("- [ ] **AC2** other — _missing_"); // old evidence replaced, not stacked
     expect(ticked).toContain("- [ ] not a criterion");
+  });
+
+  it("after a criteria check: verified, a fix cycle — or a hand-over at the cap, never a cycle past it", () => {
+    const v = (...met) => met.map((m, i) => ({ id: `AC${i + 1}`, met: m }));
+    expect(afterVerification({ verdicts: v(true, true), cycle: 3, maxCycles: 3 }).action).toBe("verified");
+    expect(afterVerification({ verdicts: v(true, false), cycle: 1, maxCycles: 3 })).toMatchObject({ action: "fix", unmet: [{ id: "AC2" }] });
+    expect(afterVerification({ verdicts: v(true, false), cycle: 3, maxCycles: 3 })).toMatchObject({ action: "give-up", reason: expect.stringMatching(/AC2/) });
+  });
+
+  it("believes a 'verified' result only when verification was asked for and every criterion is met", () => {
+    const checklist = [{ id: "AC1" }, { id: "AC2" }];
+    const all = [{ id: "AC1", met: true }, { id: "AC2", met: true }];
+    expect(acceptVerified({ decision: "verify", checklist, verdicts: all })).toBe(true);
+    expect(acceptVerified({ decision: "fix", checklist, verdicts: all })).toBe(false); // a ⛔ PR can't sneak through
+    expect(acceptVerified({ decision: "verify", checklist, verdicts: [all[0]] })).toBe(false); // AC2 missing
+    expect(acceptVerified({ decision: "verify", checklist, verdicts: [all[0], { id: "AC2", met: false }] })).toBe(false);
+    expect(acceptVerified({ decision: "verify", checklist: [], verdicts: [] })).toBe(true); // no checklist: nothing claimed
   });
 
   it("counts a head as verified only by the loop's own marker", () => {

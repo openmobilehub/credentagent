@@ -34,7 +34,7 @@ on:
 
 concurrency:
   # By PR number, whether started by a review or by hand, so the two can't run on one PR at once.
-  group: issue-agent-review-${{ github.event.workflow_run.pull_requests[0].number || inputs.pr || 'sweep' }}
+  group: ${{ github.event_name == 'push' && 'issue-agent-review-sweep' || format('issue-agent-review-pr-{0}', github.event.workflow_run.pull_requests[0].number || inputs.pr) }}
   cancel-in-progress: false
 
 permissions: {}
@@ -44,7 +44,7 @@ jobs:
     # main moved: start a conflict cycle (workflow_dispatch) for each PR in the loop that now conflicts.
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 30 # GitHub can take a while to settle each PR's mergeability
     permissions:
       contents: read
       pull-requests: read
@@ -169,6 +169,7 @@ jobs:
           path: |
             ${{ runner.temp }}/issue-agent/fix/
             !${{ runner.temp }}/issue-agent/fix/repo/
+          include-hidden-files: true # a resolved dotfile (resolved/.eslintrc…) must reach the push job
           retention-days: 30
 
   push:
