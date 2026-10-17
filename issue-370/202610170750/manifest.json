@@ -1,0 +1,92 @@
+[
+  {
+    "kind": "image",
+    "file": "before-negotiation-01.png",
+    "caption": "before (main): every Accept header, including Accept: text/markdown, rewrites to the HTML page https://openmobilehub.org/credentagent/ with text/html and Vary: Accept-Encoding only (red rows)",
+    "side": "before",
+    "session": "before-negotiation",
+    "url": "http://localhost:4300/__probe",
+    "at": "2026-10-17T07:56:34.006Z"
+  },
+  {
+    "kind": "image",
+    "file": "before-negotiation-02.png",
+    "caption": "before: a plain browser visit to / still renders the HTML product page",
+    "side": "before",
+    "session": "before-negotiation",
+    "url": "http://localhost:4300/",
+    "at": "2026-10-17T07:56:34.859Z"
+  },
+  {
+    "kind": "events",
+    "session": "before-negotiation",
+    "side": "before",
+    "events": [],
+    "at": "2026-10-17T07:56:34.997Z"
+  },
+  {
+    "kind": "video",
+    "file": "before-negotiation.webm",
+    "caption": "before: probing / with different Accept headers, then a plain browser visit",
+    "side": "before",
+    "session": "before-negotiation",
+    "at": "2026-10-17T07:56:34.998Z"
+  },
+  {
+    "kind": "image",
+    "file": "after-negotiation-01.png",
+    "caption": "after (fix): Accept containing text/markdown rewrites to .../credentagent/index.md with Content-Type text/markdown; charset=utf-8; text/html, browser-style and missing Accept still get the HTML page; every row carries Vary: Accept, Accept-Encoding (green rows)",
+    "side": "after",
+    "session": "after-negotiation",
+    "url": "http://localhost:4301/__probe",
+    "at": "2026-10-17T07:56:36.298Z"
+  },
+  {
+    "kind": "image",
+    "file": "after-negotiation-02.png",
+    "caption": "after: a plain browser visit to / still renders the HTML product page",
+    "side": "after",
+    "session": "after-negotiation",
+    "url": "http://localhost:4301/",
+    "at": "2026-10-17T07:56:37.158Z"
+  },
+  {
+    "kind": "events",
+    "session": "after-negotiation",
+    "side": "after",
+    "events": [],
+    "at": "2026-10-17T07:56:37.264Z"
+  },
+  {
+    "kind": "video",
+    "file": "after-negotiation.webm",
+    "caption": "after: probing / with different Accept headers, then a plain browser visit",
+    "side": "after",
+    "session": "after-negotiation",
+    "at": "2026-10-17T07:56:37.265Z"
+  },
+  {
+    "kind": "image",
+    "file": "test-proof-01.png",
+    "caption": "Test proof: the pipeline's own gate runs (no failing-test check: the spec found no behavior change)",
+    "side": "proof",
+    "session": "test-proof",
+    "url": "about:blank",
+    "at": "2026-10-17T07:56:53.422Z"
+  },
+  {
+    "kind": "events",
+    "session": "test-proof",
+    "side": "proof",
+    "events": [],
+    "at": "2026-10-17T07:56:56.002Z"
+  },
+  {
+    "kind": "video",
+    "file": "test-proof.webm",
+    "caption": "Test proof: the pipeline's own gate runs (no failing-test check: the spec found no behavior change)",
+    "side": "proof",
+    "session": "test-proof",
+    "at": "2026-10-17T07:56:56.003Z"
+  }
+]
