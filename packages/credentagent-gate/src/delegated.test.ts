@@ -41,6 +41,16 @@ describe("DelegatedGate — Stripe-grade facade over the delegated seams", () =>
     expect(res).toMatchObject({ ok: false, reason: "over-cap", amount: 54 });
   });
 
+  it("BYPASS (#286): half a coffee is refused invalid-amount — never bought at half price", async () => {
+    const grant = await grantFor();
+    for (const quantity of [0.5, 0.01, Number.NaN]) {
+      const res = await grant.spend({ idempotencyKey: `h${quantity}`, item: "coffee", quantity });
+      expect(res).toMatchObject({ ok: false, reason: "invalid-amount", remaining: 100 });
+    }
+    // Nothing was drawn: a whole coffee still spends the full price against the full headroom.
+    expect(await grant.spend({ idempotencyKey: "h1", item: "coffee" })).toMatchObject({ ok: true, amount: 18, remaining: 82 });
+  });
+
   it("a store the grant never approved → refused out-of-scope", async () => {
     const grant = await grantFor();
     const res = await grant.spend({ idempotencyKey: "c3", item: "coffee", merchant: "starbucks" });

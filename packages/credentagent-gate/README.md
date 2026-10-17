@@ -413,8 +413,30 @@ which is the point. Leave `agentKey` out and the gate generates the key and spen
 expiry it was signed with — today a year from creation, because a grant does not yet take its own
 expiry. Bound it with `budget` and `perSpend`, which every merchant enforces.
 
+**Every cart line must be a real purchase:** a quantity that is a whole number of at least 1, an item
+price that is a whole number of minor units above 0 (so a free item can't be quoted), and a line `total`
+equal to price × quantity. `signCheckout` throws on any other cart, and `verifyDelegatedPurchase`
+refuses it with `"malformed"` before any limit, amount or price check. A line of −1 tea would otherwise
+lower the total while every limit still held
+([#286](https://github.com/openmobilehub/credentagent/issues/286)). So if you build the quote from
+quantities the agent sends, check the cart with `checkLineItems` first. Its `code` says whose mistake
+it is: `"quantity"` is the agent's request (a 400); `"price"`, `"line-total"` and `"malformed"` are
+your own catalog or quote code (a bug to fix):
+
+```ts
+import { checkLineItems } from "@openmobilehub/credentagent-gate";
+
+app.post("/quote", (req, res) => {
+  const cart = cartFrom(req.body.items);              // YOUR code: the agent's items, priced from your catalog
+  const lines = checkLineItems(cart.line_items);      // the same rule signCheckout applies
+  if (!lines.ok && lines.code === "quantity") return res.status(400).json({ error: lines.detail });
+  if (!lines.ok) throw new Error(lines.detail);       // your catalog's bug, not the agent's
+  res.json({ checkoutJwt: credentagent.ap2.signCheckout(cart), nonce: issueNonce() });
+});
+```
+
 **What a verified purchase means:** every link of both chains verifies against the key the link before it
-names, both chains rest on the same wallet signature, the cart is the one you signed, the payment pays
+names, both chains rest on the same wallet signature, every cart line is a real purchase (above), the cart is the one you signed, the payment pays
 exactly its total, every limit in the permission holds — **a limit this verifier does not recognise, or
 one missing a field, fails** — and your catalog agrees with the price. It does **not** mean a person set
 those limits (see `trust`, above), so `trust_level` is `"presence-only-demo"`.
@@ -1004,6 +1026,7 @@ verifyMandate(token, { publicJwk, … })  ·  didWebFor(origin)  ·  didDocument
 // Agent purchases — the store's side (the agent's side is the /agent entry point below)
 verifyDelegatedPurchase(proof, { trust: "presence-only-demo", audience, nonce, checkoutKey, price, spent?, nowMs? })
   → PurchaseVerdict | PurchaseRefusal   // { ok: false, code, detail, violations? }
+checkLineItems(cart.line_items) → { ok: true } | { ok: false, code: "quantity" | "price" | "line-total" | "malformed", detail }
 
 // Money — an Amount is integer minor units; converting to minor units refuses rather than rounds
 amountFrom · amountOfMinor · amountsEqual · formatAmount · sumAmounts · toMajorUnits · toMinorUnits · exponentFor

@@ -103,6 +103,10 @@ export const minAgeOf = (e: CatalogEntry | undefined) => (e === undefined || typ
 export const categoryOf = (e: CatalogEntry | undefined) => (e === undefined || typeof e === "number" ? undefined : e.category);
 export const nameOf = (e: CatalogEntry | undefined) => (e === undefined || typeof e === "number" ? undefined : e.name);
 
+/** A quantity a spend can buy: a whole number of at least 1. Half a coffee would price at half a
+ *  coffee and still pass every cap (#286). */
+const isWholeQuantity = (q: unknown): q is number => Number.isSafeInteger(q) && (q as number) >= 1;
+
 /** The loyalty discount for a re-price, in the catalog's own units. Rounded to the smallest
  *  representable unit so it is EXACT and deterministic — the draw signer and `completeOrder`
  *  run this same line over the same sealed rate, so their totals cannot drift (invariant 3).
@@ -253,6 +257,12 @@ export class DelegatedGrant {
     // hits completeOrder's order-keyed idempotency and echoes the ORIGINAL completion — one
     // draw, charged once. The grant prefix keeps two grants on one gate from colliding
     // (grant B must never read grant A's completion — invariant 4).
+    // A fractional quantity prices at a fraction of the item, and every cap downstream reads only
+    // the priced amount — so it is refused here, before anything is priced or signed (#286).
+    if (!isWholeQuantity(quantity)) {
+      const { remaining } = await this.usage();
+      return { ok: false, amount: 0, remaining, reason: "invalid-amount", retryable: "terminal" };
+    }
     const orderId = `${this.grant.intentId}-${idempotencyKey}`;
     // Price with the grant's OWN sealed loyalty rate (#172), so the amount the delegate key signs
     // below is the amount `completeOrder` re-derives — one number, both sides (invariant 3). The

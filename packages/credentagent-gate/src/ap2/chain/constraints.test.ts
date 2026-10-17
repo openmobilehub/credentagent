@@ -104,6 +104,22 @@ describe("checkout constraints", () => {
     expect(evaluateCheckout(open, cart([["coffee", 2]]))).not.toEqual([]);
   });
 
+  // The fit used to place a cart one unit at a time, so its cost grew with the quantities: a cart of
+  // a billion coffees, or a self-made permission of a thousand one-unit limits against a thousand
+  // coffees (~10⁸ steps), held the server (#325). Counted per item, both answer at once.
+  it("checks a huge cart against many small limits without stalling (#325)", () => {
+    const many = (n: number) =>
+      openCheckout([{ type: "checkout.line_items", items: Array.from({ length: n }, (_, i) => ({ id: `r${i}`, acceptable_items: [], quantity: 1 })) as never }]);
+    const started = Date.now();
+    expect(evaluateCheckout(many(1000), cart([["coffee", 1000]]))).toEqual([]);
+    expect(evaluateCheckout(many(1000), cart([["coffee", 1001]]))).toEqual([
+      expect.objectContaining({ constraint: "checkout.line_items", detail: expect.stringMatching(/no requirement has room for coffee/) }),
+    ]);
+    const billion = openCheckout([{ type: "checkout.line_items", items: [{ ...coffee, quantity: 1e9 }] }]);
+    expect(evaluateCheckout(billion, cart([["coffee", 1e9]]))).toEqual([]);
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
+
   it("refuses an open checkout with no line_items constraint — it would bound nothing (bypass)", () => {
     expect(evaluateCheckout(openCheckout([{ type: "checkout.allowed_merchants", allowed: [SHOP] }]), cart([["coffee", 1]]))).toEqual([
       expect.objectContaining({ code: "constraint", constraint: "checkout.line_items", detail: expect.stringMatching(/must contain/) }),
