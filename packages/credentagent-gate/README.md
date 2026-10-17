@@ -59,9 +59,9 @@ the widget shows the confirmation. Add the headphones instead and the age gate d
 > fetch and redirect carries `/store`. The wallet still binds to the page's origin.
 > The path is also part of the store's identity: a spending permission signed at
 > `shop.example/store` names that store, so another store on the same host (`shop.example/other`,
-> or the root) refuses it — provided each store signs its carts with its own
-> `checkoutSigningKey` ([#335](https://github.com/openmobilehub/credentagent/issues/335)). For the same reason, give every deployment its own `walletOrigin`:
-> two that share one (say, a preview copying production's) are one merchant.
+> or the root) refuses it, and refuses the carts it quoted. For the same reason, give every deployment its own `walletOrigin`:
+> two that share one (say, a preview copying production's) are one merchant
+> ([#335](https://github.com/openmobilehub/credentagent/issues/335)).
 
 ### Branding the ceremony pages
 
@@ -252,8 +252,15 @@ const credentagent = new CredentAgent({
   mandateSigningKey: JSON.parse(process.env.MANDATE_SIGNING_KEY),   // a PRIVATE P-256 JWK
   checkoutSigningKey: JSON.parse(process.env.CHECKOUT_SIGNING_KEY), // a DIFFERENT one — signs the carts you quote
 });
-credentagent.mount(app);        // serves GET /.well-known/did.json — both public halves
+credentagent.mount(app);        // serves GET /.well-known/did.json (/did.json instead for a store under a path) — both public halves
 ```
+
+The gate's identity is a [did:web](https://w3c-ccg.github.io/did-method-web/) id built from
+`walletOrigin`. A store at the site root is `did:web:shop.example`, found at
+`https://shop.example/.well-known/did.json`. A store served under a path (`walletOrigin:
+"https://shop.example/store"`) is its own identity, `did:web:shop.example:store`, found at
+`https://shop.example/store/did.json` — the `/did.json` route `mount()` serves, behind your proxy's
+`/store` prefix. A published key lets anyone check a signature; it is not issuer-verified trust.
 
 `mandateSigningKey` is **not** `gateSecret`. `gateSecret` is a symmetric HMAC secret for challenge
 tokens; this is an asymmetric key whose public half goes to the world. Omit it and the gate generates
@@ -266,9 +273,10 @@ because a quoted cart and an issued mandate are different statements: each key's
 ever checked against `credentagent.ap2.checkoutPublicJwk`. Passing the same JWK for both throws. Omit it
 and the gate generates one at boot; `doctor()` warns on a deployment, because a cart quoted before a
 restart, or on another instance, then no longer verifies.
-Give each store its **own** checkout key, above all two stores on one host: a store accepts a cart
-signed with its key whose key id names its host, so two stores sharing a host and a key would accept
-each other's carts
+Give each store its **own** checkout key. A store accepts a cart signed with its key whose key id
+names its `walletOrigin`, path included — so stores at `/coffee` and `/wine` on one host refuse each
+other's carts even if they share a key, but two deployments sharing one `walletOrigin` and one key
+accept each other's, and so does any verifier handed the key without its `kid`
 ([#335](https://github.com/openmobilehub/credentagent/issues/335)).
 
 Mint and check:
@@ -294,7 +302,7 @@ Anyone else checks it from the published document alone — a fetch and two call
 ```ts
 import { publicJwkFromDidDocument, verifyMandate } from "@openmobilehub/credentagent-gate";
 
-const doc = await (await fetch("https://shop.example/.well-known/did.json")).json();
+const doc = await (await fetch("https://shop.example/.well-known/did.json")).json(); // a path-mounted store: https://shop.example/store/did.json
 const verdict = await verifyMandate(token, { publicJwk: publicJwkFromDidDocument(doc) });
 ```
 
@@ -949,7 +957,7 @@ class CredentAgent {
                                              // catalog, loyaltyDiscountPct, mandateSigningKey, checkoutSigningKey
                                              // (the two keys: stable private P-256 JWKs from your secret manager)
   requirements(order: GateOrder, policy: Step[]): VerificationManifestEntry[];   // Context 1
-  mount(app: ExpressApp, ceremony?: MountCeremony): void;                        // Context 2 (+ /.well-known/did.json)
+  mount(app: ExpressApp, ceremony?: MountCeremony): void;                        // Context 2 (+ /.well-known/did.json, or /did.json for a store under a path)
   doctor(opts?: { print?: boolean }): DoctorReport;                              // config preflight (#25)
   readonly orders: Orders;     // orders.create / retrieve / serve
   readonly grants: Grants;     // spending grants
