@@ -8,7 +8,7 @@ import { resolveRequirements } from "./manifest.js";
 import { MemoryVerificationStore } from "./store.js";
 import { mountCeremony, type CeremonyApp, type CeremonySeams } from "./ceremony/mount.js";
 import { basePathOf } from "./ceremony/origin.js";
-import { Orders, MemoryOrderStore, type CreatedOrder, type CompletedOrder } from "./orders.js";
+import { Orders, MemoryOrderStore, receiptsOnly, type CreatedOrder, type CompletedOrder } from "./orders.js";
 import { serveOrders } from "./orders-serve.js";
 import { Webhooks } from "./webhooks.js";
 import { Grants } from "./grants.js";
@@ -164,7 +164,8 @@ export class CredentAgent {
     // The two stores are held here so `orders.serve(app)` binds the checkout over the SAME
     // state `orders.create()` / `orders.retrieve()` use (invariant 4 — keyed per order id).
     const createdStore = opts.orderStore ?? new MemoryOrderStore<CreatedOrder>();
-    const completedStore = opts.completedOrderStore ?? new MemoryOrderStore<CompletedOrder>();
+    // Read through receiptsOnly: whatever the store holds, no reader gets the wallet's raw answer (#320).
+    const completedStore = receiptsOnly(opts.completedOrderStore ?? new MemoryOrderStore<CompletedOrder>());
     // #25 doctor(): orders.serve survives an instance split only when BOTH order stores are shared.
     this.sharedOrderStores =
       opts.orderStore !== undefined && !(opts.orderStore instanceof MemoryOrderStore) &&

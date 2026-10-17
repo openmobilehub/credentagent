@@ -245,8 +245,9 @@ ${pageHead(`Authorize payment (cross-device) · ${order}`, extraCss, args.brandi
         btn.textContent = "Authorized ✓";
         ${railCompleteScript()}
         ${completedViewScript()}
-        // "What was proven": every credential of the order with its Multipaz Tools links, then Check
-        // the signatures + Order record — server-rendered and escaped by the gate (proofLinksHtml).
+        // "What was proven": every proof of the order, then Order record — server-rendered and
+        // escaped by the gate (proofLinksHtml). Only this payment's own credential carries Multipaz
+        // Tools links (and Check the signatures): this browser just presented it (#320).
         if (typeof out.proofsHtml === "string" && out.proofsHtml) el.insertAdjacentHTML("beforeend", out.proofsHtml);
         else showRecordLink();
       } else if (!out.settlementError) {

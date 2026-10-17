@@ -274,6 +274,23 @@ export interface CompletedOrderRecord {
   proofs?: ProofEntry[];
 }
 
+/** The completed-order store as every reader gets it (the order-status poll, get-order-status,
+ *  the paid page): proofs without the wallet's raw answer, even on an order stored before the
+ *  gate stopped writing it (#320). Those reads need only the order id.
+ *  Twin of the gate's `withoutPresentations` (credentagent-gate/src/ceremony/proofs.ts), kept
+ *  unexported there: a change to what a receipt may hold changes both. */
+function receiptsOnly(store: OrderStore<CompletedOrderRecord>): OrderStore<CompletedOrderRecord> {
+  return {
+    read: async (id) => {
+      const done = await store.read(id);
+      if (!done?.proofs) return done;
+      return { ...done, proofs: done.proofs.map((p) => { const { presentation: _bytes, ...receipt } = p as ProofEntry & { presentation?: unknown }; return receipt; }) };
+    },
+    write: (id, value) => store.write(id, value),
+    clear: (id) => store.clear(id),
+  };
+}
+
 export interface Storefront {
   app: Express;
   /** The current catalog. Static source: the injected array; dynamic source: last-known-good. */
@@ -482,7 +499,7 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
     await orderCarts.clear(orderId);
   };
   const orderStore: OrderStore<CompletedOrderRecord> =
-    opts.orderStore ?? opts.storage?.orderStore ?? new MemoryOrderStore<CompletedOrderRecord>();
+    receiptsOnly(opts.orderStore ?? opts.storage?.orderStore ?? new MemoryOrderStore<CompletedOrderRecord>());
   // Created-but-not-completed orders, for the checkout page + place-order. A store
   // (not a process Map) so it can be shared across serverless instances.
   const createdOrderStore: OrderStore<Order> =

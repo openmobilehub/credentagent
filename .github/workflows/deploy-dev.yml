@@ -91,8 +91,8 @@ jobs:
         # CREDENTAGENT_BUILD labels this deployment at GET /version (dev + commit), since the
         # dev twin runs main's code under the last released version number.
         # CREDENTAGENT_INSPECT_PRESENTATIONS=1 turns on inspectPresentations for the DEV demo only
-        # (the website's demo runs here): consent pages + the order proof receipt link the wallet's
-        # demo credential to Multipaz Tools. Prod stays off.
+        # (the website's demo runs here): right after a presentation, the page that made it links the
+        # wallet's demo credential to Multipaz Tools. Prod stays off.
         # PUBLIC_URL is where buyers reach this store: the credentagent.ai router serves it under
         # /marketplace-dev (deploy/router/vercel.json), so its checkout and consent pages open on
         # credentagent.ai, not *.vercel.app (#226). Prod follows once a release carries the path

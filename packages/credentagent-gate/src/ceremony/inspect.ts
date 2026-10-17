@@ -9,8 +9,9 @@
 // rides in the URL #fragment, which a browser never sends to the server.
 //
 // Off by default because a DeviceResponse from a REAL ID can carry personal data (the
-// disclosed claims, the issuer chain, a device public key). It only ever goes back to
-// the browser that just presented it — it is never stored or sent anywhere else.
+// disclosed claims, the issuer chain, a device public key). It goes back ONLY to the browser
+// that just presented it, in that verify response, and is never stored (#320): every record
+// of the order — the verification record, the completed order — is read by order id alone.
 //
 // Honesty: this exposes the bytes; it verifies nothing new. The gate still does not
 // check the issuer signature (trust_level presence-only-demo) and the page says so.

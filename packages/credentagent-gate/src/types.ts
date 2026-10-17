@@ -188,7 +188,8 @@ export interface VerificationRecord {
    */
   verifiedGates?: Record<string, true>;
   /** What was proven for THIS order so far (the credential rail) — copied onto the completed
-   *  record by `completeOrder`, so each proof outlives this record (the order proof receipt). */
+   *  record by `completeOrder`, so each proof outlives this record (the order proof receipt).
+   *  Never the wallet's raw answer (#320): the payment step reads this back by order id. */
   proofs?: import("./ceremony/proofs.js").ProofEntry[];
 }
 
@@ -281,9 +282,12 @@ export interface CredentAgentOptions {
    * "Inspect this presentation" link. A refused proof is returned too.
    *
    * Default `false`: a DeviceResponse from a real ID can hold personal data (the disclosed
-   * claims, the issuer chain, a device public key). It only ever goes back to the browser
-   * that presented it — it is never stored. This verifies nothing new: `trust_level` is
-   * unchanged, and the page says the gate does not check the issuer signature.
+   * claims, the issuer chain, a device public key). It goes back ONLY to the browser that
+   * presented it, in that verify response, and is never stored — not on the order's
+   * verification record, not on the completed order — so nothing read by order id (the
+   * status routes, `get-order-status`, the webhook, the payment that completes the order)
+   * returns it. This verifies nothing new: `trust_level` is unchanged, and the page says the
+   * gate does not check the issuer signature.
    */
   inspectPresentations?: boolean;
   /** Per-order verification state; default in-memory, pluggable (Redis). */
