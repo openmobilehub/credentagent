@@ -135,6 +135,8 @@ describe("the issue's live status comment", () => {
     expect(isAgentComment("<!-- issue-agent-review cycle=1 sha=abc -->")).toBe(true);
     expect(isAgentComment("please also handle the empty cart case")).toBe(false);
     expect(isAgentComment("<!-- issue-agentless note -->")).toBe(false);
+    // a maintainer asking about the status comment, quoting its marker, is still a request
+    expect(isAgentComment("please make the `<!-- issue-agent-status -->` comment show cost")).toBe(false);
   });
 
   it("is left out of the next snapshot's request, with outsiders and late edits", () => {

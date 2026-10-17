@@ -58,7 +58,7 @@ export function applyAndCheck(cwd, patch) {
  * posted under a trusted account but carry text the agents wrote, so they must never come back to
  * the agents as a maintainer's instructions.
  */
-export const isAgentComment = (body) => /<!-- issue-agent[\s>-]/.test(String(body));
+export const isAgentComment = (body) => /^\s*<!-- issue-agent[\s>-]/.test(String(body)); // every agent comment starts with its marker; a maintainer merely mentioning one is not the agent
 
 /**
  * The comments that become part of the agents' request: written by someone with write access, not

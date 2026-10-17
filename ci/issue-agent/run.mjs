@@ -725,7 +725,10 @@ function assessReview(prNumber) {
   const skip = (reason, left = false) => ({ pr: pr.number, url: pr.url, issueNumber: agentBranch(pr.headRefName)?.issue, decision: { action: "skip", reason, left } });
   const labels = pr.labels.nodes.map((l) => l.name);
   const refusal = loopRefusal({ ...pr, labels });
-  if (refusal) return skip(refusal, !pr.isCrossRepository && Boolean(agentBranch(pr.headRefName))); // closed / taken over
+  // "Left the loop" only when the agent hadn't handed it over yet: a person took it over (removed
+  // agent:in-review) or closed it. A PR already handed over (ready / needs-human) keeps its status.
+  const handedOver = labels.includes(LABELS.ready) || labels.includes(LABELS.needsHuman);
+  if (refusal) return skip(refusal, !pr.isCrossRepository && Boolean(agentBranch(pr.headRefName)) && !handedOver);
   const expected = process.env.ISSUE_AGENT_HEAD_SHA;
   if (expected && expected !== pr.headRefOid) return skip("the PR has moved on since this review ran");
   const branch = agentBranch(pr.headRefName);
@@ -1006,7 +1009,7 @@ if (mode === "snapshot") {
     } catch (e) {
       console.error(e);
       outcomes.push({ n, status: "error", reason: e.message.split("\n")[0], dir: RUN?.dir });
-      setStatus(n, `the run failed: ${e.message.split("\n")[0]}`, { working: false });
+      setStatus(n, "the run failed (run locally — the details are in that run's console and run.log)", { working: false }); // not the raw error: it can carry local paths
     }
   }
   console.log("\n━━ outcomes");
