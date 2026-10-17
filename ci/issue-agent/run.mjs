@@ -10,6 +10,9 @@
 //   node ci/issue-agent/run.mjs implement issue.json            # agents + gates, NO GitHub token
 //   node ci/issue-agent/run.mjs publish <run-dir>               # trusted code, write token, runs no agent code
 //
+//   # Another repo: --target <its checkout> (or ISSUE_AGENT_TARGET). Its .github/issue-agent.json says how
+//   # to install, build and test it (config.mjs); without one, this repo's own setup applies.
+//
 // One way in (label an issue `agent`, or name it here), one way out (a draft PR + a comment on the
 // issue). Separate Claude agents (Agent SDK) play separate roles; THIS SCRIPT checks their work:
 //
@@ -50,10 +53,25 @@ import {
   roleModel, testGateCommand, rootTestRefusal, publishVerdict, isMutableSource, sameLockfile,
 } from "./checks.mjs";
 import { reportHtml, prBody, issueComment, md, statusBody, STATUS_MARK } from "./report.mjs";
+import { loadConfig, testLabel } from "./config.mjs";
 import { startMerge, buildResolvedMerge, rebuildForPush, hasMarkers, treeOf } from "./merges.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = resolve(HERE, "../..");
+
+// ── args ─────────────────────────────────────────────────────────────────────────────────────────
+const argv = process.argv.slice(2);
+const flag = (f) => argv.includes(f);
+const opt = (f, d) => (argv.includes(f) ? argv[argv.indexOf(f) + 1] : d);
+
+// The repo the agent works on: this one, or --target (a checkout of another repo's main — trusted, since
+// its config decides which commands run). The harness itself always runs from HERE.
+const REPO_ROOT = resolve(opt("--target", process.env.ISSUE_AGENT_TARGET || resolve(HERE, "../..")));
+const CONFIG = loadConfig(REPO_ROOT);
+const TEST = testLabel(CONFIG); // the authoritative test command, as people type it
+// The PR's "How to test" (publish reads the config from its own trusted checkout), and where this
+// harness lives when it isn't the target repo (the PR's footer links it).
+const PR_COMMANDS = { reproduce: CONFIG.reproduce, focused: CONFIG.focusedTest, build: Boolean(CONFIG.build) };
+const HARNESS_REPO = process.env.ISSUE_AGENT_HARNESS_REPO || undefined;
 const MODEL = process.env.ISSUE_AGENT_MODEL || "claude-opus-5-5"; // the implementer (and evidence)
 const REVIEW_MODEL = process.env.ISSUE_AGENT_REVIEW_MODEL || "claude-sonnet-5-5"; // the spec agent and the three reviewers
 const MODELS = { main: MODEL, review: REVIEW_MODEL };
@@ -70,10 +88,6 @@ const REVIEW_LOOP = process.env.ISSUE_AGENT_REVIEW_LOOP === "on";
 const MAX_REVIEW_CYCLES = cycleCap(process.env.ISSUE_AGENT_MAX_REVIEW_CYCLES); // unset ("") or not a whole number ≥ 1 → 3
 const LABELS = { working: "agent:working", inReview: "agent:in-review", ready: "agent:ready-for-human", needsHuman: "agent:needs-human" };
 
-// ── args ─────────────────────────────────────────────────────────────────────────────────────────
-const argv = process.argv.slice(2);
-const flag = (f) => argv.includes(f);
-const opt = (f, d) => (argv.includes(f) ? argv[argv.indexOf(f) + 1] : d);
 const RUNS_HOME = resolve(opt("--runs", process.env.ISSUE_AGENT_HOME ?? join(process.env.RUNNER_TEMP ?? tmpdir(), "credentagent-issue-agent")));
 const REPO = opt("--repo", process.env.GITHUB_REPOSITORY ?? ghRepoFromRemote());
 const [OWNER, NAME] = REPO.split("/");
@@ -226,7 +240,7 @@ function preflight(issue) {
 const READ_TOOLS = ["Read", "Grep", "Glob"];
 const INSPECT_BASH = ["Bash(git diff *)", "Bash(git diff)", "Bash(git log *)", "Bash(git show *)", "Bash(git status *)", "Bash(git status)", "Bash(ls *)", "Bash(grep *)", "Bash(sed -n *)", "Bash(head *)", "Bash(tail *)", "Bash(wc *)", "Bash(cat *)"];
 // Running the project's checks executes the implementer's code; reviewers may, but their tree is reset after.
-const CHECK_BASH = ["Bash(npx vitest *)", "Bash(npm test *)", "Bash(npm test)", "Bash(npm run build*)", "Bash(npm run typecheck*)", "Bash(npm run lint*)"];
+const CHECK_BASH = CONFIG.checkTools;
 const WRITE_TOOLS = ["Edit", "Write", "MultiEdit", "Bash(npm *)", "Bash(npx *)", "Bash(node *)", "Bash(mkdir *)"];
 // Denies are a tidiness rule, not a security boundary: `node`/`npm` can do any of these. The boundary is
 // that there is no GitHub credential to use and only the reviewed patch is ever published.
@@ -300,6 +314,9 @@ function summarizeInput(i = {}) {
   return String(i.command ?? i.file_path ?? i.pattern ?? i.path ?? "").replace(/\s+/g, " ").slice(0, 110);
 }
 
+// The repo's build (config.mjs), if it has one. Never fatal: a red main is measured by the baseline.
+const build = (dir) => CONFIG.build && code(CONFIG.build[0], CONFIG.build.slice(1), { cwd: dir, allowFail: true });
+
 // `reuseFrom`: a checkout whose dependencies are already installed. With a byte-identical lockfile its
 // node_modules are copied instead of running `npm ci` again — copied, not linked: workspace packages
 // are relative symlinks, which must resolve to THIS checkout's packages (main's code, for "before").
@@ -310,14 +327,15 @@ function checkout(dir, ref, { reuseFrom } = {}) {
   RUN.log(`  checkout ${ref} → ${dir}`);
   const lock = (d) => (existsSync(join(d, "package-lock.json")) ? readFileSync(join(d, "package-lock.json"), "utf8") : undefined);
   if (reuseFrom && existsSync(join(reuseFrom, "node_modules")) && sameLockfile(lock(dir), lock(reuseFrom))) {
-    for (const rel of ["node_modules", ...readdirSync(join(reuseFrom, "packages")).map((p) => join("packages", p, "node_modules"))]) {
+    const workspaces = existsSync(join(reuseFrom, "packages")) ? readdirSync(join(reuseFrom, "packages")).map((p) => join("packages", p, "node_modules")) : [];
+    for (const rel of ["node_modules", ...workspaces]) {
       if (existsSync(join(reuseFrom, rel))) cpSync(join(reuseFrom, rel), join(dir, rel), { recursive: true, verbatimSymlinks: true });
     }
     RUN.log(`  same package-lock.json as ${reuseFrom} — reused its installed dependencies, skipped npm ci`);
-  } else {
-    code("npm", ["ci", "--no-audit", "--no-fund"], { cwd: dir });
+  } else if (CONFIG.install) {
+    code(CONFIG.install[0], CONFIG.install.slice(1), { cwd: dir });
   }
-  code("npm", ["run", "build"], { cwd: dir, allowFail: true }); // a red main is measured by the baseline, not fatal here
+  build(dir); // a red main is measured by the baseline, not fatal here
 }
 
 // New files are invisible to `git diff <base>` until git knows about them: register them (without
@@ -340,28 +358,34 @@ function restoreHead(dir, base) {
 // Each failure becomes fingerprints (fingerprints.mjs). A gate passes when it is green, or when every
 // failure it reports was already on main, no more often than on main (so a red main is never charged
 // to the change, and the agent is told to leave it alone).
-// `test` picks the test command (testGateCommand): the root `npm test` unless a fix attempt asks for
-// the fast one; `only` runs a subset (the once-per-round root test run).
-const GATES = [["build", ["run", "build"]], ["typecheck", ["run", "typecheck"]], ["lint", ["run", "lint"]], ["test", ["test"]]];
-const ROOT_TEST = testGateCommand({ phase: "pre-review" });
+// The gates are the repo's (config.mjs; by default build, typecheck, lint, test). `test` picks the test
+// command (testGateCommand): the root one unless a fix attempt asks for the fast one; `only` runs a
+// subset (the once-per-round root test run).
+const GATES = CONFIG.gates;
+const ROOT_TEST = testGateCommand({ phase: "pre-review" }, CONFIG);
+const SUMMARY = CONFIG.testSummary ? new RegExp(CONFIG.testSummary, "gm") : undefined;
 
 function runGates(dir, { baseline, stopOnFail = true, test = ROOT_TEST, only } = {}) {
   const results = [];
-  for (const [name, args] of GATES) {
+  for (const { name, cmd: gateCmd } of GATES) {
     if (only && !only.includes(name)) continue;
-    const [cmd, cmdArgs] = name === "test" ? [test.cmd, test.args] : ["npm", args];
+    const [cmd, cmdArgs] = name === "test" ? [test.cmd, test.args] : [gateCmd[0], gateCmd.slice(1)];
     const r = code(cmd, cmdArgs, { cwd: dir, allowFail: true });
-    const summary = name === "test" ? (stripAnsi(r.out).match(/Tests\s+.+/g) ?? []).pop()?.trim() : undefined; // no terminal colour codes in PR text
+    const summary = name === "test" && SUMMARY ? testSummary(r.out) : undefined;
     const fps = r.code === 0 ? [] : fingerprints(name, r.out, dir);
     const base = baseline?.find((b) => b.name === name);
     const preexisting = r.code !== 0 && Boolean(base) && !base.green && fps.length > 0 && withinBaseline(fps, base.fingerprints);
     const ok = r.code === 0 || preexisting;
     results.push({ name, ok, green: r.code === 0, preexisting, fingerprints: fps, summary, tail: tail(r.out, 80), ...(name === "test" ? { scope: test.scope } : {}) });
-    if (baseline) RUN.log(`  gate ${name}${name === "test" ? ` (${test.scope === "root" ? "root npm test" : `fast: ${cmd} ${cmdArgs.join(" ")}`})` : ""}: ${r.code === 0 ? "pass" : preexisting ? "pass (only failures the starting code already had)" : "FAIL"}${summary ? ` — ${summary}` : ""}`);
+    if (baseline) RUN.log(`  gate ${name}${name === "test" ? ` (${test.scope === "root" ? `root ${TEST}` : `fast: ${cmd} ${cmdArgs.join(" ")}`})` : ""}: ${r.code === 0 ? "pass" : preexisting ? "pass (only failures the starting code already had)" : "FAIL"}${summary ? ` — ${summary}` : ""}`);
     if (!ok && stopOnFail) break; // later gates on a broken build are noise
   }
   return results;
 }
+
+// The test run's summary line(s) for the PR, e.g. vitest's "Tests  95 passed (95)" — every distinct
+// match, without terminal colour codes.
+const testSummary = (out) => [...new Set(stripAnsi(out).match(SUMMARY) ?? [])].map((s) => s.trim()).join(" · ") || undefined;
 
 // A commit's own gate results (the baseline) don't change: measure each commit once per process, and
 // reuse it for a later run in the same process (`--poll` working through several issues on one main).
@@ -392,9 +416,9 @@ function mutationCheck(dir, base, spec) {
   trackNew(dir);
   const changed = git(["diff", "--name-status", "--no-renames", base], { cwd: dir }).out.trim().split("\n").filter(Boolean)
     .map((l) => l.split("\t")).map(([s, f]) => ({ status: s[0], file: f }));
-  const isTest = (f) => /\.test\.(ts|tsx|mjs|js)$/.test(f);
+  const isTest = (f) => new RegExp(CONFIG.testFile).test(f);
   const tests = changed.filter((c) => isTest(c.file) && c.status !== "D").map((c) => c.file);
-  const src = changed.filter((c) => !isTest(c.file) && isMutableSource(c.file));
+  const src = changed.filter((c) => !isTest(c.file) && isMutableSource(c.file, CONFIG));
   if (!tests.length) return { applicable: true, ok: false, reason: "behavior changed but no test file was added or changed" };
   // Only tests changed: there is no behavior here for them to guard, and no retry could change that —
   // so this isn't a failure to fix (on #362 it cost a whole run of retries), just nothing to check.
@@ -407,13 +431,13 @@ function mutationCheck(dir, base, spec) {
       if (c.status === "A") rmSync(join(dir, c.file), { force: true });
       else git(["checkout", base, "--", c.file], { cwd: dir });
     }
-    code("npm", ["run", "build"], { cwd: dir, allowFail: true });
-    without = code("npx", ["vitest", "run", "--retry=0", ...tests], { cwd: dir, allowFail: true });
+    build(dir);
+    without = runTests(dir, tests);
   } finally {
     restorePatch(dir, base, patch);
-    code("npm", ["run", "build"], { cwd: dir, allowFail: true });
+    build(dir);
   }
-  const withFix = code("npx", ["vitest", "run", "--retry=0", ...tests], { cwd: dir, allowFail: true });
+  const withFix = runTests(dir, tests);
   const ok = without.code !== 0 && withFix.code === 0;
   RUN.log(`  mutation: ${tests.length} changed test file(s) ${without.code !== 0 ? "FAIL" : "PASS"} without the fix, ${withFix.code === 0 ? "pass" : "FAIL"} with it → ${ok ? "ok" : "NOT OK"}`);
   return {
@@ -423,6 +447,8 @@ function mutationCheck(dir, base, spec) {
     reason: ok ? undefined : without.code === 0 ? "the changed tests still PASS with the fix reverted — they don't guard it" : "the changed tests fail WITH the fix",
   };
 }
+
+const runTests = (dir, files) => code(CONFIG.testRunner[0], [...CONFIG.testRunner.slice(1), ...files], { cwd: dir, allowFail: true });
 
 // The change itself, handed to the reviewers up front so they spend their turns reviewing, not
 // running git. Capped: a cut diff says so, and `git diff` still shows the rest.
@@ -440,7 +466,7 @@ function pipelineFacts(r, baseline) {
   const m = r.mutation;
   return `\n\n<pipeline_facts>
 These were measured by the pipeline (not claimed by the implementer):
-- Gates from the repo root (\`test\` is the root \`npm test\`, run once this round after the fix attempts passed): ${r.gates.map((g) => `${g.name} ${g.green ? "green" : g.preexisting ? "red only with failures the starting code already had" : "RED"}${g.summary ? ` (${g.summary})` : ""}`).join("; ")}.
+- Gates from the repo root (\`test\` is the root \`${TEST}\`, run once this round after the fix attempts passed): ${r.gates.map((g) => `${g.name} ${g.green ? "green" : g.preexisting ? "red only with failures the starting code already had" : "RED"}${g.summary ? ` (${g.summary})` : ""}`).join("; ")}.
 - The code this change starts from (main, or in a review cycle the PR's head), before the change: ${baseline.map((b) => `${b.name} ${b.green ? "green" : `red: ${b.fingerprints.join("; ")}`}`).join("; ")}. Pre-existing failures are not this change's to fix; a diff that "fixes" them unasked is out of scope.
 - New files are part of \`git diff ${r.base}\` (registered with intent-to-add).
 - Mutation check: ${m.applicable ? `with ${(m.reverted ?? []).join(", ")} reverted to main, the changed test files (${(m.tests ?? []).join(", ")}) ${m.withoutFix.code ? "FAILED" : "PASSED"}; with the change they ${m.withFix.code === 0 ? "pass" : "FAIL"}. This is per FILE: a file fails if any test in it fails, so judge whether each new test case would fail on its own. Output without the change:\n${m.withoutFix.tail.split("\n").slice(-40).join("\n")}` : `not applicable — ${m.reason}`}
@@ -463,7 +489,7 @@ async function review(lens, issue, spec, base, facts, cwd, round, roles, cap) {
 }
 
 async function implementIssue(issue, { dir } = {}) {
-  const roles = await import("./roles.mjs");
+  const roles = (await import("./roles.mjs")).forRepo(CONFIG);
   const { renderHtml } = await import("./capture.mjs");
   const { proofHtml } = await import("./report.mjs");
   const n = issue.number;
@@ -499,7 +525,7 @@ async function implementIssue(issue, { dir } = {}) {
   return finishImplement({ issue, spec, roles, n, repoDir, base, rounds, last, done, patch, touched, forbidden, stopped, outcome, renderHtml, proofHtml });
 }
 
-// implement → [gates (fast tests) → mutation → root `npm test`, fixed in place up to MAX_FIXES times] →
+// implement → [gates (fast tests) → mutation → root test, fixed in place up to MAX_FIXES times] →
 // review, until clean or out of rounds. Mechanical failures are fixed inside a round, so review rounds go to what only a reviewer
 // catches. Shared by a new issue and by the review loop:
 //   diffBase      what the reviewers diff against and the patch is taken from (main, or the PR head)
@@ -518,14 +544,14 @@ async function iterate({ issue, spec, roles, repoDir, baseline, diffBase, mutati
           (first ? firstPrompt : roles.fixPrompt(feedback)) + baselineNote(baseline),
           { cwd: repoDir, schema, write: true, resume: first ? undefined : session, maxTurns: 200 }));
         trackNew(repoDir);
-        // Between attempts, only the tests of what changed; the root `npm test` comes once, below.
-        const fast = testGateCommand({ phase: "fix", changed: changedSince(repoDir, mutationBase) });
+        // Between attempts, only the tests of what changed; the root test run comes once, below.
+        const fast = testGateCommand({ phase: "fix", changed: changedSince(repoDir, mutationBase) }, CONFIG);
         const g = runGates(repoDir, { baseline, test: fast });
         r = { round, attempt, base, gates: g, impl };
         const gateFailed = (bad) => {
           const baseFps = baseline.find((b) => b.name === bad.name)?.fingerprints ?? [];
           const fresh = bad.fingerprints.filter((f) => !baseFps.includes(f));
-          const cmd = bad.name !== "test" ? `npm run ${bad.name}` : bad.scope === "root" ? "npm test" : `${fast.cmd} ${fast.args.join(" ")}`;
+          const cmd = bad.name !== "test" ? GATES.find((x) => x.name === bad.name).cmd.join(" ") : bad.scope === "root" ? TEST : `${fast.cmd} ${fast.args.join(" ")}`;
           return `The \`${cmd}\` gate FAILED when the pipeline ran it from the repo root.${fresh.length ? `\nFailures your change introduced:\n${fresh.map((f) => `- ${f}`).join("\n")}` : ""}\n\n\`\`\`\n${bad.tail}\n\`\`\``;
         };
         const bad = g.find((x) => !x.ok);
@@ -536,7 +562,7 @@ async function iterate({ issue, spec, roles, repoDir, baseline, diffBase, mutati
           feedback = `Test-proof check failed: ${r.mutation.reason}.\nThe pipeline reverted your source changes (${(r.mutation.reverted ?? []).join(", ") || "none"}) and ran ${(r.mutation.tests ?? []).join(", ") || "no tests"}.\n\n\`\`\`\n${r.mutation.withoutFix?.tail ?? ""}\n\`\`\`\nA behavior change needs a test that fails without it.`;
           continue;
         }
-        // Once per round, before the reviews: the authoritative root `npm test` (CLAUDE.md). It replaces
+        // Once per round, before the reviews: the authoritative root test run (CLAUDE.md). It replaces
         // the fast run in the round's record — publish won't open as ready a patch it didn't pass on.
         const [root] = runGates(repoDir, { baseline, only: ["test"] });
         root.patchSha256 = createHash("sha256").update(diffPatch(repoDir, base)).digest("hex"); // what it ran on
@@ -664,7 +690,7 @@ function publishRun(dir) {
   }
   // Never a "ready" change that didn't pass the root `npm test` on exactly this patch (a fast run
   // doesn't count); an unfinished one still opens as a `[needs human]` draft, saying it wasn't run.
-  const verdict = publishVerdict({ done: report.done === true, last: report.last, patchSha256: report.patchSha256, stopped: report.stopped });
+  const verdict = publishVerdict({ done: report.done === true, last: report.last, patchSha256: report.patchSha256, stopped: report.stopped, label: TEST });
   if (!verdict.open) {
     gh(["issue", "comment", String(n), "-R", REPO, "--body", issueComment({ kind: "needs-human-nopr", reason: verdict.reason, where: actionsRunUrl() })]);
     setStatus(n, `stopped, no PR — ${verdict.reason}`, { working: false });
@@ -701,7 +727,7 @@ function publishRun(dir) {
   git(["commit", "--quiet", "-s", "-F", "-"], { cwd: wt, input: commitMsg });
   if (flag("--dry-run")) {
     const stat = git(["show", "--stat", "--format=%H%n%an <%ae>%n%(trailers:only)", "HEAD"], { cwd: wt }).out;
-    writeFileSync(join(dir, "pr-body.md"), prBody(report, { mediaBase: `https://raw.githubusercontent.com/${REPO}/${EVIDENCE_BRANCH}/issue-${n}/${id}/`, repo: REPO }));
+    writeFileSync(join(dir, "pr-body.md"), prBody(report, { mediaBase: `https://raw.githubusercontent.com/${REPO}/${EVIDENCE_BRANCH}/issue-${n}/${id}/`, repo: REPO, harnessRepo: HARNESS_REPO ?? REPO, commands: PR_COMMANDS }));
     git(["worktree", "remove", "--force", wt], { allowFail: true });
     RUN.log(`  dry run — would push ${branch}:\n${stat}\n  PR body → ${join(dir, "pr-body.md")}`);
     return { n, status: "dry-run", branch };
@@ -729,7 +755,7 @@ function publishRun(dir) {
     const labeller = process.env.ISSUE_AGENT_LABELLER;
     const bodyFile = join(dir, "pr-body.md");
     const banner = loop ? `> [!NOTE]\n> **The agent is still working on this with the Claude reviewer** — it fixes each review, replies to and resolves the threads, and asks for a human review only once the review is ✅/💬 with nothing left open (at most ${MAX_REVIEW_CYCLES} cycles). No need to review it yet.\n\n` : "";
-    writeFileSync(bodyFile, banner + prBody(report, { mediaBase, repo: REPO }) + (labeller ? `\n<!-- issue-agent labeller=${labeller} -->\n` : ""));
+    writeFileSync(bodyFile, banner + prBody(report, { mediaBase, repo: REPO, harnessRepo: HARNESS_REPO ?? REPO, commands: PR_COMMANDS }) + (labeller ? `\n<!-- issue-agent labeller=${labeller} -->\n` : ""));
     prUrl = gh(["pr", "create", "-R", REPO, ...(loop ? [] : ["--draft"]), "--base", "main", "--head", branch,
       "--title", done ? issue.title : `[needs human] ${issue.title}`, "--body-file", bodyFile]);
     if (loop) { ensureLabels(); gh(["pr", "edit", prUrl, "-R", REPO, "--add-label", LABELS.inReview]); }
@@ -898,7 +924,7 @@ function handOver(review, kind, reason) {
 }
 
 async function fixReview(review, { dir } = {}) {
-  const roles = await import("./roles.mjs");
+  const roles = (await import("./roles.mjs")).forRepo(CONFIG);
   RUN = newRun(review.issueNumber, dir);
   RUN.log(`\n━━ PR #${review.pr} review cycle ${review.cycle + 1}/${review.maxCycles} · ${review.threads.length} thread(s) · verdict ${review.verdict} · ${RUN.dir}`);
   const outcome = (o) => { writeFileSync(join(RUN.dir, "outcome.json"), JSON.stringify({ pr: review.pr, id: RUN.id, head: review.head, ...o }, null, 2)); return { pr: review.pr, dir: RUN.dir, ...o }; };
@@ -945,8 +971,8 @@ async function fixReview(review, { dir } = {}) {
         RUN.log(`  (this ${mode} cycle becomes a conflict cycle)`); mode = "conflict";
       }
     }
-    code("npm", ["ci", "--no-audit", "--no-fund"], { cwd: repoDir, allowFail: true });
-    code("npm", ["run", "build"], { cwd: repoDir, allowFail: true });
+    if (CONFIG.install) code(CONFIG.install[0], CONFIG.install.slice(1), { cwd: repoDir, allowFail: true });
+    build(repoDir);
   }
   const mainBase = git(["merge-base", "origin/main", resolved.length ? mainSha : head], { cwd: repoDir }).out.trim();
 
@@ -990,7 +1016,7 @@ async function fixReview(review, { dir } = {}) {
     schema = roles.REVIEW_FIX_SCHEMA;
     diffBase = head;
   }
-  spec.behavior_change = changedSince(repoDir, mainBase).some(isMutableSource);
+  spec.behavior_change = changedSince(repoDir, mainBase).some((f) => isMutableSource(f, CONFIG));
 
   const { rounds, impl, reviewedPatch, stopped } = await iterate({
     issue: review.issue, spec, roles, repoDir, baseline, diffBase, mutationBase: mainBase, firstPrompt, schema,
@@ -1062,7 +1088,7 @@ function pushReview(dir, review) {
   const k = review.cycle + 1;
   // "ready" implies a root `npm test` passed on what was tested; the tree check below proves what we
   // push is exactly that, whatever base the hand-over patch was taken from.
-  const untested = rootTestRefusal(fix.last, outcome.testedPatchSha256 ?? outcome.patchSha256);
+  const untested = rootTestRefusal(fix.last, outcome.testedPatchSha256 ?? outcome.patchSha256, TEST);
   if (untested) return handOver(review, "needs-human", untested);
   const resolved = outcome.resolved ?? [];
 

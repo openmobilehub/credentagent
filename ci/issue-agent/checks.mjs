@@ -2,6 +2,7 @@
 // in the root `npm test` (issue-agent.test.mjs) rather than only reasoned about.
 
 import { spawnSync } from "node:child_process";
+import { DEFAULT_CONFIG, testLabel } from "./config.mjs";
 
 export const TRUSTED_PERMISSIONS = ["admin", "maintain", "write"];
 
@@ -283,8 +284,12 @@ export const roleModel = (role, { main, review }) => (role === "spec" || role.st
  * no tests) isn't a failure the agent can't fix. `scope` is recorded with the result, so publish can
  * tell the two apart.
  */
-export function testGateCommand({ phase, changed }) {
-  if (phase !== "fix") return { cmd: "npm", args: ["test"], scope: "root" };
+export function testGateCommand({ phase, changed }, cfg = DEFAULT_CONFIG) {
+  const [cmd, ...args] = cfg.gates.find((g) => g.name === "test").cmd;
+  if (phase !== "fix") return { cmd, args, scope: "root" };
+  // No quick way to pick a subset (config `fastTest: null`): the same command, recorded as a quick run —
+  // it still never counts as the root run publish needs.
+  if (cfg.fastTest !== "vitest-workspaces") return { cmd, args, scope: "fast" };
   const scopes = new Set();
   for (const f of changed) {
     const ws = f.match(/^(packages\/[^/]+\/|ci\/issue-agent\/)/)?.[1];
@@ -301,15 +306,16 @@ export function testGateCommand({ phase, changed }) {
  * (`patchSha256`). The fast tests a fix attempt runs never count. Names the gate that actually
  * stopped the round. Returns the reason, or undefined.
  */
-export function rootTestRefusal(round, patchSha256) {
-  if (!round) return "no round finished, so the root `npm test` never ran";
+export function rootTestRefusal(round, patchSha256, label = testLabel()) {
+  const root = `the root \`${label}\``;
+  if (!round) return `no round finished, so ${root} never ran`;
   const stuck = round.gates?.find((g) => !g.ok && g.name !== "test");
-  if (stuck) return `the \`${stuck.name}\` gate failed, so the root \`npm test\` never ran`;
+  if (stuck) return `the \`${stuck.name}\` gate failed, so ${root} never ran`;
   const t = round.gates?.find((g) => g.name === "test");
-  if (!t) return "the change has no root `npm test` result";
-  if (t.scope !== "root") return t.ok ? "the change passed only the fast tests; the round stopped before the root `npm test`" : "the fast tests failed, so the root `npm test` never ran";
-  if (!t.ok) return "the root `npm test` failed on the change";
-  if (patchSha256 && t.patchSha256 !== patchSha256) return "the change was edited after its last root `npm test` (a later round stopped early), so it has not passed one";
+  if (!t) return `the change has no root \`${label}\` result`;
+  if (t.scope !== "root") return t.ok ? `the change passed only the fast tests; the round stopped before ${root}` : `the fast tests failed, so ${root} never ran`;
+  if (!t.ok) return `${root} failed on the change`;
+  if (patchSha256 && t.patchSha256 !== patchSha256) return `the change was edited after its last root \`${label}\` (a later round stopped early), so it has not passed one`;
   return undefined;
 }
 
@@ -318,15 +324,19 @@ export function rootTestRefusal(round, patchSha256) {
  * root `npm test` on exactly this patch, or it is refused outright. An unfinished one still opens as
  * a `[needs human]` draft — the hand-off — with the missing root run added to why it stopped.
  */
-export function publishVerdict({ done, last, patchSha256, stopped }) {
-  const untested = rootTestRefusal(last, patchSha256);
+export function publishVerdict({ done, last, patchSha256, stopped, label }) {
+  const untested = rootTestRefusal(last, patchSha256, label);
   if (!untested) return { open: true, done, stopped };
   if (done) return { open: false, reason: `${untested} — nothing is published as ready without a passing one` };
   return { open: true, done: false, stopped: stopped ? `${stopped}; ${untested}` : untested };
 }
 
-/** A non-test, non-doc source file the test-proof check reverts — the library's or the harness's own. */
-export const isMutableSource = (f) => /^(packages|examples|ci\/issue-agent)\//.test(f) && !/\.md$/.test(f) && !/\.test\.[mc]?[jt]sx?$/.test(f);
+/**
+ * A source file the test-proof check reverts: under the config's `source`, not `sourceExclude` (by
+ * default docs), never a test file. By default the library's packages and examples, and the harness.
+ */
+export const isMutableSource = (f, cfg = DEFAULT_CONFIG) =>
+  new RegExp(cfg.source).test(f) && !(cfg.sourceExclude && new RegExp(cfg.sourceExclude).test(f)) && !new RegExp(cfg.testFile).test(f);
 
 /** Two checkouts can share installed dependencies only with byte-identical lockfiles. */
 export const sameLockfile = (a, b) => typeof a === "string" && a.length > 0 && a === b;

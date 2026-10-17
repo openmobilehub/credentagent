@@ -229,6 +229,50 @@ Each run gets a folder (`--runs`, default `$TMPDIR/credentagent-issue-agent/issu
 full transcripts in `transcripts/`, `change.patch` (what gets published), and `evidence/index.html`
 — the report with the screenshots and playable videos.
 
+## Using it in another repo
+
+The pipeline lives here; another repo uses it through the reusable workflow
+`.github/workflows/issue-agent-run.yml` (this repo's own `issue-agent.yml` calls it too). That repo
+needs three things — [openmobilehub/credentagent-website](https://github.com/openmobilehub/credentagent-website)
+is the worked example:
+
+1. **`.github/issue-agent.json`** — how to install, build and test it (`config.mjs` lists every field
+   with this repo's values as the defaults; a field left out keeps its default). For a static site
+   with `node --test`:
+
+   ```json
+   {
+     "install": null, "build": null,
+     "gates": [{ "name": "test", "cmd": ["node", "--test", "tests/*.test.mjs"] }],
+     "fastTest": null,
+     "testRunner": ["node", "--test"], "testFile": "^tests/.+\\.test\\.mjs$",
+     "source": "^[^/]+\\.(html|md|txt|xml)$",
+     "checkTools": ["Bash(node --test*)"], "focusedTest": "node --test <file>", "reproduce": "node --test \"tests/*.test.mjs\"",
+     "docs": ["CLAUDE.md"]
+   }
+   ```
+
+   It also takes the agents' repo-specific text — `implementNotes`, review `lenses`, `reviewRules`,
+   `serveHint` (how the evidence agent starts the site) — which otherwise point at this repo's
+   REVIEW.md, SECURITY-INVARIANTS.md and examples. Commands are argv arrays, never shell strings. An
+   unknown field or a command it can't run stops the run before any agent starts. The file is under
+   `.github/` on purpose: the agent never publishes a change there, so it can't loosen its own gates.
+
+2. **A caller workflow** — `.github/workflows/issue-agent.yml` with the same triggers as ours, whose job
+   is `uses: openmobilehub/credentagent/.github/workflows/issue-agent-run.yml@main` with
+   `secrets: inherit` and the inputs `issue`, `sender`, `snapshot_at`, `force`, `claude_auth`. Pass
+   `review_loop: false` unless the repo also runs the Claude review and `issue-agent-review.yml`:
+   without them nothing would pick up a PR opened for the loop, so it stays a draft for a human.
+
+3. **Secrets and protection** — `CLAUDE_CODE_OAUTH_TOKEN` (or `ANTHROPIC_API_KEY` + the `CLAUDE_AUTH`
+   variable `api`); optionally `AGENT_GH_TOKEN` so the draft starts CI. And branch protection on `main`
+   requiring a review: the agent never merges, but that rule is what makes it so.
+
+The jobs check out the caller's `main` at `target/` and this repo's harness next to it at `harness/`,
+then run `run.mjs … --target target`. The trust model is unchanged: the agents' job holds no GitHub
+token, publish applies the reviewed patch from trusted code, and the caller trusts this repo's `main`
+as it trusts its own. Locally: `node ci/issue-agent/run.mjs <n> --target ../other-repo --no-publish`.
+
 ## Where the evidence lives
 
 Media goes on the orphan branch **`agent-evidence`** (`issue-<n>/<run>/`), not in the PR, so the
@@ -271,12 +315,15 @@ has to merge in; without it GitHub refuses that push and the loop hands the PR t
 
 - `run.mjs` — the orchestrator: `snapshot`, `implement`, `publish` (CI runs them as three jobs; locally
   they run back to back).
-- `roles.mjs` — each agent's prompt and output schema.
+- `config.mjs` — what the pipeline needs to know about the repo it works on (`.github/issue-agent.json`,
+  "Using it in another repo"); the defaults are this repo's.
+- `roles.mjs` — each agent's prompt and output schema, built for the repo's config (`forRepo`).
 - `checks.mjs` — the trust decisions (who wrote the title, which paths publish refuses, id checks), and
   the speed rules that mustn't weaken them (model per role, which tests a gate run uses, publish's
   root-`npm test` refusal).
 - `issue-agent.test.mjs` — tests for those, the baseline and the PR-body escaping; part of the root
-  `npm test`, and each fails if its check is removed.
+  `npm test`, and each fails if its check is removed. `config.test.mjs` — the same for another repo's
+  config: its commands reach the gates, the prompts and the PR, and a config it can't use is refused.
 - `merges.mjs` — bringing `main` into a conflicting PR: the fix job's merge-and-resolve and the push
   job's replay of it, which must build the same tree (tested on a real conflict).
 - `fingerprints.mjs` — gate failures → comparable fingerprints, for the baseline.
