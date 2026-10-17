@@ -1,6 +1,7 @@
-// The checkout page's paid view shows WHAT WAS PROVEN for the order, with the same Multipaz Tools
-// links the payment page offers (Inspect, Issuer certificate, Check the signatures) and the
-// "Order record ›" link to the store's order-status record.
+// The "What was proven" block. The payment page shows it with Multipaz Tools links (Inspect,
+// Issuer certificate, Check the signatures) for the credential that payment just presented. The
+// checkout page's paid view shows it from the completed order, which never carries the wallet's
+// raw answer (#320): each proof and its trust level, and the "Order record ›" link.
 import { describe, it, expect } from "vitest";
 import { proofLinksHtml } from "./theme.js";
 import { renderRequirements } from "./checkout-page.js";
@@ -8,7 +9,8 @@ import type { ProofEntry } from "./proofs.js";
 
 const url = "https://tools.multipaz.org/mdocDeviceResponse#o2d2";
 const cert = "https://tools.multipaz.org/x509#MIIC";
-const proofs: ProofEntry[] = [
+// As the payment page builds it: the stored proofs, then its own proof with the presentation.
+const proofs: Parameters<typeof proofLinksHtml>[0] & object = [
   { gate: "Age 21+", rail: "credential", trust_level: "presence-only-demo", checks: [], presentedAt: "t",
     presentation: { format: "mso_mdoc", deviceResponse: "o2d2", inspectUrl: url, issuerCertUrl: cert } },
   { gate: "Pay (USD)", rail: "instant-demo", trust_level: "presence-only-demo", checks: [], presentedAt: "t" },
@@ -28,7 +30,7 @@ describe("proofLinksHtml", () => {
   });
 
   it("never links a non-Multipaz tool URL or an unsafe record URL", () => {
-    const bad: ProofEntry[] = [{ ...proofs[0], presentation: { format: "mso_mdoc", deviceResponse: "x", inspectUrl: "javascript:alert(1)", issuerCertUrl: "https://evil.example/x509#x" } }];
+    const bad: Parameters<typeof proofLinksHtml>[0] & object = [{ ...proofs[0], presentation: { format: "mso_mdoc", deviceResponse: "x", inspectUrl: "javascript:alert(1)", issuerCertUrl: "https://evil.example/x509#x" } }];
     const html = proofLinksHtml(bad, "javascript:alert(1)");
     expect(html).not.toContain("javascript:");
     expect(html).not.toContain("evil.example");
@@ -43,16 +45,22 @@ describe("proofLinksHtml", () => {
     expect(proofLinksHtml(undefined, undefined)).toBe("");
   });
 
-  it("the checkout page's paid view carries the proofs + order record", () => {
+  it("the checkout page's paid view carries the proofs + order record, without Multipaz links (#320)", () => {
+    // What a completed order holds: the receipt, never the wallet's raw answer.
+    const receipt: ProofEntry[] = [
+      { gate: "Age 21+", rail: "credential", trust_level: "presence-only-demo", checks: [], presentedAt: "t" },
+      { gate: "Pay (USD)", rail: "instant-demo", trust_level: "presence-only-demo", checks: [], presentedAt: "t" },
+    ];
     const html = renderRequirements(
       { id: "O1", total: 124, currency: "USD", lines: [{ id: "w", name: "Whiskey", quantity: 1, unitPrice: 124 }] } as never,
       [],
       { ageVerified: true, loyaltyApplied: false },
-      { paid: { amount: 124, currency: "USD", method: "dc-payment", proofs }, statusUrl: "/checkout/order-status?orderId=O1" },
+      { paid: { amount: 124, currency: "USD", method: "dc-payment", proofs: receipt }, statusUrl: "/checkout/order-status?orderId=O1" },
     );
     expect(html).toContain("Order paid");
     expect(html).toContain("What was proven");
-    expect(html).toContain(`href="${cert}"`);
+    expect(html).toContain("Age 21+");
     expect(html).toContain('href="/checkout/order-status?orderId=O1"');
+    expect(html).not.toContain("tools.multipaz.org");
   });
 });

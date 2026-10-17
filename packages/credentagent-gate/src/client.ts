@@ -8,7 +8,7 @@ import { resolveRequirements } from "./manifest.js";
 import { MemoryVerificationStore } from "./store.js";
 import { mountCeremony, type CeremonyApp, type CeremonySeams } from "./ceremony/mount.js";
 import { basePathOf } from "./ceremony/origin.js";
-import { Orders, MemoryOrderStore, type CreatedOrder, type CompletedOrder } from "./orders.js";
+import { Orders, MemoryOrderStore, receiptsOnly, type CreatedOrder, type CompletedOrder } from "./orders.js";
 import { serveOrders } from "./orders-serve.js";
 import { Webhooks } from "./webhooks.js";
 import { Grants } from "./grants.js";
@@ -30,7 +30,7 @@ export type MountCeremony = Omit<Partial<CeremonySeams>, "verificationStore">;
 export interface ExpressApp {
   locals: Record<string, unknown>;
   /** Optional: when present, `mount()` publishes the mandate-signing key at
-   *  `/.well-known/did.json`. Structural, so the package stays free of an express import. */
+   *  `/.well-known/did.json` (`/did.json` instead when `walletOrigin` carries a path). Structural, so the package stays free of an express import. */
   get?: (path: string, handler: (req: unknown, res: { json: (body: unknown) => void }) => void) => void;
 }
 
@@ -87,7 +87,7 @@ export class CredentAgent {
   // or the in-memory defaults. `walletOrigin` + `readerIdentity` are already public/held above.
   private readonly mandateKey: GateSigningKey;
   private readonly checkoutKey: GateSigningKey;
-  // True once /.well-known/did.json has been registered, so a second mount() does not re-register it.
+  // True once the DID document routes have been registered, so a second mount() does not re-register them.
   private didServed = false;
   private readonly hasGateSecret: boolean;
   private readonly sharedVerificationStore: boolean;
@@ -164,7 +164,8 @@ export class CredentAgent {
     // The two stores are held here so `orders.serve(app)` binds the checkout over the SAME
     // state `orders.create()` / `orders.retrieve()` use (invariant 4 — keyed per order id).
     const createdStore = opts.orderStore ?? new MemoryOrderStore<CreatedOrder>();
-    const completedStore = opts.completedOrderStore ?? new MemoryOrderStore<CompletedOrder>();
+    // Read through receiptsOnly: whatever the store holds, no reader gets the wallet's raw answer (#320).
+    const completedStore = receiptsOnly(opts.completedOrderStore ?? new MemoryOrderStore<CompletedOrder>());
     // #25 doctor(): orders.serve survives an instance split only when BOTH order stores are shared.
     this.sharedOrderStores =
       opts.orderStore !== undefined && !(opts.orderStore instanceof MemoryOrderStore) &&
@@ -382,11 +383,17 @@ export class CredentAgent {
    * Without it the signature on a mandate is checkable only by us, which would make "real
    * signatures" a hollow claim — the whole point of leaving a mock signer behind. The document is
    * built once and captured, so the handler cannot be made to re-read mutable state later.
+   *
+   * Served only where did:web resolves this store's DID, so the gate claims no route nobody reads.
+   * A root store (`did:web:shop.example`) is looked up at `/.well-known/did.json`. A store served
+   * under a path (`did:web:shop.example:store`) is looked up at `<walletOrigin>/did.json`, which a
+   * path-stripping proxy maps to this app's `/did.json`.
    */
   private publishSigningKey(app: ExpressApp): void {
     if (this.didServed || typeof app.get !== "function") return;
     const doc = didDocument(this.mandateKey, this.checkoutKey);
-    app.get("/.well-known/did.json", (_req, res) => res.json(doc));
+    const route = basePathOf(this.walletOrigin) ? "/did.json" : "/.well-known/did.json";
+    app.get(route, (_req, res) => res.json(doc));
     this.didServed = true;
   }
 }

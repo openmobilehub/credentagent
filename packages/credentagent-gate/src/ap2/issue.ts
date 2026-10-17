@@ -121,7 +121,8 @@ export class Ap2Issuer {
   /**
    * The checkout key's public half — what a cart this merchant quoted verifies against
    * (`verifyDelegatedPurchase({ checkoutKey })`, `openCheckoutPayload`). Published beside the
-   * mandate key at `/.well-known/did.json`.
+   * mandate key in the DID document: `/.well-known/did.json` for a root store,
+   * `<walletOrigin>/did.json` for a store served under a path.
    */
   get checkoutPublicJwk(): PublicJwkP256 {
     return this.#checkoutKey.publicJwk;

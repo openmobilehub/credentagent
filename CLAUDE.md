@@ -25,10 +25,10 @@ This repo (`openmobilehub/credentagent`) is the **library**: two npm workspaces 
 Tests run with **`npm test` from the repo root** (vitest) — that is the authoritative run,
 and the only one that includes the cross-package integration suite (see *Testing
 expectations*). `npm run test:workspaces` is the faster inner loop and skips it.
-`npm run build` typechecks + builds each package. The end-to-end reference DEMO lives in a
-**separate** repo,
-[`openmobilehub/mcp-apps-shopping-demo`](https://github.com/openmobilehub/mcp-apps-shopping-demo),
-which consumes these packages — link to it, don't describe it as part of this repo.
+`npm run build` typechecks + builds each package. The end-to-end DEMO is the
+**Utopia Marketplace MCP server** in a **separate** repo,
+[`openwallet-foundation/multipaz-utopia`](https://github.com/openwallet-foundation/multipaz-utopia/tree/main/organizations/marketplace/mcp),
+which consumes these packages from npm — link to it, don't describe it as part of this repo.
 
 ## Status & decisions — GitHub is the source of truth
 
@@ -214,8 +214,8 @@ anticipate it when authoring:
   `CLAUDE_CODE_OAUTH_TOKEN` secret must come from an account that can use Claude Code
   (`claude setup-token`); an unusable token errors on every PR.
 - **Which account pays for Claude in CI** — the PR review and `@claude` replies **always** use the
-  Claude **subscription** login (`CLAUDE_CODE_OAUTH_TOKEN` secret). The nightly `agent-e2e` alone
-  follows one repo variable, `CLAUDE_AUTH`:
+  Claude **subscription** login (`CLAUDE_CODE_OAUTH_TOKEN` secret). The nightly `agent-e2e` and the
+  `issue-agent` (both on the Agent SDK) follow one repo variable, `CLAUDE_AUTH`:
   - unset, or anything but `api` — the subscription login too. This is the default. Runs count
     against that subscription's usage limits.
   - `api` — an **API key** (`ANTHROPIC_API_KEY` secret), billed to that key's Console
@@ -258,6 +258,32 @@ anticipate it when authoring:
   merge, and caught nothing the Claude review missed. On-demand `@codex` doesn't work here
   either — it replies asking for a Codex environment this repo doesn't have — so don't
   write `@codex` in PR descriptions or comments.
+
+## Issue agent — label an issue `agent`
+
+Labelling an issue **`agent`** (write access needed) runs `.github/workflows/issue-agent.yml`:
+agents spec, implement and review it, and it comes back as a **draft PR** with acceptance criteria,
+the pipeline's own gate runs, a mutation check (the changed tests fail with the fix reverted),
+three review verdicts, and before/after screenshots + video. It skips an issue that is closed,
+labelled `needs-decision`, `epic`, `wontfix`, `duplicate` or `question`, assigned to someone other
+than whoever labelled it, or already has an open PR,
+and says why in a comment on the issue. **Only words by people with write access reach the agents**
+(the title and body if their author has it, and such people's comments, frozen at the label) — so to give
+it a request from an outside contributor, restate it in a comment. The agents run in a job with no
+GitHub token; a separate job publishes their reviewed change. It never merges; its PRs go through
+the same human review as any other. Media lives on the `agent-evidence` branch — never merge it.
+With an `AGENT_GH_TOKEN` secret, the agent also works through the Claude review on its own PR
+(`.github/workflows/issue-agent-review.yml`): it fixes or answers every thread, pushes, resolves the
+threads, and repeats — labelled `agent:in-review` meanwhile — and **asks for a human review only
+when the review is ✅, or 💬 with nothing open** (`agent:ready-for-human`). After 3 cycles a 💬
+also goes to a human as ready, with the open small notes listed; a ⛔ stops as `agent:needs-human`,
+as does any other stated reason. Before any hand-over as ready it checks the issue's acceptance
+criteria on the final code and ticks the PR's checklist. If `main` moves and an agent PR now
+conflicts with it, the loop resolves the conflict itself (a sweep runs on every push to `main`) or
+hands over. Don't review an `agent:in-review` PR yet; you'll be asked.
+To see what it's working on: the 🤖 status comment on the issue (edited at each step), the
+`agent:working` label (`is:open label:agent:working`), and Actions runs named `issue-agent #<n> · …`.
+How it works and how to run it locally: [`ci/issue-agent/README.md`](ci/issue-agent/README.md).
 
 Apache-2.0 · part of [Open Mobile Hub](https://openmobilehub.org) (Linux Foundation).
 

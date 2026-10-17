@@ -124,9 +124,10 @@ consumer of the published packages you can try hosted, run locally, or deploy yo
 settlement flow, including the passkey (same-device + cross-device caBLE) and
 Digital-Credentials payment rails and an x402 → Hedera on-chain settlement lab.
 
-These packages were originally extracted from the agentic shopping app in
-[openmobilehub/mcp-apps-shopping-demo](https://github.com/openmobilehub/mcp-apps-shopping-demo)
-(now **archived**, kept read-only for its demo videos and history).
+To see both packages in a real deployment, look at the
+[Utopia Marketplace MCP server](https://github.com/openwallet-foundation/multipaz-utopia/tree/main/organizations/marketplace/mcp): an AI agent shops its
+catalog, and verification and settlement are delegated to Multipaz and UPay through the gate's
+`verifier` seam.
 
 ## License & project
 

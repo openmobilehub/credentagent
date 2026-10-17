@@ -4,11 +4,11 @@ description: "Task list — Attesto SDK v0.1"
 
 # Tasks: Attesto SDK v0.1
 
-**Input**: Design documents from `specs/001-attesto-sdk/` — `plan.md`, `spec.md`, `research.md`,
-`data-model.md`, `contracts/attesto-gate.api.md`, `quickstart.md`. Governance: `.specify/memory/constitution.md` (v1.0.0).
+**Input**: Design documents from `specs/001-credentagent-sdk/` — `plan.md`, `spec.md`, `research.md`,
+`data-model.md`, `contracts/credentagent-gate.api.md`, `quickstart.md`. Governance: `.specify/memory/constitution.md` (v1.0.0).
 
 **Tests**: YES — TDD requested (Constitution: security-bypass paths MUST be tested; a test that passes
-without the control is useless). The 7 contract tests in `contracts/attesto-gate.api.md` are written FIRST.
+without the control is useless). The 7 contract tests in `contracts/credentagent-gate.api.md` are written FIRST.
 
 **Organization**: by user story so each is an independently testable increment.
 
@@ -135,7 +135,7 @@ payment last; the demo shows age + membership + pay cards.
 ## Phase 6: Polish & cross-cutting
 
 - [ ] T024 [P] Update repo-root `README.md` to the v0.1 API and point its usage section at
-      `specs/001-attesto-sdk/quickstart.md` (README is stale — early `gated()` shape).
+      `specs/001-credentagent-sdk/quickstart.md` (README is stale — early `gated()` shape).
 - [ ] T025 [P] No-regression check on the discovery surface: `/llms.txt` + `/.well-known/attesto.json`
       (`attesto-discovery.ts`) still serve and don't contradict the v0.1 manifest (incl. `enforcedAt` /
       `trust_level`). (The discovery surface is repo-level, not part of the SDK contract — keep it honest,

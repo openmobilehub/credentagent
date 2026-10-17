@@ -5,10 +5,9 @@ from the user's phone wallet before a consequential MCP tool completes. **Identi
 leads; payments is one application** — `age.over(21)`, a loyalty membership, a
 prescription, and `payment.in("usd")` are all just credentials in the same policy.
 
-> **Design preview / v0.1.** This package is real and tested, but the broader CredentAgent
-> SDK is still being extracted from the reference server
-> ([mcp-apps-shopping-demo](https://github.com/openmobilehub/mcp-apps-shopping-demo)).
-> See the repo's `ROADMAP.md` for what's shipping vs. next.
+> **Design preview.** This package is real and tested, and its API can still change before 1.0.
+> See the repo's [`ROADMAP.md`](https://github.com/openmobilehub/credentagent/blob/main/ROADMAP.md) for what's shipping vs. next. For a
+> storefront running it end to end, see the [Utopia Marketplace MCP server](https://github.com/openwallet-foundation/multipaz-utopia/tree/main/organizations/marketplace/mcp).
 
 ## Install
 
@@ -25,8 +24,8 @@ Express-shaped host.
 The whole flow in ≤ 10 lines — a credential-gated agentic storefront. `createStorefront()`
 publishes the ceremony seams; `new CredentAgent().mount(store.app)` wires the real `/credentagent/*`
 ceremony rails; `store.gate()` resolves your policy on every `checkout` call (copied from
-[`examples/storefront.mjs`](https://github.com/openmobilehub/mcp-apps-shopping-demo/blob/main/examples/storefront.mjs) /
-[`storefront-gate.test.ts`](https://github.com/openmobilehub/mcp-apps-shopping-demo/blob/main/storefront-gate.test.ts)):
+[`examples/storefront.mjs`](https://github.com/openmobilehub/credentagent/blob/main/examples/storefront.mjs) /
+[`storefront-gate.test.ts`](https://github.com/openmobilehub/credentagent/blob/main/storefront-gate.test.ts)):
 
 ```ts
 import { createStorefront } from "@openmobilehub/credentagent-storefront/server";
@@ -60,9 +59,9 @@ the widget shows the confirmation. Add the headphones instead and the age gate d
 > fetch and redirect carries `/store`. The wallet still binds to the page's origin.
 > The path is also part of the store's identity: a spending permission signed at
 > `shop.example/store` names that store, so another store on the same host (`shop.example/other`,
-> or the root) refuses it — provided each store signs its carts with its own
-> `checkoutSigningKey` ([#335](https://github.com/openmobilehub/credentagent/issues/335)). For the same reason, give every deployment its own `walletOrigin`:
-> two that share one (say, a preview copying production's) are one merchant.
+> or the root) refuses it, and refuses the carts it quoted. For the same reason, give every deployment its own `walletOrigin`:
+> two that share one (say, a preview copying production's) are one merchant
+> ([#335](https://github.com/openmobilehub/credentagent/issues/335)).
 
 ### Branding the ceremony pages
 
@@ -119,9 +118,14 @@ the verify response for your own tooling:
 ```
 
 - **Off by default.** A DeviceResponse from a real ID can carry personal data (the disclosed claims,
-  the issuer's certificate chain, a device public key). With the option on, it goes back only to the
-  browser that just presented it — it is never stored, logged, or put in a webhook. The payload
-  rides in the link's `#fragment`, which the browser never sends to the inspector's server. (One
+  the issuer's certificate chain, a device public key). With the option on, it goes back **only**
+  to the browser that just presented it, in that verify response. It is **never stored**: not on
+  the order's verification record (your `VerificationStore`), not on the completed order. So
+  nothing that needs only the order id returns it: not `orders.retrieve()`, the status routes,
+  `get-order-status`, the paid checkout page, the `order.settled` webhook, or the payment step
+  that completes the order (its receipt links only the credential that payment itself presented).
+  It is never logged. The payload rides in the link's `#fragment`, which the browser never sends
+  to the inspector's server. (One
   pre-existing exception: the dc-payment verify response has always carried the same bytes inside
   `mandate.userAuthorization.vpToken`; the option adds only the `presentation` block and the link.)
 - **A refused proof is returned too** — the moment you most want to look at what came back.
@@ -143,16 +147,21 @@ already read (`orders.retrieve()`, `GET /credentagent/orders/:id/status`, and th
 "proofs": [
   { "gate": "Age 21+", "rail": "credential", "trust_level": "presence-only-demo",
     "checks": [{ "gate": "Age over 21", "pass": true, "detail": "age_over_21 disclosed true" }],
-    "presentedAt": "2026-09-27T18:52:10.000Z",
-    "presentation": { "format": "mso_mdoc", "deviceResponse": "o2d2…", "inspectUrl": "https://tools.multipaz.org/mdocDeviceResponse#o2d2…" } },
+    "presentedAt": "2026-09-27T18:52:10.000Z" },
   { "gate": "Pay (USD)", "rail": "instant-demo", "trust_level": "presence-only-demo", "checks": [ … ], "presentedAt": "…" } ]
 ```
 
-- The storefront widget lists each proof on the confirmed order, with an **Inspect ↗** link when
-  `presentation` is there.
-- `presentation` appears only when the store set `inspectPresentations`; without it nothing is stored
-  but the gate, the checks, and the trust level.
-- The **`order.settled` webhook never carries `presentation`** — it goes to another service.
+- The storefront widget lists each proof on the confirmed order.
+- The completed order keeps the gate, the rail, the checks and the trust level — **never the
+  wallet's raw answer, even with `inspectPresentations` on**, because anyone who knows the order id
+  can read it. The **Inspect** link appears only right after a presentation, in the browser that
+  made it: on the consent page after an age or membership proof, and on the payment page for that
+  payment's own credential. The paid checkout page and the widget list each proof and its trust
+  level, without Multipaz Tools links.
+- A check's `detail` can still repeat a value the wallet disclosed (a membership number, a payment
+  instrument id or expiry), and the storefront's order record also keeps the cardholder's name.
+  Removing those is tracked in [#350](https://github.com/openmobilehub/credentagent/issues/350).
+- The `order.settled` webhook carries the same proofs.
 - `rail: "instant-demo"` marks a demo tap, never a wallet proof. Each proof states its own `trust_level`.
 
 ## Orders — a checkout without a storefront
@@ -241,8 +250,9 @@ but "every mandate already signed stops verifying at the next restart".
 
 A spending grant signed on a phone is recorded as an [AP2](https://github.com/google-agentic-commerce/AP2)
 mandate: an SD-JWT (RFC 9901) signed ES256, typed by AP2's `vct` claim, and you can mint and check
-mandates yourself with `credentagent.ap2`. A checkout still records the older dev-signed mandate (an
-integrity hash, not a key signature). Pass the key and `mount()`
+mandates yourself with `credentagent.ap2`. A checkout still records the older payment mandate
+(`ap2.PaymentMandate`), which is not key-signed: the passkey rail's carries a dev integrity hash, and
+the dc-payment rail's carries none. Pass the key and `mount()`
 publishes its public half, so a mandate this gate signed is verifiable by someone who does not have
 your source:
 
@@ -252,8 +262,15 @@ const credentagent = new CredentAgent({
   mandateSigningKey: JSON.parse(process.env.MANDATE_SIGNING_KEY),   // a PRIVATE P-256 JWK
   checkoutSigningKey: JSON.parse(process.env.CHECKOUT_SIGNING_KEY), // a DIFFERENT one — signs the carts you quote
 });
-credentagent.mount(app);        // serves GET /.well-known/did.json — both public halves
+credentagent.mount(app);        // serves GET /.well-known/did.json (/did.json instead for a store under a path) — both public halves
 ```
+
+The gate's identity is a [did:web](https://w3c-ccg.github.io/did-method-web/) id built from
+`walletOrigin`. A store at the site root is `did:web:shop.example`, found at
+`https://shop.example/.well-known/did.json`. A store served under a path (`walletOrigin:
+"https://shop.example/store"`) is its own identity, `did:web:shop.example:store`, found at
+`https://shop.example/store/did.json` — the `/did.json` route `mount()` serves, behind your proxy's
+`/store` prefix. A published key lets anyone check a signature; it is not issuer-verified trust.
 
 `mandateSigningKey` is **not** `gateSecret`. `gateSecret` is a symmetric HMAC secret for challenge
 tokens; this is an asymmetric key whose public half goes to the world. Omit it and the gate generates
@@ -266,9 +283,10 @@ because a quoted cart and an issued mandate are different statements: each key's
 ever checked against `credentagent.ap2.checkoutPublicJwk`. Passing the same JWK for both throws. Omit it
 and the gate generates one at boot; `doctor()` warns on a deployment, because a cart quoted before a
 restart, or on another instance, then no longer verifies.
-Give each store its **own** checkout key, above all two stores on one host: a store accepts a cart
-signed with its key whose key id names its host, so two stores sharing a host and a key would accept
-each other's carts
+Give each store its **own** checkout key. A store accepts a cart signed with its key whose key id
+names its `walletOrigin`, path included — so stores at `/coffee` and `/wine` on one host refuse each
+other's carts even if they share a key, but two deployments sharing one `walletOrigin` and one key
+accept each other's, and so does any verifier handed the key without its `kid`
 ([#335](https://github.com/openmobilehub/credentagent/issues/335)).
 
 Mint and check:
@@ -294,7 +312,7 @@ Anyone else checks it from the published document alone — a fetch and two call
 ```ts
 import { publicJwkFromDidDocument, verifyMandate } from "@openmobilehub/credentagent-gate";
 
-const doc = await (await fetch("https://shop.example/.well-known/did.json")).json();
+const doc = await (await fetch("https://shop.example/.well-known/did.json")).json(); // a path-mounted store: https://shop.example/store/did.json
 const verdict = await verifyMandate(token, { publicJwk: publicJwkFromDidDocument(doc) });
 ```
 
@@ -505,7 +523,7 @@ app.post("/checkout/:id", async (req, res) => {
 ## The three execution contexts
 
 The split is load-bearing — conflating them is the documented root cause of confusion
-([spec §0](https://github.com/openmobilehub/mcp-apps-shopping-demo/blob/main/specs/001-attesto-sdk/spec.md)). v0.1 is consolidated **Mode A**:
+([spec §0](https://github.com/openmobilehub/credentagent/blob/main/specs/001-credentagent-sdk/spec.md)). v0.1 is consolidated **Mode A**:
 
 1. **Tool — mints the link + reports requirements.** Your `checkout` handler runs once when
    checkout is requested. There is no phone in the loop, so it does **not** run a ceremony — it
@@ -533,8 +551,7 @@ Wrap each in `required(c)` or `optional(c)` to build the ordered policy array. A
 conditional with `.when((order) => boolean)` — it returns a fresh `Credential` (non-mutating) whose
 predicate is AND-ed onto any existing `appliesTo`.
 
-**Gate any credential** with `defineCredential` — no registration step, usable by object
-(from [`specs/001-attesto-sdk/quickstart.md`](https://github.com/openmobilehub/mcp-apps-shopping-demo/blob/main/specs/001-attesto-sdk/quickstart.md)):
+**Gate any credential** with `defineCredential` — no registration step, usable by object:
 
 ```ts
 import { defineCredential, dcql, gate } from "@openmobilehub/credentagent-gate";
@@ -543,7 +560,7 @@ const prescription = defineCredential({
   id: "prescription",
   request: dcql({ docType: "org.hl7.prescription.1", claims: ["rx_valid"] }),
   verify: (c) => c.rx_valid === true,
-  effect: gate(),                                   // or discount({ percent }) / authorize()
+  effect: gate(),                                   // custom credentials support gate() only
   appliesTo: (order) => order.lines.some((l) => l.requiresRx),  // definition-time conditional
   ui: { label: "Prescription", action: "Verify prescription" },
 });
@@ -554,7 +571,10 @@ const prescription = defineCredential({
 never-retain by default). The credential id defaults to a stable, unique derivation from the full
 doctype (`org.openwallet.payment.1` → `org_openwallet_payment_1`); pass `dcql({ docType, claims, id })`
 to name it yourself. The three effect builders — `gate()`, `discount({ percent })`, `authorize()` —
-are the only effects the resolver interprets.
+are the only effects the resolver interprets. A **custom** credential takes `gate()` only:
+`defineCredential` throws on `discount()` or `authorize()`, because neither would be enforced for it
+yet (a custom `authorize` would complete unproven). The built-ins that use them (`membership`,
+`payment`) keep their own paths.
 
 A custom credential is **served by the mounted ceremony and enforced end-to-end** — no new code
 path: `requirements()` registers it by id, the credential-gate rail builds the wallet request from
@@ -600,7 +620,8 @@ The three rails `mount()` serves differ in how much crypto is real today:
 | `delegated` (opt-in — `mount({ verifier })`) | the same policy, verified + settled by an **external** verifier/processor; the gate re-derives the binding and re-runs your policy, and **relays** the verdict's trust | the verifier's — `issuer-verified` with a real anchor |
 
 The built-in OpenID4VP plumbing is scaffolded; cryptographic mdoc trust is the integration step, not
-new cryptography. The mandate is AP2-shaped and dev-signed (integrity hash), not key-signed.
+new cryptography. The payment mandate a checkout ceremony records (`ap2.PaymentMandate`) is AP2-shaped
+and not key-signed: the passkey rail's carries a dev integrity hash, and the dc-payment rail's carries none.
 `trust_level: "issuer-verified"` is reachable **today** through the `verifier` seam (below) — the gate
 relays a level a real anchor produced; it does not verify issuer signatures itself.
 
@@ -680,14 +701,14 @@ The one rule that makes delegation safe: **trust is delegable, binding is not.**
 - The **gate** keeps what it must never outsource: it re-derives the amount/payee from the catalog and
   re-checks the verdict against it, re-runs *your* policy over the disclosed claims (an 18+ verifier
   check never satisfies `age.over(21)`), and only **then** authorizes `settle`. A verifier that
-  approves the wrong amount — or a stricter-than-the-merchant age — is refused before any money moves.
+  approves the wrong amount — or a laxer age than the merchant requires — is refused before any money moves.
 
 The concrete verifier is a **host-side adapter** — no processor-specific symbol lives in this package.
 
-> **No real adapter ships yet.** This package defines the *interface*; the first real adapter lives
-> host-side in [`openwallet-foundation/multipaz-utopia`](https://github.com/openwallet-foundation/multipaz-utopia)
-> (**S6**, tracked in [multipaz-utopia#16](https://github.com/openwallet-foundation/multipaz-utopia/issues/16)).
-> Today the only way to run the delegated rail is a **stand-in** like the scripted verifier in
+> **No adapter ships in this package.** This package defines the *interface*; the first real adapter
+> lives host-side in the [Utopia Marketplace MCP server](https://github.com/openwallet-foundation/multipaz-utopia/tree/main/organizations/marketplace/mcp) —
+> [`src/verifier.ts`](https://github.com/openwallet-foundation/multipaz-utopia/blob/main/organizations/marketplace/mcp/src/verifier.ts), which hands verification and settlement to Multipaz and UPay.
+> Without a host like that, the way to run the delegated rail is a **stand-in** like the scripted verifier in
 > [`examples/delegated-verifier/`](../../examples/delegated-verifier) — a test double, never shipped, and
 > deliberately kept out of the runnable `run-storefront` example. Stating this plainly is the honesty
 > fence working, not a gap.
@@ -850,8 +871,12 @@ is the fast-follow, and the gate **relays** that level verbatim with the attesto
 Test the whole flow **with no phone** using the exported simulated wallet — see
 [`examples/device-signed-grants.mjs`](https://github.com/openmobilehub/credentagent/blob/main/examples/device-signed-grants.mjs)
 (`devSimulateWalletSignature` produces a real device signature the way Stripe's test cards stand in
-for a real card). The **on-device** path — import `payment.mpzpass` into Multipaz and sign on a
-phone — is verified separately.
+for a real card). The **on-device** path is verified separately: the grant asks the wallet for an
+**SD-JWT** payment credential (`vct` `urn:emvco:dpc:card:1` or `com.emvco.dpc`). From a clone of
+this repo, mint one with
+[`node tools/demo-pki/mint/mint-dpc-sdjwt.mjs --mpzpass`](https://github.com/openmobilehub/credentagent/blob/main/tools/demo-pki/mint/mint-dpc-sdjwt.mjs),
+which writes `tools/demo-pki/keys/dpc.mpzpass`. Import that file into Multipaz, and sign on the
+phone. The mdoc `payment.mpzpass` from the demo set no longer matches.
 
 ### Credentials on a grant — presented before you authorize, or not at all
 
@@ -939,15 +964,23 @@ effectively a bearer instrument, fenced as a demo. A *real* HNP control requires
 "delegated"` **and** `trust_level: "issuer-verified"`; the HTTP intent rail + the wallet server that
 provide those are later increments.
 
-## API surface (v0.1)
+## API surface
 
 ```ts
 // Client (configure once, then declarative calls)
 class CredentAgent {
-  constructor(opts?: { walletOrigin?: string; store?: VerificationStore; credentials?: Credential[]; branding?: Branding; inspectPresentations?: boolean });
+  constructor(opts?: CredentAgentOptions);   // walletOrigin, store, credentials, branding, inspectPresentations,
+                                             // readerIdentity, orderStore, completedOrderStore, gateSecret, webhooks,
+                                             // catalog, loyaltyDiscountPct, mandateSigningKey, checkoutSigningKey
+                                             // (the two keys: stable private P-256 JWKs from your secret manager)
   requirements(order: GateOrder, policy: Step[]): VerificationManifestEntry[];   // Context 1
-  mount(app: ExpressApp, ceremony?: MountCeremony): void;                        // Context 2
+  mount(app: ExpressApp, ceremony?: MountCeremony): void;                        // Context 2 (+ /.well-known/did.json, or /did.json for a store under a path)
   doctor(opts?: { print?: boolean }): DoctorReport;                              // config preflight (#25)
+  readonly orders: Orders;     // orders.create / retrieve / serve
+  readonly grants: Grants;     // spending grants
+  readonly webhooks: Webhooks;
+  readonly ap2: Ap2Issuer;     // AP2 mandates signed with mandateSigningKey
+  on(event: "order.settled", handler): void;
 }
 
 // Policy builders + extensibility
@@ -971,6 +1004,17 @@ sealIntent  ·  checkDraw  ·  signDraw  ·  MemoryRevocationStore  ·  Draw / I
 // signingKey-gated check in completeOrder + the opt-in `statelessOrders` transport
 issueCartMandate(args, secret)  ·  verifyCartMandate(mandate, orderId, secret)  ·  DEFAULT_CART_MANDATE_TTL_MS
 
+// AP2 mandates (SD-JWT, ES256) — the store's own, and checking any
+credentagent.ap2.checkout(args) · .payment(args) · .openCheckout(args) · .openPayment(args) · .signCheckout(checkout)
+verifyMandate(token, { publicJwk, … })  ·  didWebFor(origin)  ·  didDocument(...)  ·  resolveSigningKey(...)
+
+// Agent purchases — the store's side (the agent's side is the /agent entry point below)
+verifyDelegatedPurchase(proof, { trust: "presence-only-demo", audience, nonce, checkoutKey, price, spent?, nowMs? })
+  → PurchaseVerdict | PurchaseRefusal   // { ok: false, code, detail, violations? }
+
+// Money — an Amount is integer minor units; converting to minor units refuses rather than rounds
+amountFrom · amountOfMinor · amountsEqual · formatAmount · sumAmounts · toMajorUnits · toMinorUnits · exponentFor
+
 // Retained Mode-B / roadmap blocking primitive
 gated()  ·  buildVerificationRequired()  ·  isVerificationRequired()  ·  envelopeInstruction()
 ageDcql()  ·  ENVELOPE_VERSION  ·  ENVELOPE_SENTINEL
@@ -980,10 +1024,16 @@ ageDcql()  ·  ENVELOPE_VERSION  ·  ENVELOPE_SENTINEL
 //        TrustLevel, DcqlQuery, DcqlClaim, DcqlCredentialOption, ExpressApp,
 //        CompletionSeam / SettlementSeam / CeremonyOrder (host composition)
 //        DelegatedVerifier / DelegatedVerdict / DelegatedHandoff / SettlementRecordLike (delegated seam)
+
+// Entry points besides the root
+"@openmobilehub/credentagent-gate/agent"   // the AGENT's side; holds its private key, so never imported by a store
+  AgentKey.generate() · AgentKey.fromJwk(jwk) · DelegatedIntent.fromWalletPresentation({ presentation, disclosures }) · intent.spend(args) → DelegatedPurchaseProof
+"@openmobilehub/credentagent-gate/cards"   // the card kit, first slice: the permission card's data contract
+  GRANT_VIEW_KIND · GrantViewData · GrantViewProduct
 ```
 
-Full, compiler-checked contract: [`specs/001-attesto-sdk/`](https://github.com/openmobilehub/mcp-apps-shopping-demo/tree/main/specs/001-attesto-sdk/) (the
-[quickstart](https://github.com/openmobilehub/mcp-apps-shopping-demo/blob/main/specs/001-attesto-sdk/quickstart.md), [`spec.md`](https://github.com/openmobilehub/mcp-apps-shopping-demo/blob/main/specs/001-attesto-sdk/spec.md),
-and the [mount contract](https://github.com/openmobilehub/mcp-apps-shopping-demo/blob/main/specs/003-gate-ceremony-extraction/contracts/attesto-mount.api.md)).
+More on the API: [`docs/reference/api.md`](https://github.com/openmobilehub/credentagent/blob/main/docs/reference/api.md).
+The first design specs ([`specs/001`–`003`](https://github.com/openmobilehub/credentagent/tree/main/specs)) predate the project's
+rename: they still use its old name (Attesto) and old routes, so don't build against them.
 
 Apache-2.0 · part of [Open Mobile Hub](https://openmobilehub.org) (Linux Foundation).
