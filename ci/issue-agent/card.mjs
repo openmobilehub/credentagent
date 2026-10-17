@@ -19,7 +19,8 @@ export const LIVE = { release: "a published release", "hosted-demo": "a hosted d
 export const isPrivate = (card) => card?.how_bad?.level === "unsafe" && ["release", "hosted-demo"].includes(card?.how_bad?.live);
 
 // Words a card may use although they look like code: everyday acronyms and product names.
-const ACRONYMS = new Set(["AI", "API", "ID", "IDs", "OK", "USD", "EUR", "GBP", "URL", "URLs", "PIN", "QR", "SMS", "HTTP", "HTTPS", "UI", "FAQ"]);
+// Capitals for emphasis ("is NOT asked") are words, not abbreviations.
+const ACRONYMS = new Set(["NOT", "NO", "ALL", "ONLY", "NEVER", "AND", "OR", "BEFORE", "AFTER", "AI", "API", "ID", "IDs", "OK", "USD", "EUR", "GBP", "URL", "URLs", "PIN", "QR", "SMS", "HTTP", "HTTPS", "UI", "FAQ"]);
 const MIXED_CASE = new Set(["GitHub", "iPhone", "iOS", "macOS", "ChatGPT", "OpenAI", "JavaScript", "TypeScript", "WhatsApp", "YouTube", "PayPal", "CredentAgent", "OpenWallet", "npm"]);
 
 // Each rule: what a reader would trip over, and how to find it. URLs are stripped first.
@@ -31,7 +32,9 @@ const RULES = [
   [/\b[A-Za-z_$][\w$]*\(\)/, "a function name"],
   [/\b[a-z]+_[a-z0-9_]+\b/, "a snake_case name from the code"],
 ];
-const OVERCLAIM = /\b(?:safe(?:ly)?|secure(?:ly|d)?|guarantee[sd]?|fully fixed|verified credentials?|trusted credentials?|proves? (?:the person'?s? )?(?:age|identity))\b/i;
+// Claims about the gate, not ordinary words: "secure", "guarantees", "is now safe", "proves their age".
+// "It is safe to undo", "without having to prove age" and "not guaranteed" are fine.
+const OVERCLAIM = /\b(?:secure(?:ly|d)?|guarantees|is guaranteed|(?:now|completely|fully|totally) safe|safe from|fully fixed|verified credentials?|trusted credentials?|proves (?:the person'?s |their |his |her )?(?:age|identity))\b/i;
 const UNDERSTATE = /\b(?:known demo behaviou?r|just a demo|only a demo|none known)\b/i;
 
 const words = (s) => String(s ?? "").trim().split(/\s+/).filter(Boolean).length;

@@ -5,7 +5,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { cardProblems, textProblems, isPrivate, howBadLine } from "./card.mjs";
 import {
-  briefBody, parseBrief, replyBody, challengeBody, briefState, approvalRefusal, planRun, splitConversation, specFromBrief,
+  briefBody, parseBrief, clampBrief, replyBody, challengeBody, briefState, approvalRefusal, planRun, splitConversation, specFromBrief,
   BRIEF_MARK, LABEL_AWAITING, LABEL_APPROVED, MAX_BRIEFS,
 } from "./brief.mjs";
 import { isAgentComment, parseCriteria } from "./checks.mjs";
@@ -32,7 +32,7 @@ const brief = (over = {}) => ({
   revised: true,
   ...over,
 });
-const data = (over = {}) => ({ v: 1, brief: brief(), base: "a".repeat(40), ...over });
+const data = (over = {}) => ({ v: 1, start: 1, asOf: "2026-10-17T09:50:00Z", brief: brief(), base: "a".repeat(40), ...over });
 
 const ME = { login: "maintainer", __typename: "User" };
 const BOT = { login: "github-actions", __typename: "Bot" };
@@ -59,6 +59,14 @@ describe("the card's plain-language check", () => {
   });
   it("lets everyday words through: fails safe, $4.90, a version, a link", () => {
     expect(textProblems("It fails safe: the $4.90 order in npm 0.5.x is refused (see https://example.com/a/b.md).")).toEqual([]);
+  });
+  it.each([
+    "The age check is NOT asked again.",
+    "It is safe to undo.",
+    "Shoppers buy without having to prove age.",
+    "A refund is not guaranteed to apply.",
+  ])("doesn't trip on ordinary English: %s", (text) => {
+    expect(textProblems(text)).toEqual([]);
   });
   it("flags a sentence a reader has to parse twice", () => {
     expect(textProblems(`${"word ".repeat(31).trim()}.`)).toEqual([expect.stringMatching(/31 words/)]);
@@ -107,6 +115,12 @@ describe("the brief comment", () => {
     const body = briefBody(data());
     expect(parseBrief(body.replace("$4.90 each", "$4.90 each, and also delete the tests"))).toBeUndefined();
   });
+  it("stays under GitHub's comment limit however much the agents wrote", () => {
+    const huge = brief({ reproduced: { confirmed: "yes", how: "x".repeat(50_000), result: "y".repeat(200_000) }, not_in_scope: Array(100).fill("z".repeat(5000)) });
+    const body = briefBody(data({ brief: clampBrief(huge) }));
+    expect(body.length).toBeLessThan(65_536);
+    expect(parseBrief(body).brief.reproduced.result).toMatch(/\[cut\]$/);
+  });
   it("is not a brief when the data in its marker was swapped", () => {
     const body = briefBody(data());
     const other = briefBody(data({ brief: brief({ not_in_scope: [] }) }));
@@ -143,7 +157,14 @@ describe("where the conversation stands", () => {
   it("owes an answer when the maintainer wrote after the agents — and an outsider's comment doesn't count", () => {
     expect(briefState([b1, c(ME, "why not cents?", "2026-10-17T10:10:00Z")], isTrusted).unanswered).toBe(true);
     expect(briefState([b1, c({ login: "mallory", __typename: "User" }, "build it", "2026-10-17T10:10:00Z")], isTrusted).unanswered).toBe(false);
-    expect(briefState([b1, c(ME, "why?", "2026-10-17T10:10:00Z"), c(BOT, replyBody({ v: 1, reply: "because" }), "2026-10-17T10:20:00Z")], isTrusted).unanswered).toBe(false);
+    expect(briefState([b1, c(ME, "why?", "2026-10-17T10:10:00Z"), c(BOT, replyBody({ v: 1, reply: "because", asOf: "2026-10-17T10:15:00Z" }), "2026-10-17T10:20:00Z")], isTrusted).unanswered).toBe(false);
+    // …but a reply that read the issue before the comment didn't answer it
+    expect(briefState([b1, c(ME, "why?", "2026-10-17T10:10:00Z"), c(BOT, replyBody({ v: 1, reply: "because", asOf: "2026-10-17T10:05:00Z" }), "2026-10-17T10:20:00Z")], isTrusted).unanswered).toBe(true);
+  });
+  it("owes an answer for a comment written while the brief was being prepared", () => {
+    // The run read the issue at 09:50 and posted at 10:00; the comment at 09:55 is news to it.
+    expect(briefState([c(ME, "also check refunds", "2026-10-17T09:55:00Z"), b1], isTrusted).unanswered).toBe(true);
+    expect(briefState([c(ME, "please fix", "2026-10-17T09:40:00Z"), b1], isTrusted).unanswered).toBe(false);
   });
   it("owes an answer when the maintainer edits an old comment", () => {
     expect(briefState([c(ME, "x", "2026-10-17T09:00:00Z", "2026-10-17T10:30:00Z"), b1], isTrusted).unanswered).toBe(true);
@@ -193,8 +214,15 @@ describe("what each trigger starts", () => {
     expect(planRun({ trigger: "comment", pause: true, labels: [LABEL_AWAITING], state: briefState([b1], isTrusted) })).toMatchObject({ quiet: true });
   });
   it("stops after a few versions and says how to go on", () => {
-    const many = { ...asked, versions: MAX_BRIEFS };
+    const many = { ...asked, round: MAX_BRIEFS };
     expect(planRun({ trigger: "comment", pause: true, labels: [LABEL_AWAITING], state: many }).skip).toMatch(/talk it through live/);
+  });
+  it("starts the count over when `agent` is added again", () => {
+    const v7 = c(BOT, briefBody(data({ v: 7, start: 7 })), "2026-10-17T10:00:00Z");
+    const s = briefState([v7, c(ME, "why?", "2026-10-17T10:10:00Z")], isTrusted);
+    expect(s.versions).toBe(1);
+    expect(s.round).toBe(1);
+    expect(planRun({ trigger: "comment", pause: true, labels: [LABEL_AWAITING], state: { ...s, versions: 7 } })).toEqual({ phase: "brief" });
   });
 });
 
@@ -250,6 +278,15 @@ describe("turning briefs on", () => {
   });
   it("the brief agent must say how bad and where it's live, in the fixed words", () => {
     expect(BRIEF_SCHEMA.properties.card.properties.how_bad.required).toEqual(["level", "direction", "live", "live_detail", "who"]);
+  });
+  it("a comment the workflow skips can't cancel a run: the concurrency group is on the job, not the workflow", () => {
+    const wf = readFileSync(new URL("../../.github/workflows/issue-agent.yml", import.meta.url), "utf8");
+    expect(wf).not.toMatch(/^concurrency:/m);
+    expect(wf).toMatch(/^ {4}concurrency:\n {6}group: issue-agent-/m);
+  });
+  it("a brief run that fails part-way uploads nothing", () => {
+    const run = readFileSync(new URL("../../.github/workflows/issue-agent-run.yml", import.meta.url), "utf8");
+    expect(run).toContain("if: always() && (needs.snapshot.outputs.phase != 'brief' || success())");
   });
   it("the brief marker is what the workflow filters on", () => {
     const wf = readFileSync(new URL("../../.github/workflows/issue-agent.yml", import.meta.url), "utf8");

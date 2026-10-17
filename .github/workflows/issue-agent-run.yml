@@ -118,6 +118,7 @@ jobs:
     outputs:
       skip: ${{ steps.snap.outputs.skip }}
       phase: ${{ steps.snap.outputs.phase }}
+      asof: ${{ steps.snap.outputs.asof }}
     steps:
       - name: Wait for follow-up comments
         if: inputs.wait_seconds > 0
@@ -218,7 +219,9 @@ jobs:
           # "brief" or "implement" (an empty phase is a run from before briefs: implement).
           node harness/ci/issue-agent/run.mjs "$([ "$PHASE" = brief ] && echo brief || echo implement)" issue.json --target target --dir "$RUNNER_TEMP/issue-agent/run"
       - name: Hand the run to publish (and keep it)
-        if: always()
+        # A brief that failed part-way may hold notes on a security hole it never got to judge: it
+        # uploads nothing (publish then says the run failed).
+        if: always() && (needs.snapshot.outputs.phase != 'brief' || success())
         uses: actions/upload-artifact@v4
         with:
           name: issue-agent-run
@@ -274,6 +277,8 @@ jobs:
           ISSUE_AGENT_DISCUSS_ROUTINE: ${{ secrets.ISSUE_AGENT_DISCUSS_ROUTINE }}
           ISSUE_AGENT_DISCUSS_TOKEN: ${{ secrets.ISSUE_AGENT_DISCUSS_TOKEN }}
           PHASE: ${{ needs.snapshot.outputs.phase }}
+          ISSUE_AGENT_TRIGGER: ${{ inputs.trigger }}
+          ISSUE_AGENT_BRIEF_ASOF: ${{ needs.snapshot.outputs.asof }} # when the run read the issue
         run: |
           mkdir -p "$RUNNER_TEMP/issue-agent/run"
           node harness/ci/issue-agent/run.mjs "$([ "$PHASE" = brief ] && echo publish-brief || echo publish)" "$RUNNER_TEMP/issue-agent/run" --target target --issue "$ISSUE"

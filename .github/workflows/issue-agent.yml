@@ -36,12 +36,6 @@ on:
         options: [dispatch, comment]
         default: dispatch
 
-# One run per issue at a time. Comments get their own group, and a newer comment replaces a waiting or
-# running answer — so three quick comments get one answer that covers all three.
-concurrency:
-  group: issue-agent-${{ github.event.issue.number || inputs.issue || 'sweep' }}${{ (github.event_name == 'issue_comment' || inputs.trigger == 'comment') && '-talk' || '' }}
-  cancel-in-progress: ${{ github.event_name == 'issue_comment' || inputs.trigger == 'comment' }}
-
 permissions: {}
 
 jobs:
@@ -55,6 +49,12 @@ jobs:
           && contains(github.event.issue.labels.*.name, 'agent:awaiting-approval')
           && !startsWith(github.event.comment.body, '<!-- issue-agent')
           && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
+    # One run per issue at a time. Comments get their own group, and a newer comment replaces a waiting or
+    # running answer — so three quick comments get one answer that covers all three. On the job, not the
+    # workflow: a comment this job skips (an outsider's, or the agents' own) must not cancel anything.
+    concurrency:
+      group: issue-agent-${{ github.event.issue.number || inputs.issue }}${{ (github.event_name == 'issue_comment' || inputs.trigger == 'comment') && '-talk' || '' }}
+      cancel-in-progress: ${{ github.event_name == 'issue_comment' || inputs.trigger == 'comment' }}
     # This commit's copy: a change to the jobs is tested by this repo's own runs before others pick it up.
     uses: ./.github/workflows/issue-agent-run.yml
     # The most any job gets; each narrows it (the agents' job: contents read, no token).

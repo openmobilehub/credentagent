@@ -129,9 +129,10 @@ scope, and the agents' plan.
 
 **What keeps it honest:**
 
-- **You approve exactly what you read.** The brief's comment carries its own data; approval re-renders
-  it and compares. A brief edited by hand, a comment you haven't had an answer to, or an issue edited
-  since the brief — each refuses the approval and says why.
+- **You approve exactly what you read.** The brief's comment carries its own data and a hash over the
+  data and the text; approval checks it. A brief edited by hand, a comment you haven't had an answer to
+  (including one written while the brief was being prepared), or an issue edited since the brief —
+  each refuses the approval and says why.
 - **The approved brief is the contract.** Its criteria become the build's checklist word for word
   (after-merge checks go to you in the PR instead). If the implementer thinks one is wrong, it doesn't
   reword it: it stops, says why on the issue, and the brief goes back to waiting for you.
@@ -141,12 +142,14 @@ scope, and the agents' plan.
 - **A security hole is never briefed in public.** When the brief finds something **Unsafe** that a
   release or a hosted demo lets through, nothing about it is posted (SECURITY.md): the issue gets a
   short note to move it to a private advisory, the run keeps only its outcome, and the brief's log
-  never reaches the job's public console.
+  never reaches the job's public console. A brief run that fails part-way uploads nothing at all.
 - `needs-decision` doesn't stop a brief: approving it *is* the decision.
+- Re-adding `agent` starts over: a fresh brief, and a fresh count of versions.
 
 **Replies arrive by themselves.** A comment by a member or collaborator on an issue labelled
 `agent:awaiting-approval` starts a run; it waits two minutes first, and a newer comment replaces it, so
-three quick comments get one answer. After 6 versions it stops and suggests approving or talking it
+three quick comments get one answer (a comment the workflow skips — an outsider's, or the agents' own —
+cancels nothing). After 6 versions it stops and suggests approving or talking it
 through live. Every hour, a check starts a run for any comment whose event was lost (as the workflow's
 own bot — allowed for comment runs only, which answer nothing but write-access people's comments).
 
@@ -308,6 +311,8 @@ node ci/issue-agent/run.mjs 286 --no-publish        # everything except pushing;
 node ci/issue-agent/run.mjs publish ~/…/issue-286-<run>   # then publish that exact run
 node ci/issue-agent/run.mjs 286                     # or both in one go
 node ci/issue-agent/run.mjs --poll                  # every open `agent` issue with no PR yet
+node ci/issue-agent/run.mjs 286 --trigger comment   # briefs on: answer the latest comment on the brief
+node ci/issue-agent/run.mjs 286 --trigger approved  # briefs on: build the approved brief
 ```
 
 Each run gets a folder (`--runs`, default `$TMPDIR/credentagent-issue-agent/issue-<n>-<run>`):
