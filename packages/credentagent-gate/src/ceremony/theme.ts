@@ -559,8 +559,8 @@ export function progressRail(steps: RailStep[], currentIndex: number): string {
 export function checkoutRail(
   order: { lines: { minimumAge?: number }[]; discount: number; total: number },
   current: string, // "age" | "membership" | "pay" | a custom credential id
-  // `includePay: false` drops the Pay step for a policy with NO payment credential — an
-  // identity-only gate settles nothing, so a priced order must not imply a payment step.
+  // `includePay: false` drops the Pay step for a policy with NO payment credential — the
+  // delegated rail builds no settle step for it, so a priced order must not imply a Pay step.
   opts: { ageVerified?: boolean; currentLabel?: string; includePay?: boolean } = {},
 ): string {
   const isBuiltin = current === "age" || current === "membership" || current === "pay";

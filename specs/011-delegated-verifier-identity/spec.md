@@ -21,7 +21,7 @@ The rail already supports it, and the behavior is pinned:
 (*"an identity-only delegated gate (no payment) completes with NO settlement call"*) — `settle?()`
 is optional on `DelegatedVerifier` ([`ceremony/types.ts`](../../packages/credentagent-gate/src/ceremony/types.ts)),
 and the verify handler only builds a settle thunk when `policyHasPayment(...)` is true
-([`delegated-payment/routes.ts:183`](../../packages/credentagent-gate/src/ceremony/delegated-payment/routes.ts)).
+([`delegated-payment/routes.ts:186`](../../packages/credentagent-gate/src/ceremony/delegated-payment/routes.ts)).
 What was missing is a **story a developer can run and read**. Writing it exposed that the shared
 approve page still spoke as a checkout on this path, so the gate package also changes: the page's
 wording and return link (SC-003). The rail's backend is unchanged.

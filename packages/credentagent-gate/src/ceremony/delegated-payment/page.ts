@@ -49,9 +49,9 @@ export interface DelegatedPageOptions {
 export function renderDelegatedPage(opts: DelegatedPageOptions): string {
   const { order, total, currency, lines, cart, rail } = opts;
   // Honesty (Principle VII): the page may not claim more than the ceremony does. A policy
-  // with no authorize() credential never settles — pinned by "an identity-only delegated
-  // gate (no payment) completes with NO settlement call" — so every word below that promises
-  // a payment is simply false on that path.
+  // with no authorize() credential builds no settle step on this rail — pinned by "an
+  // identity-only delegated gate (no payment) completes with NO settlement call" — so the page
+  // promises no payment. (A host-wide `settle` still runs in completeOrder: see `hasPayment`.)
   const hasPayment = opts.hasPayment !== false;
   const copy = hasPayment
     ? {

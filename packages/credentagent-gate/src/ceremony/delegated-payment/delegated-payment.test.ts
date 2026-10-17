@@ -625,11 +625,11 @@ describe("delegated rail — the gate names no verifier", () => {
 });
 
 // ── An identity-only delegated gate must not be dressed as a payment (#141 follow-up) ────
-// This rail is shared with the payment flow, but a policy with NO authorize() credential
-// settles nothing — pinned above by "an identity-only delegated gate (no payment) completes
-// with NO settlement call". The approve page nevertheless hardcoded "Authorize payment", a
-// "Pay" step, "present a payment credential" and "settlement", so the ONE screen a human
-// reads announced a payment that provably never happens (Principle VII: the page must not
+// This rail is shared with the payment flow, but for a policy with NO authorize() credential
+// it builds no settle step — pinned above by "an identity-only delegated gate (no payment)
+// completes with NO settlement call". The approve page nevertheless hardcoded "Authorize
+// payment", a "Pay" step, "present a payment credential" and "settlement", so the ONE screen a
+// human reads announced a payment this rail never makes (Principle VII: the page must not
 // claim more than the ceremony does). It also ignored the host's `returnUrl` seam that both
 // sibling rails already honor (dc-payment/routes.ts, passkey/routes.ts), stranding the user
 // on `/checkout` — a route a non-storefront host does not serve.

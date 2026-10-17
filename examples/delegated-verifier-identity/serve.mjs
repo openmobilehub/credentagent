@@ -129,7 +129,7 @@ function releaseRecord({ subject, requestId }) {
   }
   // The approve page names this record, so a request without one would ask the person to approve
   // "unknown" — and a `null` name would still release on the re-call. Refuse it up front.
-  if (typeof subject !== "string" || subject === "") {
+  if (typeof subject !== "string" || subject.trim() === "") {
     return { released: false, error: "name the record to release" };
   }
   const id = `REQ-${randomUUID()}`;

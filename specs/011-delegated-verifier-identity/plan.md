@@ -38,7 +38,7 @@ devDependency, used by `bring-your-own-host.mjs`) + the two workspace packages. 
   ONE verification store everywhere (mount only injects its own store when locals has none —
   invariant 4). `defineHost` not exposing `verifier` is a DX gap — issue #355.
 - Identity-only completion: `policyHasPayment` false ⇒ no settle thunk
-  ([`delegated-payment/routes.ts:183`](../../packages/credentagent-gate/src/ceremony/delegated-payment/routes.ts));
+  ([`delegated-payment/routes.ts:186`](../../packages/credentagent-gate/src/ceremony/delegated-payment/routes.ts));
   pinned by [`delegated-payment.test.ts:508`](../../packages/credentagent-gate/src/ceremony/delegated-payment/delegated-payment.test.ts).
 - Scripted walk-through drives the rail's real HTTP legs:
   `GET /credentagent/delegated/request?order=…` → `{ referenceToken }`
@@ -57,7 +57,7 @@ devDependency, used by `bring-your-own-host.mjs`) + the two workspace packages. 
 | II — Three execution contexts | PASS | The tool handler only mints the link + typed refusal (Context 1); the ceremony runs on the mounted `/credentagent/delegated` page (Context 2); the re-call reads the completion record (Context 3). The scripted walk-through drives the page's own HTTP legs — it does not move ceremony logic into the tool. |
 | III — Consolidated checkout | PASS (n/a) | No checkout; one handoff link to one ceremony page. |
 | IV — One ordered policy array | PASS | Policy is exactly `[required(age.over(21))]`. No payment ⇒ nothing to order last; amount is $0, derived server-side from the action "catalog", never passed. |
-| V — Extensible to any credential | PASS | Built-in `age` keeps the file minimal; README notes a `defineCredential` licence gate can replace it (the action's `minimumAge` tag goes too). |
+| V — Extensible to any credential | PASS | Built-in `age` keeps the file minimal; the README lists what a `defineCredential` licence gate takes instead (it must apply to the action, the `minimumAge` tag goes, the stand-in discloses its claims under the credential's id, and the refusal's `credential` is typed to built-ins — #23). |
 | VI — structuredContent is data | PASS | The envelope refusal is plain JSON (`buildVerificationRequired`); no functions cross the wire. |
 | VII — Honesty in types/copy | **PASS (binding copy rule)** | The stand-in reports `trust_level: "presence-only-demo"` verbatim; file + README carry the S6 fence (no real adapter yet, `multipaz-utopia#16`). No copy may present the gate as a real safety control. |
 | Security Requirements | PASS | Release happens ONLY off the completed record the shared completion wrote (enforce-on-every-path); the $0 amount is re-derived from the catalog (never the token); state keyed per request id; `underage` mode proves the 18+-for-21+ refusal (explicit positive claims); the reference token stays sealed/order-bound (rail behavior, untouched). |
