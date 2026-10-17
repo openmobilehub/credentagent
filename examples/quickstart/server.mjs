@@ -40,7 +40,7 @@ const walletOrigin = deployedOrigin ?? `http://localhost:${port}`;
 // The priced catalog (dollars) the grants resource prices + bounds delegated spends from —
 // derived from the SAME storefront catalog so a grant's allow-bounds and the checkout agree.
 const grantCatalog = Object.fromEntries(
-  SAMPLE_CATALOG.map((p) => [p.id, { price: p.price, category: p.category, ...(p.minimumAge ? { minAge: p.minimumAge } : {}) }]),
+  SAMPLE_CATALOG.map((p) => [p.id, { price: p.price, category: p.category, ...(p.minimumAge ? { minAge: p.minimumAge } : {}), ...(p.requiresRx ? { requiresRx: true } : {}) }]),
 );
 // The grants resource lives on the CredentAgent, so construct it BEFORE the storefront wires it in.
 // The reader identity this gate presents (#51). Supplied, it signs each wallet request as a
