@@ -14,8 +14,14 @@ export function titleAuthor(author, renames) {
   return renames.length ? renames.at(-1)?.actor?.login ?? undefined : author;
 }
 
-/** Paths the agent may never publish a change to. */
-export const forbiddenPaths = (paths) => [...new Set(paths.filter((p) => p === ".github" || p.startsWith(".github/") || p === ".git" || p.startsWith(".git/")))];
+/**
+ * Paths the agent may never publish a change to: `.github/`, `.git/`, and everything under `.claude/`
+ * but its skills. Skills are guidance, like docs/; settings, hooks, agents and commands decide what the
+ * agents themselves may do.
+ */
+const under = (p, dir) => p === dir || p.startsWith(`${dir}/`);
+export const forbiddenPaths = (paths) => [...new Set(paths.filter((p) =>
+  under(p, ".github") || under(p, ".git") || (under(p, ".claude") && !p.startsWith(".claude/skills/"))))];
 
 /**
  * The files a staged change actually touches, as git sees them after `git apply --index` — not as

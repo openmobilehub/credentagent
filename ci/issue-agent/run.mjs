@@ -241,7 +241,12 @@ const READ_TOOLS = ["Read", "Grep", "Glob"];
 const INSPECT_BASH = ["Bash(git diff *)", "Bash(git diff)", "Bash(git log *)", "Bash(git show *)", "Bash(git status *)", "Bash(git status)", "Bash(ls *)", "Bash(grep *)", "Bash(sed -n *)", "Bash(head *)", "Bash(tail *)", "Bash(wc *)", "Bash(cat *)"];
 // Running the project's checks executes the implementer's code; reviewers may, but their tree is reset after.
 const CHECK_BASH = CONFIG.checkTools;
-const WRITE_TOOLS = ["Edit", "Write", "MultiEdit", "Bash(npm *)", "Bash(npx *)", "Bash(node *)", "Bash(mkdir *)"];
+// Claude Code refuses writes under .claude/ unless a rule names the path, so skills get explicit rules
+// (both the project-relative and the cwd-anchored form). Nothing else under .claude/ is allowed, and the
+// publish step refuses it anyway (checks.mjs, forbiddenPaths). Unconfirmed that the SDK honours these
+// over its .claude/ protection: check with a local --no-publish run on an issue that edits a skill.
+const SKILL_EDITS = ["Edit", "Write", "MultiEdit"].flatMap((t) => [`${t}(.claude/skills/**)`, `${t}(/.claude/skills/**)`]);
+const WRITE_TOOLS = ["Edit", "Write", "MultiEdit", ...SKILL_EDITS, "Bash(npm *)", "Bash(npx *)", "Bash(node *)", "Bash(mkdir *)"];
 // Denies are a tidiness rule, not a security boundary: `node`/`npm` can do any of these. The boundary is
 // that there is no GitHub credential to use and only the reviewed patch is ever published.
 const NEVER = ["Bash(git push *)", "Bash(git commit *)", "Bash(git reset *)", "Bash(git checkout *)", "Bash(gh *)", "Bash(curl *)", "Bash(wget *)", "WebFetch", "WebSearch"];
@@ -713,7 +718,7 @@ function publishRun(dir) {
   const { files, forbidden } = applyAndCheck(wt, patch);
   if (forbidden.length) {
     git(["worktree", "remove", "--force", wt], { allowFail: true });
-    const reason = `the change touches ${forbidden.join(", ")} — the agent never publishes changes under .github/`;
+    const reason = `the change touches ${forbidden.join(", ")} — the agent never publishes changes under .github/, or under .claude/ outside its skills`;
     gh(["issue", "comment", String(n), "-R", REPO, "--body", issueComment({ kind: "needs-human-nopr", reason, where: actionsRunUrl() })]);
     setStatus(n, `stopped, no PR — ${reason}`, { working: false });
     return { n, status: "needs-human", reason };

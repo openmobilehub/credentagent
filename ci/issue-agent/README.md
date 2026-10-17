@@ -78,6 +78,14 @@ different agent before it reaches the PR:
 - **Only the reviewed patch is published**, applied to a clean checkout — so nothing the evidence
   agent, a test run or a server leaves behind *in the working tree* can reach the PR. A patch
   touching `.github/` is never pushed. (What the publish job does and doesn't trust is below.)
+- **Skills, yes; the rest of `.claude/`, no.** The implementer may edit `.claude/skills/` — skills are
+  guidance for agents, like `docs/` or `CLAUDE.md` — through explicit allow rules (`run.mjs`,
+  `SKILL_EDITS`), since Claude Code otherwise refuses any write under `.claude/`. A patch touching any
+  other `.claude/` path (settings, hooks, agents, commands) is never pushed, like `.github/`: those
+  decide what the agents themselves may do (`checks.mjs`, `forbiddenPaths`). *Not yet confirmed:*
+  that an explicit allow rule really lifts Claude Code's `.claude/` protection under the Agent SDK —
+  CI can't show it. Check with one local `--no-publish` run on an issue that edits a skill; if the
+  edit is still refused, such issues keep ending `[needs human]` (the publish refusal holds either way).
 - If the agents don't converge (or a budget runs out, or a reviewer can't finish), the PR still
   opens as `[needs human]` with the open findings (and, when it applies, that the root `npm test`
   never passed on it), or the issue gets a comment saying why.
