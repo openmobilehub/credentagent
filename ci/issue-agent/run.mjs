@@ -55,6 +55,7 @@ import {
 import { reportHtml, prBody, issueComment, md, statusBody, STATUS_MARK } from "./report.mjs";
 import { briefBody, replyBody, challengeBody, briefState, planRun, specFromBrief, splitConversation, clampBrief, LABEL_AWAITING, LABEL_APPROVED, BRIEF_MARK, MAX_BRIEFS } from "./brief.mjs";
 import { cardProblems, isPrivate } from "./card.mjs";
+import { validateExample, runExample, exampleHtml } from "./example.mjs";
 import { loadConfig, testLabel } from "./config.mjs";
 import { startMerge, buildResolvedMerge, rebuildForPush, hasMarkers, treeOf } from "./merges.mjs";
 
@@ -655,10 +656,30 @@ async function finishImplement({ issue, spec, roles, n, repoDir, base, rounds, l
   // evidence — after the patch is frozen, so nothing the evidence agent does can reach the PR
   const evidenceDir = join(RUN.dir, "evidence");
   mkdirSync(evidenceDir, { recursive: true });
-  let evidence;
+  let evidence, example;
+  const beforeDir = join(RUN.dir, "before");
+  if (done) checkout(beforeDir, base, { reuseFrom: repoDir });
+  // Before and after for a developer (README, "Before and after"): an agent proposes the example, the
+  // pipeline runs it on main and on the change and records what each printed. A page change gets its
+  // screenshots below instead.
+  if (done && !spec.touches_ui) {
+    try {
+      const { out } = await agent("example", roles.examplePrompt({ issue, spec, beforeDir, afterDir: repoDir, reproduced: issue.brief?.brief?.reproduced }),
+        { cwd: evidenceDir, schema: roles.EXAMPLE_SCHEMA, write: true, additionalDirectories: [beforeDir, repoDir], maxTurns: 60 });
+      const ex = validateExample(out);
+      if (ex.error) throw new Error(`the example was refused: ${ex.error}`);
+      if (ex.notApplicable) example = { notApplicable: ex.notApplicable };
+      else {
+        example = runExample(ex, { beforeDir, afterDir: repoDir }, (cmd, args, o) => code(cmd, args, { ...o, allowFail: true, timeout: 120_000 }));
+        RUN.log(`  before and after: exit ${example.before.code} on main, ${example.after.code} with the change${example.same ? " — SAME output" : ""}`);
+        await renderHtml({ outDir: evidenceDir, name: "before-after", side: "example", html: exampleHtml(example), caption: `Before and after: ${example.title}` });
+      }
+    } catch (e) {
+      example = { failed: e.message.split("\n")[0].slice(0, 300) };
+      RUN.log(`  before and after: ${example.failed}`);
+    }
+  }
   if (done && spec.touches_ui) {
-    const beforeDir = join(RUN.dir, "before");
-    checkout(beforeDir, base, { reuseFrom: repoDir });
     try {
       ({ out: evidence } = await agent("evidence", roles.evidencePrompt({
         issue, spec, captureModule: join(HERE, "capture.mjs"), beforeDir, afterDir: repoDir, evidenceDir, portBase: 4100 + (n % 50) * 10,
@@ -677,7 +698,7 @@ async function finishImplement({ issue, spec, roles, n, repoDir, base, rounds, l
   });
   const manifest = JSON.parse(readFileSync(join(evidenceDir, "manifest.json"), "utf8"));
   const report = {
-    issue, spec, rounds, last, done: done && !forbidden.length, evidence, manifest, base, model: MODEL, models: RUN.models, costUsd: RUN.costUsd, id: RUN.id,
+    issue, spec, rounds, last, done: done && !forbidden.length, evidence, example, manifest, base, model: MODEL, models: RUN.models, costUsd: RUN.costUsd, id: RUN.id,
     stopped: forbidden.length ? `the change touches ${forbidden.join(", ")} — workflow changes are never published by the agent` : stopped,
     patchSha256: createHash("sha256").update(patch).digest("hex"), files: touched,
   };

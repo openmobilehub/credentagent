@@ -61,8 +61,8 @@ function mediaFigures(manifest, mediaBase) {
     ? `<figure><video controls muted playsinline src="${esc(mediaBase + e.file)}"></video><figcaption>🎬 ${esc(e.caption)}</figcaption></figure>`
     : `<figure><a href="${esc(mediaBase + e.file)}"><img src="${esc(mediaBase + e.file)}" alt="${esc(e.caption)}" loading="lazy"></a><figcaption>${esc(e.caption)}</figcaption></figure>`;
   const dialogs = manifest.filter((e) => e.kind === "events" && e.events.length);
-  return ["before", "after", "proof"].map((side) => group(side).length
-    ? `<h2>${side === "proof" ? "Test proof" : side === "before" ? "Before (main)" : "After (this change)"}</h2><div class="grid">${group(side).map(fig).join("")}</div>`
+  return ["example", "before", "after", "proof"].map((side) => group(side).length
+    ? `<h2>${{ example: "Before and after", proof: "Test proof", before: "Before (main)", after: "After (this change)" }[side]}</h2><div class="grid">${group(side).map(fig).join("")}</div>`
     : "").join("") + (dialogs.length
     ? `<h2>What the browser saw</h2><div class="card"><table>${dialogs.map((d) => `<tr><td>${esc(d.side)} · ${esc(d.session)}</td><td><pre>${esc(JSON.stringify(d.events, null, 1))}</pre></td></tr>`).join("")}</table></div>` : "");
 }
@@ -94,6 +94,23 @@ const checkedGates = (gates) => {
   return `the ${others.length ? `${others.join(", ")} and ` : ""}full test suite`;
 };
 
+// A code block that can't be closed early by the text inside it (agent-written output can hold ```).
+const fence = (text, lang = "") => { const t = String(text ?? ""); const n = Math.max(3, ...[...t.matchAll(/`+/g)].map((m) => m[0].length + 1)); return `${"`".repeat(n)}${lang}\n${t}\n${"`".repeat(n)}`; };
+
+// The PR's first section (README, "Before and after"): what a developer sees on main and with the
+// change — the example the pipeline ran, or a page's screenshots — before any prose.
+function beforeAfter(r, show) {
+  const ui = show("before", "❌ Before — main") + show("after", "✅ After — this change");
+  if (ui.trim()) return `## Before and after\n\n${ui}`;
+  const ex = r.example;
+  if (!ex) return "";
+  if (ex.notApplicable) return `## Before and after\n\n_No developer-facing change: ${md(ex.notApplicable)}_\n`;
+  if (ex.failed) return `## Before and after\n\n_The pipeline couldn't record one: ${md(ex.failed)}_\n`;
+  const pic = show("example", "");
+  const out = (label, x) => `**${label}** · exit ${Number(x.code)}\n\n${fence(x.out || "(no output)", "text")}`;
+  return `## Before and after\n\n**${md(ex.title)}**\n\n${pic ? `${pic}\n` : ""}${fence(ex.code, /^[a-z]{1,12}$/.test(ex.lang) ? ex.lang : "")}\n\n${fence(`$ ${(ex.cmd ?? []).join(" ")}`, "sh")}\n\n${out("❌ Before — main", ex.before)}\n\n${out("✅ After — this change", ex.after)}\n${ex.same ? "\n> [!WARNING]\n> Main and this change printed the same thing: the example doesn't show the difference. Check it by hand.\n" : ""}\n_The pipeline ran this itself, in a clean checkout of main and of this change._\n`;
+}
+
 // `commands`: the repo's "How to test" (config.mjs `reproduce`, `focusedTest` with <file>, and
 // `build: false` when it has no build step); this repo's own by default. `harnessRepo`: where ci/issue-agent lives, when it isn't the PR's repo.
 export function prBody(r, { mediaBase, repo, harnessRepo = repo, commands ={ reproduce: "npm ci && npm run build && npm test", focused: "npx vitest run <file>" } }) {
@@ -105,9 +122,10 @@ export function prBody(r, { mediaBase, repo, harnessRepo = repo, commands ={ rep
   // File names come from the evidence agent: only plain media names reach a src/href.
   const media = r.manifest.filter((e) => (e.kind === "image" || e.kind === "video") && /^[A-Za-z0-9._-]+\.(png|webm)$/.test(String(e.file)));
   const show = (side, title) => {
-    const items = media.filter((e) => e.side === side);
+    // The before/after picture is a still: its scroll-through video adds nothing.
+    const items = media.filter((e) => e.side === side && !(side === "example" && e.kind === "video"));
     if (!items.length) return "";
-    return `#### ${title}\n\n${items.map((e) => e.kind === "image" ? `<img src="${mediaBase}${e.file}" width="640" alt="${esc(e.caption)}">\n\n_${md(e.caption)}_` : `🎬 [${md(e.caption)}](${mediaBase}${e.file})`).join("\n\n")}\n`;
+    return `${title ? `#### ${title}\n\n` : ""}${items.map((e) => e.kind === "image" ? `<img src="${mediaBase}${e.file}" width="${side === "example" ? 860 : 640}" alt="${esc(e.caption)}">${side === "example" ? "" : `\n\n_${md(e.caption)}_`}` : `🎬 [${md(e.caption)}](${mediaBase}${e.file})`).join("\n\n")}\n`;
   };
   const g = r.last.gates.map((x) => `\`${x.name}\` ${notFullRun(x, r.patchSha256) ? `⚠️ ${notFullRun(x, r.patchSha256)}` : x.green ? "✅" : x.ok ? "⚠️ red on main too, not this change" : "❌"}${x.summary ? ` ${md(x.summary)}` : ""}`).join(" · ");
   const m = r.last.mutation;
@@ -116,7 +134,8 @@ export function prBody(r, { mediaBase, repo, harnessRepo = repo, commands ={ rep
   const report = `https://htmlpreview.github.io/?${mediaBase.replace("https://raw.githubusercontent.com/", "https://github.com/").replace(/\/agent-evidence\//, "/blob/agent-evidence/")}index.html`;
   const files = (r.files ?? []).map((f) => `\`${String(f).replace(/[`\n]/g, "'")}\``).join(", ");
   return `${MARK}
-${r.done ? "" : `> [!WARNING]\n> **Not finished${r.stopped ? `: ${md(r.stopped)}` : ""}.** The open findings are listed below — a human has to take this over.\n\n`}## In plain terms
+${r.done ? "" : `> [!WARNING]\n> **Not finished${r.stopped ? `: ${md(r.stopped)}` : ""}.** The open findings are listed below — a human has to take this over.\n\n`}${beforeAfter(r, show)}
+## In plain terms
 
 ${md(r.spec.summary)}
 
@@ -138,8 +157,6 @@ gh pr checkout <this PR> && ${commands.reproduce}
 \`\`\`
 ${m?.applicable && m.tests?.length ? `\nThe changed tests: \`${commands.focused.replace("<file>", m.tests.join(" "))}\`. To see them catch the problem, undo the source change (\`git checkout origin/main -- ${(m.reverted ?? []).join(" ")}\`), ${commands.build === false ? "" : "rebuild, "}and run them again: they fail.\n` : ""}
 ${r.evidence ? `\n**What the recordings show:** ${md(r.evidence.demonstrates)}${r.evidence.limitations ? `\n\n_What they don't show:_ ${md(r.evidence.limitations)}` : ""}\n` : ""}
-${show("before", "Before (main)")}
-${show("after", "After (this change)")}
 ${show("proof", "Test proof")}
 📄 [Full report with playable videos](${report})
 

@@ -372,6 +372,45 @@ Severity: "blocking" = a maintainer would request changes (bug, broken invariant
 
 Do not edit files. Return the structured result.`;
 
+  // ── 3b. Before and after (what a developer sees, for a change with no page to screenshot) ───────
+  const EXAMPLE_SCHEMA = {
+    type: "object",
+    required: ["applicable"],
+    properties: {
+      applicable: { type: "boolean", description: "false only when nothing a developer of this repo does turns out differently (docs-only, a pure internal refactor)" },
+      why_not: { type: "string", description: "when not applicable: one plain sentence" },
+      title: { type: "string", description: "one line, what the developer does: \"A store sells 3 teas at $4.90 and takes the payment\"" },
+      lang: { type: "string", description: "the code fence language of the file shown: js, ts, sh, json…" },
+      files: {
+        type: "array",
+        description: "1–3 files, paths relative to the checkout root (they're written into each checkout for the run, then removed)",
+        items: { type: "object", required: ["path", "content"], properties: { path: { type: "string" }, content: { type: "string" } } },
+      },
+      show: { type: "string", description: "the path of the file the PR shows (the developer's code)" },
+      cmd: { type: "array", items: { type: "string" }, description: "how the developer runs it, as argv from the checkout root, starting with node, npm or npx: [\"node\", \"example.mjs\"] or [\"npm\", \"run\", \"lint\"]" },
+    },
+  };
+
+  const examplePrompt = ({ issue, spec, beforeDir, afterDir, reproduced }) => `You are the EXAMPLE agent. The PR for this change will open with a "Before and after": the few lines a developer of this project would write, run on main and on the change, with what each printed. Write that example. The pipeline runs it itself in both checkouts and shows the real output, so it has to actually run.
+
+${issueBlock(issue)}
+
+<spec>
+${JSON.stringify(spec, null, 2)}
+</spec>
+${reproduced?.how ? `\nThe approved brief reproduced it like this — start from it:\n<reproduced>\n${reproduced.how}\n${reproduced.result ?? ""}\n</reproduced>\n` : ""}
+- BEFORE checkout (main, built): ${beforeDir}
+- AFTER checkout (the change, built): ${afterDir}
+
+Rules:
+- Write it the way ${cfg.audience} would: only the public surface — the packages' entry points as the README imports them, or the documented commands (npm run lint, an examples/ script). No reaching into internals or test helpers. If the example needs setup plumbing, keep it short and honest: that is a finding about the API, not something to hide.
+- At most ~25 lines in the file shown. Make the output speak for itself: print the one or two values that differ (a status, an error message, a total), not a dump.
+- Files go at paths relative to the checkout root (e.g. "example.mjs", which can import the workspace packages by name). The command is argv, run from the checkout root, starting with node, npm or npx.
+- Try it in both checkouts before answering (cd into each, write the files, run the command, then delete the files). The two outputs must differ in the way the change claims; if they don't, fix the example — or, if it can't show the change, say so.
+- If nothing a developer does turns out differently (docs only, an internal refactor), return applicable: false with one sentence why.
+
+Don't edit anything else in either checkout. Return the structured result.`;
+
   // ── 4. Evidence (screens + video, before vs after) ───────────────────────────────────────────────
   const EVIDENCE_SCHEMA = {
     type: "object",
@@ -410,8 +449,8 @@ Write ONE script at ${evidenceDir}/evidence.mjs and run it with \`node ${evidenc
 
 If the spec's evidence plan can't be shown in a browser after an honest attempt, say so in limitations rather than staging something misleading. Return the structured result listing every file you captured.`;
 
-  return { BRIEF_SCHEMA, briefPrompt, briefFixPrompt, SPEC_SCHEMA, specPrompt, IMPLEMENT_SCHEMA, implementPrompt, REVIEW_FIX_SCHEMA, conflictPrompt, reviewFixPrompt, fixPrompt, REVIEW_SCHEMA, reviewPrompt, EVIDENCE_SCHEMA, evidencePrompt };
+  return { BRIEF_SCHEMA, briefPrompt, briefFixPrompt, EXAMPLE_SCHEMA, examplePrompt, SPEC_SCHEMA, specPrompt, IMPLEMENT_SCHEMA, implementPrompt, REVIEW_FIX_SCHEMA, conflictPrompt, reviewFixPrompt, fixPrompt, REVIEW_SCHEMA, reviewPrompt, EVIDENCE_SCHEMA, evidencePrompt };
 }
 
 // This repo's own roles — what the pipeline used before config.mjs, and what the tests import.
-export const { BRIEF_SCHEMA, briefPrompt, briefFixPrompt, SPEC_SCHEMA, specPrompt, IMPLEMENT_SCHEMA, implementPrompt, REVIEW_FIX_SCHEMA, conflictPrompt, reviewFixPrompt, fixPrompt, REVIEW_SCHEMA, reviewPrompt, EVIDENCE_SCHEMA, evidencePrompt } = forRepo();
+export const { BRIEF_SCHEMA, briefPrompt, briefFixPrompt, EXAMPLE_SCHEMA, examplePrompt, SPEC_SCHEMA, specPrompt, IMPLEMENT_SCHEMA, implementPrompt, REVIEW_FIX_SCHEMA, conflictPrompt, reviewFixPrompt, fixPrompt, REVIEW_SCHEMA, reviewPrompt, EVIDENCE_SCHEMA, evidencePrompt } = forRepo();

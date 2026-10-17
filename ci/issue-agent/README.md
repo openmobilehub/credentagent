@@ -171,6 +171,23 @@ Each brief then fires the routine once and links the session it returns. Without
 call fails) the brief just says "reply here". Whatever you agree in the session reaches the agents the
 same way as any comment: on the issue.
 
+## Before and after — the first thing in every PR
+
+Every agent PR opens with what a developer sees on `main` and with the change, before any prose:
+
+- **A change to a page** (anything a browser shows): the evidence agent's screenshots of each.
+- **Anything else:** an **example** — the few lines a developer of the repo would write, using only
+  the public API or documented commands (`npm run lint`, an `examples/` script). An agent proposes it
+  (starting from the brief's reproduction, when there is one); **the pipeline runs it itself**, in a
+  clean checkout of `main` and of the change, credential-free, and shows the code, the command, and
+  each side's real output and exit code — plus a side-by-side picture of the same. If both sides print
+  the same thing, the PR says so instead of pretending. With nothing a developer would see differently
+  (docs only, an internal refactor), it says that in one line. `example.mjs` checks the proposal
+  (1–3 files inside the checkout, a command starting with `node`, `npm` or `npx`) and puts each
+  checkout back as it was.
+
+The PR template asks a human author for the same section.
+
 ## Seeing what it's working on
 
 - **On the issue:** one 🤖 status comment, edited in place — the current state on top, a timestamped
@@ -417,6 +434,8 @@ has to merge in; without it GitHub refuses that push and the loop hands the PR t
 - `brief.mjs` — the brief: its comment (and reading it back exactly), where the conversation stands,
   what approval refuses, what each trigger starts. `card.mjs` — the card's plain-language check.
   `brief.test.mjs` — their tests; each fails if its check is removed.
+- `example.mjs` — the PR's "Before and after": checking the proposed example, running it on both
+  checkouts, the side-by-side picture. Tested in `brief.test.mjs`.
 - `config.mjs` — what the pipeline needs to know about the repo it works on (`.github/issue-agent.json`,
   "Using it in another repo"); the defaults are this repo's.
 - `roles.mjs` — each agent's prompt and output schema, built for the repo's config (`forRepo`).

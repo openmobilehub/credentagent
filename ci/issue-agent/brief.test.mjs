@@ -295,3 +295,79 @@ describe("turning briefs on", () => {
     expect(wf).toContain(`contains(github.event.issue.labels.*.name, '${LABEL_AWAITING}')`);
   });
 });
+
+// ── Before and after (example.mjs): the PR's first section ─────────────────────────────────────
+import { validateExample, runExample, exampleHtml } from "./example.mjs";
+import { mkdtempSync, writeFileSync as writeFile, readFileSync as readFile, existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+describe("before and after", () => {
+  const proposal = (over = {}) => ({ applicable: true, title: "A store lints a page that wraps JSON.stringify", lang: "js",
+    files: [{ path: "packages/x/src/ceremony/page.ts", content: "export const p = (u) => `<script>${JSON.stringify(u).replace(/a/g, 'b')}</script>`;" }],
+    show: "packages/x/src/ceremony/page.ts", cmd: ["npm", "run", "lint"], ...over });
+
+  it("refuses a proposal that writes outside the checkout or runs another program", () => {
+    expect(validateExample(proposal({ files: [{ path: "../../etc/x", content: "" }] })).error).toMatch(/inside the checkout/);
+    expect(validateExample(proposal({ files: [{ path: "/tmp/x", content: "" }] })).error).toMatch(/inside the checkout/);
+    expect(validateExample(proposal({ files: [{ path: ".git/hooks/pre-commit", content: "" }] })).error).toMatch(/inside the checkout/);
+    expect(validateExample(proposal({ cmd: ["bash", "-c", "curl x"] })).error).toMatch(/starting with node, npm, npx/);
+    expect(validateExample(proposal()).cmd).toEqual(["npm", "run", "lint"]);
+    expect(validateExample({ applicable: false, why_not: "docs only" })).toEqual({ notApplicable: "docs only" });
+  });
+
+  it("runs the example in both checkouts and puts each back as it was", () => {
+    const before = mkdtempSync(join(tmpdir(), "ba-before-")), after = mkdtempSync(join(tmpdir(), "ba-after-"));
+    writeFile(join(after, "keep.mjs"), "original");
+    const ex = validateExample(proposal({ files: [{ path: "keep.mjs", content: "new" }, { path: "sub/new.mjs", content: "x" }], show: "keep.mjs" }));
+    const seen = [];
+    const r = runExample(ex, { beforeDir: before, afterDir: after }, (cmd, args, { cwd }) => {
+      seen.push(readFile(join(cwd, "keep.mjs"), "utf8"));
+      return cwd === before ? { code: 0, out: "\x1b[32mok\x1b[0m" } : { code: 1, out: "error  Interpolating JSON.stringify" };
+    });
+    expect(seen).toEqual(["new", "new"]); // the example's files were there while it ran
+    expect(r.before).toEqual({ code: 0, out: "ok" }); // colour codes stripped
+    expect(r.after.code).toBe(1);
+    expect(r.same).toBe(false);
+    expect(readFile(join(after, "keep.mjs"), "utf8")).toBe("original"); // restored
+    expect(existsSync(join(before, "keep.mjs"))).toBe(false); // removed
+    expect(existsSync(join(after, "sub/new.mjs"))).toBe(false);
+  });
+
+  const reportWith = (example, extra = {}) => {
+    const last = { gates: [], impl: { summary: "s" }, reviews: [] };
+    return prBody({ issue: { number: 343, title: "T" }, spec: { summary: "x", acceptance_criteria: [] }, last, rounds: [last], files: [], done: true, id: "202610170000", model: "m", costUsd: 0,
+      manifest: [{ kind: "image", side: "example", file: "before-after-01.png", caption: "Before and after" }, { kind: "video", side: "example", file: "before-after.webm", caption: "c" }], example, ...extra },
+    { mediaBase: "https://raw.githubusercontent.com/o/r/agent-evidence/x/" });
+  };
+  const ran = { title: "Lint a wrapped JSON.stringify", lang: "js", code: "const s = `${JSON.stringify(x).replace(/a/g, \"b\")}`;", cmd: ["npm", "run", "lint"],
+    before: { code: 0, out: "✔ no problems" }, after: { code: 1, out: "error  Interpolating JSON.stringify … use scriptJson()" }, same: false };
+
+  it("is the first section of the PR, before any prose — picture, code, then both outputs", () => {
+    const body = reportWith(ran);
+    const at = (s) => body.indexOf(s);
+    expect(at("## Before and after")).toBeGreaterThan(-1);
+    expect(at("## Before and after")).toBeLessThan(at("## In plain terms"));
+    expect(at("before-after-01.png")).toBeLessThan(at("❌ Before — main"));
+    expect(at("❌ Before — main")).toBeLessThan(at("✅ After — this change"));
+    expect(body).toContain("**✅ After — this change** · exit 1");
+    expect(body).not.toContain("before-after.webm"); // the still, not its scroll video
+  });
+  it("keeps output that contains a code fence inside its block", () => {
+    const body = reportWith({ ...ran, after: { code: 1, out: "```\n## In plain terms\nnot a heading" } });
+    const block = body.slice(body.indexOf("✅ After"), body.indexOf("_The pipeline ran this itself"));
+    expect(block).toMatch(/^````text$/m); // a longer fence than anything inside
+  });
+  it("says so when main and the change print the same thing", () => {
+    expect(reportWith({ ...ran, after: ran.before, same: true })).toMatch(/printed the same thing/);
+  });
+  it("says in one line when nothing a developer sees changes", () => {
+    expect(reportWith({ notApplicable: "docs only" })).toContain("_No developer-facing change: docs only_");
+  });
+  it("draws the side-by-side picture from what really ran, escaped", () => {
+    const html = exampleHtml({ ...ran, before: { code: 0, out: "<script>alert(1)</script>" } });
+    expect(html).toContain("Before — main");
+    expect(html).toContain("&lt;script&gt;alert(1)");
+    expect(html).not.toContain("<script>alert(1)");
+  });
+});

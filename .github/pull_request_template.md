@@ -10,6 +10,19 @@ Write this for a HUMAN who did NOT write the code.
 Delete this comment before you submit.
 -->
 
+## Before and after
+
+<!-- First, before any prose: what a developer (or a user) sees on main and with this change.
+     The few lines they write — public API or documented commands only — then what each version prints:
+
+     ```js
+     const order = await ca.orders.create({ order: { total: 4.9 * 3, … } });
+     ```
+     ❌ Before — main:            ✅ After — this change:
+     completed=false (amount)     completed=true
+
+     A page change: a screenshot of each. Nothing a developer or user sees changes? Say so in one line. -->
+
 ## In plain terms
 
 <!-- One or two sentences a non-specialist understands: what this is and what it does. No jargon. -->
