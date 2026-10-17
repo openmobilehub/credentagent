@@ -20,7 +20,11 @@ enforces mechanically:
 - no module-level `let`/`var`/`new Map()`/`new Set()` in package `src` — per-order
   state lives behind `VerificationStore` (invariant 4);
 - no `Math.random()` in the gate package — randomness in the security surface comes
-  from `node:crypto` (invariant 6-adjacent).
+  from `node:crypto` (invariant 6-adjacent);
+- no `JSON.stringify(…)` interpolated directly into a ceremony page template — values
+  inside a page's `<script>` go through `scriptJson()` (page integrity, invariant
+  6-adjacent; #330). It does not see a wrapped or precomputed `JSON.stringify`, a raw
+  value in a script, or an unencoded `cart` join, so review those by hand.
 
 Spend zero review attention re-checking those. **Do** review any new
 `eslint-disable` in the diff: it must carry a one-line justification, and the
@@ -93,8 +97,63 @@ is never presented as a real safety control.
 - **Fix it or flag it:** anything broken the PR author must have seen is either
   fixed inline (small and safe) or filed as an issue — never silently ignored.
 
+## 6. Scope: review what ships, not just the diff
+
+The diff is where a review starts, not where it ends.
+
+- **Release / version-bump PRs** ship every change since the previous tag to npm.
+  Review `git diff <previous tag>..HEAD` (`git tag --sort=-v:refname`), and check
+  the release notes (often drafted as a PR comment) against that code: every
+  feature they name exists and works as described, the `trust_level` fencing is
+  intact, and the known-issues list is complete. A bump-only diff is never
+  "nothing to review".
+- **A changed public API, README, or dependency range** puts its callers,
+  `examples/`, and docs in scope. Grep for them; stale ones are findings.
+- **A changed control** puts its other completion paths in scope (invariant 1):
+  find every path that reaches the same outcome and check that each one enforces it.
+
+## 7. Rigor: how deep the review goes
+
+A local review and the automated one must reach the same findings. Shallow
+approvals are the failure mode this section exists to prevent.
+
+- Read every changed file **in full**, plus the callers and callees a finding
+  depends on, not just the hunks.
+- Cover each dimension separately (security + bypass tests, correctness and edge
+  cases, DX + docs truthfulness, honesty fencing + PR text). Parallel sub-agents
+  are the expected way to do it.
+- Verify before reporting, and label each finding **CONFIRMED** (traced end to end)
+  or **PLAUSIBLE** (strong evidence, one named step unproven). Drop a finding
+  only when you can disprove it, not because you're unsure. A labelled PLAUSIBLE
+  finding costs the author a minute; a missed bug costs a release.
+- State the coverage: the scope (`base..head` or `tag..HEAD`), the files read in
+  full, and the dimensions checked. An approval without stated coverage is not an
+  approval.
+
 ## Output contract (automated review)
 
-Report a verdict plus findings, each anchored to `file:line` and naming the
-invariant or principle it violates. Findings that map to §1–§4 are
-request-changes; §5 findings are comments unless they compound.
+Rigor and readability are separate jobs: be as thorough as §7 asks, then write
+the result so a busy person who did not write the code understands it in one
+read. Long, jargon-heavy reviews get skimmed, and a skimmed review misses the one
+finding that mattered.
+
+**Visible part (what a person reads), at most ~200 words:**
+
+1. `## Claude review`, then a verdict in plain words: **✅ Ready to merge**,
+   **💬 Ready — small notes**, or **⛔ Needs changes**.
+2. One or two sentences: what the PR does and whether it is safe to merge.
+3. **Fix before merging** (only for ⛔, at most 3 items). For each: what is
+   wrong, why it matters (an everyday example), and what to do, in one sentence each.
+4. **Worth a look** (optional): at most 5 one-line, non-blocking notes.
+5. On a follow-up review, one line first: "Since the last review: N fixed, M still open".
+
+Above the details: no file paths, line numbers, invariant numbers, rubric codes or
+bare issue numbers. Name the thing instead ("the payment page"). Don't list what
+passed.
+
+**Details (collapsed `<details>` block, for the author):** every finding with its
+`file:line`, the invariant or principle it maps to, CONFIRMED or PLAUSIBLE, and the
+evidence; then the coverage line from §7.
+
+Findings that map to §1–§4 (or a release claim the code does not back, §6) are
+⛔ Needs changes. §5 findings are 💬 notes unless they compound.

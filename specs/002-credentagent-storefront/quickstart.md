@@ -2,7 +2,7 @@
 
 Validates the storefront extraction: a one-line `createStorefront()` that returns the demo's real storefront
 (rich widget + 9 tools + checkout page) and that Attesto mounts onto. API source of truth:
-[`contracts/attesto-storefront.api.md`](./contracts/attesto-storefront.api.md); shapes in
+[`contracts/credentagent-storefront.api.md`](./contracts/credentagent-storefront.api.md); shapes in
 [`data-model.md`](./data-model.md).
 
 ## Adopt in your project (the real flow — from npm)
@@ -64,7 +64,7 @@ npx vitest run packages/attesto-storefront storefront-gate.test.ts --exclude '**
 
 **Expected**: green — the nine tools registered; `checkout` ungated → plain link / gated → `requires` (age
 gate, payment last); the priced `Order` feeds `requirements()` with zero glue; the `ui://` resource present;
-state per order/session (no bleed). (Contract tests in [`contracts/`](./contracts/attesto-storefront.api.md).)
+state per order/session (no bleed). (Contract tests in [`contracts/`](./contracts/credentagent-storefront.api.md).)
 
 ### 3. Demo parity (no regression)
 

@@ -8,7 +8,8 @@ locally with your existing Claude Code login.
 
 To bill the nightly run to an API key instead of the subscription, set the repo variable
 `CLAUDE_AUTH` to `api` (it then uses the `ANTHROPIC_API_KEY` secret and fails if that is missing).
-The same variable switches the PR review — see "Code review" in the root `CLAUDE.md`.
+The variable applies to this run only; the PR review always uses the subscription — see "Code
+review" in the root `CLAUDE.md`.
 
 **Target the deployed store with `E2E_MCP_URL`** — defaults to the prod demo
 (`https://credentagent.ai/marketplace/mcp`), so the nightly workflow needs no env. Set it to the

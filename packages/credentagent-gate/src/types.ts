@@ -1,6 +1,6 @@
 // @openmobilehub/credentagent-gate — public types (the contract, in TypeScript).
 //
-// Two layers (see specs/001-attesto-sdk/data-model.md):
+// Two layers (see specs/001-credentagent-sdk/data-model.md):
 //   • policy   — code: builders carry functions (.when / verify / appliesTo) and live in your server.
 //   • manifest — data: `requirements()` resolves the policy server-side and emits a flat, JSON-safe
 //                manifest. Functions NEVER cross the wire. `requirements()` is that code→data boundary.
@@ -322,7 +322,9 @@ export interface CredentAgentOptions {
    *
    * DISTINCT from {@link CredentAgentOptions.gateSecret}, which is a SYMMETRIC HMAC secret for
    * challenge tokens. This one is ASYMMETRIC and its public half is published to the world at
-   * `/.well-known/did.json`, so anyone can verify a mandate this gate signed. Two different keys
+   * `<walletOrigin>/.well-known/did.json` — or, for a store served under a path, at
+   * `<walletOrigin>/did.json` under the path-scoped DID `did:web:<host>:<path>` — so anyone can
+   * verify a mandate this gate signed. Two different keys
    * under one name is how a configuration mistake becomes silent, which is why they are named
    * apart rather than sharing a `signingKey`.
    *
@@ -335,10 +337,16 @@ export interface CredentAgentOptions {
    * (`credentagent.ap2.signCheckout`). Kept apart from {@link CredentAgentOptions.mandateSigningKey}
    * (spec 014, FR-6): a quoted cart and an issued mandate are different statements, and each key's
    * `kid` (`#merchant-checkout-key` / `#gate-signing-key`) says which one a signature makes. Both
-   * public halves are published at `/.well-known/did.json`.
+   * public halves are published in the same DID document (`/.well-known/did.json`, or
+   * `<walletOrigin>/did.json` for a store served under a path).
    *
    * Omit for local dev and the gate generates one at boot; `doctor()` warns on a deployment,
    * because a cart quoted before a restart, or on another instance, then no longer verifies.
+   *
+   * Use one per store. The key id carries the store's `walletOrigin`, path included, so stores
+   * at different paths refuse each other's carts even when they share a key — but two
+   * deployments that share one `walletOrigin` and a key accept each other's, as does any
+   * verifier handed this key without its `kid` (#335).
    */
   checkoutSigningKey?: PrivateJwkP256;
   /**

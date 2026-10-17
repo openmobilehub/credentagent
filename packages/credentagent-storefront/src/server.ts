@@ -123,9 +123,8 @@ export interface StorageProvider {
 export interface StorefrontOptions {
   /**
    * Products to sell. Defaults to the package's `SAMPLE_CATALOG`. Pass a plain `Product[]`
-   * for the zero-config static catalog, or a {@link CatalogSource} (e.g.
-   * `firestoreCatalog(...)` from `@openmobilehub/credentagent-storefront/firestore`) for a
-   * live, editable catalog the module loads + caches server-side. Prices and age
+   * for the zero-config static catalog, or a {@link CatalogSource} (one you write over your
+   * own database) for a live, editable catalog loaded server-side. Prices and age
    * thresholds always re-derive from this catalog server-side (Security invariant 2).
    */
   catalog?: Product[] | CatalogSource;
@@ -178,15 +177,19 @@ export interface StorefrontOptions {
    * just run with a per-process key.
    */
   signingKey?: string;
-  /** Allow a per-process ephemeral signing key (default: true unless `signingKey` is set). */
+  /**
+   * Allow a per-process ephemeral signing key (default: true unless `signingKey` is set).
+   * `statelessOrders` is stricter: it needs this set to `true` explicitly when no `signingKey` is given.
+   */
   allowEphemeralKey?: boolean;
   /**
    * Opt-in (default false): carry the created order in a signed Cart Mandate on the
    * checkout link (`?order=<id>&cart=<base64url>`) instead of a `createdOrderStore`
    * write, so a checkout survives an instance split with no shared created-order store
-   * (gate FR-007). Forces a concrete `signingKey` (generated if none) so the mandate the
-   * checkout tool issues is the one the gate rails verify. Verification + completion
-   * state still use their stores.
+   * (gate FR-007). Needs a stable `signingKey`, so the mandate one instance issues verifies
+   * on another: without one it throws, unless `allowEphemeralKey: true` (a per-process key,
+   * for a single-process dev server / tests). Verification + completion state still use
+   * their stores.
    */
   statelessOrders?: boolean;
   /**
@@ -204,7 +207,7 @@ export interface StorefrontOptions {
   /**
    * Optional label for THIS deployment — e.g. `"dev.3f9c2a1"` (where + which commit) — so two
    * deployments of the same package version can be told apart. Reported next to the version by
-   * `GET /version`, and to MCP clients as semver build metadata (`0.5.0+dev.3f9c2a1`).
+   * `GET /version`, and to MCP clients as semver build metadata (`<version>+dev.3f9c2a1`).
    * Characters outside `[0-9A-Za-z.-]` become `-`.
    */
   build?: string;
@@ -404,7 +407,7 @@ function homeRequires(requires: unknown[], base: string, cart?: string | null): 
     const entry = e as { approveUrl?: unknown };
     if (typeof entry.approveUrl !== "string") return e;
     let approveUrl = homeApproveUrl(entry.approveUrl, base);
-    if (cart) approveUrl += `${approveUrl.includes("?") ? "&" : "?"}cart=${cart}`;
+    if (cart) approveUrl += `${approveUrl.includes("?") ? "&" : "?"}cart=${encodeURIComponent(cart)}`;
     return { ...entry, approveUrl };
   });
 }
@@ -455,7 +458,7 @@ const dataResult = (data: Record<string, unknown>, isError = false): CallToolRes
 
 export function createStorefront(opts: StorefrontOptions = {}): Storefront {
   // Normalize the catalog into a CatalogSource: a plain array (or the default) is wrapped
-  // in a static source; a dynamic source (e.g. `firestoreCatalog(...)`) is used as-is. Every
+  // in a static source; a dynamic source is used as-is. Every
   // catalog read below goes through `source.current()` — the last-known-good snapshot the
   // prime middleware keeps warm — so the SYNCHRONOUS re-price paths (incl. the gate's
   // ceremony `createOrder`) re-derive prices/ages server-side (invariant 2) with no gate change.
@@ -539,7 +542,7 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
     return Buffer.from(JSON.stringify(mandate)).toString("base64url");
   };
   const withCart = (url: string, cart?: string | null): string =>
-    cart ? `${url}${url.includes("?") ? "&" : "?"}cart=${cart}` : url;
+    cart ? `${url}${url.includes("?") ? "&" : "?"}cart=${encodeURIComponent(cart)}` : url;
 
   // Resolve a created order by id: from a VERIFIED cart mandate (statelessOrders, no store
   // read) or the createdOrderStore. Fails closed — a forged/tampered/expired mandate → null.
@@ -568,7 +571,7 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
 
   // Prime the catalog before EVERY route runs — including the `/credentagent/*` ceremony
   // rails a consumer mounts later (registered after this middleware, so this runs first).
-  // Awaiting the TTL-cached load means every synchronous `source.current()` below reads a
+  // Awaiting the load (any caching is the source's own) means every synchronous `source.current()` below reads a
   // warm, server-side re-derived snapshot. A cold/unreachable load FAILS CLOSED (503, no
   // handler runs) rather than serving an empty catalog (Security invariant 2). The static
   // default resolves instantly and never fails, so the zero-config path is unchanged.
@@ -1310,7 +1313,7 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
 
           // Re-price and re-validate against the storefront's LIVE catalog before delegating
           // (Codex P1 + invariant 2). The grant engine holds its own catalog snapshot, which a
-          // dynamic `source` (e.g. Firestore) can drift from; these fail-closed pre-checks read
+          // dynamic `source` can drift from; these fail-closed pre-checks read
           // `source.current()` so a price bump can't evade the sealed per-spend cap and an item
           // newly marked age-restricted can't be bought unattended — regardless of the grant's
           // snapshot. The engine remains the authority for allow-bounds and budget draw-down.
