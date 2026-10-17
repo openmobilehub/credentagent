@@ -21,7 +21,7 @@ x509.cryptoProvider.set(globalThis.crypto);
 
 /** The ceremony seams the host supplies to `mount()`; the per-order
  *  verification store is CredentAgent's own, so the host never passes it here. */
-export type MountCeremony = Omit<Partial<CeremonySeams>, "verificationStore">;
+export type MountCeremony = Omit<Partial<CeremonySeams>, "verificationStore" | "discountPercentFor">;
 
 /**
  * Minimal structural type for an Express app — the package stays dependency-free
