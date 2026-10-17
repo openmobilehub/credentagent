@@ -600,10 +600,16 @@ describe("when GitHub won't let the workflow open the PR", () => {
   // Verbatim from credentagent-website's first run (Actions run 39011004287), which had no AGENT_GH_TOKEN.
   const refused = "pull request create failed: GraphQL: GitHub Actions is not permitted to create or approve pull requests (createPullRequest)";
   it("tells the issue where the pushed change is and how to finish, instead of a bare failure", () => {
-    const hint = publishRefusalHint(refused, "agent/issue-42-202610170644");
+    const hint = publishRefusalHint(refused, "agent/issue-42-202610170644", { harnessRepo: "openmobilehub/credentagent" });
     expect(hint).toContain("`agent/issue-42-202610170644`");
     expect(hint).toContain("AGENT_GH_TOKEN");
+    // A link that works from the repo the issue is in — which may not have ci/issue-agent at all.
+    expect(hint).toContain("https://github.com/openmobilehub/credentagent/blob/main/ci/issue-agent/README.md#knobs");
+    expect(hint).not.toMatch(/needs human/);
     expect(issueComment({ kind: "error", reason: hint, where: "https://x.test/run" })).toContain("pushed as `agent/issue-42-202610170644`");
+  });
+  it("keeps an unfinished change from being opened as if it were done", () => {
+    expect(publishRefusalHint(refused, "b", { done: false })).toMatch(/did NOT finish.*"\[needs human\] …"/);
   });
   it("says nothing it doesn't know for any other failure", () => {
     expect(publishRefusalHint("GraphQL: Head sha can't be blank", "b")).toBeUndefined();

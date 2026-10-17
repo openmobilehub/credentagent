@@ -33,10 +33,11 @@ name: issue-agent-run
 # (CLAUDE_CODE_OAUTH_TOKEN); "api" → ANTHROPIC_API_KEY. Spend is capped per agent and per run
 # (ISSUE_AGENT_BUDGET_USD, ISSUE_AGENT_RUN_BUDGET_USD).
 #
-# PRs opened with the default GITHUB_TOKEN don't start other workflows (GitHub's rule), so CI and the
-# Claude review won't start on them until a human marks the draft ready for review. An AGENT_GH_TOKEN
-# secret (fine-grained PAT: contents, pull-requests, issues write) makes them start on their own; it is
-# only ever used by the publish job. `review_loop: false` keeps the PR a draft for a human even then —
+# The AGENT_GH_TOKEN secret (fine-grained PAT: contents, pull-requests, issues, workflows write) is in
+# practice required, and only ever used by the publish job. Without it the default GITHUB_TOKEN can open
+# the PR only if the repo lets "GitHub Actions create and approve pull requests" (leave that off: it also
+# lets workflows approve PRs) — otherwise publish pushes the branch and tells the issue to open the PR by
+# hand. And a PR opened with GITHUB_TOKEN starts no other workflow (GitHub's rule): no CI, no Claude review. `review_loop: false` keeps the PR a draft for a human even then —
 # for a repo without the review loop (issue-agent-review.yml), where nothing would pick it up.
 
 on:

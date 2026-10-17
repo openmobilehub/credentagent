@@ -307,11 +307,13 @@ is left, so together they can't pass the cap. A run that hits its cap stops and 
 | `ISSUE_AGENT_LABEL` | `agent` | the label `--poll` looks for |
 | `ISSUE_AGENT_MAX_REVIEW_CYCLES` | `3` | review-loop fix cycles; at the cap 💬 → `agent:ready-for-human` (notes listed), ⛔ → `agent:needs-human` |
 
-Secrets/variables: `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` (+ `CLAUDE_AUTH`), and optionally
+Secrets/variables: `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` (+ `CLAUDE_AUTH`), and
 **`AGENT_GH_TOKEN`** (used by the trusted jobs that write: `publish`, and the review loop's `push`;
-`assess` only checks whether it's set) — without it, PRs are opened by `GITHUB_TOKEN`, GitHub
-doesn't start CI or the Claude review on those until someone marks the draft ready, and the review
-loop is off. Give it the **Workflows** permission too if `main` may carry workflow changes the loop
+`assess` only checks whether it's set) — in practice required. Without it, publish falls back to
+`GITHUB_TOKEN`, which can open a PR only if the repo allows "GitHub Actions to create and approve pull
+requests" (leave that off: it also lets workflows approve PRs); otherwise publish pushes the branch
+and tells the issue to open the PR by hand. Even when `GITHUB_TOKEN` can open it, GitHub doesn't
+start CI or the Claude review on that PR until someone marks it ready, and the review loop is off. Give it the **Workflows** permission too if `main` may carry workflow changes the loop
 has to merge in; without it GitHub refuses that push and the loop hands the PR to a human.
 
 ## Files

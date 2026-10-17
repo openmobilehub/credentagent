@@ -341,11 +341,14 @@ export const isMutableSource = (f, cfg = DEFAULT_CONFIG) =>
 /**
  * What to tell the issue when GitHub refuses to let the workflow's own token open the PR — a repo
  * setting, not a failed run: the reviewed change is already pushed, so say where and how to finish.
+ * `harnessRepo`: where the README lives (another repo has no ci/issue-agent of its own). `done`: false
+ * for an unfinished change, which must keep publish's "[needs human]" title when opened by hand.
  * Undefined for any other failure.
  */
-export function publishRefusalHint(out, branch) {
+export function publishRefusalHint(out, branch, { harnessRepo = "openmobilehub/credentagent", done = true } = {}) {
   if (!/not permitted to create or approve pull requests/i.test(String(out))) return undefined;
-  return `GitHub doesn't let this repo's Actions token open pull requests, so the reviewed change is pushed as \`${branch}\` but has no PR. Open a draft PR from that branch by hand, and add an \`AGENT_GH_TOKEN\` secret (ci/issue-agent/README.md, "Knobs") so the next run opens its own`;
+  const howTo = done ? "Open a draft PR from that branch by hand" : `The run did NOT finish, so open it as a draft titled "[needs human] …" and say why it stopped`;
+  return `GitHub doesn't let this repo's Actions token open pull requests, so the reviewed change is pushed as \`${branch}\` but has no PR. ${howTo}, and add an \`AGENT_GH_TOKEN\` secret (https://github.com/${harnessRepo}/blob/main/ci/issue-agent/README.md#knobs) so the next run opens its own`;
 }
 
 /** Two checkouts can share installed dependencies only with byte-identical lockfiles. */

@@ -758,7 +758,7 @@ function publishRun(dir) {
     writeFileSync(bodyFile, banner + prBody(report, { mediaBase, repo: REPO, harnessRepo: HARNESS_REPO ?? REPO, commands: PR_COMMANDS }) + (labeller ? `\n<!-- issue-agent labeller=${labeller} -->\n` : ""));
     const created = sh("gh", ["pr", "create", "-R", REPO, ...(loop ? [] : ["--draft"]), "--base", "main", "--head", branch,
       "--title", done ? issue.title : `[needs human] ${issue.title}`, "--body-file", bodyFile], { allowFail: true });
-    if (created.code !== 0) throw Object.assign(new Error(`gh pr create failed:\n${created.out.slice(-2000)}`), { hint: publishRefusalHint(created.out, branch) });
+    if (created.code !== 0) throw Object.assign(new Error(`gh pr create failed:\n${created.out.slice(-2000)}`), { hint: publishRefusalHint(created.out, branch, { harnessRepo: HARNESS_REPO ?? REPO, done }) });
     prUrl = created.out.trim();
     if (loop) { ensureLabels(); gh(["pr", "edit", prUrl, "-R", REPO, "--add-label", LABELS.inReview]); }
     gh(["issue", "comment", String(n), "-R", REPO, "--body", issueComment({ kind: loop ? "pr-in-review" : done ? "pr" : "needs-human", prUrl, report })]);
