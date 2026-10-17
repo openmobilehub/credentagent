@@ -20,8 +20,11 @@ anyway.) Pages' status code and content type come through as they are: a missing
 404 (not Vercel's 79-byte `text/plain` one), `llms.txt` and `robots.txt` stay `text/plain`,
 `sitemap.xml` stays `application/xml`. So do Pages' redirects: if the website publishes a page as a
 folder (`about/index.html`), Pages answers `/about` with a 301 to
-`https://openmobilehub.org/credentagent/about/`, and the visitor leaves credentagent.ai — link to
-`/about/` with the slash, or publish `about.html`. The catch-all must stay the **last** rewrite, after
+`https://openmobilehub.org/credentagent/about/`, and the visitor leaves credentagent.ai — publish
+`about.html` instead. Linking to `/about/` with the slash probably doesn't help: `/:path*` likely
+captures `about` without the trailing slash, so Pages gets `/credentagent/about` and redirects the
+same way (the hand check below for `/about/` settles it). Don't set `"trailingSlash": true` to fix
+it — that would redirect `/marketplace/mcp` and break the store's POSTs. The catch-all must stay the **last** rewrite, after
 `/`, `/marketplace-dev/:path*` and `/marketplace/:path*` — Vercel applies the first matching rewrite.
 It doesn't capture `/api/ask`: Vercel resolves the filesystem and functions before any rewrite.
 `vercel-config.test.mjs` (root `npm test`) pins the rewrite order (every other rule before the
@@ -63,6 +66,7 @@ curl -sI https://credentagent.ai/llms.txt       # 200, content-type: text/plain 
 curl -sI https://credentagent.ai/sitemap.xml    # 200, content-type: application/xml
 curl -sI https://credentagent.ai/no-such-page   # 404 from Pages, not Vercel's 79-byte text/plain 404
 curl -sI https://credentagent.ai/about          # 200; a 301 to openmobilehub.org means a folder page left the domain (see above)
+curl -sI https://credentagent.ai/about/         # a 301 to openmobilehub.org means the slash is dropped on the way to Pages
 curl -s -X POST https://credentagent.ai/api/ask -H 'Origin: https://credentagent.ai' \
   -H 'Content-Type: application/json' -d '{"question":"hi","context":{}}'   # JSON answer from the function
 curl -s -X POST https://credentagent.ai/marketplace/mcp -H 'Content-Type: application/json' \
