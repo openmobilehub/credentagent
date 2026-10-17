@@ -181,6 +181,7 @@ turns up something off, fix it or flag it.
 - [ ] Every commit is signed off (`git commit -s`); the DCO check will be green.
 - [ ] You pushed a branch to this repo (not a fork) so the automated review can run.
 - [ ] No presence-only gate is presented as a real safety control.
+- [ ] A change someone using the npm packages would notice adds a line under `[Unreleased]` in [`CHANGELOG.md`](CHANGELOG.md) — marked **BREAKING** if their code has to change.
 - [ ] Anything broken you noticed along the way is fixed or filed — never silently ignored.
 
 Apache-2.0 · part of [Open Mobile Hub](https://openmobilehub.org) (Linux Foundation).
