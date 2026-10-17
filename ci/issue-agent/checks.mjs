@@ -102,11 +102,31 @@ export function reviewDecision({ verdict, open, cycle, maxCycles }) {
 }
 
 /**
- * Review cycles already pushed: the loop's per-cycle comments (`<!-- issue-agent-review cycle=k`),
- * by someone trusted. The hand-over comments carry the same prefix but aren't cycles.
+ * Who can post the loop's cycle comments: the push job — as the AGENT_GH_TOKEN's user (someone with
+ * write access) or as the github-actions app. Not any bot.
  */
-export const cyclesDone = (comments, isTrustedAuthor) =>
-  comments.filter((c) => /<!-- issue-agent-review cycle=\d+ /.test(c.body) && isTrustedAuthor(c.author)).length;
+export const isLoopAuthor = (author, isTrusted) =>
+  (author?.__typename === "Bot" && author?.login === "github-actions") || (author?.__typename !== "Bot" && isTrusted(author?.login));
+
+/**
+ * Review cycles already pushed: the loop's per-cycle comments (`<!-- issue-agent-review cycle=k`)
+ * by the loop's own author. The hand-over comments carry the same prefix but aren't cycles.
+ */
+export const cyclesDone = (comments, isTrusted) =>
+  comments.filter((c) => /<!-- issue-agent-review cycle=\d+ /.test(c.body) && isLoopAuthor(c.author, isTrusted)).length;
+
+/**
+ * Whether the review loop may act on a PR at all: an issue-agent branch in THIS repository (never a
+ * fork — its code would be run, then pushed here with a write token), still open, and opted into
+ * the loop by publish (`agent:in-review`). Returns the reason it may not, or undefined.
+ */
+export function loopRefusal({ headRefName, isCrossRepository, state, labels }) {
+  if (isCrossRepository) return "the PR comes from a fork — the loop only works on branches in this repository";
+  if (!agentBranch(headRefName)) return `${headRefName} is not an issue-agent branch`;
+  if (state !== "OPEN") return `the PR is ${String(state).toLowerCase()}`;
+  if (!labels.includes("agent:in-review")) return "the PR isn't in the review loop (no agent:in-review label) — a human may be working on it";
+  return undefined;
+}
 
 /**
  * Files main changed since the PR branched off that the PR changes too. When there are any, the

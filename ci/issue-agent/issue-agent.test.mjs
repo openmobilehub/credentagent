@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   titleAuthor, forbiddenPaths, applyAndCheck, isRunId, isCommitId, publishIssueNumber,
-  isReviewBot, parseVerdict, agentBranch, threadsToAnswer, reviewDecision, sharedChanges, cyclesDone,
+  isReviewBot, parseVerdict, agentBranch, threadsToAnswer, reviewDecision, sharedChanges, cyclesDone, loopRefusal,
 } from "./checks.mjs";
 import { fingerprints, withinBaseline } from "./fingerprints.mjs";
 import { prBody, issueComment } from "./report.mjs";
@@ -157,15 +157,26 @@ describe("the review loop", () => {
     expect(ignored).toEqual(["a thread started by mallory (no write access)"]);
   });
 
-  it("counts pushed cycles, not hand-overs or outsiders' copies", () => {
+  it("counts pushed cycles — not hand-overs, outsiders' copies, or another bot's", () => {
     const c = (author, body) => ({ author, body });
     const comments = [
       c(maintainer, "<!-- issue-agent-review cycle=1 sha=abc -->\n🔁"),
-      c(maintainer, "<!-- issue-agent-review cycle=2 sha=def -->\n🔁"),
+      c({ __typename: "Bot", login: "github-actions" }, "<!-- issue-agent-review cycle=2 sha=def -->\n🔁"),
       c(maintainer, "<!-- issue-agent-review stopped -->\n⚠️"),
       c(outsider, "<!-- issue-agent-review cycle=9 sha=x -->"),
+      c({ __typename: "Bot", login: "some-other-app" }, "<!-- issue-agent-review cycle=9 sha=y -->"),
+      c({ __typename: "Bot", login: "dzuluaga" }, "<!-- issue-agent-review cycle=9 sha=z -->"),
     ];
-    expect(cyclesDone(comments, (a) => isTrusted(a?.login))).toBe(2);
+    expect(cyclesDone(comments, isTrusted)).toBe(2);
+  });
+
+  it("refuses forks, non-agent branches, closed PRs and PRs out of the loop", () => {
+    const pr = { headRefName: "agent/issue-1-202610162031", isCrossRepository: false, state: "OPEN", labels: ["agent:in-review"] };
+    expect(loopRefusal(pr)).toBeUndefined();
+    expect(loopRefusal({ ...pr, isCrossRepository: true })).toMatch(/fork/);
+    expect(loopRefusal({ ...pr, headRefName: "feat/x" })).toMatch(/not an issue-agent branch/);
+    expect(loopRefusal({ ...pr, state: "MERGED" })).toMatch(/merged/);
+    expect(loopRefusal({ ...pr, labels: ["agent:needs-human"] })).toMatch(/isn't in the review loop/);
   });
 
   it("brings main in only when main changed a file the PR changes too", () => {

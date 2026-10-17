@@ -25,18 +25,21 @@ on:
         required: true
 
 concurrency:
-  group: issue-agent-review-${{ github.event.workflow_run.head_branch || inputs.pr }}
+  # By PR number, whether started by a review or by hand, so the two can't run on one PR at once.
+  group: issue-agent-review-${{ github.event.workflow_run.pull_requests[0].number || inputs.pr }}
   cancel-in-progress: false
 
 permissions: {}
 
 jobs:
   assess:
-    # Only reviews of PRs from agent branches in this repository.
+    # Only reviews of PRs from agent branches in this repository (run.mjs re-checks: same repo, agent
+    # branch, agent:in-review). Any conclusion but "cancelled" (a newer push superseded it): a failed
+    # or verdict-less review is handed to a human rather than left waiting.
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.event == 'pull_request' &&
-       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.conclusion != 'cancelled' &&
        github.event.workflow_run.head_repository.full_name == github.repository &&
        startsWith(github.event.workflow_run.head_branch, 'agent/issue-'))
     runs-on: ubuntu-latest
@@ -51,6 +54,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.repository.default_branch }} # trusted code from main, even when started by hand from another branch
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
@@ -74,6 +78,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ steps.pr.outputs.number }}
           ISSUE_AGENT_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          ISSUE_AGENT_REVIEW_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          # Off without a token whose pushes start workflows: then no fix session is spent at all.
+          ISSUE_AGENT_REVIEW_LOOP: ${{ secrets.AGENT_GH_TOKEN != '' && 'on' || '' }}
         run: node ci/issue-agent/run.mjs assess-review "$PR" --out review.json
       - if: steps.pr.outputs.number != ''
         uses: actions/upload-artifact@v4
@@ -92,6 +99,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.repository.default_branch }} # the harness itself comes from main
           fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@v4
@@ -141,6 +149,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.repository.default_branch }} # trusted code from main holds the PAT
           fetch-depth: 0
           persist-credentials: false # pushes go through `gh auth git-credential`
       - uses: actions/setup-node@v4

@@ -40,7 +40,7 @@ import { fileURLToPath } from "node:url";
 import { fingerprints, stripAnsi, withinBaseline } from "./fingerprints.mjs";
 import {
   TRUSTED_PERMISSIONS, titleAuthor, forbiddenPaths, applyAndCheck, changedSince, isRunId, isCommitId, publishIssueNumber,
-  isReviewBot, parseVerdict, agentBranch, threadsToAnswer, reviewDecision, sharedChanges, filesBetween, cyclesDone,
+  isReviewBot, parseVerdict, agentBranch, threadsToAnswer, reviewDecision, sharedChanges, filesBetween, cyclesDone, loopRefusal,
 } from "./checks.mjs";
 import { reportHtml, prBody, issueComment, md } from "./report.mjs";
 
@@ -686,7 +686,7 @@ const REVIEW_MARK = "<!-- issue-agent-review";
 
 function loadPr(number) {
   const q = `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){
-    number url state isDraft headRefName headRefOid body title labels(first:30){nodes{name}}
+    number url state isDraft isCrossRepository headRefName headRefOid body title labels(first:30){nodes{name}}
     commits(last:1){nodes{commit{oid committedDate}}}
     comments(last:100){nodes{author{__typename login} body createdAt}}
     reviewThreads(first:100){nodes{id isResolved path line comments(first:50){nodes{databaseId author{__typename login} body createdAt}}}}}}}`;
@@ -695,12 +695,13 @@ function loadPr(number) {
 
 function assessReview(prNumber) {
   const pr = loadPr(prNumber);
-  const branch = agentBranch(pr.headRefName);
   const skip = (reason) => ({ pr: pr.number, decision: { action: "skip", reason } });
-  if (!branch) return skip(`${pr.headRefName} is not an issue-agent branch`);
-  if (pr.state !== "OPEN") return skip(`the PR is ${pr.state.toLowerCase()}`);
   const labels = pr.labels.nodes.map((l) => l.name);
-  if (labels.includes(LABELS.ready) || labels.includes(LABELS.needsHuman)) return skip("the PR was already handed to a human");
+  const refusal = loopRefusal({ ...pr, labels });
+  if (refusal) return skip(refusal);
+  // No token whose pushes start workflows → a fix could never be reviewed: don't spend a fix session.
+  if (!REVIEW_LOOP) return skip("the review loop is off (no AGENT_GH_TOKEN)");
+  const branch = agentBranch(pr.headRefName);
   const expected = process.env.ISSUE_AGENT_HEAD_SHA;
   if (expected && expected !== pr.headRefOid) return skip("the PR has moved on since this review ran");
 
@@ -708,8 +709,14 @@ function assessReview(prNumber) {
   const summary = pr.comments.nodes.filter((c) => isReviewBot(c.author) && c.body.startsWith("## Claude review") && c.createdAt >= headAt).at(-1);
   const verdict = parseVerdict(summary?.body);
   const { answer, ignored } = threadsToAnswer(pr.reviewThreads.nodes.map((t) => ({ ...t, comments: t.comments.nodes })), trusted);
-  const cycle = cyclesDone(pr.comments.nodes, (a) => a?.__typename === "Bot" || trusted(a?.login));
-  const decision = reviewDecision({ verdict, open: answer.length, cycle, maxCycles: MAX_REVIEW_CYCLES });
+  const cycle = cyclesDone(pr.comments.nodes, trusted);
+  let decision = reviewDecision({ verdict, open: answer.length, cycle, maxCycles: MAX_REVIEW_CYCLES });
+  // A review that failed, or produced no verdict for this commit (paused, skipped), would otherwise
+  // leave the PR marked "don't review yet" forever: hand it to a human instead.
+  const conclusion = process.env.ISSUE_AGENT_REVIEW_CONCLUSION;
+  if (decision.action === "wait" && conclusion) {
+    decision = { action: "give-up", reason: conclusion === "success" ? "the Claude review finished without a verdict for the latest commit (it may be paused or have skipped it)" : `the Claude review ${conclusion === "failure" ? "failed" : `ended as ${conclusion}`} on the latest commit` };
+  }
   const issue = snapshotIssue(branch.issue).issue ?? { number: branch.issue, title: `Issue #${branch.issue}`, body: "", comments: [], dropped: [] };
   return {
     pr: pr.number, url: pr.url, headRef: pr.headRefName, head: pr.headRefOid, isDraft: pr.isDraft, issueNumber: branch.issue, issue,
@@ -725,9 +732,10 @@ function handOver(review, kind, reason) {
   if (kind === "ready" && review.isDraft) sh("gh", ["pr", "ready", url, "-R", REPO], { allowFail: true });
   sh("gh", ["pr", "edit", url, "-R", REPO, "--remove-label", LABELS.inReview, "--add-label", kind === "ready" ? LABELS.ready : LABELS.needsHuman], { allowFail: true });
   if (review.labeller) sh("gh", ["pr", "edit", url, "-R", REPO, "--add-reviewer", review.labeller], { allowFail: true });
-  // Drop the "still working" banner.
-  const body = review.body.replace(/^> \[!NOTE\]\n> \*\*The agent is still working on this[^\n]*\n\n/, "");
-  if (body !== review.body) sh("gh", ["pr", "edit", url, "-R", REPO, "--body", body], { allowFail: true });
+  // Drop the "still working" banner from the CURRENT body (push may have just written a description update).
+  const currentBody = loadPr(review.pr).body;
+  const body = currentBody.replace(/^> \[!NOTE\]\n> \*\*The agent is still working on this[^\n]*\n\n/, "");
+  if (body !== currentBody) sh("gh", ["pr", "edit", url, "-R", REPO, "--body", body], { allowFail: true });
   const who = review.labeller ? `@${review.labeller} ` : "";
   // Open threads, each as a link a reviewer can click: the file and the note's first line.
   const open = (review.threads ?? []).map((t) => {
@@ -804,7 +812,9 @@ function pushReview(dir, review) {
   RUN ??= { id: "push", dir, costUsd: 0, log: console.log };
   const pr = loadPr(review.pr);
   if (pr.headRefOid !== review.head) return { pr: review.pr, status: "skipped", reason: "the PR moved on while the fix was being made" };
-  if (pr.headRefName !== review.headRef || !agentBranch(pr.headRefName)) throw new Error(`unexpected PR branch ${pr.headRefName}`);
+  if (pr.headRefName !== review.headRef) throw new Error(`unexpected PR branch ${pr.headRefName}`);
+  const refusal = loopRefusal({ ...pr, labels: pr.labels.nodes.map((l) => l.name) });
+  if (refusal) return { pr: review.pr, status: "skipped", reason: refusal }; // re-checked here: push holds the write token
   if (!REVIEW_LOOP) return handOver(review, "needs-human", "the review loop needs an AGENT_GH_TOKEN secret: a fix pushed with the default token would never be reviewed again");
   const outcomeFile = join(dir, "outcome.json");
   if (!existsSync(outcomeFile)) return handOver(review, "needs-human", `the fix job produced nothing${actionsRunUrl() ? ` (logs: ${actionsRunUrl()})` : ""}`);
@@ -865,8 +875,8 @@ function pushReview(dir, review) {
     const section = `<!-- issue-agent-update -->\n### Updated after review cycle ${k}\n\n${md(update)}\n<!-- /issue-agent-update -->`;
     const current = loadPr(review.pr).body;
     const body = /<!-- issue-agent-update -->[\s\S]*?<!-- \/issue-agent-update -->/.test(current)
-      ? current.replace(/<!-- issue-agent-update -->[\s\S]*?<!-- \/issue-agent-update -->/, section)
-      : current.replace(/\n## In plain terms\n/, `\n${section}\n\n## In plain terms\n`);
+      ? current.replace(/<!-- issue-agent-update -->[\s\S]*?<!-- \/issue-agent-update -->/, () => section) // a function: `$&` in agent text stays literal
+      : current.replace(/\n## In plain terms\n/, () => `\n${section}\n\n## In plain terms\n`);
     if (body !== current) sh("gh", ["pr", "edit", review.url, "-R", REPO, "--body", body], { allowFail: true });
   }
   const declined = fix.responses.filter((r) => r.action === "declined").length;

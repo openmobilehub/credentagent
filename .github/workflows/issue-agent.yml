@@ -73,6 +73,7 @@ jobs:
           esac
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.repository.default_branch }} # trusted code from main, even when started by hand from another branch
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
@@ -102,6 +103,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.repository.default_branch }}
           fetch-depth: 0
           persist-credentials: false # nothing in .git/config for an agent to find
       - uses: actions/setup-node@v4
@@ -154,6 +156,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.repository.default_branch }} # trusted code from main holds the write token
           fetch-depth: 0
           persist-credentials: false # pushes go through `gh auth git-credential`
       - uses: actions/setup-node@v4
