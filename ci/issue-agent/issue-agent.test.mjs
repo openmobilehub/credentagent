@@ -208,6 +208,11 @@ describe("the review loop", () => {
     expect(latestVerdict({ summaries, headAt: "2026-10-16T13:00:00Z", headIsMerge: true, conclusion: "failure" }).verdict).toBeUndefined();
   });
 
+  it("hands a PR over, spending nothing, when the loop has no token", () => {
+    expect(reviewDecision({ loopOn: false, verdict: "changes", open: 3, cycle: 0, maxCycles: 3 })).toMatchObject({ action: "give-up", reason: expect.stringMatching(/AGENT_GH_TOKEN/) });
+    expect(reviewDecision({ verdict: "changes", open: 3, cycle: 0, maxCycles: 3 }).action).toBe("fix"); // on by default
+  });
+
   it("hands a PR over when the review failed or gave no verdict, instead of waiting forever", () => {
     expect(reviewDecision({ verdict: undefined, open: 0, cycle: 0, maxCycles: 3, conclusion: "failure" })).toMatchObject({ action: "give-up", reason: expect.stringMatching(/failed/) });
     expect(reviewDecision({ verdict: undefined, open: 0, cycle: 0, maxCycles: 3, conclusion: "success" })).toMatchObject({ action: "give-up", reason: expect.stringMatching(/without a verdict/) });

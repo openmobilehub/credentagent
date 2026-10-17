@@ -79,6 +79,8 @@ jobs:
           PR: ${{ steps.pr.outputs.number }}
           ISSUE_AGENT_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
           ISSUE_AGENT_REVIEW_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          # The cycle cap: the repo variable if set (e.g. raise it, then run by hand), else 3.
+          ISSUE_AGENT_MAX_REVIEW_CYCLES: ${{ vars.ISSUE_AGENT_MAX_REVIEW_CYCLES }}
           # Off without a token whose pushes start workflows: then no fix session is spent at all.
           ISSUE_AGENT_REVIEW_LOOP: ${{ secrets.AGENT_GH_TOKEN != '' && 'on' || '' }}
         run: node ci/issue-agent/run.mjs assess-review "$PR" --out review.json

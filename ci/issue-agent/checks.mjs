@@ -105,7 +105,10 @@ export function latestVerdict({ summaries, headAt, headIsMerge, conclusion }) {
  * merge, and each review of a fix tends to find a new, smaller note — so the PR goes to a human
  * with the open notes listed. ⛔ at the cap is never "ready": the loop stops and says why.
  */
-export function reviewDecision({ verdict, open, cycle, maxCycles, conclusion }) {
+export function reviewDecision({ verdict, open, cycle, maxCycles, conclusion, loopOn = true }) {
+  // Without a token whose pushes start workflows a fix could never be reviewed: spend no fix
+  // session, and hand the PR (still marked in review) to a human rather than leave it stranded.
+  if (!loopOn) return { action: "give-up", reason: "the review loop is off — there is no AGENT_GH_TOKEN, so a pushed fix would never be reviewed again" };
   if (!verdict) {
     // No verdict for the head: wait if no review has finished (started by hand), otherwise hand the
     // PR to a human — a failed or verdict-less review would leave it "in review" forever.

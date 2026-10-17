@@ -109,7 +109,10 @@ Claude review finishes on an agent/issue-* PR
   locally: `run.mjs assess-review <pr> --dry-run`, `run.mjs fix-review review.json`,
   `run.mjs push-review <fix-dir> --review review.json --pr <pr> --dry-run`. A PR that was already
   handed over needs its `agent:in-review` label back first (swap it for `agent:needs-human` or
-  `agent:ready-for-human`); to give it more cycles than the cap, set `ISSUE_AGENT_MAX_REVIEW_CYCLES`.
+  `agent:ready-for-human`); to give it more cycles than the cap, raise the cap — the repo variable
+  `ISSUE_AGENT_MAX_REVIEW_CYCLES` (`gh variable set ISSUE_AGENT_MAX_REVIEW_CYCLES --body 4`) for
+  Actions runs, or the same environment variable locally. A review cancelled by hand without a new
+  push starts nothing: run the loop by hand to resume it.
 
 ## What it trusts — and what it doesn't
 

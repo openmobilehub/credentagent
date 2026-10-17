@@ -57,7 +57,7 @@ const EVIDENCE_BRANCH = "agent-evidence";
 // The review loop (README, "The review loop") — on when the workflow has a token whose pushes start
 // other workflows (AGENT_GH_TOKEN); with GITHUB_TOKEN a pushed fix would never be reviewed again.
 const REVIEW_LOOP = process.env.ISSUE_AGENT_REVIEW_LOOP === "on";
-const MAX_REVIEW_CYCLES = Number(process.env.ISSUE_AGENT_MAX_REVIEW_CYCLES ?? 3);
+const MAX_REVIEW_CYCLES = Number(process.env.ISSUE_AGENT_MAX_REVIEW_CYCLES || 3); // `||`: an unset repo variable arrives as ""
 const LABELS = { inReview: "agent:in-review", ready: "agent:ready-for-human", needsHuman: "agent:needs-human" };
 
 // ── args ─────────────────────────────────────────────────────────────────────────────────────────
@@ -703,12 +703,8 @@ function assessReview(prNumber) {
   if (expected && expected !== pr.headRefOid) return skip("the PR has moved on since this review ran");
   const branch = agentBranch(pr.headRefName);
   const labeller = pr.body.match(/<!-- issue-agent labeller=([A-Za-z0-9-]+) -->/)?.[1];
-  // No token whose pushes start workflows → a fix could never be reviewed: spend no fix session,
-  // and hand the PR (still marked in-review) to a human rather than leave it stranded.
-  if (!REVIEW_LOOP) {
-    return { pr: pr.number, url: pr.url, isDraft: pr.isDraft, labeller, body: pr.body, threads: [], cycle: 0,
-      decision: { action: "give-up", reason: "the review loop is off — there is no AGENT_GH_TOKEN, so a pushed fix would never be reviewed again" } };
-  }
+  const off = reviewDecision({ loopOn: REVIEW_LOOP });
+  if (off.action === "give-up") return { pr: pr.number, url: pr.url, isDraft: pr.isDraft, labeller, body: pr.body, threads: [], cycle: 0, decision: off };
 
   const head = pr.commits.nodes[0].commit;
   const summaries = pr.comments.nodes.filter((c) => isReviewBot(c.author) && c.body.startsWith("## Claude review"));
