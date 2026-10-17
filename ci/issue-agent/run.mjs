@@ -242,7 +242,7 @@ const INSPECT_BASH = ["Bash(git diff *)", "Bash(git diff)", "Bash(git log *)", "
 // Running the project's checks executes the implementer's code; reviewers may, but their tree is reset after.
 const CHECK_BASH = CONFIG.checkTools;
 // Claude Code refuses writes under .claude/ unless a rule names the path, so skills get explicit rules
-// (both the project-relative and the cwd-anchored form). Nothing else under .claude/ is allowed, and the
+// (both the cwd-relative `path` form and the project-root-relative `/path` form). Nothing else under .claude/ is allowed, and the
 // publish step refuses it anyway (checks.mjs, forbiddenPaths). Unconfirmed that the SDK honours these
 // over its .claude/ protection: check with a local --no-publish run on an issue that edits a skill.
 const SKILL_EDITS = ["Edit", "Write", "MultiEdit"].flatMap((t) => [`${t}(.claude/skills/**)`, `${t}(/.claude/skills/**)`]);
@@ -642,7 +642,7 @@ async function finishImplement({ issue, spec, roles, n, repoDir, base, rounds, l
   const manifest = JSON.parse(readFileSync(join(evidenceDir, "manifest.json"), "utf8"));
   const report = {
     issue, spec, rounds, last, done: done && !forbidden.length, evidence, manifest, base, model: MODEL, models: RUN.models, costUsd: RUN.costUsd, id: RUN.id,
-    stopped: forbidden.length ? `the change touches ${forbidden.join(", ")} — workflow changes are never published by the agent` : stopped,
+    stopped: forbidden.length ? `the change touches ${forbidden.join(", ")} — the agent never publishes changes under .github/, or under .claude/ outside its skills` : stopped,
     patchSha256: createHash("sha256").update(patch).digest("hex"), files: touched,
   };
   writeFileSync(join(RUN.dir, "report.json"), JSON.stringify(report, null, 2));

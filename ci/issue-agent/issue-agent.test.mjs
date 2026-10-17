@@ -56,7 +56,8 @@ describe("the publish job's checks", () => {
     expect(forbiddenPaths(["packages/.github-notes.md", "docs/.github/x"])).toEqual([]);
   });
   it("forbids everything under .claude/ except its skills", () => {
-    const control = [".claude/settings.json", ".claude/settings.local.json", ".claude/hooks/x.sh", ".claude/agents/a.md", ".claude/commands/c.md", ".claude/CLAUDE.md", ".claude/skills", ".claude"];
+    const control = [".claude/settings.json", ".claude/settings.local.json", ".claude/hooks/x.sh", ".claude/agents/a.md", ".claude/commands/c.md", ".claude/CLAUDE.md", ".claude/skills", ".claude",
+      ".Claude/settings.json", ".claude/Settings.json", ".CLAUDE/hooks/x.sh", ".GitHub/workflows/x.yml"];
     expect(forbiddenPaths([".claude/skills/publish-release/SKILL.md", ...control])).toEqual(control);
     expect(forbiddenPaths(["docs/.claude/settings.json", ".claudex/x", ".claude/skills/x/SKILL.md"])).toEqual([]);
   });
