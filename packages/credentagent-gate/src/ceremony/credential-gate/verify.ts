@@ -32,7 +32,9 @@ import * as jose from "jose";
 import { age, membership } from "../../credentials.js";
 import { DEFAULT_LOYALTY_DISCOUNT_PCT } from "../mandate.js";
 import type { CeremonyOrder } from "../types.js";
+import type { CeremonyContext } from "../mount.js";
 import type { Credential } from "../../types.js";
+import { registeredMinAge } from "../../manifest.js";
 import type { CredentialKind } from "./dcql.js";
 import { openReaderContext } from "../mdoc/readerContext.js";
 import { decodeVpToken, type DisclosedEntry } from "../mdoc/mdoc.js";
@@ -81,11 +83,18 @@ export function requiredAgeForOrder(order: CeremonyOrder): number | null {
 /**
  * The age THIS order must prove: the strictest of its lines' `minimumAge` and the age its own
  * policy requires (`age.over(n)` — `CompletionInput.policyMinAge`, #354), or `null` when neither
- * asks for one. Every rail evaluates an age proof at this threshold and `completeOrder` enforces
- * it, so the two cannot disagree about which age an order needs.
+ * asks for one. The policy age comes from the mounted lookup; when that doesn't know the order,
+ * from the registered `age` credential — the same fallback `completeOrder` uses. Every rail
+ * evaluates an age proof at this threshold and `completeOrder` enforces it, so the two cannot
+ * disagree about which age an order needs.
  */
-export function requiredAgeFor(order: CeremonyOrder, policyMinAge?: number): number | null {
-  const age = Math.max(requiredAgeForOrder(order) ?? 0, policyMinAge ?? 0);
+export async function requiredAgeFor(
+  ctx: Pick<CeremonyContext, "policyAge" | "credentialRegistry" | "orderPolicies">,
+  order: CeremonyOrder,
+): Promise<number | null> {
+  const gateOrder = { id: order.id, total: order.total, currency: order.currency, lines: order.lines.map((l) => ({ ...l })) };
+  const policyAge = (await ctx.policyAge?.(order.id)) ?? registeredMinAge(gateOrder, ctx.credentialRegistry, ctx.orderPolicies?.get(order.id));
+  const age = Math.max(requiredAgeForOrder(order) ?? 0, policyAge);
   return age > 0 ? age : null;
 }
 

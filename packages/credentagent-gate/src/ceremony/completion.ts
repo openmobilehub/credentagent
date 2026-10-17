@@ -15,6 +15,7 @@ import { refusal } from "./refusals.js";
 import { KeyedMutex } from "./keyed-mutex.js";
 import { preserveLineAttributes } from "./order-attributes.js";
 import { RESERVED_CREDENTIAL_IDS } from "../credentials.js";
+import { registeredMinAge } from "../manifest.js";
 import type { ProofEntry } from "./proofs.js";
 
 // Per-order in-process serializer for completion (#103). The idempotency read at the top and
@@ -105,6 +106,16 @@ export interface CompletionContext {
 }
 
 /**
+ * The re-priced order as the `appliesTo` predicates see it. Evaluate `appliesTo` against the FULL
+ * re-priced line — spread every field, never a hand-picked allow-list. A dropped field could make
+ * an applicable gate look inapplicable (fail-OPEN), skipping enforcement the manifest promised
+ * (invariant 1). #64 item 1 — narrowing this projection — was declined for exactly that reason.
+ */
+function gateOrderOf(repriced: CeremonyOrder): GateOrder {
+  return { id: repriced.id, total: repriced.total, currency: repriced.currency, lines: repriced.lines.map((l) => ({ ...l })) };
+}
+
+/**
  * Invariant 1 (007, generalized): is there an applicable custom `gate()` credential with NO
  * proof for THIS order? Shared by the human-present path AND the delegated-draw path — a draw
  * is a completion path too, and an unattended agent can't present a prescription/license, so
@@ -138,16 +149,7 @@ function hasUnprovenCustomGate(
       (!policyScope || policyScope.has(cred.id)),
   );
   if (customGates.length === 0) return false;
-  // Evaluate `appliesTo` against the FULL re-priced line — spread every field, never a
-  // hand-picked allow-list. A dropped field could make an applicable gate look inapplicable
-  // here (fail-OPEN), skipping enforcement the manifest promised (invariant 1). #64 item 1
-  // — narrowing this projection — was declined for exactly that reason.
-  const gateOrder: GateOrder = {
-    id: repriced.id,
-    total: repriced.total,
-    currency: repriced.currency,
-    lines: repriced.lines.map((l) => ({ ...l })),
-  };
+  const gateOrder = gateOrderOf(repriced);
   const verifiedGates = (verification as { verifiedGates?: Record<string, true> } | undefined)?.verifiedGates ?? {};
   for (const cred of customGates) {
     const applies = cred.appliesTo ? cred.appliesTo(gateOrder) : true;
@@ -256,10 +258,17 @@ async function completeOrderLocked(input: CompletionInput, ctx: CompletionContex
   // (credential-gate/routes.ts) — before it can complete. This is the shared-completion-seam
   // half of CT9; the demo's place-order + MCP order-completion-tool halves are wired in T014.
   const lineAge = Math.max(0, ...repriced.lines.map((l) => (typeof l.minimumAge === "number" ? l.minimumAge : 0)));
+  // When nothing says what the order's policy asked (the server forgot the order, restarted, or
+  // another instance resolved it), the registered `age` credential decides — fail-closed, the
+  // same fallback as the custom-gate sweep, so a forgotten order never loses its age check.
+  const policyAge = input.policyMinAge ?? registeredMinAge(gateOrderOf(repriced), ctx.credentialRegistry, policyCredentialIds);
   // The STRICTEST threshold this order demands (lines vs policy, the stricter wins). 0 when
   // nothing is restricted. Read below to test an age proof at the RIGHT threshold, so an 18+
   // proof cannot open a 21+ order (invariant 5).
-  const requiredAge = Math.max(lineAge, input.policyMinAge ?? 0);
+  const requiredAge = Math.max(lineAge, policyAge);
+  // A threshold that isn't a number (a `minimumAge: NaN` catalog line, a malformed policy age)
+  // would make every comparison below false and skip the age check entirely — refuse instead.
+  if (!Number.isFinite(requiredAge)) return { completed: false, reason: "age" };
   const ageRestricted = requiredAge > 0;
 
   // ── HNP delegated-draw branch (005 FR-006): additive + fail-closed. Only taken when a

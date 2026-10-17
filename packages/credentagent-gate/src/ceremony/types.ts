@@ -151,12 +151,15 @@ export interface CompletionInput {
    * an age check in the policy holds on an item that carries no `minimumAge` tag (invariants 1 + 5).
    * Supplied like `policyCredentialIds`: the mounted ceremony adds it to every rail's completion
    * (from `requirements()`), `orders.serve` from the stored created order, and `host.complete`
-   * from the mounted lookup. Absent ⇒ only the lines decide (the behavior before #354).
+   * from the mounted lookup. `0` ⇒ the policy asks no age. Absent ⇒ the registered `age`
+   * credential decides when it applies (fail-closed, like the custom-gate sweep), so an order the
+   * server forgot never loses its age check.
    */
   policyMinAge?: number;
 }
 
-/** Look up the age an order's own policy requires (see `CompletionInput.policyMinAge`). */
+/** Look up the age an order's own policy requires (see `CompletionInput.policyMinAge`): `0` when
+ *  the policy asks none, `undefined` when the order is unknown to this lookup. */
 export type PolicyAgeLookup = (orderId: string) => MaybePromise<number | undefined>;
 
 /**

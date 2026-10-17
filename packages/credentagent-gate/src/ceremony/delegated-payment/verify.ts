@@ -87,7 +87,7 @@ export async function applyDelegatedPolicy(ctx: CeremonyContext, order: Ceremony
   const { idMap } = mergeDelegatedDcql(entries);
   // The age this order must prove — its lines AND its own policy (#354) — so the verdict is held
   // to the same threshold completeOrder enforces.
-  const minimumAge = requiredAgeFor(order, await ctx.policyAge?.(order.id)) ?? 21;
+  const minimumAge = (await requiredAgeFor(ctx, order)) ?? 21;
   for (const { credentialId } of entries) {
     const cred = ctx.credentialRegistry?.get(credentialId);
     if (!cred || cred.effect.kind !== "gate") continue; // authorize → binding gate; discount → excluded

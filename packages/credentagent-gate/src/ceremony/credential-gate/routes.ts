@@ -165,7 +165,7 @@ function percentFor(order: { discount: number; subtotal: number }): number | und
 export const registerCredentialGate: RailRegistrar = (app: CeremonyApp, ctx: CeremonyContext): void => {
   // The age THIS order must prove: its lines' `minimumAge` AND its own policy's `age.over(n)`
   // (#354), the stricter wins — the same threshold `completeOrder` enforces. `null` ⇒ no age asked.
-  const ageFor = async (order: CeremonyOrder): Promise<number | null> => requiredAgeFor(order, await ctx.policyAge?.(order.id));
+  const ageFor = (order: CeremonyOrder): Promise<number | null> => requiredAgeFor(ctx, order);
   // The Foundational fail-fast tests mount() with a route-less app shape; only
   // attach when the host app can actually route (CeremonyApp.get/post are optional).
   const get = app.get?.bind(app) as ((path: string, ...handlers: RailHandler[]) => unknown) | undefined;

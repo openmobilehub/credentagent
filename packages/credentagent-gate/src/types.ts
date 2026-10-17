@@ -309,6 +309,9 @@ export interface CredentAgentOptions {
    * instance that COMPLETES an order is often not the one that ran checkout, so its registry is
    * empty and the completion sweep would no-op — an applicable `gate()` checking out UNPROVEN
    * (fail-open). Declare your custom credentials here and every instance enforces them.
+   *
+   * The same holds for an `age.over(n)` that only the policy asks for (no `minimumAge` on the
+   * item): an instance that doesn't know the order's policy enforces the age declared here.
    */
   credentials?: Credential[];
   /** Persist created orders (`orders.create`); default in-memory, inject a shared store for multi-instance. */

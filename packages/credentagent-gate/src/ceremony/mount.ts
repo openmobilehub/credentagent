@@ -86,9 +86,11 @@ export interface CeremonySeams {
    *  path — not only via `orders.serve`. Absent / order missing ⇒ the registry-wide sweep (fail-closed). */
   orderPolicies?: ReadonlyMap<string, readonly string[]>;
   /** The age each order's own policy requires (#354) — `CredentAgent.mount()` passes it from
-   *  `requirements()`, `orders.serve` from its stored created orders. The rails evaluate an age
+   *  `requirements()` (then from a lookup the host passed it, for orders it never resolved),
+   *  `orders.serve` from its stored created orders. The rails evaluate an age
    *  proof at the stricter of it and the lines' `minimumAge`, and `mountCeremony` adds it to every
-   *  rail's completion as `policyMinAge`. Absent / unknown order ⇒ only the lines decide. */
+   *  rail's completion as `policyMinAge`. Absent / unknown order ⇒ the registered `age`
+   *  credential decides when it applies (fail-closed). */
   policyAge?: PolicyAgeLookup;
   /** Where a rail returns the buyer after they prove (the "continue to checkout" link +
    *  the post-proof redirect). Absent ⇒ each rail's default `/checkout?order=<id>` (the

@@ -13,9 +13,10 @@ export function mdocDocSpec(kind: CredentialKind, minimumAge = 21): MdocDocSpec 
     return {
       docType: "org.iso.18013.5.1.mDL",
       namespace: "org.iso.18013.5.1",
-      // Ask for the over-age booleans bracketing the threshold; verify.ts requires
-      // the explicit positive at THIS threshold (a sub-threshold proof is refused).
-      elements: minimumAge >= 21 ? ["age_over_21", "age_over_18"] : ["age_over_18"],
+      // Ask for the over-age boolean AT the threshold (plus 18, as `ageDcql` does on the
+      // OpenID4VP path); verify.ts requires the explicit positive at THIS threshold, so a
+      // 25+ policy must ask for `age_over_25` or no iPhone wallet could ever prove it.
+      elements: minimumAge > 18 ? [`age_over_${minimumAge}`, "age_over_18"] : ["age_over_18"],
     };
   }
   return {
