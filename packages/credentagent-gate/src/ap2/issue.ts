@@ -155,9 +155,13 @@ export class Ap2Issuer {
    * The cart's `merchant` is this merchant. Leave it out and it is filled in. A cart naming
    * another merchant is refused, because no permission would ever match it.
    *
-   * Every line must be a real purchase: a quantity that is a whole number of at least 1, and an
-   * item price that is a whole number of minor units above 0. A cart with any other line is
-   * refused — a line of −1 tea would lower the total without breaking any limit (#286).
+   * Every line must be a real purchase: a quantity that is a whole number of at least 1, an item
+   * price that is a whole number of minor units above 0, and a line total of price × quantity —
+   * with at most `MAX_CART_UNITS` units in all. A cart with any other line is refused — a line of
+   * −1 tea would lower the total without breaking any limit (#286).
+   *
+   * @throws Error when a line is not a real purchase, or the cart names another merchant. Check a
+   * cart built from an agent's request with `lineItemsProblem` first, and answer the agent with a 400.
    */
   signCheckout(checkout: UcpCheckout): string {
     const lines = lineItemsProblem(checkout.line_items);

@@ -746,6 +746,10 @@ export class Grants {
         // Malformed input refuses BEFORE the key is consulted or consumed (P2 on #112): the engine
         // prices exactly one item, so a multi-item array must not silently drop items past the first.
         if (!Array.isArray(items) || items.length !== 1) return { ok: false, code: "invalid-request" };
+        // A fractional qty would price at a fraction of the item — half a coffee at half price (#286).
+        // Zero and negative stay `invalid-amount`: they price at or below 0, and say so.
+        const qty0 = items[0]?.qty;
+        if (qty0 !== undefined && !Number.isInteger(qty0)) return { ok: false, code: "invalid-request" };
 
         // Idempotent replay FIRST — a safe retry echoes the original outcome, SUCCESS OR REFUSAL
         // (P2 on #112: replaying only successes let a refused key be repurposed with a cheaper item).

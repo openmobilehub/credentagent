@@ -10,7 +10,7 @@ import type { Spent } from "./constraints.js";
 import { CHECKOUT_KEY_FRAGMENT, resolveSigningKey } from "../keys.js";
 import { signCompactJwt } from "../jwt.js";
 import { Ap2Issuer } from "../issue.js";
-import { merchantFor } from "../from-gate.js";
+import { MAX_CART_UNITS, merchantFor } from "../from-gate.js";
 import { newWallet, testGrant, GATE_ORIGIN } from "./test-wallet.js";
 import { p256 } from "../../ceremony/intent-sign/dev-wallet.js";
 import { VCT, type UcpCheckout } from "../types.js";
@@ -177,10 +177,10 @@ describe("the merchant's own checks", () => {
   // Invariant 3: a total that does not add up from its lines — even one the merchant signed, and
   // even when the catalog and the payment agree with it — is refused.
   it("refuses a checkout whose total does not add up from its lines (bypass)", async () => {
-    const { verify } = await purchase({
-      mutate: (c) => ({ ...c, line_items: c.line_items.map((l) => ({ ...l, totals: [{ type: "total", amount: 900 }] })) }),
-    });
-    expect(await verify()).toMatchObject({ ok: false, code: "amount", detail: expect.stringMatching(/does not add up/) });
+    // Its one line totals 450; the cart claims 900. (A line whose own total is off is refused
+    // earlier, as malformed — see #286 below.)
+    const { verify } = await purchase({ mutate: (c) => ({ ...c, totals: [{ type: "total", amount: 900 }] }) });
+    expect(await verify({ price: () => 900 })).toMatchObject({ ok: false, code: "amount", detail: expect.stringMatching(/does not add up/) });
   });
 
   // Invariant 3: the payment must pay exactly the cart's total.
@@ -482,9 +482,9 @@ describe("malformed input is refused, never thrown", () => {
   // #286: the line_items limit skips a line of quantity ≤ 0, but the total still subtracts it. So
   // "1 coffee and −1 tea" fits every limit, adds up, and matches an honest catalog — $12.50 paid
   // for a $22 coffee. Only refusing the line itself, before anything adds it up, stops it.
-  async function cartOf(lines: Array<[string, number, number?]>) {
+  async function cartOf(lines: Array<[string, number, number?]>, mutate?: (c: UcpCheckout) => UcpCheckout) {
     const g = await testGrant();
-    const m = merchant(GATE_ORIGIN, lines);
+    const m = merchant(GATE_ORIGIN, lines, mutate);
     const hash = digestToken(m.checkoutJwt);
     const hop = (which: 0 | 1, content: Record<string, unknown>) =>
       appendAgentHop({ chain: walletChain(g.presentation, g.disclosures[which])!, agentKey: g.agent.privateKey, content, audience: GATE_ORIGIN, nonce: "n" });
@@ -521,6 +521,33 @@ describe("malformed input is refused, never thrown", () => {
       ]);
       expect(v).toMatchObject({ ok: false, code: "malformed", detail: expect.stringMatching(/price/) });
     }
+  });
+
+  // The cart total is summed from each line's own `total` entry, not from price × quantity. A tea
+  // priced 950 whose line total says −950 lowers the cart just as a quantity of −1 does.
+  it("refuses a line whose total is not its price × quantity (bypass, #286)", async () => {
+    const v = await cartOf(
+      [
+        ["coffee", 1, 2200],
+        ["tea", 1, 950],
+      ],
+      (c) => ({
+        ...c,
+        line_items: c.line_items.map((l) => (l.item.id === "tea" ? { ...l, totals: [{ type: "total" as const, amount: -950 }] } : l)),
+        totals: [{ type: "total", amount: 1250 }],
+      }),
+    );
+    expect(v).toMatchObject({ ok: false, code: "malformed", detail: expect.stringMatching(/total/) });
+  });
+
+  // Checking a cart against `checkout.line_items` places it one unit at a time; a cart of a billion
+  // coffees would hold the event loop, and a self-minted permission can declare room for all of them.
+  it(`refuses a cart of more than ${MAX_CART_UNITS} units before placing any of them`, async () => {
+    const v = await cartOf([
+      ["coffee", MAX_CART_UNITS, 1],
+      ["tea", 1, 1],
+    ]);
+    expect(v).toMatchObject({ ok: false, code: "malformed", detail: expect.stringMatching(/units/) });
   });
 });
 

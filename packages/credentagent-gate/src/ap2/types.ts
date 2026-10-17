@@ -82,7 +82,7 @@ export interface Pisp {
 export interface UcpItem {
   id: string;
   title: string;
-  /** Unit price in the currency's minor units. Never negative. */
+  /** Unit price in the currency's minor units. At least 1: a cart line priced 0 or below is refused (#286). */
   price: number;
   image_url?: string;
   /** OUR EXTENSION: the age this product demands, so an age gate can read a checkout. */
@@ -107,7 +107,7 @@ export interface UcpLineItem {
   id: string;
   item: UcpItem;
   quantity: number;
-  /** Per-line breakdown, same shape as the checkout's. Re-derived, never trusted off the wire. */
+  /** Per-line breakdown, same shape as the checkout's. Its `total` must equal `item.price × quantity`, or the cart is refused. */
   totals: UcpTotal[];
   parent_id?: string;
 }

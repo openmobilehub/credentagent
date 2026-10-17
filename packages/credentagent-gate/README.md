@@ -413,12 +413,20 @@ which is the point. Leave `agentKey` out and the gate generates the key and spen
 expiry it was signed with — today a year from creation, because a grant does not yet take its own
 expiry. Bound it with `budget` and `perSpend`, which every merchant enforces.
 
-**Every cart line must be a real purchase:** a quantity that is a whole number of at least 1, and an
-item price that is a whole number of minor units above 0. `signCheckout` throws on any other line, and
-`verifyDelegatedPurchase` refuses it with `"malformed"` before checking anything else. A line of −1 tea
-would otherwise lower the total while every limit still held
+**Every cart line must be a real purchase:** a quantity that is a whole number of at least 1, an item
+price that is a whole number of minor units above 0 (so a free item can't be quoted), and a line `total`
+equal to price × quantity — with at most `MAX_CART_UNITS` (1000) units in the whole cart. `signCheckout`
+throws on any other cart, and `verifyDelegatedPurchase` refuses it with `"malformed"` before any limit,
+amount or price check. A line of −1 tea would otherwise lower the total while every limit still held
 ([#286](https://github.com/openmobilehub/credentagent/issues/286)). So if you build the quote from
-quantities the agent sends, an agent asking for −1 of something gets an error, not a cheaper cart.
+quantities the agent sends, check the cart first and answer a bad request with a 400:
+
+```ts
+import { lineItemsProblem } from "@openmobilehub/credentagent-gate";
+
+const problem = lineItemsProblem(ucpCheckout.line_items);   // the same rule signCheckout applies
+if (problem) return res.status(400).json({ error: problem });   // e.g. "line li_2 has quantity -1 — …"
+```
 
 **What a verified purchase means:** every link of both chains verifies against the key the link before it
 names, both chains rest on the same wallet signature, every cart line is a real purchase (above), the cart is the one you signed, the payment pays

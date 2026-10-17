@@ -10,6 +10,7 @@ import { Ap2Issuer } from "./issue.js";
 import { CHECKOUT_KEY_FRAGMENT, KEY_FRAGMENT, publicJwkFromDidDocument, resolveSigningKey, type PrivateJwkP256 } from "./keys.js";
 import { signCompactJwt, verifyCompactJwt } from "./jwt.js";
 import type { UcpCheckout } from "./types.js";
+import { lineItemsProblem, MAX_CART_UNITS } from "../index.js";
 
 const ORIGIN = "https://shop.example";
 const privateJwk = () =>
@@ -81,10 +82,17 @@ describe("the merchant's checkout key (FR-6)", () => {
       { ...tea, quantity: 1.5 },
       { ...tea, item: { ...tea.item, price: 0 } },
       { ...tea, item: { ...tea.item, price: -950 } },
+      { ...tea, totals: [{ type: "total" as const, amount: -950 }] },
+      { ...tea, totals: [] },
     ]) {
       expect(() => ap2.signCheckout({ ...cart, line_items: [coffee, bad] })).toThrow(/line li_2/);
+      // The pre-check a store answers 400 with is the same rule, word for word.
+      expect(lineItemsProblem([coffee, bad])).toMatch(/^line li_2/);
     }
+    const bulk = { ...tea, quantity: MAX_CART_UNITS, totals: [{ type: "total" as const, amount: 950 * MAX_CART_UNITS }] };
+    expect(() => ap2.signCheckout({ ...cart, line_items: [coffee, bulk] })).toThrow(/units/);
     expect(() => ap2.signCheckout({ ...cart, line_items: [coffee, tea] })).not.toThrow();
+    expect(lineItemsProblem([coffee, tea])).toBeUndefined();
   });
 
   it("publishes both keys at /.well-known/did.json — the mandate key first", async () => {

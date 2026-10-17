@@ -123,7 +123,9 @@ export class DelegatedIntent {
     const cart = peekJson<UcpCheckout>(args.checkoutJwt.split(".")[1]);
     const problem = cart ? cartProblem(cart) : "it does not decode";
     if (!cart || problem)
-      throw new Error(`checkoutJwt is not a UCP Checkout: ${problem} — pass the cart exactly as the merchant signed it`);
+      throw new Error(
+        `checkoutJwt is not a payable UCP Checkout: ${problem} — pass the cart exactly as the merchant signed it, or ask the merchant for a new quote`,
+      );
     const iat = Math.floor(Date.now() / 1000);
     const exp = iat + Math.floor(DEFAULT_MANDATE_TTL_MS / 1000);
     const checkoutHash = digestToken(args.checkoutJwt, SD_HASH_ALG);
@@ -342,8 +344,8 @@ const isCount = (v: unknown): boolean => Number.isSafeInteger(v) && (v as number
 
 /**
  * What a cart needs before anything reads it: a merchant, a totals list, and lines that are each a
- * real purchase — an item id, a quantity of at least 1, a price above 0 (`lineItemsProblem`, the
- * same rule `signCheckout` quotes by). A line of quantity −1 would otherwise lower the total (#286).
+ * real purchase — an item id, a quantity of at least 1, a price above 0, a line total of price ×
+ * quantity (`lineItemsProblem`, the same rule `signCheckout` quotes by). A line of quantity −1 would otherwise lower the total (#286).
  */
 function cartProblem(cart: UcpCheckout): string | undefined {
   if (!cart || typeof cart !== "object") return "the checkout is not an object";

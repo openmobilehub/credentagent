@@ -2,9 +2,10 @@
 // vocabularies, so `ap2/` stays a clean wire-format module and the rails stay unaware of
 // SD-JWT.
 //
-// Nothing here decides anything. A `CeremonyOrder` arriving with a wrong total produces a
+// The adapters decide nothing. A `CeremonyOrder` arriving with a wrong total produces a
 // Checkout with a wrong total — re-pricing (security invariant 2) is upstream, and putting
-// a number into a mandate has never made it true.
+// a number into a mandate has never made it true. The one exception is `lineItemsProblem`:
+// the shape every cart line must have, which the quoting and the verifying store both refuse by.
 import { amountOfMinor, sumAmounts, toMinorUnits } from "./money.js";
 import type { CeremonyOrder } from "../ceremony/types.js";
 import { basePathOf } from "../ceremony/origin.js";
@@ -94,22 +95,40 @@ function lineTotalOf(line: UcpLineItem, currency: string): Amount {
 }
 
 /**
+ * The most units one cart may hold, across all its lines. Checking a cart against a permission's
+ * `checkout.line_items` places it one unit at a time, so a cart of a billion coffees would stall
+ * the store's server; past this, the cart is refused as malformed instead.
+ */
+export const MAX_CART_UNITS = 1000;
+
+/**
  * What every cart line needs before anything adds it up: an item id, a whole quantity of at
- * least 1, and a unit price that is a whole number of minor units above 0. `undefined` when all do.
+ * least 1, a unit price that is a whole number of minor units above 0, and a `total` entry equal
+ * to price × quantity — the number the cart total is actually summed from. And at most
+ * {@link MAX_CART_UNITS} units in all. `undefined` when the cart passes; otherwise what is wrong.
  *
  * One rule for the store that quotes a cart (`Ap2Issuer.signCheckout`) and the store that verifies
  * one (`verifyDelegatedPurchase`). A line of quantity −1 is skipped by the `checkout.line_items`
  * limit yet still subtracted from the total — "1 coffee and −1 tea" would fit every limit and
  * match an honest catalog's price (#286). So such a line is refused, never read.
+ *
+ * Exported so a store can check a cart built from an agent's request and answer it with a 400,
+ * rather than catch `signCheckout`'s throw.
  */
 export function lineItemsProblem(lines: unknown): string | undefined {
   if (!Array.isArray(lines)) return "the checkout has no line_items list";
+  let units = 0;
   for (const line of lines as UcpLineItem[]) {
     if (!line?.item || typeof line.item.id !== "string") return "a checkout line has no item id";
     if (!Number.isSafeInteger(line.quantity) || line.quantity < 1)
       return `line ${line.id} has quantity ${line.quantity} — each line's quantity must be a whole number of at least 1`;
     if (!Number.isSafeInteger(line.item.price) || line.item.price < 1)
       return `line ${line.id} has price ${line.item.price} — each item's price must be a whole number of minor units above 0`;
+    const expected = line.item.price * line.quantity;
+    const total = Array.isArray(line.totals) ? line.totals.find((t) => t?.type === "total")?.amount : undefined;
+    if (total !== expected) return `line ${line.id} has total ${total} — each line's total must be its price × quantity, ${expected}`;
+    units += line.quantity;
+    if (units > MAX_CART_UNITS) return `the cart holds more than ${MAX_CART_UNITS} units`;
   }
   return undefined;
 }
