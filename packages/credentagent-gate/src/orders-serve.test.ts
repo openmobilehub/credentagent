@@ -317,7 +317,8 @@ describe("orders.serve — the order proof receipt", () => {
 // Invariant 3 — the line sum, the order total and the signed amount must agree. 3 × $4.90 is
 // 14.700000000000001 in float dollars; before #360 the re-priced order carried that unrounded
 // total, Gate 1 re-derived a rounded payable of 14.7, and the strict comparison refused a
-// correct payment ("Amount binding: FAIL"). The order is now re-priced in whole cents.
+// correct payment ("Amount binding: FAIL"). Gate 1 now compares in whole cents (checkAmounts),
+// and orders.serve re-prices in whole cents too.
 describe("orders.serve — amounts that are not exact in binary (#360)", () => {
   const teaOrder = (unitPrice: number) => ({ id: "", total: unitPrice * 3, currency: "USD", lines: [{ id: "tea", name: "Tea", quantity: 3, unitPrice }] });
   const claims = { issuer_name: "Demo Bank", payment_instrument_id: "pi-1", masked_account_reference: "•••• 4242", holder_name: "Demo", expiry_date: "2032-09-01" };
@@ -333,9 +334,14 @@ describe("orders.serve — amounts that are not exact in binary (#360)", () => {
         query: {}, headers: { host: "localhost:4000" }, protocol: "http",
         body: { order: id, amount, claims },
       }, res);
-      return res._json as { completed: boolean; gates?: Array<{ gate: string; pass: boolean; detail: string }> };
+      return res._json as { completed: boolean; mandate?: { cart: { total: number } }; gates?: Array<{ gate: string; pass: boolean; detail: string }> };
     };
-    return { ca, id, pay };
+    const place = async () => {
+      const res = fakeRes();
+      await app._post.get("/credentagent/orders/:id/place")!({ params: { id } }, res);
+      return res;
+    };
+    return { ca, id, pay, place };
   }
 
   it("a 3 × $4.90 order completes when paid 14.70 through the instant demo", async () => {
@@ -357,9 +363,8 @@ describe("orders.serve — amounts that are not exact in binary (#360)", () => {
     expect(out.completed).toBe(false);
     const binding = out.gates?.find((g) => g.gate === "Amount binding");
     expect(binding?.pass).toBe(false);
-    // The re-derived payable is whole cents — no float artifact reaches the gate.
-    expect(binding?.detail).toContain(`vs 14.7)`);
-    expect(binding?.detail).not.toContain("14.700000000000001");
+    // The order the wallet is asked to sign carries the whole-cent total, not the float sum.
+    expect(out.mandate?.cart.total).toBe(14.7);
     expect((await ca.orders.retrieve(id)).ok).toBe(false);
   });
 
@@ -368,5 +373,32 @@ describe("orders.serve — amounts that are not exact in binary (#360)", () => {
     await ca.store.write(id, { loyalty: { applied: true, membershipNumber: "M-1" } });
     expect((await pay(14.7)).completed).toBe(false);
     expect((await pay(13.23)).completed).toBe(true);
+  });
+
+  // Invariant 3 — the page prices a `discount(15)` member at 15% off; the payment rails must
+  // check the same 15%, not their default 10% (which refused every such member).
+  it("a 15% member discount completes at the discounted price — and the undiscounted price is refused", async () => {
+    const { ca, id, pay } = await setup(10, [optional(membership.discount(15)), required(payment.in("usd"))]);
+    await ca.store.write(id, { loyalty: { applied: true, membershipNumber: "M-1" } });
+    expect((await pay(30)).completed).toBe(false);
+    expect((await pay(25.5)).completed).toBe(true); // 3 × $10 − 15%
+  });
+
+  // A real fraction of a cent is refused, never rounded (ap2/money.ts) — 3 × $0.002 is not $0.01.
+  it("REFUSES a sub-cent order rather than rounding it to whole cents", async () => {
+    const { ca, id, pay } = await setup(0.002);
+    const out = await pay(0.01);
+    expect(out.completed).toBe(false);
+    expect(out.gates?.find((g) => g.gate === "Amount binding")?.detail).toContain("refused");
+    expect((await ca.orders.retrieve(id)).ok).toBe(false);
+  });
+
+  // Invariant 3 — the instant-demo place path records the price the page showed, discount included.
+  it("the instant-demo place path records a proven member's discounted total, not the full price", async () => {
+    const { ca, id, place } = await setup(4.9, [optional(membership.discount(10))]);
+    await ca.store.write(id, { loyalty: { applied: true, membershipNumber: "M-1" } });
+    await place();
+    const done = await ca.orders.retrieve(id);
+    expect(done.ok && done.completion.amount).toBe(13.23);
   });
 });

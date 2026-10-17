@@ -17,6 +17,7 @@ import type {
   CeremonyOrderStore,
   CompletionSeam,
   DelegatedVerifier,
+  MaybePromise,
   SettlementSeam,
 } from "./types.js";
 import { verifyCartMandate } from "./cartMandate.js";
@@ -107,6 +108,11 @@ export interface CeremonySeams {
    *  URL a rail page fetches, links or redirects to carries it. Normally derived from a
    *  `walletOrigin` that includes the path. Absent ⇒ "" (served at the root). */
   basePath?: string;
+  /** The loyalty discount percent THIS order's policy grants (e.g. 15 for
+   *  `membership.discount(15)`), which the payment rails' amount check holds the order's
+   *  discount to. `orders.serve` sets it from the stored policy. Absent, or `undefined` for an
+   *  order ⇒ `DEFAULT_LOYALTY_DISCOUNT_PCT` (10), as before. */
+  loyaltyDiscountPct?: (orderId: string) => MaybePromise<number | undefined>;
 }
 
 /** The resolved context each rail receives (every required seam present). */
@@ -143,6 +149,8 @@ export interface CeremonyContext {
   inspectPresentations?: boolean;
   /** The browser-visible path prefix every page URL carries ("" at the root). */
   basePath?: string;
+  /** The order's loyalty discount percent for the amount check (absent ⇒ the default 10). */
+  loyaltyDiscountPct?: (orderId: string) => MaybePromise<number | undefined>;
 }
 
 /** A rail attaches its routes to the host app given the resolved context. */
@@ -182,6 +190,7 @@ export function mountCeremony(app: CeremonyApp, options: Partial<CeremonySeams> 
   const branding = options.branding ?? locals.branding;
   const inspectPresentations = options.inspectPresentations ?? locals.inspectPresentations ?? false;
   const basePath = (options.basePath ?? locals.basePath ?? "").replace(/\/+$/, "");
+  const loyaltyDiscountPct = options.loyaltyDiscountPct ?? locals.loyaltyDiscountPct;
   let signingKey = options.signingKey ?? locals.signingKey;
 
   // Fail fast (CT2) — a load-bearing seam must never silently default. (`origin`
@@ -245,6 +254,7 @@ export function mountCeremony(app: CeremonyApp, options: Partial<CeremonySeams> 
     ...(branding ? { branding } : {}),
     ...(inspectPresentations ? { inspectPresentations } : {}),
     ...(basePath ? { basePath } : {}),
+    ...(loyaltyDiscountPct ? { loyaltyDiscountPct } : {}),
   };
 
   // Re-expose the resolved seams on app.locals so the storefront's gate routes

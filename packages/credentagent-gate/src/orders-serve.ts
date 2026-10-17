@@ -18,6 +18,7 @@
 
 import { mountCeremony, type CeremonyApp } from "./ceremony/mount.js";
 import { basePathOf } from "./ceremony/origin.js";
+import { inMinorUnits, loyaltyDiscount } from "./ceremony/mandate.js";
 import { completeOrder, type CompletedRecord, type CompletedOrderStore } from "./ceremony/completion.js";
 import { renderRequirements, type RenderOrder } from "./ceremony/checkout-page.js";
 import type { CartItemRef, CeremonyCatalog, CeremonyOrder, CeremonyOrderStore, RepriceOpts } from "./ceremony/types.js";
@@ -73,13 +74,6 @@ type OrdersHandler = (req: OrdersRequest, res: OrdersResponse) => void | Promise
 
 // ── Order shape mapping (the stored GateOrder is the authority) ────────────────
 
-/** Whole cents, rounded exactly as the rails' Gate 1 rounds its re-derived payable — so a
- *  float-dollar artifact (3 × 4.90 = 14.700000000000001) never reaches the amount binding,
- *  where it would disagree with the rounded payable and refuse a correct payment (invariant 3). */
-function round2(n: number): number {
-  return Math.round(n * 100) / 100;
-}
-
 /** The discount percent a policy grants (a `discount` step), if any. */
 function discountPctOf(policy: Step[]): number | undefined {
   for (const s of policy) {
@@ -97,7 +91,7 @@ function toCeremonyLine(l: GateOrder["lines"][number], currency: string) {
     name: typeof l.name === "string" ? l.name : l.id,
     unitPrice: l.unitPrice,
     quantity: l.quantity,
-    lineTotal: round2(l.unitPrice * l.quantity),
+    lineTotal: inMinorUnits(l.unitPrice * l.quantity, currency),
     currency,
     ...(typeof l.minimumAge === "number" ? { minimumAge: l.minimumAge } : {}),
     ...(typeof l.category === "string" ? { category: l.category } : {}),
@@ -114,18 +108,20 @@ function repriceStored(created: CreatedOrder, items: CartItemRef[], opts?: Repri
     if (!src) throw new Error(`[credentagent] orders catalog: unknown line "${it.productId}" for order ${created.order.id}`);
     return toCeremonyLine({ ...src, quantity: it.quantity }, currency);
   });
-  // Every figure in whole cents, derived the way Gate 1 re-derives it (line sum, then
-  // round2(lineSum × pct/100)), so subtotal − discount === the payable the rails compute.
-  const subtotal = round2(lines.reduce((s, l) => s + l.lineTotal, 0));
+  // Every figure as the whole minor units it denotes (float noise like 3 × 4.90 dropped; a real
+  // fraction of a cent kept, so the rails refuse it), and the discount from Gate 1's own
+  // formula at this policy's percent — the percent the rails check it against
+  // (`loyaltyDiscountPct` below), so total === the payable they re-derive.
+  const subtotal = inMinorUnits(lines.reduce((s, l) => s + l.lineTotal, 0), currency);
   const pct = discountPctOf(created.policy);
-  const discount = opts?.loyaltyApplied && pct ? round2(subtotal * (pct / 100)) : 0;
+  const discount = opts?.loyaltyApplied && pct ? loyaltyDiscount(subtotal, pct, currency) : 0;
   return {
     id: created.order.id,
     lines,
     itemCount: lines.reduce((s, l) => s + l.quantity, 0),
     subtotal,
     discount,
-    total: round2(subtotal - discount),
+    total: inMinorUnits(subtotal - discount, currency),
     currency,
   };
 }
@@ -229,6 +225,12 @@ export function serveOrders(app: CeremonyApp, deps: ServeOrdersDeps): void {
     ...(deps.inspectPresentations ? { inspectPresentations: true } : {}),
     ...(deps.signingKey ? { signingKey: deps.signingKey } : { allowEphemeralKey: true }),
     basePath: basePathOf(deps.walletOrigin),
+    // The payment rails hold the discount to THIS order's policy percent (a `discount(15)`
+    // order is checked at 15, not the rails' default 10) — the same percent repriceStored uses.
+    loyaltyDiscountPct: async (id) => {
+      const created = await deps.created.read(id);
+      return created ? discountPctOf(created.policy) : undefined;
+    },
   });
 
   const get = app.get?.bind(app);
@@ -291,7 +293,10 @@ export function serveOrders(app: CeremonyApp, deps: ServeOrdersDeps): void {
       // re-record the order or fire order.settled again (the listener triggers fulfillment).
       const done = await deps.completed.read(id);
       if (!done) {
-        const order = repriceStored(created, created.order.lines.map((l) => ({ productId: l.id, quantity: l.quantity })));
+        // Priced exactly as the page showed it: a proven membership's discount is recorded too
+        // (invariant 3 — the button's amount and the settled amount agree).
+        const v = ((await deps.verificationStore.read(id)) ?? {}) as VerificationRecord;
+        const order = repriceStored(created, created.order.lines.map((l) => ({ productId: l.id, quantity: l.quantity })), { loyaltyApplied: v.loyalty?.applied === true });
         await deps.complete({ orderId: id, amount: order.total, currency: order.currency, method: "demo", completedAt: new Date().toISOString() });
       }
     }

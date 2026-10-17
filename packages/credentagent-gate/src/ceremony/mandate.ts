@@ -11,6 +11,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { CeremonyOrder } from "./types.js";
 import type { Origin } from "./origin.js";
+import { exponentFor, toMajorUnits, toMinorUnits } from "../ap2/money.js";
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
@@ -18,6 +19,65 @@ function round2(n: number): number {
 
 // The demo's whole-cart loyalty discount; the host can override via runGates opts.
 export const DEFAULT_LOYALTY_DISCOUNT_PCT = 10;
+
+/** The loyalty discount Gate 1 expects on a line sum: `pct` percent, rounded half-up to the
+ *  currency's minor unit (`round2(lineSum × pct/100)` for USD). The ONE formula — a re-pricer
+ *  that builds its discount with it can never disagree with the check (invariant 3). */
+export function loyaltyDiscount(lineSum: number, pct: number, currency: string): number {
+  // An unknown currency is refused by Gate 1 itself; here it only needs not to throw.
+  let f = 100;
+  try { f = 10 ** exponentFor(currency); } catch { /* refused at Gate 1 */ }
+  return Math.round(lineSum * (pct / 100) * f) / f;
+}
+
+/** `n` as the exact amount of whole minor units it denotes (3 × 4.90 = 14.700000000000001 →
+ *  14.7), or `n` UNCHANGED when it denotes none — a real fraction of a cent ($0.004) or an
+ *  unknown currency — so Gate 1 refuses it rather than a builder silently rounding it. */
+export function inMinorUnits(n: number, currency: string): number {
+  try {
+    return toMajorUnits(toMinorUnits(n, currency), currency);
+  } catch {
+    return n;
+  }
+}
+
+/** What Gate 1 re-derived from the cart, and whether every presented amount matches it. */
+export interface AmountCheck {
+  ok: boolean;
+  lineSum: number;
+  discount: number;
+  payable: number;
+  /** Why an amount could not be read as whole minor units at all (the check fails closed). */
+  refused?: string;
+}
+
+/**
+ * Gate 1's amount re-derivation, shared by the passkey and the dc-payment rails so the two can
+ * never drift (#360). Re-sum the (undiscounted) cart lines, check the discount is zero or exactly
+ * `pct` percent of that sum, and require every `presented` amount (the cart total, the authorized
+ * payment, the wallet's transaction amount) to equal the payable.
+ *
+ * Every comparison is in whole minor units through `toMinorUnits` (ap2/money.ts). Float noise is
+ * absorbed — 14.700000000000001 and 14.7 are both 1470 cents, so a host that adds dollars as
+ * floats is not refused — while a real fraction of a cent, a non-finite value or an unknown
+ * currency is REFUSED, never rounded.
+ */
+export function checkAmounts(cart: CeremonyOrder, pct: number, presented: number[]): AmountCheck {
+  const discountIn = cart.discount ?? 0;
+  try {
+    const cents = (n: number) => toMinorUnits(n, cart.currency);
+    const lineSumMinor = cart.lines.reduce((sum, l) => sum + cents(l.lineTotal), 0);
+    const lineSum = toMajorUnits(lineSumMinor, cart.currency);
+    const discountMinor = cents(discountIn);
+    const discountOk = discountMinor === 0 || discountMinor === cents(loyaltyDiscount(lineSum, pct, cart.currency));
+    const payableMinor = lineSumMinor - discountMinor;
+    const ok = discountOk && presented.every((a) => cents(a) === payableMinor);
+    return { ok, lineSum, discount: toMajorUnits(discountMinor, cart.currency), payable: toMajorUnits(payableMinor, cart.currency) };
+  } catch (err) {
+    const lineSum = round2(cart.lines.reduce((sum, l) => sum + l.lineTotal, 0));
+    return { ok: false, lineSum, discount: discountIn, payable: round2(lineSum - discountIn), refused: (err as Error).message };
+  }
+}
 const DEFAULT_ISSUER = "did:web:credentagent.local";
 const DEFAULT_PAYEE_NAME = "CredentAgent Gate Demo";
 
@@ -140,7 +200,6 @@ export function runGates(mandate: PasskeyMandate, opts: { loyaltyDiscountPct?: n
   const pct = opts.loyaltyDiscountPct ?? DEFAULT_LOYALTY_DISCOUNT_PCT;
   const ua = mandate.userAuthorization;
   const cart = mandate.cart;
-  const lineSum = round2(cart.lines.reduce((sum, l) => sum + l.lineTotal, 0));
   const results: GateResult[] = [];
 
   // Gate 1 — amount integrity. Re-sum the (undiscounted) cart lines and re-derive
@@ -148,15 +207,12 @@ export function runGates(mandate: PasskeyMandate, opts: { loyaltyDiscountPct?: n
   // present, must be either zero or EXACTLY the configured percentage of the line
   // sum — this lets a legitimately discounted order pass and rejects a token
   // tampered with an arbitrary discount. Payable must equal cart.total AND the
-  // authorized payment.amount.
-  const discount = cart.discount ?? 0;
-  const discountOk = discount === 0 || discount === round2(lineSum * (pct / 100));
-  const payable = round2(lineSum - discount);
-  const amountOk = discountOk && payable === cart.total && payable === mandate.payment.amount;
+  // authorized payment.amount, in whole minor units (checkAmounts).
+  const { ok: amountOk, lineSum, discount, payable, refused } = checkAmounts(cart, pct, [cart.total, mandate.payment.amount]);
   results.push({
     gate: "Amount integrity",
     pass: amountOk,
-    detail: `lines=${lineSum} · discount=${discount} · payable=${payable} · payment=${mandate.payment.amount} · cart.total=${cart.total}`,
+    detail: `lines=${lineSum} · discount=${discount} · payable=${payable} · payment=${mandate.payment.amount} · cart.total=${cart.total}${refused ? ` · refused: ${refused}` : ""}`,
   });
 
   // Gate 2 — authorization present & structurally a webauthn assertion.
