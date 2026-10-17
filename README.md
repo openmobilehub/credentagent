@@ -86,6 +86,8 @@ For a deployment, pass your public origin: `new CredentAgent({ walletOrigin: "ht
   (enforce server-side on every completion path, never trust the order token, scope
   state per order/session, require explicit positive credential claims, keep
   WebAuthn / OpenID4VP origin-bound with replay protection).
+- **[SECURITY.md](./SECURITY.md)** — how to report a vulnerability privately, the supported
+  versions, and what is already known (presence-only / device-signed trust).
 - **[CONTRIBUTING.md](./CONTRIBUTING.md)** — DCO sign-off (`git commit -s`), the
   security-bypass testing bar, and the module conventions.
 - **[docs/deployment.md](./docs/deployment.md)** — running it for real (serverless stores,
@@ -114,7 +116,8 @@ dev-signed (integrity hash), not key-signed.
 The honesty is carried in the **types**, not just prose: `trust_level` and `enforcedAt`
 are part of the contract. See [SECURITY-INVARIANTS.md](./SECURITY-INVARIANTS.md) and the
 Gate's [honest status](./packages/credentagent-gate/README.md#honest-status) for the
-per-rail breakdown.
+per-rail breakdown. To report a vulnerability, follow [SECURITY.md](./SECURITY.md) — privately,
+never in a public issue.
 
 ## Reference demo
 

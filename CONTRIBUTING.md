@@ -13,6 +13,9 @@ CredentAgent is part of [Open Mobile Hub](https://openmobilehub.org) under the O
 Linux Foundation, and the contribution rules below reflect that posture — most importantly the
 **DCO sign-off** and the **security-test bar**. Please read this file before opening a PR.
 
+Found a vulnerability? Don't open an issue or PR — report it privately as described in
+[SECURITY.md](./SECURITY.md).
+
 To see the packages in action, run [`examples/quickstart`](./examples/quickstart) here, or look at
 the [Utopia Marketplace MCP server](https://github.com/openwallet-foundation/multipaz-utopia/tree/main/organizations/marketplace/mcp), a separate repo that runs both
 packages end to end. Contribute library changes here.
