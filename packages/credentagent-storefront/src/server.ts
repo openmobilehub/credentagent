@@ -303,8 +303,10 @@ export interface Storefront {
 // ── widget bundle (single-file html, built by vite into dist/ui/) ───────────
 
 const SKYBRIDGE_MIME = "text/html+skybridge";
-// Product images are self-contained `data:` URIs (added to the CSP below); picsum
-// stays allowlisted in case a custom catalog uses remote images.
+// Product images are self-contained `data:` URIs. They need no CSP entry: the MCP Apps
+// default view CSP already has `img-src 'self' data:`, and scanners that grade the
+// declared policy refuse bare schemes. Picsum stays allowlisted in case a custom
+// catalog uses remote images.
 const IMAGE_DOMAINS = ["https://picsum.photos", "https://fastly.picsum.photos"];
 
 function bundleCandidates(): string[] {
@@ -1389,14 +1391,16 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
 
     // ── widget resource — two registrations from one bundle ─────────────────
     // Claude / MCP-Apps hosts read RESOURCE_URI; ChatGPT reads the skybridge URI.
-    // `data:` in the CSP so the widget's inline SVG image placeholder renders (FR-014).
+    // Both declare the same specific-origin policy (`_meta.ui.csp`, plus `openai/widgetCSP`
+    // for ChatGPT). No `data:`: the hosts' default already allows `data:` images, so the
+    // inline SVG image placeholder (FR-014) still renders.
     registerAppResource(
       server,
       RESOURCE_URI,
       RESOURCE_URI,
       { mimeType: RESOURCE_MIME_TYPE },
       async (): Promise<ReadResourceResult> => ({
-        contents: [{ uri: RESOURCE_URI, mimeType: RESOURCE_MIME_TYPE, text: await loadBundle(), _meta: { ui: { csp: { resourceDomains: [...IMAGE_DOMAINS, "data:"], connectDomains: cspOrigin(baseUrl) } } } }],
+        contents: [{ uri: RESOURCE_URI, mimeType: RESOURCE_MIME_TYPE, text: await loadBundle(), _meta: { ui: { csp: { resourceDomains: IMAGE_DOMAINS, connectDomains: cspOrigin(baseUrl) } } } }],
       }),
     );
     server.registerResource(
@@ -1404,7 +1408,7 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
       SKYBRIDGE_URI,
       { mimeType: SKYBRIDGE_MIME },
       async (): Promise<ReadResourceResult> => ({
-        contents: [{ uri: SKYBRIDGE_URI, mimeType: SKYBRIDGE_MIME, text: await loadBundle(), _meta: { "openai/widgetCSP": { connect_domains: cspOrigin(baseUrl), resource_domains: [...IMAGE_DOMAINS, "data:"] } } }],
+        contents: [{ uri: SKYBRIDGE_URI, mimeType: SKYBRIDGE_MIME, text: await loadBundle(), _meta: { ui: { csp: { resourceDomains: IMAGE_DOMAINS, connectDomains: cspOrigin(baseUrl) } }, "openai/widgetCSP": { connect_domains: cspOrigin(baseUrl), resource_domains: IMAGE_DOMAINS } } }],
       }),
     );
 
