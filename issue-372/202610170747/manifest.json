@@ -1,0 +1,98 @@
+[
+  {
+    "kind": "image",
+    "file": "before-widget-csp-01.png",
+    "caption": "before (main): the MCP Apps registration lists the bare scheme \"data:\" in resourceDomains (red), and the skybridge registration has only openai/widgetCSP (also with \"data:\") and no _meta.ui.csp",
+    "side": "before",
+    "session": "before-widget-csp",
+    "url": "about:blank",
+    "at": "2026-10-17T07:53:52.588Z"
+  },
+  {
+    "kind": "events",
+    "session": "before-widget-csp",
+    "side": "before",
+    "events": [],
+    "at": "2026-10-17T07:53:52.770Z"
+  },
+  {
+    "kind": "video",
+    "file": "before-widget-csp.webm",
+    "caption": "before: resources/read of both product-picker widget registrations, rendered",
+    "side": "before",
+    "session": "before-widget-csp",
+    "at": "2026-10-17T07:53:52.771Z"
+  },
+  {
+    "kind": "image",
+    "file": "after-widget-csp-01.png",
+    "caption": "after (fix): both registrations declare _meta.ui.csp (green) with only the picsum origins in resourceDomains and the server origin in connectDomains; the skybridge copy still has openai/widgetCSP; no \"data:\" anywhere",
+    "side": "after",
+    "session": "after-widget-csp",
+    "url": "about:blank",
+    "at": "2026-10-17T07:53:54.859Z"
+  },
+  {
+    "kind": "events",
+    "session": "after-widget-csp",
+    "side": "after",
+    "events": [],
+    "at": "2026-10-17T07:53:55.005Z"
+  },
+  {
+    "kind": "video",
+    "file": "after-widget-csp.webm",
+    "caption": "after: resources/read of both product-picker widget registrations, rendered",
+    "side": "after",
+    "session": "after-widget-csp",
+    "at": "2026-10-17T07:53:55.005Z"
+  },
+  {
+    "kind": "image",
+    "file": "after-placeholder-under-csp-01.png",
+    "caption": "after: with img-src = MCP Apps default ('self' data:) + the fixed resourceDomains, the FR-014 SVG placeholder still renders; a non-allowlisted image is blocked. Status line: placeholder loaded: true (400x300); non-allowlisted example.com image loaded: false",
+    "side": "after",
+    "session": "after-placeholder-under-csp",
+    "url": "about:blank",
+    "at": "2026-10-17T07:53:56.656Z"
+  },
+  {
+    "kind": "events",
+    "session": "after-placeholder-under-csp",
+    "side": "after",
+    "events": [],
+    "at": "2026-10-17T07:53:56.760Z"
+  },
+  {
+    "kind": "video",
+    "file": "after-placeholder-under-csp.webm",
+    "caption": "after: FR-014 placeholder renders under the fixed policy",
+    "side": "after",
+    "session": "after-placeholder-under-csp",
+    "at": "2026-10-17T07:53:56.760Z"
+  },
+  {
+    "kind": "image",
+    "file": "test-proof-01.png",
+    "caption": "Test proof: the pipeline's own gate runs, and the changed tests failing on main's code and passing on the fix",
+    "side": "proof",
+    "session": "test-proof",
+    "url": "about:blank",
+    "at": "2026-10-17T07:54:16.643Z"
+  },
+  {
+    "kind": "events",
+    "session": "test-proof",
+    "side": "proof",
+    "events": [],
+    "at": "2026-10-17T07:54:20.011Z"
+  },
+  {
+    "kind": "video",
+    "file": "test-proof.webm",
+    "caption": "Test proof: the pipeline's own gate runs, and the changed tests failing on main's code and passing on the fix",
+    "side": "proof",
+    "session": "test-proof",
+    "at": "2026-10-17T07:54:20.011Z"
+  }
+]

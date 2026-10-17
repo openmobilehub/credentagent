@@ -1,0 +1,5 @@
+Warning: Server is binding to 0.0.0.0 without DNS rebinding protection. Consider using the allowedHosts option to restrict allowed hosts, or use authentication to protect your server.
+
+  ✓ CredentAgent-gated storefront running → http://localhost:4321/mcp
+  Add it to Goose as a Streamable HTTP connector, then ask it to buy the whiskey.
+
