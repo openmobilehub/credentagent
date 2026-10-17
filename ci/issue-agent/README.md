@@ -106,16 +106,22 @@ Claude review runs on it, and `.github/workflows/issue-agent-review.yml` takes o
 review:
 
 ```
-Claude review finishes on an agent/issue-* PR
+Claude review finishes on an agent/issue-* PR   (or: main moved, and the PR now conflicts with it)
   ├─ assess   read the verdict + the open threads (the review bot's and maintainers' only)    (script)
-  │             ✅ Ready to merge, or 💬 with no thread open → hand to a human: label
-  │                agent:ready-for-human, request the labeller's review, drop the banner      ← stop
-  │             cycle cap reached with 💬 → the same hand-over, with the open notes listed      ← stop
+  │             conflicts with main → fix: merge main, resolve the conflicts (or hand over at the cap)
+  │             ✅ Ready to merge, or 💬 with no thread open → verify first:
+  │               the spec reviewer checks the issue's acceptance criteria on the final code
+  │                 all met → tick the checklist, hand to a human: label agent:ready-for-human,
+  │                           request the labeller's review, drop the banner                  ← stop
+  │                 some not → fix: make them true (a cycle)
+  │             cycle cap reached with 💬 → the same, with the open notes listed               ← stop
   │             cycle cap reached with ⛔ → label agent:needs-human, say why                   ← stop
-  ├─ fix      answer every thread — fix it, or decline it with a reason; then the same gates,
-  │           mutation check (over the whole PR) and three reviews as the first run         (agents)
+  ├─ fix      answer every thread — fix it, or decline it with a reason (or resolve a conflict,
+  │           or make an unmet criterion true); then the same gates, mutation check (over the
+  │           whole PR) and three reviews as the first run                                  (agents)
   └─ push     apply the checked fix to the PR head (fast-forward, no force), reply to every
-              thread with the agent's answer and resolve it                                  (script)
+              thread with the agent's answer and resolve it; if main moved under it and the
+              new head conflicts, start a conflict cycle at once                             (script)
                 → the push starts the next Claude review → assess again
 ```
 
@@ -144,10 +150,25 @@ Claude review finishes on an agent/issue-* PR
   `AGENT_GH_TOKEN` is gone. A head that only merges `main` in (GitHub's *Update branch*) isn't
   reviewed again — the review skips a push that leaves the PR's diff unchanged — so the last
   verdict still applies.
-- **Main is brought in when it matters.** If `main` has changed a file the PR also changes, the fix
-  job merges `main` first (the review reads the PR merged onto main, so a stale copy of such a file
-  can only be fixed by a merge); the push job re-does that merge from a commit it checks is on
-  `main`, signed off, and hands over on a conflict.
+- **Main is brought in when it matters — and conflicts get resolved, not waited on.** If `main` has
+  changed a file the PR also changes, the fix job merges `main` first (the review reads the PR
+  merged onto main, so a stale copy of such a file can only be fixed by a merge). A PR that
+  *conflicts* with `main` gets no review at all — GitHub runs no `pull_request` workflow on it — so
+  the loop doesn't wait for one: on every push to `main` a sweep starts a conflict cycle for each
+  `agent:in-review` PR that now conflicts, and the push job does the same if `main` moved while it
+  was fixing. In a conflict cycle the agent resolves the conflict markers (keeping both sides'
+  intent) through the same gates and reviews; the push job then rebuilds the very same merge commit
+  from `main` and the resolved files (`merges.mjs` — only the files git itself says conflict, never
+  a forbidden path, never with markers left, never a lost file read as a deletion; tested on a real
+  conflict), signed off, and pushes it only if the result is byte-for-byte the tree that was tested.
+  A conflict found mid-cycle turns that cycle into a conflict cycle (its review threads wait for the
+  next one). At the cycle cap a conflicting PR goes to a human instead.
+- **"Ready" means the issue is done, not just that the reviewer is quiet.** Before handing over, the
+  spec reviewer checks the PR description's acceptance-criteria checklist (the issue's own, written
+  at publish) against the final code, once per head. All met → the boxes are ticked with the
+  evidence and an "✔️ Acceptance criteria checked on the final code (<sha>)" comment is left; any
+  unmet → a cycle makes them true — or, at the cycle cap, the PR goes to a human with the unmet ones
+  named. A PR whose description has no checklist is handed over saying there was nothing to check.
 - **The PR description stays true.** The agent can't edit it; it returns corrections, and the push
   job writes them into one "Updated after review cycle k" section.
 - **Without `AGENT_GH_TOKEN`** the loop can't work — a push made with `GITHUB_TOKEN` starts no
@@ -256,6 +277,8 @@ has to merge in; without it GitHub refuses that push and the loop hands the PR t
   root-`npm test` refusal).
 - `issue-agent.test.mjs` — tests for those, the baseline and the PR-body escaping; part of the root
   `npm test`, and each fails if its check is removed.
+- `merges.mjs` — bringing `main` into a conflicting PR: the fix job's merge-and-resolve and the push
+  job's replay of it, which must build the same tree (tested on a real conflict).
 - `fingerprints.mjs` — gate failures → comparable fingerprints, for the baseline.
 - `capture.mjs` — Playwright helpers the evidence agent imports (`session`, `startServer`).
 - `report.mjs` — the test-proof page, the HTML report, the PR body, the issue comments.

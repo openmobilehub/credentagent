@@ -141,10 +141,24 @@ export function latestVerdict({ summaries, headAt, headIsMerge, conclusion }) {
  * merge, and each review of a fix tends to find a new, smaller note — so the PR goes to a human
  * with the open notes listed. ⛔ at the cap is never "ready": the loop stops and says why.
  */
-export function reviewDecision({ verdict, open, cycle, maxCycles, conclusion, loopOn }) {
+export function reviewDecision({ verdict, open, cycle, maxCycles, conclusion, loopOn, conflicting = false, verified = false }) {
   // Without a token whose pushes start workflows a fix could never be reviewed: spend no fix
   // session, and hand the PR (still marked in review) to a human rather than leave it stranded.
   if (!loopOn) return { action: "give-up", reason: "the review loop is off — there is no AGENT_GH_TOKEN, so a pushed fix would never be reviewed again" };
+  // A PR that conflicts with main gets no review at all (GitHub runs no pull_request workflow on
+  // it), so waiting would stall forever: resolve it now, or hand over at the cap.
+  if (conflicting) {
+    if (cycle >= maxCycles) return { action: "give-up", reason: `the PR conflicts with main and ${maxCycles} review cycles are done` };
+    return { action: "fix", conflict: true, reason: "the PR conflicts with main — merging main in and resolving the conflicts" };
+  }
+  const decided = decideOnVerdict({ verdict, open, cycle, maxCycles, conclusion });
+  // "Done" means the reviewer is satisfied; before a human is asked, the issue's own acceptance
+  // criteria are checked on the final code too (once per head).
+  if (decided.action === "done" && !verified) return { action: "verify", then: decided, reason: "the review is satisfied — checking the issue's acceptance criteria on the final code before handing over" };
+  return decided;
+}
+
+function decideOnVerdict({ verdict, open, cycle, maxCycles, conclusion }) {
   if (!verdict) {
     // No verdict for the head: wait if no review has finished (started by hand), otherwise hand the
     // PR to a human — a failed or verdict-less review would leave it "in review" forever.
@@ -158,6 +172,52 @@ export function reviewDecision({ verdict, open, cycle, maxCycles, conclusion, lo
   }
   return { action: "fix", reason: verdict === "changes" ? "the review says ⛔ Needs changes" : `${open} review thread(s) still open` };
 }
+
+// ── the acceptance-criteria checklist in an agent PR's description ──────────────────────────────
+// publish writes it as "- [ ] **AC1** text"; verification ticks it as "- [x] **AC1** text — _evidence_".
+const AC_LINE = /^- \[( |x)\] \*\*(AC\d+)\*\* (.*)$/gm;
+
+/** The criteria in a PR description: [{ id, text, met }] (evidence stripped from the text). */
+export function parseCriteria(body) {
+  return [...String(body ?? "").matchAll(AC_LINE)].map(([, box, id, rest]) => ({ id, text: rest.replace(/ — _[^\n]*_$/, ""), met: box === "x" }));
+}
+
+/** The description with each criterion's box and evidence set from `verdicts` [{ id, met, evidence }]. */
+export function tickCriteria(body, verdicts, escape = (s) => s) {
+  const byId = new Map(verdicts.map((v) => [v.id, v]));
+  return String(body).replace(AC_LINE, (line, _box, id, rest) => {
+    const v = byId.get(id);
+    if (!v) return line;
+    const text = rest.replace(/ — _[^\n]*_$/, "");
+    return `- [${v.met ? "x" : " "}] **${id}** ${text}${v.evidence ? ` — _${escape(String(v.evidence).replace(/\s+/g, " ").replace(/_/g, "\\_"))}_` : ""}`;
+  });
+}
+
+/**
+ * What follows a criteria check: all met → verified; some not → a fix cycle to make them true — but
+ * not past the cycle cap, where the PR goes to a human with the unmet ones named.
+ */
+export function afterVerification({ verdicts, cycle, maxCycles }) {
+  const unmet = verdicts.filter((v) => !v.met);
+  if (!unmet.length) return { action: "verified" };
+  if (cycle >= maxCycles) return { action: "give-up", reason: `${maxCycles} review cycles are done and these acceptance criteria aren't met yet: ${unmet.map((v) => v.id).join(", ")}` };
+  return { action: "fix", unmet };
+}
+
+/**
+ * Whether the push job may believe a "verified" result from the agents' job: only when the trusted
+ * decision asked for verification, and only if every criterion in it is met — or the trusted assess
+ * step found no checklist at all (then nothing was claimed).
+ */
+export function acceptVerified({ decision, checklist, verdicts }) {
+  if (decision !== "verify") return false;
+  if (!checklist.length) return true;
+  return checklist.every((c) => verdicts.find((v) => v.id === c.id)?.met === true);
+}
+
+/** Whether the loop already verified the criteria on exactly this head (a marker comment by the loop). */
+export const verifiedFor = (comments, head, isTrusted) =>
+  comments.some((c) => String(c.body).startsWith(`<!-- issue-agent-verified sha=${head} `) && isLoopAuthor(c.author, isTrusted));
 
 /**
  * Who can post the loop's cycle comments: the push job — as the AGENT_GH_TOKEN's user (someone with

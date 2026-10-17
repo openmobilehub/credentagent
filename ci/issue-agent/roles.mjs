@@ -126,6 +126,22 @@ export const REVIEW_FIX_SCHEMA = {
   },
 };
 
+// The review loop found the PR conflicting with main (main moved onto the same files). The checkout
+// holds the PR head with main merged in, conflict markers left in place.
+export const conflictPrompt = (issue, conflicted, mainSha) => `You are the IMPLEMENT agent. The pull request you opened for this issue now conflicts with main: main (${mainSha.slice(0, 7)}) changed the same lines since the PR branched off. The checkout you are in is the PR with main merged in; git left conflict markers (<<<<<<< ======= >>>>>>>) in:
+
+${conflicted.map((f) => `- ${f}`).join("\n")}
+
+${issueBlock(issue)}
+
+Resolve every conflict so the result does BOTH: what main's change does and what this PR does. Usually both sides added something (an import, a function, a list entry, a doc paragraph) — keep both. Where they truly contradict, keep main's behavior plus this PR's feature, and say what you chose and why in open_questions.
+
+- Remove every conflict marker. Don't change unrelated code.
+- Then run: npm run build && npm run typecheck && npm run lint && npm test — from the repo root — and fix what fails.
+- Don't commit or push: the pipeline re-checks everything, records the merge, and pushes.
+
+Return the structured result: criteria_status covering every criterion id you were given.`;
+
 export const reviewFixPrompt = (issue, review) => `You are the IMPLEMENT agent, answering a code review of the pull request you opened for this issue. The checkout you are in is the PR's head.
 
 ${issueBlock(issue)}

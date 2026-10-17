@@ -4,7 +4,7 @@
 
 import { describe, it, expect, beforeEach } from "vitest";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -12,8 +12,10 @@ import {
   isReviewBot, parseVerdict, agentBranch, threadsToAnswer, reviewDecision, sharedChanges, cyclesDone, loopRefusal, latestVerdict, cycleCap,
   isAgentComment, requestComments, leftLoop,
   roleModel, testGateCommand, rootTestRefusal, publishVerdict, isMutableSource, sameLockfile,
+  parseCriteria, tickCriteria, verifiedFor, afterVerification, acceptVerified,
 } from "./checks.mjs";
 import { reviewPrompt } from "./roles.mjs";
+import { startMerge, buildResolvedMerge, replayResolution, rebuildForPush, treeOf } from "./merges.mjs";
 import { fingerprints, withinBaseline } from "./fingerprints.mjs";
 import { prBody, proofHtml, issueComment, statusBody, STATUS_MARK } from "./report.mjs";
 
@@ -83,6 +85,127 @@ describe("the publish job's checks", () => {
       const patch = patchOf((src) => writeFileSync(join(src, "a.txt"), "x\n"));
       expect(applyAndCheck(repo, patch)).toEqual({ files: ["a.txt"], forbidden: [] });
     });
+  });
+});
+
+describe("bringing main into a conflicting PR (merges.mjs)", () => {
+  // A real conflict: the PR and main both change line 2 of a.txt. The fix job's "agent" resolves it
+  // (and makes one more fix); the push job must rebuild exactly the same tree from what it hands over.
+  let repo, prHead, mainSha;
+  const write = (dir, f, s) => { mkdirSync(join(dir, f, ".."), { recursive: true }); writeFileSync(join(dir, f), s); };
+  // Like a CI runner: git may not invent an identity, so a merge helper that leans on one fails here.
+  const noIdentity = (fn) => {
+    const saved = { ...process.env };
+    Object.assign(process.env, { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "user.useConfigOnly", GIT_CONFIG_VALUE_0: "true" });
+    try { return fn(); } finally { for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k]; Object.assign(process.env, saved); }
+  };
+  const makeRepo = (pr, main) => {
+    repo = mkdtempSync(join(tmpdir(), "issue-agent-merge-"));
+    git(repo, "init", "-q", "-b", "main");
+    write(repo, "a.txt", "one\nshared\nthree\n");
+    git(repo, "add", "-A"); git(repo, "commit", "-q", "-m", "base");
+    git(repo, "checkout", "-q", "-b", "pr");
+    for (const [f, s] of Object.entries(pr)) write(repo, f, s);
+    git(repo, "add", "-A"); git(repo, "commit", "-q", "-m", "pr");
+    prHead = git(repo, "rev-parse", "HEAD").trim();
+    git(repo, "checkout", "-q", "main");
+    for (const [f, s] of Object.entries(main)) write(repo, f, s);
+    git(repo, "add", "-A"); git(repo, "commit", "-q", "-m", "main moved");
+    mainSha = git(repo, "rev-parse", "HEAD").trim();
+  };
+  beforeEach(() => makeRepo(
+    { "a.txt": "one\nPR version\nthree\n", "b.txt": "the PR's file\n" },
+    { "a.txt": "one\nmain version\nthree\n", "c.txt": "main's file\n" },
+  ));
+  const fixJob = (resolve = (work) => write(work, "a.txt", "one\nmain version + PR version\nthree\n")) => {
+    const work = join(repo, "..", `${repo.split("/").pop()}-work`);
+    git(repo, "worktree", "add", "-q", "--detach", work, prHead);
+    const m = noIdentity(() => startMerge(work, prHead, mainSha));
+    resolve(work); // the agent's resolution
+    write(work, "d.txt", "an extra fix\n"); // and one more change, made in the same round
+    const keep = join(repo, "..", `${repo.split("/").pop()}-resolved`);
+    const merge = noIdentity(() => buildResolvedMerge({ repo, scratch: join(repo, "..", `${repo.split("/").pop()}-scratch`), head: prHead, mainSha, conflicted: m.conflicted, resolvedFrom: work, keepDir: keep }));
+    git(work, "add", "--all", "--intent-to-add");
+    const patch = git(work, "diff", "--binary", merge.sha);
+    return { work, keep, conflicted: m.conflicted, deleted: merge.deleted, patch, want: treeOf(work) };
+  };
+  let pushes = 0;
+  const freshCheckout = () => {
+    const wt = join(repo, "..", `${repo.split("/").pop()}-push${++pushes}`);
+    git(repo, "worktree", "add", "-q", "--detach", wt, prHead);
+    return wt;
+  };
+  // The replay half alone (its refusals)...
+  const pushJob = (conflicted, keep, patch, deleted = []) => {
+    const wt = freshCheckout();
+    const replay = noIdentity(() => replayResolution(wt, mainSha, conflicted, keep, deleted));
+    if (replay.ok) {
+      git(wt, "commit", "-q", "-m", "merge main");
+      if (patch.trim()) { spawnSync("git", ["apply", "--index", "-"], { cwd: wt, input: patch }); git(wt, "commit", "-q", "-m", "fix"); }
+    }
+    return { wt, replay };
+  };
+  // ...and the push job's whole rebuild, exactly as run.mjs calls it.
+  const rebuild = (fx, over = {}) => noIdentity(() => rebuildForPush({
+    wt: freshCheckout(), mainSha, resolved: fx.conflicted, resolvedDir: fx.keep, deleted: fx.deleted, patch: fx.patch, expectedTree: fx.want,
+    mergeMessage: "merge main", fixMessage: "fix", commitArgs: ["-c", "user.name=t", "-c", "user.email=t@example.com"], ...over,
+  }));
+
+  it("pushes only the exact tree that was tested: the whole rebuild, end to end", () => {
+    const fx = fixJob();
+    const ok = rebuild(fx);
+    expect(ok).toMatchObject({ ok: true });
+    expect(git(repo, "rev-parse", `${ok.sha}^{tree}`).trim()).toBe(fx.want);
+    // a hand-over patch carrying one change more than what was tested is refused
+    const tampered = fx.patch + "diff --git a/e.txt b/e.txt\nnew file mode 100644\nindex 0000000..e69de29\n";
+    expect(rebuild(fx, { patch: tampered })).toMatchObject({ ok: false, why: expect.stringMatching(/differs from the one the pipeline tested/) });
+    // no tested tree to compare with: refused, never pushed unchecked
+    expect(rebuild(fx, { expectedTree: undefined })).toMatchObject({ ok: false, why: expect.stringMatching(/differs/) });
+    // a patch that reaches into .github/ is refused before any commit
+    const sneaky = "diff --git a/.github/x.yml b/.github/x.yml\nnew file mode 100644\nindex 0000000..e69de29\n";
+    expect(rebuild(fx, { patch: sneaky })).toMatchObject({ ok: false, why: expect.stringMatching(/never publishes/) });
+  });
+
+  it("rebuilds, in the push job, exactly the tree the agent's resolution made — and it no longer conflicts", () => {
+    const fx = fixJob();
+    expect(fx.conflicted).toEqual(["a.txt"]);
+    expect(fx.patch).toMatch(/d\.txt/); // only the extra fix rides on top of the merge
+    expect(fx.patch).not.toMatch(/a\.txt/);
+    const { wt, replay } = pushJob(fx.conflicted, fx.keep, fx.patch);
+    expect(replay).toEqual({ ok: true });
+    expect(git(wt, "rev-parse", "HEAD^{tree}").trim()).toBe(fx.want); // what push builds is what was tested
+    const check = spawnSync("git", ["merge-tree", "--write-tree", "--quiet", mainSha, "HEAD"], { cwd: wt });
+    expect(check.status).toBe(0); // merges cleanly into main now
+  });
+
+  it("carries a resolution that deletes a file — and never reads a lost copy as a deletion", () => {
+    const fx = fixJob((work) => rmSync(join(work, "a.txt")));
+    expect(fx.deleted).toEqual(["a.txt"]);
+    const ok = pushJob(fx.conflicted, fx.keep, fx.patch, fx.deleted);
+    expect(ok.replay).toEqual({ ok: true });
+    expect(git(ok.wt, "rev-parse", "HEAD^{tree}").trim()).toBe(fx.want);
+    expect(pushJob(fx.conflicted, fx.keep, "", []).replay).toMatchObject({ ok: false, why: expect.stringMatching(/copy of a\.txt is missing/) });
+  });
+
+  it("refuses a resolution for the wrong files, or one with markers left", () => {
+    const fx = fixJob();
+    expect(pushJob(["b.txt"], fx.keep, "").replay).toMatchObject({ ok: false, why: expect.stringMatching(/not in the files the fix resolved/) });
+    writeFileSync(join(fx.keep, "a.txt"), "<<<<<<< HEAD\nx\n=======\ny\n>>>>>>> main\n");
+    expect(pushJob(fx.conflicted, fx.keep, "").replay).toMatchObject({ ok: false, why: expect.stringMatching(/markers/) });
+  });
+
+  it("refuses a resolution handed over for a merge that is clean", () => {
+    makeRepo({ "b.txt": "the PR's file\n" }, { "c.txt": "main's file\n" }); // nothing conflicts
+    const keep = mkdtempSync(join(tmpdir(), "issue-agent-keep-"));
+    writeFileSync(join(keep, "a.txt"), "smuggled\n");
+    expect(pushJob(["a.txt"], keep, "").replay).toMatchObject({ ok: false, why: expect.stringMatching(/merges cleanly/) });
+  });
+
+  it("refuses a resolution under .github/, even when git says it conflicts", () => {
+    makeRepo({ ".github/workflows/x.yml": "on: push # PR\n" }, { ".github/workflows/x.yml": "on: pull_request # main\n" });
+    const keep = mkdtempSync(join(tmpdir(), "issue-agent-keep-"));
+    write(keep, ".github/workflows/x.yml", "on: [push, pull_request]\n");
+    expect(pushJob([".github/workflows/x.yml"], keep, "").replay).toMatchObject({ ok: false, why: expect.stringMatching(/never changes/) });
   });
 });
 
@@ -281,7 +404,57 @@ describe("the review loop", () => {
   });
 
   // The loop's normal state: the token is there. (loopOn has no default — forgetting it means "off".)
-  const rd = (o) => reviewDecision({ loopOn: true, ...o });
+  // ...and the criteria already verified on this head, unless a test says otherwise.
+  const rd = (o) => reviewDecision({ loopOn: true, verified: true, ...o });
+
+  it("checks the issue's acceptance criteria before handing over — once per head", () => {
+    const d = reviewDecision({ loopOn: true, verdict: "ready", open: 0, cycle: 1, maxCycles: 3 });
+    expect(d).toMatchObject({ action: "verify", then: { action: "done" } });
+    expect(reviewDecision({ loopOn: true, verified: true, verdict: "ready", open: 0, cycle: 1, maxCycles: 3 }).action).toBe("done");
+    // at the cap, a 💬 with notes is "done" too — and is verified first as well
+    expect(reviewDecision({ loopOn: true, verdict: "notes", open: 2, cycle: 3, maxCycles: 3 })).toMatchObject({ action: "verify", then: { action: "done", notes: 2 } });
+    // "fix" and "give-up" are never held back for verification
+    expect(reviewDecision({ loopOn: true, verdict: "changes", open: 2, cycle: 0, maxCycles: 3 }).action).toBe("fix");
+  });
+
+  it("resolves a conflict with main instead of waiting for a review that can't come — or hands over at the cap", () => {
+    expect(rd({ conflicting: true, verdict: undefined, open: 0, cycle: 0, maxCycles: 3 })).toMatchObject({ action: "fix", conflict: true });
+    expect(rd({ conflicting: true, verdict: "ready", open: 0, cycle: 1, maxCycles: 3 })).toMatchObject({ action: "fix", conflict: true }); // even a ✅ can't be merged while it conflicts
+    expect(rd({ conflicting: true, verdict: "ready", open: 0, cycle: 3, maxCycles: 3 })).toMatchObject({ action: "give-up", reason: expect.stringMatching(/conflicts with main/) });
+  });
+
+  it("reads and ticks the acceptance-criteria checklist in the PR description", () => {
+    const body = "intro\n- [ ] **AC1** one thing\n- [x] **AC2** other — _old evidence_\n- [ ] not a criterion\n";
+    expect(parseCriteria(body)).toEqual([{ id: "AC1", text: "one thing", met: false }, { id: "AC2", text: "other", met: true }]);
+    const ticked = tickCriteria(body, [{ id: "AC1", met: true, evidence: "a_b.ts:3" }, { id: "AC2", met: false, evidence: "missing" }]);
+    expect(ticked).toContain("- [x] **AC1** one thing — _a\\_b.ts:3_");
+    expect(ticked).toContain("- [ ] **AC2** other — _missing_"); // old evidence replaced, not stacked
+    expect(ticked).toContain("- [ ] not a criterion");
+  });
+
+  it("after a criteria check: verified, a fix cycle — or a hand-over at the cap, never a cycle past it", () => {
+    const v = (...met) => met.map((m, i) => ({ id: `AC${i + 1}`, met: m }));
+    expect(afterVerification({ verdicts: v(true, true), cycle: 3, maxCycles: 3 }).action).toBe("verified");
+    expect(afterVerification({ verdicts: v(true, false), cycle: 1, maxCycles: 3 })).toMatchObject({ action: "fix", unmet: [{ id: "AC2" }] });
+    expect(afterVerification({ verdicts: v(true, false), cycle: 3, maxCycles: 3 })).toMatchObject({ action: "give-up", reason: expect.stringMatching(/AC2/) });
+  });
+
+  it("believes a 'verified' result only when verification was asked for and every criterion is met", () => {
+    const checklist = [{ id: "AC1" }, { id: "AC2" }];
+    const all = [{ id: "AC1", met: true }, { id: "AC2", met: true }];
+    expect(acceptVerified({ decision: "verify", checklist, verdicts: all })).toBe(true);
+    expect(acceptVerified({ decision: "fix", checklist, verdicts: all })).toBe(false); // a ⛔ PR can't sneak through
+    expect(acceptVerified({ decision: "verify", checklist, verdicts: [all[0]] })).toBe(false); // AC2 missing
+    expect(acceptVerified({ decision: "verify", checklist, verdicts: [all[0], { id: "AC2", met: false }] })).toBe(false);
+    expect(acceptVerified({ decision: "verify", checklist: [], verdicts: [] })).toBe(true); // no checklist: nothing claimed
+  });
+
+  it("counts a head as verified only by the loop's own marker", () => {
+    const c = (author, body) => ({ author, body });
+    expect(verifiedFor([c(maintainer, "<!-- issue-agent-verified sha=abc123 -->\n✔️")], "abc123", isTrusted)).toBe(true);
+    expect(verifiedFor([c(maintainer, "<!-- issue-agent-verified sha=abc123 -->\n✔️")], "def456", isTrusted)).toBe(false); // another head
+    expect(verifiedFor([c(outsider, "<!-- issue-agent-verified sha=abc123 -->")], "abc123", isTrusted)).toBe(false);
+  });
 
   it("hands over only when the review is satisfied and nothing is open", () => {
     const d = (verdict, open, cycle = 0) => rd({ verdict, open, cycle, maxCycles: 3 }).action;
