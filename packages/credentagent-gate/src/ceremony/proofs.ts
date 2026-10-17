@@ -22,9 +22,10 @@ export interface ProofEntry {
   presentedAt: string;
 }
 
-/** Add `entry`, replacing an earlier proof of the SAME gate (re-proving never piles up). */
+/** Add `entry`, replacing an earlier proof of the SAME gate (re-proving never piles up). Every
+ *  entry comes back without credential bytes, so the next write cleans one stored before #320. */
 export function upsertProof(proofs: readonly ProofEntry[] | undefined, entry: ProofEntry): ProofEntry[] {
-  return [...(proofs ?? []).filter((p) => p.gate !== entry.gate), entry];
+  return withoutPresentations([...(proofs ?? []).filter((p) => p.gate !== entry.gate), entry]);
 }
 
 /** The proofs without credential bytes. The type already has no `presentation`; this drops one an

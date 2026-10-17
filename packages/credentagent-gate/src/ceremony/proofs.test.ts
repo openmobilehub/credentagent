@@ -41,6 +41,13 @@ describe("proof helpers", () => {
     expect(c.map((p) => [p.gate, p.rail])).toEqual([["Membership", "credential"], ["Age 21+", "instant-demo"]]);
   });
 
+  it("upsertProof cleans a proof stored before #320 on the next write (another gate's entry too)", () => {
+    const old = { ...entry("Age 21+"), presentation: { format: "mso_mdoc", deviceResponse: "RAW", inspectUrl: "https://tools.multipaz.org/mdocDeviceResponse#RAW" } } as ProofEntry;
+    const next = upsertProof([old], entry("Membership"));
+    expect(next).toEqual([entry("Age 21+"), entry("Membership")]);
+    expect(JSON.stringify(next)).not.toContain("RAW");
+  });
+
   it("withoutPresentations drops the credential bytes and keeps everything else", () => {
     // An untyped caller, or a proof stored before #320, can still carry one.
     const p = { ...entry("Age 21+"), presentation: { format: "mso_mdoc", deviceResponse: "RAW", inspectUrl: "https://tools.multipaz.org/mdocDeviceResponse#RAW" } } as ProofEntry;

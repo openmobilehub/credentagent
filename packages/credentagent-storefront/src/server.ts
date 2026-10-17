@@ -273,7 +273,9 @@ export interface CompletedOrderRecord {
 
 /** The completed-order store as every reader gets it (the order-status poll, get-order-status,
  *  the paid page): proofs without the wallet's raw answer, even on an order stored before the
- *  gate stopped writing it (#320). Those reads need only the order id. */
+ *  gate stopped writing it (#320). Those reads need only the order id.
+ *  Twin of the gate's `withoutPresentations` (credentagent-gate/src/ceremony/proofs.ts), kept
+ *  unexported there: a change to what a receipt may hold changes both. */
 function receiptsOnly(store: OrderStore<CompletedOrderRecord>): OrderStore<CompletedOrderRecord> {
   return {
     read: async (id) => {

@@ -172,8 +172,9 @@ ${pageHead(`Authorize payment · ${order.id}`, extraCss, args.branding)}
         btn.textContent = "Authorized ✓";
         ${railCompleteScript()}
         ${completedViewScript()}
-        // "What was proven": every credential of the order with its Multipaz Tools links, then Check
-        // the signatures + Order record — server-rendered and escaped by the gate (proofLinksHtml).
+        // "What was proven": every proof of the order with its trust level, then Order record —
+        // server-rendered and escaped by the gate (proofLinksHtml). No Multipaz Tools links: a
+        // passkey carries no credential, and earlier proofs never come back with theirs (#320).
         if (typeof out.proofsHtml === "string" && out.proofsHtml) el.insertAdjacentHTML("beforeend", out.proofsHtml);
         else showRecordLink();
       }

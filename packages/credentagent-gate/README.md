@@ -155,8 +155,8 @@ already read (`orders.retrieve()`, `GET /credentagent/orders/:id/status`, and th
   payment's own credential. The paid checkout page and the widget list each proof and its trust
   level, without Multipaz Tools links.
 - A check's `detail` can still repeat a value the wallet disclosed (a membership number, a payment
-  instrument id or expiry). Removing those is tracked in
-  [#350](https://github.com/openmobilehub/credentagent/issues/350).
+  instrument id or expiry), and the storefront's order record also keeps the cardholder's name.
+  Removing those is tracked in [#350](https://github.com/openmobilehub/credentagent/issues/350).
 - The `order.settled` webhook carries the same proofs.
 - `rail: "instant-demo"` marks a demo tap, never a wallet proof. Each proof states its own `trust_level`.
 
