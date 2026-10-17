@@ -50,7 +50,7 @@ import {
   isReviewBot, parseVerdict, agentBranch, threadsToAnswer, reviewDecision, sharedChanges, filesBetween, cyclesDone, loopRefusal, latestVerdict, cycleCap,
   parseCriteria, tickCriteria, verifiedFor, afterVerification, acceptVerified, conflictMidCycle,
   isAgentComment, requestComments, leftLoop,
-  roleModel, testGateCommand, rootTestRefusal, publishVerdict, isMutableSource, sameLockfile,
+  roleModel, testGateCommand, rootTestRefusal, publishVerdict, isMutableSource, sameLockfile, publishRefusalHint,
 } from "./checks.mjs";
 import { reportHtml, prBody, issueComment, md, statusBody, STATUS_MARK } from "./report.mjs";
 import { loadConfig, testLabel } from "./config.mjs";
@@ -756,8 +756,10 @@ function publishRun(dir) {
     const bodyFile = join(dir, "pr-body.md");
     const banner = loop ? `> [!NOTE]\n> **The agent is still working on this with the Claude reviewer** — it fixes each review, replies to and resolves the threads, and asks for a human review only once the review is ✅/💬 with nothing left open (at most ${MAX_REVIEW_CYCLES} cycles). No need to review it yet.\n\n` : "";
     writeFileSync(bodyFile, banner + prBody(report, { mediaBase, repo: REPO, harnessRepo: HARNESS_REPO ?? REPO, commands: PR_COMMANDS }) + (labeller ? `\n<!-- issue-agent labeller=${labeller} -->\n` : ""));
-    prUrl = gh(["pr", "create", "-R", REPO, ...(loop ? [] : ["--draft"]), "--base", "main", "--head", branch,
-      "--title", done ? issue.title : `[needs human] ${issue.title}`, "--body-file", bodyFile]);
+    const created = sh("gh", ["pr", "create", "-R", REPO, ...(loop ? [] : ["--draft"]), "--base", "main", "--head", branch,
+      "--title", done ? issue.title : `[needs human] ${issue.title}`, "--body-file", bodyFile], { allowFail: true });
+    if (created.code !== 0) throw Object.assign(new Error(`gh pr create failed:\n${created.out.slice(-2000)}`), { hint: publishRefusalHint(created.out, branch) });
+    prUrl = created.out.trim();
     if (loop) { ensureLabels(); gh(["pr", "edit", prUrl, "-R", REPO, "--add-label", LABELS.inReview]); }
     gh(["issue", "comment", String(n), "-R", REPO, "--body", issueComment({ kind: loop ? "pr-in-review" : done ? "pr" : "needs-human", prUrl, report })]);
     setStatus(n, loop ? `PR opened: ${prUrl} — now working through the Claude review on it` : done ? `draft PR opened: ${prUrl}` : `draft PR opened, but it needs a human: ${prUrl}`, { working: loop });
@@ -1189,8 +1191,8 @@ if (mode === "snapshot") {
   } catch (e) {
     console.error(e);
     const n = Number(opt("--issue"));
-    if (n && !flag("--dry-run")) sh("gh", ["issue", "comment", String(n), "-R", REPO, "--body", issueComment({ kind: "error", where: actionsRunUrl() })], { allowFail: true });
-    setStatus(n, "the run failed while publishing", { working: false });
+    if (n && !flag("--dry-run")) sh("gh", ["issue", "comment", String(n), "-R", REPO, "--body", issueComment({ kind: "error", reason: e.hint, where: actionsRunUrl() })], { allowFail: true });
+    setStatus(n, e.hint ? `stopped before the PR — ${e.hint}` : "the run failed while publishing", { working: false });
     process.exitCode = 1;
   }
 } else if (mode === "assess-review") {

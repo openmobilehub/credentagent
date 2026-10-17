@@ -265,8 +265,11 @@ is the worked example:
    without them nothing would pick up a PR opened for the loop, so it stays a draft for a human.
 
 3. **Secrets and protection** — `CLAUDE_CODE_OAUTH_TOKEN` (or `ANTHROPIC_API_KEY` + the `CLAUDE_AUTH`
-   variable `api`); optionally `AGENT_GH_TOKEN` so the draft starts CI. And branch protection on `main`
-   requiring a review: the agent never merges, but that rule is what makes it so.
+   variable `api`), and **`AGENT_GH_TOKEN`** — in practice required: the workflow's own token may open
+   a PR only if the repo allows "GitHub Actions to create and approve pull requests", which also lets
+   workflows *approve* PRs, so leave that off. Without either, publish pushes the reviewed branch and
+   the issue comment says to open the PR by hand. The token also lets the draft start CI. And branch
+   protection on `main` requiring a review: the agent never merges, but that rule is what makes it so.
 
 The jobs check out the caller's `main` at `target/` and this repo's harness next to it at `harness/`,
 then run `run.mjs … --target target`. The trust model is unchanged: the agents' job holds no GitHub
