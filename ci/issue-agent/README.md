@@ -82,6 +82,22 @@ different agent before it reaches the PR:
   opens as `[needs human]` with the open findings (and, when it applies, that the root `npm test`
   never passed on it), or the issue gets a comment saying why.
 
+## Seeing what it's working on
+
+- **On the issue:** one 🤖 status comment, edited in place — the current state on top, a timestamped
+  history underneath, each step linking its Actions run: started → PR opened → each review cycle
+  (fixing / pushed) → ready for your review, or stopped and why. Edits don't notify anyone; the
+  moments that need you (a PR, a hand-over, a stop) still get their own comment.
+- **The `agent:working` label** is on an issue from the moment work starts until the PR is handed to
+  a human or the run stops — so **`is:open label:agent:working`** lists everything in flight, and
+  `label:agent:in-review` lists the PRs still going through the review loop.
+- **In Actions,** runs are named `issue-agent #362 · labelled agent · <title>` and
+  `issue-agent-review · agent/issue-362-<run>`, so the list reads at a glance (a run for another
+  label says so, and is skipped).
+
+The status comment and label are written only by the trusted jobs (the agents' job holds no token),
+and only a status comment written by the workflow's bot or a write-access user is ever edited.
+
 ## The review loop
 
 With an `AGENT_GH_TOKEN` secret set, a converged change doesn't stop at "draft PR": it opens as a

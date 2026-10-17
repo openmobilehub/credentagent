@@ -279,6 +279,8 @@ when the review is ✅, or 💬 with nothing open** (`agent:ready-for-human`). A
 also goes to a human as ready, with the open small notes listed; a ⛔ stops as `agent:needs-human`,
 as does any other stated reason. Don't review an `agent:in-review` PR
 yet; you'll be asked.
+To see what it's working on: the 🤖 status comment on the issue (edited at each step), the
+`agent:working` label (`is:open label:agent:working`), and Actions runs named `issue-agent #<n> · …`.
 How it works and how to run it locally: [`ci/issue-agent/README.md`](ci/issue-agent/README.md).
 
 Apache-2.0 · part of [Open Mobile Hub](https://openmobilehub.org) (Linux Foundation).

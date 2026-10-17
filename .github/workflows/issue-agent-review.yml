@@ -1,4 +1,6 @@
 name: issue-agent-review
+# In the Actions list: which agent branch (it carries the issue number), or which PR when run by hand.
+run-name: "issue-agent-review · ${{ github.event.workflow_run.head_branch || format('PR #{0} (run by hand)', inputs.pr) }}"
 
 # The review loop: after every Claude review of an issue agent's PR (branch agent/issue-*), the agent
 # fixes what the review asks, pushes, replies to and resolves each thread — and the push starts the

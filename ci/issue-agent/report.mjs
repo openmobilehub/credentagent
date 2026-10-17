@@ -144,6 +144,18 @@ ${blocking.length ? `### Open blocking findings\n\n${blocking.join("\n")}\n\n` :
 `;
 }
 
+// The issue's live status comment: one comment, edited in place — the current state on top, a
+// timestamped history underneath (newest last, capped). `previous` is that comment's current body.
+export const STATUS_MARK = "<!-- issue-agent-status -->";
+export function statusBody(previous, state, { at = new Date(), link, max = 25 } = {}) {
+  const rows = String(previous ?? "").split("\n").filter((l) => /^\| \d{2}-\d{2} \d{2}:\d{2} \|/.test(l));
+  const when = at.toISOString().slice(5, 16).replace("T", " "); // MM-DD HH:MM, UTC
+  // One line, everywhere it's shown: a line break in a reason could otherwise plant a fake history row.
+  const line = md(String(state).replace(/[\r\n]+/g, " "));
+  rows.push(`| ${when} | ${line.replace(/\|/g, "\\|")}${link ? ` · [run](${link})` : ""} |`);
+  return `${STATUS_MARK}\n🤖 **Issue agent:** ${line}\n\n| UTC | step |\n| --- | --- |\n${rows.slice(-max).join("\n")}\n`;
+}
+
 export function issueComment({ kind, reason, prUrl, report, where }) {
   const retry = "Remove and re-add the `agent` label to run it again.";
   switch (kind) {
