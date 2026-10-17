@@ -73,6 +73,13 @@ type OrdersHandler = (req: OrdersRequest, res: OrdersResponse) => void | Promise
 
 // ── Order shape mapping (the stored GateOrder is the authority) ────────────────
 
+/** Whole cents, rounded exactly as the rails' Gate 1 rounds its re-derived payable — so a
+ *  float-dollar artifact (3 × 4.90 = 14.700000000000001) never reaches the amount binding,
+ *  where it would disagree with the rounded payable and refuse a correct payment (invariant 3). */
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
 /** The discount percent a policy grants (a `discount` step), if any. */
 function discountPctOf(policy: Step[]): number | undefined {
   for (const s of policy) {
@@ -90,7 +97,7 @@ function toCeremonyLine(l: GateOrder["lines"][number], currency: string) {
     name: typeof l.name === "string" ? l.name : l.id,
     unitPrice: l.unitPrice,
     quantity: l.quantity,
-    lineTotal: l.unitPrice * l.quantity,
+    lineTotal: round2(l.unitPrice * l.quantity),
     currency,
     ...(typeof l.minimumAge === "number" ? { minimumAge: l.minimumAge } : {}),
     ...(typeof l.category === "string" ? { category: l.category } : {}),
@@ -107,16 +114,18 @@ function repriceStored(created: CreatedOrder, items: CartItemRef[], opts?: Repri
     if (!src) throw new Error(`[credentagent] orders catalog: unknown line "${it.productId}" for order ${created.order.id}`);
     return toCeremonyLine({ ...src, quantity: it.quantity }, currency);
   });
-  const subtotal = lines.reduce((s, l) => s + l.lineTotal, 0);
+  // Every figure in whole cents, derived the way Gate 1 re-derives it (line sum, then
+  // round2(lineSum × pct/100)), so subtotal − discount === the payable the rails compute.
+  const subtotal = round2(lines.reduce((s, l) => s + l.lineTotal, 0));
   const pct = discountPctOf(created.policy);
-  const discount = opts?.loyaltyApplied && pct ? Math.round(subtotal * pct) / 100 : 0;
+  const discount = opts?.loyaltyApplied && pct ? round2(subtotal * (pct / 100)) : 0;
   return {
     id: created.order.id,
     lines,
     itemCount: lines.reduce((s, l) => s + l.quantity, 0),
     subtotal,
     discount,
-    total: subtotal - discount,
+    total: round2(subtotal - discount),
     currency,
   };
 }

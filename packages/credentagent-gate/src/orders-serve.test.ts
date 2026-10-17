@@ -313,3 +313,60 @@ describe("orders.serve — the order proof receipt", () => {
     expect(JSON.stringify(await completed.read("O1"))).not.toContain("RAW");
   });
 });
+
+// Invariant 3 — the line sum, the order total and the signed amount must agree. 3 × $4.90 is
+// 14.700000000000001 in float dollars; before #360 the re-priced order carried that unrounded
+// total, Gate 1 re-derived a rounded payable of 14.7, and the strict comparison refused a
+// correct payment ("Amount binding: FAIL"). The order is now re-priced in whole cents.
+describe("orders.serve — amounts that are not exact in binary (#360)", () => {
+  const teaOrder = (unitPrice: number) => ({ id: "", total: unitPrice * 3, currency: "USD", lines: [{ id: "tea", name: "Tea", quantity: 3, unitPrice }] });
+  const claims = { issuer_name: "Demo Bank", payment_instrument_id: "pi-1", masked_account_reference: "•••• 4242", holder_name: "Demo", expiry_date: "2032-09-01" };
+
+  async function setup(unitPrice: number, policy = [required(payment.in("usd"))]) {
+    const ca = new CredentAgent({ walletOrigin: "http://localhost:4000" });
+    const app = fakeApp();
+    ca.orders.serve(app);
+    const { id } = await ca.orders.create({ order: teaOrder(unitPrice), policy });
+    const pay = async (amount: number) => {
+      const res = fakeRes();
+      await app._post.get("/credentagent/dc-payment/verify")!({
+        query: {}, headers: { host: "localhost:4000" }, protocol: "http",
+        body: { order: id, amount, claims },
+      }, res);
+      return res._json as { completed: boolean; gates?: Array<{ gate: string; pass: boolean; detail: string }> };
+    };
+    return { ca, id, pay };
+  }
+
+  it("a 3 × $4.90 order completes when paid 14.70 through the instant demo", async () => {
+    const { ca, id, pay } = await setup(4.9);
+    const out = await pay(14.7);
+    expect(out.completed).toBe(true);
+    const done = await ca.orders.retrieve(id);
+    expect(done.ok && done.completion.amount).toBe(14.7);
+  });
+
+  it("control: a 3 × $5.00 order still completes when paid 15", async () => {
+    const { pay } = await setup(5);
+    expect((await pay(15)).completed).toBe(true);
+  });
+
+  it.each([14.69, 14.71])("REFUSES a payment of %s for the 14.70 order — amount binding stays enforced", async (amount) => {
+    const { ca, id, pay } = await setup(4.9);
+    const out = await pay(amount);
+    expect(out.completed).toBe(false);
+    const binding = out.gates?.find((g) => g.gate === "Amount binding");
+    expect(binding?.pass).toBe(false);
+    // The re-derived payable is whole cents — no float artifact reaches the gate.
+    expect(binding?.detail).toContain(`vs 14.7)`);
+    expect(binding?.detail).not.toContain("14.700000000000001");
+    expect((await ca.orders.retrieve(id)).ok).toBe(false);
+  });
+
+  it("a loyalty-discounted 3 × $4.90 order completes for exactly 13.23 (14.70 − 10%) and refuses the undiscounted 14.70", async () => {
+    const { ca, id, pay } = await setup(4.9, [optional(membership.discount(10)), required(payment.in("usd"))]);
+    await ca.store.write(id, { loyalty: { applied: true, membershipNumber: "M-1" } });
+    expect((await pay(14.7)).completed).toBe(false);
+    expect((await pay(13.23)).completed).toBe(true);
+  });
+});
