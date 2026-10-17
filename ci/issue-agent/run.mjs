@@ -17,10 +17,14 @@
 //              issue text and comments written by people with write access, as of the label
 //   spec       an agent reads the request + code → acceptance criteria (or "not actionable")
 //   implement  an agent writes the failing test first, then the fix
-//   gates      this script runs build, typecheck, lint, root `npm test` — measured against main's own
-//              failures, so a red main is never charged to the change
+//   gates      this script runs build, typecheck, lint and the tests of what changed — measured against
+//              main's own failures (measured once per main commit, then reused), so a red main is
+//              never charged to the change
 //   mutation   this script reverts the source change and re-runs the changed tests: they must FAIL
-//   review     three agents in parallel — spec / security / DX — blocking findings → back to implement
+//   root test  once per round, before the reviews: the authoritative root `npm test` (publish refuses
+//              a change without a passing one)
+//   review     three agents in parallel — spec / security / DX, grounded in REVIEW.md and handed the
+//              diff — blocking findings → back to implement
 //   evidence   before/after screenshots + video in a real browser (anything browser-visible), and a
 //              recorded test-proof page for every change
 //   publish    the REVIEWED change, as a patch, applied to a clean checkout: one signed-off commit, a
@@ -41,12 +45,15 @@ import { fingerprints, stripAnsi, withinBaseline } from "./fingerprints.mjs";
 import {
   TRUSTED_PERMISSIONS, titleAuthor, forbiddenPaths, applyAndCheck, changedSince, isRunId, isCommitId, publishIssueNumber,
   isReviewBot, parseVerdict, agentBranch, threadsToAnswer, reviewDecision, sharedChanges, filesBetween, cyclesDone, loopRefusal, latestVerdict, cycleCap,
+  roleModel, testGateCommand, rootTestRefusal, isMutableSource, sameLockfile,
 } from "./checks.mjs";
 import { reportHtml, prBody, issueComment, md } from "./report.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, "../..");
-const MODEL = process.env.ISSUE_AGENT_MODEL ?? "claude-opus-5-5";
+const MODEL = process.env.ISSUE_AGENT_MODEL || "claude-opus-5-5"; // the implementer (and evidence)
+const REVIEW_MODEL = process.env.ISSUE_AGENT_REVIEW_MODEL || "claude-sonnet-5-5"; // the spec agent and the three reviewers
+const MODELS = { main: MODEL, review: REVIEW_MODEL };
 const MAX_ROUNDS = Number(process.env.ISSUE_AGENT_MAX_ROUNDS ?? 3);
 const MAX_FIXES = Number(process.env.ISSUE_AGENT_MAX_FIXES ?? 3);
 const AGENT_BUDGET_USD = Number(process.env.ISSUE_AGENT_BUDGET_USD ?? 25);
@@ -118,7 +125,7 @@ const newRun = (n, dir) => {
   const id = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 12);
   dir ??= join(RUNS_HOME, `issue-${n}-${id}`);
   mkdirSync(dir, { recursive: true });
-  return { id, dir, costUsd: 0, log: (s) => { console.log(s); appendFileSync(join(dir, "run.log"), s + "\n"); } };
+  return { id, dir, costUsd: 0, models: {}, log: (s) => { console.log(s); appendFileSync(join(dir, "run.log"), s + "\n"); } };
 };
 
 // ══ 1. snapshot (trusted; GitHub read access) ═════════════════════════════════════════════════════
@@ -214,14 +221,16 @@ async function agent(role, prompt, { cwd, schema, write = false, check = false, 
   if (cap !== undefined && cap <= 0) throw new BudgetSpent(`${role}'s share of the budget is spent`);
   const transcript = join(RUN.dir, "transcripts", `${role}.jsonl`);
   mkdirSync(dirname(transcript), { recursive: true });
-  RUN.log(`▶ ${role}${resume ? " (resumed)" : ""}`);
+  const model = roleModel(role, MODELS);
+  RUN.models[role] = model;
+  RUN.log(`▶ ${role} · ${model}${resume ? " (resumed)" : ""}`);
   let sessionId = resume, result, structured, cost = 0, error, sawResult = false;
   const allowed = Math.min(AGENT_BUDGET_USD, remaining, cap ?? Infinity);
   try {
   for await (const msg of query({
     prompt,
     options: {
-      model: MODEL,
+      model,
       cwd,
       resume,
       env: AGENT_ENV,
@@ -269,12 +278,23 @@ function summarizeInput(i = {}) {
   return String(i.command ?? i.file_path ?? i.pattern ?? i.path ?? "").replace(/\s+/g, " ").slice(0, 110);
 }
 
-function checkout(dir, ref) {
+// `reuseFrom`: a checkout whose dependencies are already installed. With a byte-identical lockfile its
+// node_modules are copied instead of running `npm ci` again — copied, not linked: workspace packages
+// are relative symlinks, which must resolve to THIS checkout's packages (main's code, for "before").
+function checkout(dir, ref, { reuseFrom } = {}) {
   git(["fetch", "--quiet", "origin", "main"]);
   if (existsSync(dir)) git(["worktree", "remove", "--force", dir], { allowFail: true });
   git(["worktree", "add", "--quiet", "--detach", dir, ref]);
   RUN.log(`  checkout ${ref} → ${dir}`);
-  code("npm", ["ci", "--no-audit", "--no-fund"], { cwd: dir });
+  const lock = (d) => (existsSync(join(d, "package-lock.json")) ? readFileSync(join(d, "package-lock.json"), "utf8") : undefined);
+  if (reuseFrom && existsSync(join(reuseFrom, "node_modules")) && sameLockfile(lock(dir), lock(reuseFrom))) {
+    for (const rel of ["node_modules", ...readdirSync(join(reuseFrom, "packages")).map((p) => join("packages", p, "node_modules"))]) {
+      if (existsSync(join(reuseFrom, rel))) cpSync(join(reuseFrom, rel), join(dir, rel), { recursive: true, verbatimSymlinks: true });
+    }
+    RUN.log(`  same package-lock.json as ${reuseFrom} — reused its installed dependencies, skipped npm ci`);
+  } else {
+    code("npm", ["ci", "--no-audit", "--no-fund"], { cwd: dir });
+  }
   code("npm", ["run", "build"], { cwd: dir, allowFail: true }); // a red main is measured by the baseline, not fatal here
 }
 
@@ -298,22 +318,46 @@ function restoreHead(dir, base) {
 // Each failure becomes fingerprints (fingerprints.mjs). A gate passes when it is green, or when every
 // failure it reports was already on main, no more often than on main (so a red main is never charged
 // to the change, and the agent is told to leave it alone).
+// `test` picks the test command (testGateCommand): the root `npm test` unless a fix attempt asks for
+// the fast one; `only` runs a subset (the once-per-round root test run).
 const GATES = [["build", ["run", "build"]], ["typecheck", ["run", "typecheck"]], ["lint", ["run", "lint"]], ["test", ["test"]]];
+const ROOT_TEST = testGateCommand({ phase: "pre-review" });
 
-function runGates(dir, { baseline, stopOnFail = true } = {}) {
+function runGates(dir, { baseline, stopOnFail = true, test = ROOT_TEST, only } = {}) {
   const results = [];
   for (const [name, args] of GATES) {
-    const r = code("npm", args, { cwd: dir, allowFail: true });
+    if (only && !only.includes(name)) continue;
+    const [cmd, cmdArgs] = name === "test" ? [test.cmd, test.args] : ["npm", args];
+    const r = code(cmd, cmdArgs, { cwd: dir, allowFail: true });
     const summary = name === "test" ? (r.out.match(/Tests\s+.+/g) ?? []).pop()?.trim() : undefined;
     const fps = r.code === 0 ? [] : fingerprints(name, r.out, dir);
     const base = baseline?.find((b) => b.name === name);
     const preexisting = r.code !== 0 && Boolean(base) && !base.green && fps.length > 0 && withinBaseline(fps, base.fingerprints);
     const ok = r.code === 0 || preexisting;
-    results.push({ name, ok, green: r.code === 0, preexisting, fingerprints: fps, summary, tail: tail(r.out, 80) });
-    if (baseline) RUN.log(`  gate ${name}: ${r.code === 0 ? "pass" : preexisting ? "pass (only main's own failures)" : "FAIL"}${summary ? ` — ${summary}` : ""}`);
+    results.push({ name, ok, green: r.code === 0, preexisting, fingerprints: fps, summary, tail: tail(r.out, 80), ...(name === "test" ? { scope: test.scope } : {}) });
+    if (baseline) RUN.log(`  gate ${name}${name === "test" ? ` (${test.scope === "root" ? "root npm test" : `fast: ${cmd} ${cmdArgs.join(" ")}`})` : ""}: ${r.code === 0 ? "pass" : preexisting ? "pass (only main's own failures)" : "FAIL"}${summary ? ` — ${summary}` : ""}`);
     if (!ok && stopOnFail) break; // later gates on a broken build are noise
   }
   return results;
+}
+
+// A commit's own gate results (the baseline) don't change: measure each commit once, and reuse it from
+// RUNS_HOME on a later run — only for the exact same sha and the same gate commands.
+function baselineFor(dir, sha, label) {
+  const file = isCommitId(sha) ? join(RUNS_HOME, "baselines", `${sha}.json`) : undefined;
+  const gates = JSON.stringify(GATES);
+  if (file && existsSync(file)) {
+    try {
+      const cached = JSON.parse(readFileSync(file, "utf8"));
+      if (cached.sha === sha && cached.gates === gates && Array.isArray(cached.baseline)) {
+        RUN.log(`  baseline (${label} ${sha.slice(0, 7)}): reused from ${file} — this commit was already measured`);
+        return cached.baseline;
+      }
+    } catch { /* unreadable: measure afresh */ }
+  }
+  const baseline = runGates(dir, { stopOnFail: false });
+  if (file) { mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, JSON.stringify({ sha, gates, baseline }, null, 2)); }
+  return baseline;
 }
 
 const baselineNote = (baseline) => {
@@ -332,7 +376,7 @@ function mutationCheck(dir, base, spec) {
     .map((l) => l.split("\t")).map(([s, f]) => ({ status: s[0], file: f }));
   const isTest = (f) => /\.test\.(ts|tsx|mjs|js)$/.test(f);
   const tests = changed.filter((c) => isTest(c.file) && c.status !== "D").map((c) => c.file);
-  const src = changed.filter((c) => !isTest(c.file) && /^(packages|examples)\//.test(c.file) && !/\.md$/.test(c.file));
+  const src = changed.filter((c) => !isTest(c.file) && isMutableSource(c.file));
   if (!tests.length) return { applicable: true, ok: false, reason: "behavior changed but no test file was added or changed" };
   if (!src.length) return { applicable: true, ok: false, reason: "tests changed but no source file did — nothing to revert" };
 
@@ -360,12 +404,23 @@ function mutationCheck(dir, base, spec) {
   };
 }
 
+// The change itself, handed to the reviewers up front so they spend their turns reviewing, not
+// running git. Capped: a cut diff says so, and `git diff` still shows the rest.
+const DIFF_CAP = 80_000;
+function reviewDiff(dir, base) {
+  trackNew(dir);
+  const stat = git(["diff", "--stat", base], { cwd: dir }).out.trim();
+  const patch = git(["diff", base], { cwd: dir }).out;
+  const cut = patch.length > DIFF_CAP;
+  return `\n\n<diff base="${base}">\n${stat}\n\n${cut ? patch.slice(0, DIFF_CAP) : patch}${cut ? `\n… [cut at ${DIFF_CAP} of ${patch.length} characters — run \`git diff ${base}\` for the rest]` : ""}\n</diff>`;
+}
+
 // What the pipeline measured, handed to the reviewers so they judge it instead of guessing.
 function pipelineFacts(r, baseline) {
   const m = r.mutation;
   return `\n\n<pipeline_facts>
 These were measured by the pipeline (not claimed by the implementer):
-- Gates from the repo root: ${r.gates.map((g) => `${g.name} ${g.green ? "green" : g.preexisting ? "red only with main's pre-existing failures" : "RED"}${g.summary ? ` (${g.summary})` : ""}`).join("; ")}.
+- Gates from the repo root (\`test\` is the root \`npm test\`, run once this round after the fix attempts passed): ${r.gates.map((g) => `${g.name} ${g.green ? "green" : g.preexisting ? "red only with main's pre-existing failures" : "RED"}${g.summary ? ` (${g.summary})` : ""}`).join("; ")}.
 - Main before the change: ${baseline.map((b) => `${b.name} ${b.green ? "green" : `red: ${b.fingerprints.join("; ")}`}`).join("; ")}. Pre-existing failures are not this change's to fix; a diff that "fixes" them unasked is out of scope.
 - New files are part of \`git diff ${r.base}\` (registered with intent-to-add).
 - Mutation check: ${m.applicable ? `with ${(m.reverted ?? []).join(", ")} reverted to main, the changed test files (${(m.tests ?? []).join(", ")}) ${m.withoutFix.code ? "FAILED" : "PASSED"}; with the change they ${m.withFix.code === 0 ? "pass" : "FAIL"}. This is per FILE: a file fails if any test in it fails, so judge whether each new test case would fail on its own. Output without the change:\n${m.withoutFix.tail.split("\n").slice(-40).join("\n")}` : `not applicable — ${m.reason}`}
@@ -400,7 +455,7 @@ async function implementIssue(issue, { dir } = {}) {
   const repoDir = join(RUN.dir, "repo");
   checkout(repoDir, "origin/main");
   const base = git(["rev-parse", "HEAD"], { cwd: repoDir }).out.trim();
-  const baseline = runGates(repoDir, { stopOnFail: false });
+  const baseline = baselineFor(repoDir, base, "main");
   RUN.log(`  baseline (main ${base.slice(0, 7)}): ${baseline.map((b) => `${b.name} ${b.green ? "green" : `RED (${b.fingerprints.length})`}`).join(" · ")}`);
 
   const { out: spec } = await agent("spec", roles.specPrompt(issue), { cwd: repoDir, schema: roles.SPEC_SCHEMA, maxTurns: 60 });
@@ -424,8 +479,8 @@ async function implementIssue(issue, { dir } = {}) {
   return finishImplement({ issue, spec, roles, n, repoDir, base, rounds, last, done, patch, touched, forbidden, stopped, outcome, renderHtml, proofHtml });
 }
 
-// implement → [gates → mutation, fixed in place up to MAX_FIXES times] → review, until clean or out of
-// rounds. Mechanical failures are fixed inside a round, so review rounds go to what only a reviewer
+// implement → [gates (fast tests) → mutation → root `npm test`, fixed in place up to MAX_FIXES times] →
+// review, until clean or out of rounds. Mechanical failures are fixed inside a round, so review rounds go to what only a reviewer
 // catches. Shared by a new issue and by the review loop:
 //   diffBase      what the reviewers diff against and the patch is taken from (main, or the PR head)
 //   mutationBase  what the test-proof check reverts the source to (always main's merge base)
@@ -443,21 +498,29 @@ async function iterate({ issue, spec, roles, repoDir, baseline, diffBase, mutati
           (first ? firstPrompt : roles.fixPrompt(feedback)) + baselineNote(baseline),
           { cwd: repoDir, schema, write: true, resume: first ? undefined : session, maxTurns: 200 }));
         trackNew(repoDir);
-        const g = runGates(repoDir, { baseline });
+        // Between attempts, only the tests of what changed; the root `npm test` comes once, below.
+        const fast = testGateCommand({ phase: "fix", changed: changedSince(repoDir, mutationBase) });
+        const g = runGates(repoDir, { baseline, test: fast });
         r = { round, attempt, base, gates: g, impl };
-        const bad = g.find((x) => !x.ok);
-        if (bad) {
+        const gateFailed = (bad) => {
           const baseFps = baseline.find((b) => b.name === bad.name)?.fingerprints ?? [];
           const fresh = bad.fingerprints.filter((f) => !baseFps.includes(f));
-          feedback = `The \`npm run ${bad.name}\` gate FAILED when the pipeline ran it from the repo root.${fresh.length ? `\nFailures your change introduced:\n${fresh.map((f) => `- ${f}`).join("\n")}` : ""}\n\n\`\`\`\n${bad.tail}\n\`\`\``;
-          continue;
-        }
+          const cmd = bad.name !== "test" ? `npm run ${bad.name}` : bad.scope === "root" ? "npm test" : `${fast.cmd} ${fast.args.join(" ")}`;
+          return `The \`${cmd}\` gate FAILED when the pipeline ran it from the repo root.${fresh.length ? `\nFailures your change introduced:\n${fresh.map((f) => `- ${f}`).join("\n")}` : ""}\n\n\`\`\`\n${bad.tail}\n\`\`\``;
+        };
+        const bad = g.find((x) => !x.ok);
+        if (bad) { feedback = gateFailed(bad); continue; }
         r.mutation = mutationCheck(repoDir, mutationBase, spec);
         if (mutationBase !== base) restoreHead(repoDir, base); // mutationCheck leaves HEAD at its base
         if (r.mutation.applicable && !r.mutation.ok) {
           feedback = `Test-proof check failed: ${r.mutation.reason}.\nThe pipeline reverted your source changes (${(r.mutation.reverted ?? []).join(", ") || "none"}) and ran ${(r.mutation.tests ?? []).join(", ") || "no tests"}.\n\n\`\`\`\n${r.mutation.withoutFix?.tail ?? ""}\n\`\`\`\nA behavior change needs a test that fails without it.`;
           continue;
         }
+        // Once per round, before the reviews: the authoritative root `npm test` (CLAUDE.md). It replaces
+        // the fast run in the round's record — publish refuses a round without a passing one.
+        const [root] = runGates(repoDir, { baseline, only: ["test"] });
+        r.gates = [...g.filter((x) => x.name !== "test"), root];
+        if (!root.ok) { feedback = gateFailed(root); continue; }
         r.mechanicalOk = true;
         break;
       }
@@ -467,7 +530,7 @@ async function iterate({ issue, spec, roles, repoDir, baseline, diffBase, mutati
       // Freeze what the reviewers review. Their test runs execute the change; whatever they leave
       // behind is thrown away, and this exact patch is what gets published.
       const patch = diffPatch(repoDir, base);
-      const facts = pipelineFacts(r, baseline);
+      const facts = reviewDiff(repoDir, base) + pipelineFacts(r, baseline);
       const share = Math.min(AGENT_BUDGET_USD, (RUN_BUDGET_USD - RUN.costUsd) / 3);
       const settled = await Promise.allSettled(["spec", "security", "dx"].map((l) => review(l, issue, spec, base, facts, repoDir, round, roles, share)));
       if (diffPatch(repoDir, base) !== patch) { RUN.log("  reviewers' runs changed the tree — restoring the reviewed change"); restorePatch(repoDir, base, patch); }
@@ -507,7 +570,7 @@ async function finishImplement({ issue, spec, roles, n, repoDir, base, rounds, l
   let evidence;
   if (done && spec.touches_ui) {
     const beforeDir = join(RUN.dir, "before");
-    checkout(beforeDir, base);
+    checkout(beforeDir, base, { reuseFrom: repoDir });
     try {
       ({ out: evidence } = await agent("evidence", roles.evidencePrompt({
         issue, spec, captureModule: join(HERE, "capture.mjs"), beforeDir, afterDir: repoDir, evidenceDir, portBase: 4100 + (n % 50) * 10,
@@ -526,7 +589,7 @@ async function finishImplement({ issue, spec, roles, n, repoDir, base, rounds, l
   });
   const manifest = JSON.parse(readFileSync(join(evidenceDir, "manifest.json"), "utf8"));
   const report = {
-    issue, spec, rounds, last, done: done && !forbidden.length, evidence, manifest, base, model: MODEL, costUsd: RUN.costUsd, id: RUN.id,
+    issue, spec, rounds, last, done: done && !forbidden.length, evidence, manifest, base, model: MODEL, models: RUN.models, costUsd: RUN.costUsd, id: RUN.id,
     stopped: forbidden.length ? `the change touches ${forbidden.join(", ")} — workflow changes are never published by the agent` : stopped,
     patchSha256: createHash("sha256").update(patch).digest("hex"), files: touched,
   };
@@ -573,6 +636,12 @@ function publishRun(dir) {
   if (!patch.trim()) {
     gh(["issue", "comment", String(n), "-R", REPO, "--body", issueComment({ kind: "needs-human-nopr", reason: "the agents produced no change", where: actionsRunUrl() })]);
     return { n, status: "needs-human", reason: "empty change" };
+  }
+  // Never a change whose last round didn't pass the root `npm test` (a fast run doesn't count).
+  const untested = rootTestRefusal(report.last);
+  if (untested) {
+    gh(["issue", "comment", String(n), "-R", REPO, "--body", issueComment({ kind: "needs-human-nopr", reason: untested, where: actionsRunUrl() })]);
+    return { n, status: "needs-human", reason: untested };
   }
   // Re-derived here, not taken from the report.
   if (!isCommitId(report.base)) throw new Error(`not a commit id: ${report.base}`);
@@ -778,14 +847,14 @@ async function fixReview(review, { dir } = {}) {
     code("npm", ["run", "build"], { cwd: repoDir, allowFail: true });
   }
   const mainBase = git(["merge-base", "origin/main", head], { cwd: repoDir }).out.trim();
-  const baseline = runGates(repoDir, { stopOnFail: false });
+  const baseline = baselineFor(repoDir, head, "PR head");
   RUN.log(`  baseline (PR head ${head.slice(0, 7)}): ${baseline.map((b) => `${b.name} ${b.green ? "green" : `RED (${b.fingerprints.length})`}`).join(" · ")}`);
 
   // The "spec" for this round: every review thread answered (fixed, or declined with a reason).
   const firstLine = (s) => String(s).replace(/[*_`#>]/g, "").split("\n").map((l) => l.trim()).find(Boolean)?.slice(0, 200) ?? "";
   const criteria = review.threads.map((t, i) => ({ id: `T${i + 1}`, text: `Review thread ${t.id} (${t.path ?? "general"}${t.line ? `:${t.line}` : ""}) is fixed, or declined with a concrete reason a reviewer would accept — "${firstLine(t.comments[0].body)}"`, verified_by: "review" }));
   if (!criteria.length) criteria.push({ id: "S1", text: "Every item under 'Fix before merging' in the review summary is fixed, or declined with a concrete reason", verified_by: "review" });
-  const prChangesSource = () => changedSince(repoDir, mainBase).some((f) => /^(packages|examples)\//.test(f) && !/\.md$/.test(f) && !/\.test\.[mc]?[jt]sx?$/.test(f));
+  const prChangesSource = () => changedSince(repoDir, mainBase).some(isMutableSource);
   const spec = { actionable: true, summary: `Answer the Claude review of PR #${review.pr} (${review.verdict}).`, acceptance_criteria: criteria, behavior_change: prChangesSource(), touches_ui: false, evidence_plan: "test proof", test_plan: "as the review asks" };
 
   const { rounds, impl, reviewedPatch, stopped } = await iterate({
@@ -797,7 +866,7 @@ async function fixReview(review, { dir } = {}) {
   writeFileSync(join(RUN.dir, "fix.patch"), patch);
   const final = last?.impl ?? impl ?? {};
   writeFileSync(join(RUN.dir, "fix.json"), JSON.stringify({
-    rounds, last, responses: final.responses ?? [], summary: final.summary ?? "", summary_items: final.summary_items ?? [],
+    rounds, last, models: RUN.models, responses: final.responses ?? [], summary: final.summary ?? "", summary_items: final.summary_items ?? [],
     description_update: final.description_update ?? "", open_questions: final.open_questions ?? [], costUsd: RUN.costUsd,
   }, null, 2));
   return outcome({ status: last?.clean ? "ready" : "needs-human", reason: stopped ?? (last?.clean ? undefined : "the fix did not pass the pipeline's own checks and reviews"), patchSha256: createHash("sha256").update(patch).digest("hex"), mergedMain });
@@ -823,6 +892,8 @@ function pushReview(dir, review) {
   const fix = JSON.parse(readFileSync(join(dir, "fix.json"), "utf8"));
   if (createHash("sha256").update(patch).digest("hex") !== outcome.patchSha256) throw new Error("fix.patch does not match the checked patch");
   const k = review.cycle + 1;
+  const untested = rootTestRefusal(fix.last);
+  if (untested) return handOver(review, "needs-human", untested);
 
   let sha;
   if (patch.trim()) {

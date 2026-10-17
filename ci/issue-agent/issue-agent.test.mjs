@@ -10,7 +10,9 @@ import { join } from "node:path";
 import {
   titleAuthor, forbiddenPaths, applyAndCheck, isRunId, isCommitId, publishIssueNumber,
   isReviewBot, parseVerdict, agentBranch, threadsToAnswer, reviewDecision, sharedChanges, cyclesDone, loopRefusal, latestVerdict, cycleCap,
+  roleModel, testGateCommand, rootTestRefusal, isMutableSource, sameLockfile,
 } from "./checks.mjs";
+import { reviewPrompt } from "./roles.mjs";
 import { fingerprints, withinBaseline } from "./fingerprints.mjs";
 import { prBody, issueComment } from "./report.mjs";
 
@@ -240,5 +242,89 @@ describe("the review loop", () => {
     expect(at("changes", 4).action).toBe("give-up");
     // before the cap, open notes are still fixed
     expect(rd({ verdict: "notes", open: 2, cycle: 2, maxCycles: 3 }).action).toBe("fix");
+  });
+});
+
+describe("the internal reviewers", () => {
+  const issue = { number: 1, url: "u", title: "t", body: "b", comments: [] };
+  const spec = { summary: "s", acceptance_criteria: [{ id: "AC1", text: "x", verified_by: "test" }] };
+  // REVIEW.md's checks, which the Claude review on GitHub applies: every lens applies them too, so the
+  // internal round catches what that review would.
+  for (const lens of ["spec", "security", "dx"]) {
+    const text = reviewPrompt(lens, issue, spec, "abc123");
+    it(`${lens}: is grounded in REVIEW.md`, () => {
+      expect(text).toContain("REVIEW.md");
+    });
+    it(`${lens}: carries the stale-docs rule`, () => {
+      expect(text).toMatch(/stale ones are findings/i);
+    });
+    it(`${lens}: carries the fix-it-or-flag-it rule`, () => {
+      expect(text).toMatch(/fix it or flag it/i);
+    });
+    it(`${lens}: asks which test fails if the line is reverted`, () => {
+      expect(text).toMatch(/which test fails if this line is reverted\?/i);
+    });
+  }
+});
+
+describe("models per role", () => {
+  const models = { main: "claude-opus-5-5", review: "claude-sonnet-5-5" };
+  it("runs the spec agent and the three reviewers on the review model", () => {
+    for (const role of ["spec", "review-spec-r1", "review-security-r2", "review-dx-r3-retry"]) expect(roleModel(role, models)).toBe("claude-sonnet-5-5");
+  });
+  it("keeps the implementer (first try, fixes, review-loop fixes) and evidence on the main model", () => {
+    for (const role of ["implement-r1", "implement-r2-fix3", "evidence"]) expect(roleModel(role, models)).toBe("claude-opus-5-5");
+  });
+  it("honors each setting", () => {
+    const other = { main: "claude-fable-5-1", review: "claude-haiku-5-5" };
+    expect(roleModel("spec", other)).toBe("claude-haiku-5-5");
+    expect(roleModel("implement-r1", other)).toBe("claude-fable-5-1");
+  });
+});
+
+describe("which tests a gate run uses", () => {
+  it("runs the root npm test before the reviews", () => {
+    expect(testGateCommand({ phase: "pre-review", changed: ["packages/credentagent-gate/src/a.ts"] })).toEqual({ cmd: "npm", args: ["test"], scope: "root" });
+  });
+  it("runs only the affected workspaces' tests during a fix attempt", () => {
+    const c = testGateCommand({ phase: "fix", changed: ["packages/credentagent-gate/src/a.ts", "packages/credentagent-gate/test/a.test.ts", "ci/issue-agent/run.mjs", "README.md"] });
+    expect(c).toEqual({ cmd: "npx", args: ["vitest", "run", "packages/credentagent-gate/", "ci/issue-agent/"], scope: "fast" });
+  });
+  it("runs a changed root-level test file itself", () => {
+    expect(testGateCommand({ phase: "fix", changed: ["storefront-gate.test.ts"] }).args).toEqual(["vitest", "run", "storefront-gate.test.ts"]);
+  });
+  it("falls back to the workspaces' suites when nothing localizes", () => {
+    expect(testGateCommand({ phase: "fix", changed: ["docs/x.md"] })).toEqual({ cmd: "npm", args: ["run", "test:workspaces"], scope: "fast" });
+  });
+});
+
+describe("publish needs a root npm test", () => {
+  const round = (test) => ({ gates: [{ name: "build", ok: true, green: true }, ...(test ? [test] : [])] });
+  it("allows a round whose root npm test passed", () => {
+    expect(rootTestRefusal(round({ name: "test", scope: "root", ok: true, green: true }))).toBeUndefined();
+  });
+  it("refuses a round with no root npm test", () => {
+    expect(rootTestRefusal(round())).toMatch(/no root `npm test`/);
+    expect(rootTestRefusal(undefined)).toMatch(/no root `npm test`/);
+  });
+  it("refuses a round that only ran the fast workspace tests", () => {
+    expect(rootTestRefusal(round({ name: "test", scope: "fast", ok: true, green: true }))).toMatch(/only the fast/);
+  });
+  it("refuses a round whose root npm test failed", () => {
+    expect(rootTestRefusal(round({ name: "test", scope: "root", ok: false, green: false }))).toMatch(/failed/);
+  });
+});
+
+describe("the pipeline's reuse", () => {
+  it("reverts the harness's own source in the test-proof check, but not tests or docs", () => {
+    expect(isMutableSource("ci/issue-agent/run.mjs")).toBe(true);
+    expect(isMutableSource("packages/credentagent-gate/src/a.ts")).toBe(true);
+    expect(isMutableSource("ci/issue-agent/issue-agent.test.mjs")).toBe(false);
+    expect(isMutableSource("ci/issue-agent/README.md")).toBe(false);
+  });
+  it("skips a second npm ci only for an identical lockfile", () => {
+    expect(sameLockfile('{"a":1}', '{"a":1}')).toBe(true);
+    expect(sameLockfile('{"a":1}', '{"a":2}')).toBe(false);
+    expect(sameLockfile(undefined, undefined)).toBe(false);
   });
 });

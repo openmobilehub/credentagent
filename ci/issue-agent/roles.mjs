@@ -192,9 +192,19 @@ const LENSES = {
   dx: `the DX + quality lens: REVIEW.md beyond §1 and docs/reference/architecture-principles.md — public API shape, naming, docs that now lie, dead code, error messages. Also correctness bugs anywhere in the diff.`,
 };
 
+// The checks the Claude review on GitHub runs (REVIEW.md), stated in every lens: what that review
+// would find, an internal round should find first — each GitHub review round costs minutes.
+const REVIEW_RULES = `Every lens applies these checks from REVIEW.md — the checklist the Claude review on GitHub runs after you:
+- §2, the bypass-test rule: for each new or changed control, and each new or changed test, ask "Which test fails if this line is reverted?" No answer → blocking. A test that would still pass with the thing it guards removed is not a useful test.
+- §5, fix it or flag it: anything broken the author must have seen is either fixed inline (small and safe) or filed as an issue — never silently ignored. Flag what the diff walked past.
+- §6, review what ships, not just the diff: a changed public API, README, behavior or dependency range puts its callers, \`examples/\`, and docs (READMEs, comments, the file's own header) in scope. Grep for them; stale ones are findings.
+- §7: read every changed file in full, plus the callers and callees a finding depends on.`;
+
 export const reviewPrompt = (lens, issue, spec, base) => `You are a REVIEW agent with ${LENSES[lens]}
 
 You did not write this change. Review it adversarially: your job is to find what is wrong before a human maintainer does.
+
+${REVIEW_RULES}
 
 ${issueBlock(issue)}
 
@@ -202,7 +212,7 @@ ${issueBlock(issue)}
 ${JSON.stringify(spec, null, 2)}
 </spec>
 
-The change is the diff between ${base} and the working tree: run \`git diff ${base}\` (and \`git diff ${base} --stat\`) — new files are included. Read surrounding code as needed. You may run focused tests (\`npx vitest run <file>\`). The <pipeline_facts> block below is what the pipeline itself measured (gates, main's pre-existing failures, the mutation check): treat it as established — don't mark a criterion unmet for something it already proves.
+The change is the diff between ${base} and the working tree — new files included. It is in the <diff> block below (\`git diff ${base}\` shows the same, if it was cut). Read surrounding code as needed. You may run focused tests (\`npx vitest run <file>\`). The <pipeline_facts> block below is what the pipeline itself measured (gates, main's pre-existing failures, the mutation check): treat it as established — don't mark a criterion unmet for something it already proves.
 
 Severity: "blocking" = a maintainer would request changes (bug, broken invariant, unmet criterion, a test that passes without its control, scope creep that adds risk). "suggestion" = optional polish. Do not report style nits the linter owns. Verdict is request_changes iff there is at least one blocking finding.
 

@@ -20,9 +20,10 @@ issue labelled `agent` (by someone with write access)
   │                └─ skipped → a comment on the issue says why
   ├─ spec        reads the request + code → acceptance criteria, or "not actionable"       (agent)
   ├─ implement   failing test first, then the fix                                          (agent)
-  ├─ gates       build · typecheck · lint · root `npm test`, vs main's own failures          (script)
+  ├─ gates       build · typecheck · lint · tests of what changed, vs main's own failures  (script)
   ├─ mutation    revert the source change → the changed tests must FAIL; restore → pass     (script)
-  ├─ review      spec · security · DX, in parallel, adversarial                            (3 agents)
+  ├─ root test   once per round: the authoritative root `npm test`                         (script)
+  ├─ review      spec · security · DX, in parallel, adversarial, on REVIEW.md              (3 agents)
   │                └─ any red above → back to the SAME implement session (≤3 review rounds;
   │                   mechanical failures get up to 3 fixes inside a round)
   ├─ freeze      the reviewed change is saved as a patch — the only thing ever published   (script)
@@ -34,17 +35,39 @@ issue labelled `agent` (by someone with write access)
 The script checks; the agents do. What an agent *claims* is re-checked mechanically or by a
 different agent before it reaches the PR:
 
-- **Gates** run from the repo root (CLAUDE.md's authoritative run). Failures are compared against a
-  baseline of `main`'s own, **by count**: a red `main` isn't charged to the change, and the change
-  can't add even one more failure of a kind `main` already has.
+- **Gates** run from the repo root. Failures are compared against a baseline of `main`'s own, **by
+  count**: a red `main` isn't charged to the change, and the change can't add even one more failure
+  of a kind `main` already has. The baseline is measured once per `main` commit and kept under the
+  runs folder (`baselines/<sha>.json`); a later run on the same commit reuses it (`run.log` says
+  "reused"), a different commit is measured afresh.
+- **Fast tests while fixing, the root `npm test` once per round.** Between fix attempts the test gate
+  runs only the tests of what changed — each touched workspace (`packages/<name>/`,
+  `ci/issue-agent/`) and any changed root-level test file, or `npm run test:workspaces` when nothing
+  narrows it down. Once those and the mutation check pass, the authoritative root `npm test`
+  (CLAUDE.md's verification run) runs once, before the reviews; if it fails, the round goes back to
+  fixing and isn't reviewed. **Publish refuses** a change whose last round has no passing root run —
+  a fast run never counts — and so does the review loop's push.
 - **The mutation check** enforces CLAUDE.md's "a test that would still pass with the security control
-  removed is not a useful test": every changed source file is reverted to `main` (new ones deleted),
+  removed is not a useful test": every changed source file (under `packages/`, `examples/` or
+  `ci/issue-agent/`; not tests or docs) is reverted to `main` (new ones deleted),
   the changed test files run, and they must fail. It is per file — a file fails if any test in it
   does — so the reviewers are told to judge each new case on its own.
 - **New files count.** They're registered with git (`--intent-to-add`) before every diff, so the
   mutation check, the reviewers and the patch all see them.
 - **Reviewers didn't write the code.** They can read, and run the project's checks; whatever their
   runs leave in the tree is thrown away. A criterion with no verdict counts as not met.
+- **Reviewers check what the Claude review on GitHub checks.** Every lens carries `REVIEW.md`'s
+  rules — the bypass-test question ("which test fails if this line is reverted?"), "fix it or flag
+  it", and "stale docs, callers and examples are findings" — so a round on GitHub isn't spent on what
+  the internal round could have caught. They get the diff (capped) and the pipeline's measured facts
+  in the prompt, rather than spending turns finding them.
+- **Two models.** The spec agent and the three reviewers run on `ISSUE_AGENT_REVIEW_MODEL` (faster);
+  the implementer — every attempt, and the review loop's fixes — and the evidence agent on
+  `ISSUE_AGENT_MODEL`. `report.json` records the model each role used (`models`). The final check, the
+  Claude review on GitHub, is unchanged.
+- **No second install for "before".** The evidence step's checkout of `main` copies the installed
+  dependencies when its `package-lock.json` is identical to the change's, instead of running `npm ci`
+  again (`run.log` says so); a different lockfile still gets `npm ci`.
 - **Only the reviewed patch is published**, applied to a clean checkout — so nothing the evidence
   agent, a test run or a server leaves behind *in the working tree* can reach the PR. A patch
   touching `.github/` is never pushed. (What the publish job does and doesn't trust is below.)
@@ -183,7 +206,8 @@ is left, so together they can't pass the cap. A run that hits its cap stops and 
 
 | env | default | |
 | --- | --- | --- |
-| `ISSUE_AGENT_MODEL` | `claude-opus-5-5` | model for every role |
+| `ISSUE_AGENT_MODEL` | `claude-opus-5-5` | model for the implementer (and its fixes, and the review loop's) and the evidence agent |
+| `ISSUE_AGENT_REVIEW_MODEL` | `claude-sonnet-5-5` | model for the spec agent and the three reviewers |
 | `ISSUE_AGENT_MAX_ROUNDS` | `3` | review rounds before `[needs human]` |
 | `ISSUE_AGENT_MAX_FIXES` | `3` | gate / test-proof fixes inside a round |
 | `ISSUE_AGENT_BUDGET_USD` | `25` | per-session cap |
@@ -203,7 +227,9 @@ has to merge in; without it GitHub refuses that push and the loop hands the PR t
 - `run.mjs` — the orchestrator: `snapshot`, `implement`, `publish` (CI runs them as three jobs; locally
   they run back to back).
 - `roles.mjs` — each agent's prompt and output schema.
-- `checks.mjs` — the trust decisions (who wrote the title, which paths publish refuses, id checks).
+- `checks.mjs` — the trust decisions (who wrote the title, which paths publish refuses, id checks), and
+  the speed rules that mustn't weaken them (model per role, which tests a gate run uses, publish's
+  root-`npm test` refusal).
 - `issue-agent.test.mjs` — tests for those, the baseline and the PR-body escaping; part of the root
   `npm test`, and each fails if its check is removed.
 - `fingerprints.mjs` — gate failures → comparable fingerprints, for the baseline.

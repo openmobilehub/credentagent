@@ -163,6 +163,51 @@ export function cycleCap(value, fallback = 3) {
   return Number.isInteger(n) && n >= 1 ? n : fallback;
 }
 
+// ── speed without weakening the checks ───────────────────────────────────────────────────────────
+
+/**
+ * The model a role runs on: the spec agent and the three reviewers (`review-<lens>-r<n>`) on the
+ * faster review model; the implementer (every attempt, and the review loop's fixes) and evidence on
+ * the main one.
+ */
+export const roleModel = (role, { main, review }) => (role === "spec" || role.startsWith("review-") ? review : main);
+
+/**
+ * The test command a gate run uses. Before the reviews (`pre-review`): the authoritative root
+ * `npm test`. During a fix attempt (`fix`): only the tests of what changed — each touched workspace
+ * (`packages/<name>/`, `ci/issue-agent/`) and any changed root-level test file — through the root
+ * vitest config, or the workspaces' own suites when nothing localizes. `scope` is recorded with the
+ * result, so publish can tell the two apart.
+ */
+export function testGateCommand({ phase, changed }) {
+  if (phase !== "fix") return { cmd: "npm", args: ["test"], scope: "root" };
+  const scopes = new Set();
+  for (const f of changed) {
+    const ws = f.match(/^(packages\/[^/]+\/|ci\/issue-agent\/)/)?.[1];
+    if (ws) scopes.add(ws);
+    else if (!f.includes("/") && /\.test\.[mc]?[jt]sx?$/.test(f)) scopes.add(f);
+  }
+  return scopes.size ? { cmd: "npx", args: ["vitest", "run", ...scopes], scope: "fast" } : { cmd: "npm", args: ["run", "test:workspaces"], scope: "fast" };
+}
+
+/**
+ * Why a round may not be published: it has no passing root `npm test` (CLAUDE.md's authoritative
+ * run). The fast tests a fix attempt runs never count. Returns the reason, or undefined.
+ */
+export function rootTestRefusal(round) {
+  const t = round?.gates?.find((g) => g.name === "test");
+  if (!t) return "the change has no root `npm test` result — nothing is published without one";
+  if (t.scope !== "root") return "the change ran only the fast workspace tests, not the root `npm test` — nothing is published without it";
+  if (!t.ok) return "the root `npm test` failed on the change";
+  return undefined;
+}
+
+/** A non-test, non-doc source file the test-proof check reverts — the library's or the harness's own. */
+export const isMutableSource = (f) => /^(packages|examples|ci\/issue-agent)\//.test(f) && !/\.md$/.test(f) && !/\.test\.[mc]?[jt]sx?$/.test(f);
+
+/** Two checkouts can share installed dependencies only with byte-identical lockfiles. */
+export const sameLockfile = (a, b) => typeof a === "string" && a.length > 0 && a === b;
+
 export const isRunId = (id) => /^\d{12}$/.test(String(id));
 export const isCommitId = (sha) => /^[0-9a-f]{40}$/.test(String(sha));
 
