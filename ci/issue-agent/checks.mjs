@@ -199,6 +199,72 @@ export function cycleCap(value, fallback = 3) {
   return Number.isInteger(n) && n >= 1 ? n : fallback;
 }
 
+// ── speed without weakening the checks ───────────────────────────────────────────────────────────
+
+/**
+ * The model a role runs on: the spec agent and the three reviewers (`review-<lens>-r<n>`) on the
+ * faster review model; the implementer (every attempt, and the review loop's fixes) and evidence on
+ * the main one.
+ */
+export const roleModel = (role, { main, review }) => (role === "spec" || role.startsWith("review-") ? review : main);
+
+/**
+ * The test command a gate run uses. Before the reviews (`pre-review`): the authoritative root
+ * `npm test`. During a fix attempt (`fix`): only the tests of what changed — each touched workspace
+ * (`packages/<name>/`, `ci/issue-agent/`) and any changed root-level test file — or every workspace
+ * when nothing localizes. Always through the root vitest config, from the root, so failure paths match
+ * the baseline's; `--passWithNoTests`, so a filter that matches nothing (a deleted test, a package with
+ * no tests) isn't a failure the agent can't fix. `scope` is recorded with the result, so publish can
+ * tell the two apart.
+ */
+export function testGateCommand({ phase, changed }) {
+  if (phase !== "fix") return { cmd: "npm", args: ["test"], scope: "root" };
+  const scopes = new Set();
+  for (const f of changed) {
+    const ws = f.match(/^(packages\/[^/]+\/|ci\/issue-agent\/)/)?.[1];
+    if (ws) scopes.add(ws);
+    else if (!f.includes("/") && /\.test\.[mc]?[jt]sx?$/.test(f)) scopes.add(f);
+  }
+  if (!scopes.size) scopes.add("packages/").add("ci/issue-agent/");
+  return { cmd: "npx", args: ["vitest", "run", "--passWithNoTests", ...scopes], scope: "fast" };
+}
+
+/**
+ * Why a change hasn't passed the root `npm test` (CLAUDE.md's authoritative run): the round's last
+ * gate run, which must include a passing root run on exactly the patch being published
+ * (`patchSha256`). The fast tests a fix attempt runs never count. Names the gate that actually
+ * stopped the round. Returns the reason, or undefined.
+ */
+export function rootTestRefusal(round, patchSha256) {
+  if (!round) return "no round finished, so the root `npm test` never ran";
+  const stuck = round.gates?.find((g) => !g.ok && g.name !== "test");
+  if (stuck) return `the \`${stuck.name}\` gate failed, so the root \`npm test\` never ran`;
+  const t = round.gates?.find((g) => g.name === "test");
+  if (!t) return "the change has no root `npm test` result";
+  if (t.scope !== "root") return t.ok ? "the change passed only the fast tests; the round stopped before the root `npm test`" : "the fast tests failed, so the root `npm test` never ran";
+  if (!t.ok) return "the root `npm test` failed on the change";
+  if (patchSha256 && t.patchSha256 !== patchSha256) return "the change was edited after its last root `npm test` (a later round stopped early), so it has not passed one";
+  return undefined;
+}
+
+/**
+ * What publish does with a change, given its root-test record. A "ready" change must have passed the
+ * root `npm test` on exactly this patch, or it is refused outright. An unfinished one still opens as
+ * a `[needs human]` draft — the hand-off — with the missing root run added to why it stopped.
+ */
+export function publishVerdict({ done, last, patchSha256, stopped }) {
+  const untested = rootTestRefusal(last, patchSha256);
+  if (!untested) return { open: true, done, stopped };
+  if (done) return { open: false, reason: `${untested} — nothing is published as ready without a passing one` };
+  return { open: true, done: false, stopped: stopped ? `${stopped}; ${untested}` : untested };
+}
+
+/** A non-test, non-doc source file the test-proof check reverts — the library's or the harness's own. */
+export const isMutableSource = (f) => /^(packages|examples|ci\/issue-agent)\//.test(f) && !/\.md$/.test(f) && !/\.test\.[mc]?[jt]sx?$/.test(f);
+
+/** Two checkouts can share installed dependencies only with byte-identical lockfiles. */
+export const sameLockfile = (a, b) => typeof a === "string" && a.length > 0 && a === b;
+
 export const isRunId = (id) => /^\d{12}$/.test(String(id));
 export const isCommitId = (sha) => /^[0-9a-f]{40}$/.test(String(sha));
 

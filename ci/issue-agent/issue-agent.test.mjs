@@ -9,10 +9,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   titleAuthor, forbiddenPaths, applyAndCheck, isRunId, isCommitId, publishIssueNumber,
-  isReviewBot, parseVerdict, agentBranch, threadsToAnswer, reviewDecision, sharedChanges, cyclesDone, loopRefusal, latestVerdict, cycleCap, isAgentComment, requestComments, leftLoop,
+  isReviewBot, parseVerdict, agentBranch, threadsToAnswer, reviewDecision, sharedChanges, cyclesDone, loopRefusal, latestVerdict, cycleCap,
+  isAgentComment, requestComments, leftLoop,
+  roleModel, testGateCommand, rootTestRefusal, publishVerdict, isMutableSource, sameLockfile,
 } from "./checks.mjs";
+import { reviewPrompt } from "./roles.mjs";
 import { fingerprints, withinBaseline } from "./fingerprints.mjs";
-import { prBody, issueComment, statusBody, STATUS_MARK } from "./report.mjs";
+import { prBody, proofHtml, issueComment, statusBody, STATUS_MARK } from "./report.mjs";
 
 // Pinned so a contributor's own git config (quotePath off, signed commits) can't change the outcome.
 const git = (cwd, ...args) => {
@@ -114,6 +117,39 @@ describe("agent text in a PR body", () => {
   it("only puts plain media file names into an img src", () => {
     expect(body).toContain("https://example.test/ok-01.png");
     expect(body).not.toContain("onerror");
+  });
+  it("doesn't show a root test that ran on an earlier version of the patch as passing", () => {
+    const stale = prBody({ ...report, patchSha256: "bb", last: { ...report.last, gates: [{ name: "test", ok: true, green: true, patchSha256: "aa" }] } }, { mediaBase: "", repo: "o/r" });
+    expect(stale).toMatch(/`test` ⚠️ ran on an earlier version/);
+    expect(stale).not.toMatch(/`test` ✅/);
+  });
+  // A round stopped after the quick tests (e.g. by the test-proof check) never reached the root run.
+  const fast = { ...report, done: false, patchSha256: "bb", last: { ...report.last, gates: [{ name: "test", scope: "fast", ok: true, green: true }] } };
+  const staleRoot = { ...report, done: false, patchSha256: "bb", last: { ...report.last, gates: [{ name: "test", scope: "root", ok: true, green: true, patchSha256: "aa" }] } };
+  it("doesn't show a quick-tests-only run as the full test suite passing", () => {
+    const b = prBody(fast, { mediaBase: "", repo: "o/r" });
+    expect(b).toMatch(/`test` ⚠️ quick tests only/);
+    expect(b).not.toMatch(/`test` ✅/);
+  });
+  it("says the same in the test-proof page and the issue comment", () => {
+    for (const r of [fast, staleRoot]) {
+      const html = proofHtml({ issue: r.issue, spec: r.spec, last: r.last, base: "a".repeat(40), patchSha256: r.patchSha256 });
+      expect(html).toMatch(/<td class="warn">(quick tests only|ran on an earlier version)/);
+      expect(html).not.toMatch(/<td class="ok">pass/);
+      const c = issueComment({ kind: "needs-human", prUrl: "https://x/pr/1", report: { ...r, manifest: [] } });
+      expect(c).toMatch(/not all run on this change/);
+      expect(c).not.toMatch(/gates green/);
+    }
+  });
+  it("still shows a failed quick-tests run as a failure everywhere", () => {
+    const failed = { ...fast, last: { ...fast.last, gates: [{ name: "test", scope: "fast", ok: false, green: false }] } };
+    expect(prBody(failed, { mediaBase: "", repo: "o/r" })).toMatch(/`test` ❌/);
+    expect(proofHtml({ issue: failed.issue, spec: failed.spec, last: failed.last, base: "a".repeat(40), patchSha256: "bb" })).toMatch(/<td class="bad">FAIL/);
+    expect(issueComment({ kind: "needs-human", prUrl: "https://x/pr/1", report: { ...failed, manifest: [] } })).toMatch(/gates red/);
+  });
+  it("says red in the issue comment when another gate failed and only the quick tests ran", () => {
+    const r = { ...fast, manifest: [], last: { ...fast.last, gates: [{ name: "build", ok: false, green: false }, { name: "test", scope: "fast", ok: true, green: true }] } };
+    expect(issueComment({ kind: "needs-human", prUrl: "https://x/pr/1", report: r })).toMatch(/gates red \(`test`: quick tests only/);
   });
   it("says why when it skips", () => {
     expect(issueComment({ kind: "skipped", reason: "it is closed" })).toMatch(/not starting this one.*it is closed/);
@@ -300,5 +336,121 @@ describe("the review loop", () => {
     expect(at("changes", 4).action).toBe("give-up");
     // before the cap, open notes are still fixed
     expect(rd({ verdict: "notes", open: 2, cycle: 2, maxCycles: 3 }).action).toBe("fix");
+  });
+});
+
+describe("the internal reviewers", () => {
+  const issue = { number: 1, url: "u", title: "t", body: "b", comments: [] };
+  const spec = { summary: "s", acceptance_criteria: [{ id: "AC1", text: "x", verified_by: "test" }] };
+  // REVIEW.md's checks, which the Claude review on GitHub applies: every lens applies them too, so the
+  // internal round catches what that review would.
+  for (const lens of ["spec", "security", "dx"]) {
+    const text = reviewPrompt(lens, issue, spec, "abc123");
+    it(`${lens}: is grounded in REVIEW.md`, () => {
+      expect(text).toContain("REVIEW.md");
+    });
+    it(`${lens}: carries the stale-docs rule`, () => {
+      expect(text).toMatch(/stale ones are findings/i);
+    });
+    it(`${lens}: carries the fix-it-or-flag-it rule, as REVIEW.md's "flag, don't block alone"`, () => {
+      expect(text).toMatch(/fix it or flag it/i);
+      expect(text).toMatch(/flag, don't block alone/i);
+    });
+    it(`${lens}: asks which test fails if the line is reverted`, () => {
+      expect(text).toMatch(/which test fails if this line is reverted\?/i);
+    });
+  }
+});
+
+describe("models per role", () => {
+  const models = { main: "claude-opus-5-5", review: "claude-sonnet-5-5" };
+  it("runs the spec agent and the three reviewers on the review model", () => {
+    for (const role of ["spec", "review-spec-r1", "review-security-r2", "review-dx-r3-retry"]) expect(roleModel(role, models)).toBe("claude-sonnet-5-5");
+  });
+  it("keeps the implementer (first try, fixes, review-loop fixes) and evidence on the main model", () => {
+    for (const role of ["implement-r1", "implement-r2-fix3", "evidence"]) expect(roleModel(role, models)).toBe("claude-opus-5-5");
+  });
+  it("honors each setting", () => {
+    const other = { main: "claude-fable-5-1", review: "claude-haiku-5-5" };
+    expect(roleModel("spec", other)).toBe("claude-haiku-5-5");
+    expect(roleModel("implement-r1", other)).toBe("claude-fable-5-1");
+  });
+});
+
+describe("which tests a gate run uses", () => {
+  it("runs the root npm test before the reviews", () => {
+    expect(testGateCommand({ phase: "pre-review", changed: ["packages/credentagent-gate/src/a.ts"] })).toEqual({ cmd: "npm", args: ["test"], scope: "root" });
+  });
+  it("runs only the affected workspaces' tests during a fix attempt", () => {
+    const c = testGateCommand({ phase: "fix", changed: ["packages/credentagent-gate/src/a.ts", "packages/credentagent-gate/test/a.test.ts", "ci/issue-agent/run.mjs", "README.md"] });
+    expect(c).toEqual({ cmd: "npx", args: ["vitest", "run", "--passWithNoTests", "packages/credentagent-gate/", "ci/issue-agent/"], scope: "fast" });
+  });
+  it("runs a changed root-level test file itself — and a deleted one matching nothing isn't a failure", () => {
+    expect(testGateCommand({ phase: "fix", changed: ["storefront-gate.test.ts"] }).args).toEqual(["vitest", "run", "--passWithNoTests", "storefront-gate.test.ts"]);
+  });
+  it("falls back to every workspace, still from the root (so failure paths match the baseline's)", () => {
+    expect(testGateCommand({ phase: "fix", changed: ["docs/x.md"] })).toEqual({ cmd: "npx", args: ["vitest", "run", "--passWithNoTests", "packages/", "ci/issue-agent/"], scope: "fast" });
+  });
+});
+
+describe("publish needs a root npm test on the published patch", () => {
+  const round = (test, other = { name: "build", ok: true, green: true }) => ({ gates: [other, ...(test ? [test] : [])] });
+  const root = (o = {}) => ({ name: "test", scope: "root", ok: true, green: true, patchSha256: "aa", ...o });
+  it("allows a round whose root npm test passed on this patch", () => {
+    expect(rootTestRefusal(round(root()), "aa")).toBeUndefined();
+  });
+  it("refuses a round with no root npm test", () => {
+    expect(rootTestRefusal(round())).toMatch(/no root `npm test`/);
+    expect(rootTestRefusal(undefined)).toMatch(/never ran/);
+  });
+  it("refuses a round that only ran the fast tests", () => {
+    expect(rootTestRefusal(round({ name: "test", scope: "fast", ok: true, green: true }))).toMatch(/only the fast/);
+    expect(rootTestRefusal(round({ name: "test", scope: "fast", ok: false, green: false }))).toMatch(/fast tests failed/);
+  });
+  it("names the gate that actually stopped the round", () => {
+    expect(rootTestRefusal(round(undefined, { name: "build", ok: false, green: false }))).toMatch(/`build` gate failed/);
+  });
+  it("refuses a round whose root npm test failed", () => {
+    expect(rootTestRefusal(round(root({ ok: false, green: false })), "aa")).toMatch(/failed on the change/);
+  });
+  it("refuses a patch edited after its root npm test (a later round stopped on budget)", () => {
+    expect(rootTestRefusal(round(root()), "bb")).toMatch(/edited after/);
+  });
+});
+
+describe("what publish does without a root npm test", () => {
+  const passed = { gates: [{ name: "test", scope: "root", ok: true, green: true, patchSha256: "aa" }] };
+  const stuck = { gates: [{ name: "build", ok: false, green: false }] };
+  it("publishes a ready change that passed it on this patch", () => {
+    expect(publishVerdict({ done: true, last: passed, patchSha256: "aa" })).toEqual({ open: true, done: true, stopped: undefined });
+  });
+  it("refuses a ready change that didn't", () => {
+    const v = publishVerdict({ done: true, last: passed, patchSha256: "bb" });
+    expect(v.open).toBe(false);
+    expect(v.reason).toMatch(/edited after/);
+  });
+  it("still hands an unfinished change to a human as a draft, naming the real failing gate", () => {
+    expect(publishVerdict({ done: false, last: stuck, patchSha256: "aa", stopped: "gates still red" }))
+      .toEqual({ open: true, done: false, stopped: "gates still red; the `build` gate failed, so the root `npm test` never ran" });
+  });
+  it("says so on a draft whose patch changed after its last root run", () => {
+    expect(publishVerdict({ done: false, last: passed, patchSha256: "bb", stopped: "budget spent" }).stopped).toMatch(/^budget spent; .*edited after/);
+  });
+});
+
+describe("the pipeline's reuse", () => {
+  it("reverts the harness's own source in the test-proof check, but not tests or docs", () => {
+    expect(isMutableSource("ci/issue-agent/run.mjs")).toBe(true);
+    expect(isMutableSource("packages/credentagent-gate/src/a.ts")).toBe(true);
+    expect(isMutableSource("examples/delegated/server.ts")).toBe(true);
+    expect(isMutableSource("docs/x.ts")).toBe(false);
+    expect(isMutableSource("ci/issue-agent/issue-agent.test.mjs")).toBe(false);
+    expect(isMutableSource("ci/issue-agent/README.md")).toBe(false);
+  });
+  it("skips a second npm ci only for an identical lockfile", () => {
+    expect(sameLockfile('{"a":1}', '{"a":1}')).toBe(true);
+    expect(sameLockfile('{"a":1}', '{"a":2}')).toBe(false);
+    expect(sameLockfile(undefined, undefined)).toBe(false);
+    expect(sameLockfile("", "")).toBe(false);
   });
 });
