@@ -52,6 +52,42 @@ export function applyAndCheck(cwd, patch) {
   return { files, forbidden: forbiddenPaths(files) };
 }
 
+/**
+ * The agent's own comments — its notices (`<!-- issue-agent -->`), its live status
+ * (`<!-- issue-agent-status -->`), its review-loop notes (`<!-- issue-agent-review … -->`). They're
+ * posted under a trusted account but carry text the agents wrote, so they must never come back to
+ * the agents as a maintainer's instructions.
+ */
+export const isAgentComment = (body) => /^\s*<!-- issue-agent[\s>-]/.test(String(body)); // every agent comment starts with its marker; a maintainer merely mentioning one is not the agent
+
+/**
+ * Whether a PR the loop refused has left it for good while the agent still had it — a person took
+ * it over (removed agent:in-review) or closed it — so its issue's agent:working label must come off.
+ * Not for a fork or a non-agent branch (no issue of ours), nor for a PR already handed over
+ * (ready / needs-human), which keeps the status the hand-over wrote.
+ */
+export const leftLoop = ({ headRefName, isCrossRepository, labels }) =>
+  !isCrossRepository && Boolean(agentBranch(headRefName))
+  && !labels.includes("agent:ready-for-human") && !labels.includes("agent:needs-human");
+
+/**
+ * The comments that become part of the agents' request: written by someone with write access, not
+ * by the agent itself (its notices and status carry agent-written text under a trusted account),
+ * and not written or edited after the snapshot (the label). Everything else is listed as dropped.
+ */
+export function requestComments(comments, { isTrusted, snapshotAt }) {
+  const after = (t) => Boolean(t) && Date.parse(t) > Date.parse(snapshotAt);
+  const kept = [], dropped = [];
+  for (const c of comments) {
+    if (isAgentComment(c.body)) continue; // never instructions — not even "dropped": it isn't a request
+    const who = c.author?.login;
+    if (!isTrusted(who)) { dropped.push(`a comment by ${who ?? "a deleted user"} (no write access)`); continue; }
+    if (after(c.createdAt) || after(c.lastEditedAt)) { dropped.push(`a comment by ${who} written or edited after the label`); continue; }
+    kept.push({ author: who, body: c.body });
+  }
+  return { comments: kept, dropped };
+}
+
 // ── the review loop ──────────────────────────────────────────────────────────────────────────────
 
 /** The Claude review's GitHub App account: a Bot, never a user who happens to be called "claude". */
