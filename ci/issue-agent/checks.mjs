@@ -105,7 +105,7 @@ export function latestVerdict({ summaries, headAt, headIsMerge, conclusion }) {
  * merge, and each review of a fix tends to find a new, smaller note — so the PR goes to a human
  * with the open notes listed. ⛔ at the cap is never "ready": the loop stops and says why.
  */
-export function reviewDecision({ verdict, open, cycle, maxCycles, conclusion, loopOn = true }) {
+export function reviewDecision({ verdict, open, cycle, maxCycles, conclusion, loopOn }) {
   // Without a token whose pushes start workflows a fix could never be reviewed: spend no fix
   // session, and hand the PR (still marked in review) to a human rather than leave it stranded.
   if (!loopOn) return { action: "give-up", reason: "the review loop is off — there is no AGENT_GH_TOKEN, so a pushed fix would never be reviewed again" };
@@ -156,6 +156,12 @@ export function loopRefusal({ headRefName, isCrossRepository, state, labels }) {
  * of such a file is something only a merge can fix.
  */
 export const sharedChanges = (mainChanged, prChanged) => [...new Set(prChanged)].filter((f) => mainChanged.includes(f)).sort();
+
+/** The review-cycle cap from a setting: a whole number ≥ 1, else the default — never NaN (no cap). */
+export function cycleCap(value, fallback = 3) {
+  const n = Number(value);
+  return Number.isInteger(n) && n >= 1 ? n : fallback;
+}
 
 export const isRunId = (id) => /^\d{12}$/.test(String(id));
 export const isCommitId = (sha) => /^[0-9a-f]{40}$/.test(String(sha));

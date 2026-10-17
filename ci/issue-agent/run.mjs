@@ -40,7 +40,7 @@ import { fileURLToPath } from "node:url";
 import { fingerprints, stripAnsi, withinBaseline } from "./fingerprints.mjs";
 import {
   TRUSTED_PERMISSIONS, titleAuthor, forbiddenPaths, applyAndCheck, changedSince, isRunId, isCommitId, publishIssueNumber,
-  isReviewBot, parseVerdict, agentBranch, threadsToAnswer, reviewDecision, sharedChanges, filesBetween, cyclesDone, loopRefusal, latestVerdict,
+  isReviewBot, parseVerdict, agentBranch, threadsToAnswer, reviewDecision, sharedChanges, filesBetween, cyclesDone, loopRefusal, latestVerdict, cycleCap,
 } from "./checks.mjs";
 import { reportHtml, prBody, issueComment, md } from "./report.mjs";
 
@@ -57,7 +57,7 @@ const EVIDENCE_BRANCH = "agent-evidence";
 // The review loop (README, "The review loop") — on when the workflow has a token whose pushes start
 // other workflows (AGENT_GH_TOKEN); with GITHUB_TOKEN a pushed fix would never be reviewed again.
 const REVIEW_LOOP = process.env.ISSUE_AGENT_REVIEW_LOOP === "on";
-const MAX_REVIEW_CYCLES = Number(process.env.ISSUE_AGENT_MAX_REVIEW_CYCLES || 3); // `||`: an unset repo variable arrives as ""
+const MAX_REVIEW_CYCLES = cycleCap(process.env.ISSUE_AGENT_MAX_REVIEW_CYCLES); // unset ("") or not a whole number ≥ 1 → 3
 const LABELS = { inReview: "agent:in-review", ready: "agent:ready-for-human", needsHuman: "agent:needs-human" };
 
 // ── args ─────────────────────────────────────────────────────────────────────────────────────────
@@ -686,7 +686,7 @@ const REVIEW_MARK = "<!-- issue-agent-review";
 
 function loadPr(number) {
   const q = `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){
-    number url state isDraft isCrossRepository headRefName headRefOid body title labels(first:30){nodes{name}}
+    number url state isDraft isCrossRepository headRefName headRefOid body title author{login} labels(first:30){nodes{name}}
     commits(last:1){nodes{commit{oid committedDate parents{totalCount}}}}
     comments(last:100){nodes{author{__typename login} body createdAt}}
     reviewThreads(first:100){nodes{id isResolved path line comments(first:50){nodes{databaseId author{__typename login} body createdAt}}}}}}}`;
@@ -703,9 +703,6 @@ function assessReview(prNumber) {
   if (expected && expected !== pr.headRefOid) return skip("the PR has moved on since this review ran");
   const branch = agentBranch(pr.headRefName);
   const labeller = pr.body.match(/<!-- issue-agent labeller=([A-Za-z0-9-]+) -->/)?.[1];
-  const off = reviewDecision({ loopOn: REVIEW_LOOP });
-  if (off.action === "give-up") return { pr: pr.number, url: pr.url, isDraft: pr.isDraft, labeller, body: pr.body, threads: [], cycle: 0, decision: off };
-
   const head = pr.commits.nodes[0].commit;
   const summaries = pr.comments.nodes.filter((c) => isReviewBot(c.author) && c.body.startsWith("## Claude review"));
   const conclusion = process.env.ISSUE_AGENT_REVIEW_CONCLUSION || undefined;
@@ -713,7 +710,8 @@ function assessReview(prNumber) {
   if (reused) RUN?.log?.("  the head only merges main in; the last review still applies");
   const { answer, ignored } = threadsToAnswer(pr.reviewThreads.nodes.map((t) => ({ ...t, comments: t.comments.nodes })), trusted);
   const cycle = cyclesDone(pr.comments.nodes, trusted);
-  const decision = reviewDecision({ verdict, open: answer.length, cycle, maxCycles: MAX_REVIEW_CYCLES, conclusion });
+  // One decision, every rule in it (tested in checks.mjs) — including "no token: hand over, spend nothing".
+  const decision = reviewDecision({ verdict, open: answer.length, cycle, maxCycles: MAX_REVIEW_CYCLES, conclusion, loopOn: REVIEW_LOOP });
   const issue = snapshotIssue(branch.issue).issue ?? { number: branch.issue, title: `Issue #${branch.issue}`, body: "", comments: [], dropped: [] };
   return {
     pr: pr.number, url: pr.url, headRef: pr.headRefName, head: pr.headRefOid, isDraft: pr.isDraft, issueNumber: branch.issue, issue,
@@ -728,9 +726,12 @@ function handOver(review, kind, reason) {
   const url = review.url;
   if (kind === "ready" && review.isDraft) sh("gh", ["pr", "ready", url, "-R", REPO], { allowFail: true });
   sh("gh", ["pr", "edit", url, "-R", REPO, "--remove-label", LABELS.inReview, "--add-label", kind === "ready" ? LABELS.ready : LABELS.needsHuman], { allowFail: true });
-  if (review.labeller) sh("gh", ["pr", "edit", url, "-R", REPO, "--add-reviewer", review.labeller], { allowFail: true });
+  const current = loadPr(review.pr);
+  // GitHub won't request a review from a PR's own author (the token's owner, when it opened the PR);
+  // the @-mention below reaches them either way.
+  if (review.labeller && review.labeller !== current.author?.login) sh("gh", ["pr", "edit", url, "-R", REPO, "--add-reviewer", review.labeller], { allowFail: true });
   // Drop the "still working" banner from the CURRENT body (push may have just written a description update).
-  const currentBody = loadPr(review.pr).body;
+  const currentBody = current.body;
   const body = currentBody.replace(/^> \[!NOTE\]\n> \*\*The agent is still working on this[^\n]*\n\n/, "");
   if (body !== currentBody) sh("gh", ["pr", "edit", url, "-R", REPO, "--body", body], { allowFail: true });
   const who = review.labeller ? `@${review.labeller} ` : "";

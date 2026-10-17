@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   titleAuthor, forbiddenPaths, applyAndCheck, isRunId, isCommitId, publishIssueNumber,
-  isReviewBot, parseVerdict, agentBranch, threadsToAnswer, reviewDecision, sharedChanges, cyclesDone, loopRefusal, latestVerdict,
+  isReviewBot, parseVerdict, agentBranch, threadsToAnswer, reviewDecision, sharedChanges, cyclesDone, loopRefusal, latestVerdict, cycleCap,
 } from "./checks.mjs";
 import { fingerprints, withinBaseline } from "./fingerprints.mjs";
 import { prBody, issueComment } from "./report.mjs";
@@ -184,8 +184,11 @@ describe("the review loop", () => {
     expect(sharedChanges(["docs/a.md"], ["src/x.ts"])).toEqual([]);
   });
 
+  // The loop's normal state: the token is there. (loopOn has no default — forgetting it means "off".)
+  const rd = (o) => reviewDecision({ loopOn: true, ...o });
+
   it("hands over only when the review is satisfied and nothing is open", () => {
-    const d = (verdict, open, cycle = 0) => reviewDecision({ verdict, open, cycle, maxCycles: 3 }).action;
+    const d = (verdict, open, cycle = 0) => rd({ verdict, open, cycle, maxCycles: 3 }).action;
     expect(d("ready", 0)).toBe("done");
     expect(d("notes", 0)).toBe("done");
     expect(d("notes", 2)).toBe("fix"); // small notes still get fixed before a human is asked
@@ -210,22 +213,32 @@ describe("the review loop", () => {
 
   it("hands a PR over, spending nothing, when the loop has no token", () => {
     expect(reviewDecision({ loopOn: false, verdict: "changes", open: 3, cycle: 0, maxCycles: 3 })).toMatchObject({ action: "give-up", reason: expect.stringMatching(/AGENT_GH_TOKEN/) });
-    expect(reviewDecision({ verdict: "changes", open: 3, cycle: 0, maxCycles: 3 }).action).toBe("fix"); // on by default
+    expect(reviewDecision({ verdict: "changes", open: 3, cycle: 0, maxCycles: 3 }).action).toBe("give-up"); // not told it's on → off
+    expect(rd({ verdict: "changes", open: 3, cycle: 0, maxCycles: 3 }).action).toBe("fix");
+  });
+
+  it("reads the cycle cap as a whole number ≥ 1, never as no cap", () => {
+    expect(cycleCap("4")).toBe(4);
+    expect(cycleCap("")).toBe(3);
+    expect(cycleCap(undefined)).toBe(3);
+    expect(cycleCap("four")).toBe(3);
+    expect(cycleCap("2.5")).toBe(3);
+    expect(cycleCap("0")).toBe(3);
   });
 
   it("hands a PR over when the review failed or gave no verdict, instead of waiting forever", () => {
-    expect(reviewDecision({ verdict: undefined, open: 0, cycle: 0, maxCycles: 3, conclusion: "failure" })).toMatchObject({ action: "give-up", reason: expect.stringMatching(/failed/) });
-    expect(reviewDecision({ verdict: undefined, open: 0, cycle: 0, maxCycles: 3, conclusion: "success" })).toMatchObject({ action: "give-up", reason: expect.stringMatching(/without a verdict/) });
-    expect(reviewDecision({ verdict: undefined, open: 0, cycle: 0, maxCycles: 3 }).action).toBe("wait"); // started by hand, no review finished
+    expect(rd({ verdict: undefined, open: 0, cycle: 0, maxCycles: 3, conclusion: "failure" })).toMatchObject({ action: "give-up", reason: expect.stringMatching(/failed/) });
+    expect(rd({ verdict: undefined, open: 0, cycle: 0, maxCycles: 3, conclusion: "success" })).toMatchObject({ action: "give-up", reason: expect.stringMatching(/without a verdict/) });
+    expect(rd({ verdict: undefined, open: 0, cycle: 0, maxCycles: 3 }).action).toBe("wait"); // started by hand, no review finished
   });
 
   it("at the cycle cap, counts 💬 as ready (notes listed) but never ⛔", () => {
-    const at = (verdict, open) => reviewDecision({ verdict, open, cycle: 3, maxCycles: 3 });
+    const at = (verdict, open) => rd({ verdict, open, cycle: 3, maxCycles: 3 });
     expect(at("notes", 2)).toMatchObject({ action: "done", notes: 2 });
     expect(at("ready", 1)).toMatchObject({ action: "done", notes: 1 });
     expect(at("changes", 0).action).toBe("give-up");
     expect(at("changes", 4).action).toBe("give-up");
     // before the cap, open notes are still fixed
-    expect(reviewDecision({ verdict: "notes", open: 2, cycle: 2, maxCycles: 3 }).action).toBe("fix");
+    expect(rd({ verdict: "notes", open: 2, cycle: 2, maxCycles: 3 }).action).toBe("fix");
   });
 });
