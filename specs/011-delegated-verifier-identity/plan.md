@@ -1,0 +1,97 @@
+# Implementation Plan: Identity-only delegated gate example
+
+**Branch**: `011-delegated-verifier-identity` | **Date**: 2026-07-28 | **Spec**: [spec.md](./spec.md)
+
+**Input**: Issue #141 (an example, plus the approve-page fix that writing it exposed).
+
+## Summary
+
+One new runnable example, `examples/delegated-verifier-identity/serve.mjs`: an MCP-shaped
+"release-a-sealed-record" tool gated behind `required(age.over(21))` — no cart, no price, no
+`payment.in(...)` — where the proof runs through the **external `DelegatedVerifier` seam** (a local
+stand-in with **no `settle` member**). Plus one `examples/README.md` entry.
+
+Writing the example exposed that the delegated rail's shared approve page still spoke as a
+checkout on an identity-only policy ("Authorize payment", a Pay step, a $0.00 Total, a return
+link to `/checkout`). So the gate package changes in one place: `delegated-payment/page.ts`
+words the page from THIS order's policy (`policyHasPayment`), the route passes the host's
+`returnUrl` like its sibling rails, and `theme.ts` gains default-preserving options
+(`showAmounts`, `includePay`, completion-banner labels). The rail's backend is unchanged.
+
+## Technical Context
+
+**Language**: plain ESM JavaScript (`.mjs`), Node ≥ 20, run against the built workspace packages
+(`npm run build:packages`) like every sibling example. **Dependencies**: `express` (already a root
+devDependency, used by `bring-your-own-host.mjs`) + the two workspace packages. **Port**: 3009
+(3005–3007 and 4100 are taken by siblings).
+
+### Wiring (all existing API, verified against source)
+
+- Seams via `defineHost({ catalog, orderStore, records, returnUrl, allowEphemeralKey })`
+  ([`host.ts:108`](../../packages/credentagent-gate/src/host.ts)) — the "catalog" prices the
+  record-release action at $0.
+- The verifier seam is published on `app.locals.credentagent` **before** `host.publish(app)`
+  (publish merges onto existing locals, [`host.ts:167`](../../packages/credentagent-gate/src/host.ts));
+  zero-arg `credentagent.mount(app)` then picks up `locals.verifier`
+  ([`client.ts:357-363`](../../packages/credentagent-gate/src/client.ts)) and the delegated rail
+  registers ([`mount.ts:173`](../../packages/credentagent-gate/src/ceremony/mount.ts)). This keeps
+  ONE verification store everywhere (mount only injects its own store when locals has none —
+  invariant 4). `defineHost` not exposing `verifier` is a DX gap — issue #355.
+- Identity-only completion: `policyHasPayment` false ⇒ no settle thunk
+  ([`delegated-payment/routes.ts:186`](../../packages/credentagent-gate/src/ceremony/delegated-payment/routes.ts));
+  pinned by [`delegated-payment.test.ts:508`](../../packages/credentagent-gate/src/ceremony/delegated-payment/delegated-payment.test.ts).
+- Scripted walk-through drives the rail's real HTTP legs:
+  `GET /credentagent/delegated/request?order=…` → `{ referenceToken }`
+  → `POST /credentagent/delegated/verify { order, referenceToken }` → `{ completed, gates }`.
+- Envelope refusal via `buildVerificationRequired` / `isVerificationRequired` / `ageDcql`, same as
+  `gate-any-action.mjs`; approve URL is the delegated page, built in-file (manifest routes
+  `gate`-effect links to the built-in rail by design — spec Decision 4).
+
+## Constitution Check
+
+*Gate instantiated against Constitution v1.2.0 (Principles I–VII + Security Requirements).*
+
+| Article | Verdict | Notes |
+| :-- | :-- | :-- |
+| I — Stripe-grade, example-is-the-test | **PASS (watch item)** | The example IS the deliverable. Three warts are declared, not dressed up, and each has an issue where the API fix belongs: (a) the one-line `app.locals` verifier publish (`defineHost` gap, #355); (b) the hand-built delegated approve URL (identity routing, #356 under epic #60); (c) the hand-built refusal envelope restating the policy, with `requirements()` called only to register it (#23). |
+| II — Three execution contexts | PASS | The tool handler only mints the link + typed refusal (Context 1); the ceremony runs on the mounted `/credentagent/delegated` page (Context 2); the re-call reads the completion record (Context 3). The scripted walk-through drives the page's own HTTP legs — it does not move ceremony logic into the tool. |
+| III — Consolidated checkout | PASS (n/a) | No checkout; one handoff link to one ceremony page. |
+| IV — One ordered policy array | PASS | Policy is exactly `[required(age.over(21))]`. No payment ⇒ nothing to order last; amount is $0, derived server-side from the action "catalog", never passed. |
+| V — Extensible to any credential | PASS | Built-in `age` keeps the file minimal; the README lists what a `defineCredential` licence gate takes instead (it must apply to the action, the `minimumAge` tag goes, the stand-in discloses its claims under the credential's id, and the refusal's `credential` is typed to built-ins — #23). |
+| VI — structuredContent is data | PASS | The envelope refusal is plain JSON (`buildVerificationRequired`); no functions cross the wire. |
+| VII — Honesty in types/copy | **PASS (binding copy rule)** | The stand-in reports `trust_level: "presence-only-demo"` verbatim; file + README carry the S6 fence (no real adapter yet, `multipaz-utopia#16`). No copy may present the gate as a real safety control. |
+| Security Requirements | PASS | Release happens ONLY off the completed record the shared completion wrote (enforce-on-every-path); the $0 amount is re-derived from the catalog (never the token); state keyed per request id; `underage` mode proves the 18+-for-21+ refusal (explicit positive claims); the reference token stays sealed/order-bound (rail behavior, untouched). |
+| Workflow gates | PASS | Spec cites real file:line; DCO on every commit; "done" claimed only after the walk-through runs green in all three VERDICT modes. |
+
+No violations → Complexity Tracking omitted.
+
+## Project Structure
+
+```text
+specs/011-delegated-verifier-identity/
+├── spec.md              # approved
+└── plan.md              # this file
+
+examples/
+├── delegated-verifier-identity/
+│   └── serve.mjs        # the example (hero file)
+└── README.md            # + one "Gating patterns" entry
+
+packages/credentagent-gate/src/ceremony/
+├── delegated-payment/page.ts    # wording follows the order's policy
+├── delegated-payment/routes.ts  # passes hasPayment + the host's returnUrl
+└── theme.ts                     # showAmounts / includePay / banner labels (defaults unchanged)
+```
+
+No research.md / data-model.md / contracts: the feature adds no API surface, no storage, no
+endpoints — every contract it exercises already exists and is cited above.
+
+## Validation
+
+1. `npm run build:packages` green.
+2. `node examples/delegated-verifier-identity/serve.mjs` — walk-through prints refusal → completed
+   ceremony (no settlement field) → released record.
+3. `VERDICT=underage node …/serve.mjs` and `VERDICT=declined node …/serve.mjs` — refusal printed,
+   release log empty.
+4. Root `npm test` green. Each new page test is paired with a control on a policy that DOES
+   settle, and each turns red when its fix is reverted (SC-003).
