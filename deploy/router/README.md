@@ -10,6 +10,15 @@ itself — `vercel.json` forwards each path to the demo that serves it:
 | `https://credentagent.ai/marketplace-dev/mcp` | `credentagent-demo-dev` — `main`'s unpublished packages |
 | `https://credentagent.ai/marketplace-dev/checkout?…` and the other store pages | `credentagent-demo-dev` — its checkout and consent pages (see below) |
 | `https://credentagent.ai/` | the product page from https://openmobilehub.org/credentagent, served under credentagent.ai (the address bar stays on credentagent.ai) |
+| `https://credentagent.ai/<anything else>` (`/robots.txt`, `/llms.txt`, `/sitemap.xml`, `/about`, …) | the same path under https://openmobilehub.org/credentagent/ — the last rewrite, a catch-all |
+
+**The catch-all (#369):** every path no other rule claims passes through to Pages unchanged, so
+whatever the website publishes appears at credentagent.ai. Pages' status code and content type come
+through as they are: a missing page is Pages' own 404 (not Vercel's 79-byte `text/plain` one),
+`llms.txt` and `robots.txt` stay `text/plain`, `sitemap.xml` stays `application/xml`. It must stay the
+**last** rewrite, after `/marketplace-dev/:path*` and `/marketplace/:path*` — Vercel applies the
+first matching rewrite. It doesn't capture `/api/ask`: Vercel resolves the filesystem and functions
+before rewrites. `vercel-config.test.mjs` (root `npm test`) pins this order.
 
 **Why a separate project, not a domain on `credentagent-demo`:** a demo mints its checkout and
 wallet links from `PUBLIC_URL`, falling back to `VERCEL_PROJECT_PRODUCTION_URL`, which Vercel
@@ -24,7 +33,7 @@ end — the router strips the prefix on the way in. The wallet binds to the page
 credentagent.ai. The prod demo keeps its `*.vercel.app` links until a release carries this (0.5.0's
 pages use root paths); then set `PUBLIC_URL=https://credentagent.ai/marketplace` in `deploy-prod.yml`.
 
-To add a route, add a `rewrites` entry mapping `/<name>/:path*` to the target origin.
+To add a route, add a `rewrites` entry mapping `/<name>/:path*` to the target origin, above the catch-all.
 
 **DNS** (GoDaddy): `A @ 76.76.21.21` and `CNAME www cname.vercel-dns.com.`
 
@@ -33,6 +42,20 @@ To add a route, add a `rewrites` entry mapping `/<name>/:path*` to the target or
 Actions → deploy-prod → Run workflow → `router`), from the repository root
 with the project's Root Directory `deploy/router`. It then checks that `/marketplace/mcp` and
 `/marketplace-dev/mcp` answer through credentagent.ai.
+
+After a router deploy, check the pass-through by hand:
+
+```sh
+curl -sI https://credentagent.ai/robots.txt     # 200, content-type: text/plain
+curl -sI https://credentagent.ai/llms.txt       # 200, content-type: text/plain (once the website publishes it)
+curl -sI https://credentagent.ai/sitemap.xml    # 200, content-type: application/xml
+curl -sI https://credentagent.ai/no-such-page   # 404 from Pages, not Vercel's 79-byte text/plain 404
+curl -s -X POST https://credentagent.ai/api/ask -H 'Origin: https://credentagent.ai' \
+  -H 'Content-Type: application/json' -d '{"question":"hi","context":{}}'   # JSON answer from the function
+curl -s -X POST https://credentagent.ai/marketplace/mcp -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'   # the store's tools
+```
 
 ## `POST /api/ask` — the website demo's "Ask about your order" agent
 
