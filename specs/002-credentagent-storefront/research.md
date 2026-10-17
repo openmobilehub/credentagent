@@ -109,7 +109,8 @@ must be self-contained (ship the bundle) for that to work.
 tools, emitting **both** the MCP-Apps `ui.resourceUri` form (Claude) **and** the ChatGPT `openai/*` set:
 `openai/outputTemplate` (== the `ui://` URI), **`openai/widgetAccessible: true`**, and the
 `openai/toolInvocation` status. Widget-rendering tool results carry **cart-bearing `structuredContent`**,
-and the widget CSP allows `data:`.
+and the widget renders `data:` images (since issue #372 the MCP Apps `_meta.ui.csp` no longer lists
+`data:` — its default view CSP allows it — while ChatGPT's `openai/widgetCSP` still does).
 
 **Rationale**: Diagnosis of the current demo found the widget *renders* in ChatGPT but is **interactively
 dead** — `UI_META` set only `outputTemplate`, so `window.openai.callTool` was rejected and the steppers /

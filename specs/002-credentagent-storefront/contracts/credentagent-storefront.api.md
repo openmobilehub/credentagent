@@ -69,7 +69,9 @@ surfaces:
 Without `openai/widgetAccessible: true` the widget renders but in-widget callbacks (steppers, Checkout)
 silently no-op in ChatGPT. Widget-rendering tool results MUST carry **cart-bearing `structuredContent`**
 (e.g. `checkout` includes `products`/`cart`) so a fresh ChatGPT widget instance doesn't render an empty
-cart. The widget CSP MUST allow `data:` (the image placeholder). Runtime host detection (`chatgpt`/`mcp`/
+cart. The widget MUST render `data:` images (the image placeholder) — since issue #372 the MCP
+Apps `_meta.ui.csp` must NOT list the bare `data:` scheme (its default view CSP allows `data:` images),
+while ChatGPT's `openai/widgetCSP` still declares `data:`. Runtime host detection (`chatgpt`/`mcp`/
 `standalone`) preserved.
 
 ## Contract tests (MUST exist)
