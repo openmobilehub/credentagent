@@ -58,8 +58,9 @@ Read the [trust model](./docs/reference/trust-model.md) and the
 [security invariants](./SECURITY-INVARIANTS.md) before you report. They state plainly what
 the gate does and does not verify today.
 
-**Known and expected (not a vulnerability on its own).** The gate itself never verifies an
-issuer's signature, so no level it reports on its own is backed by a real trust anchor:
+**Known and expected (not a vulnerability on its own).** The gate itself never checks an
+issuer's signature against a trusted certificate authority, so no level it reports on its
+own is backed by a real trust anchor:
 
 - The built-in checkout rails (passkey, credential, dc-payment) report
   `trust_level: "presence-only-demo"`. The wire cryptography is real — WebAuthn, OpenID4VP
@@ -69,15 +70,16 @@ issuer's signature, so no level it reports on its own is backed by a real trust 
   either: the passkey rail's carries a dev integrity hash, and the dc-payment rail's
   carries none.
 - Spending grants that opt into device signing report `trust_level: "device-signed"`: the
-  wallet's signature is really checked, but the payment credential behind it is
-  self-minted, so it has no issuer trust anchor.
+  credential's own signature and the wallet's signature are really checked, but the
+  payment credential is self-minted, so its certificate chains to no trusted root.
 - Grants issued by `DelegatedGate`, and spending grants approved by a click on the server's
   page, report `trust_level: "server-issued-demo"` by default: the server, not a wallet,
   vouches for them.
 
 These levels mark flow demos, not real safety controls. In-gate issuer verification is on
-the roadmap. Today, `trust_level: "issuer-verified"` appears only when a host passes an
-external `verifier` to `mount()` and that verifier reports it; the gate relays it unchanged.
+the roadmap. Today, `trust_level: "issuer-verified"` appears only when the host supplies it — for
+example an external `verifier` passed to `mount()` that reports it — and the gate relays it
+unchanged.
 A report that only shows one of these known gaps is already known.
 
 **In scope.** Anything that breaks what the gate *does* claim to enforce today, for
