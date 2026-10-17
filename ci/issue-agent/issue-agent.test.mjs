@@ -12,7 +12,7 @@ import {
   isReviewBot, parseVerdict, agentBranch, threadsToAnswer, reviewDecision, sharedChanges, cyclesDone, loopRefusal, latestVerdict, cycleCap,
 } from "./checks.mjs";
 import { fingerprints, withinBaseline } from "./fingerprints.mjs";
-import { prBody, issueComment } from "./report.mjs";
+import { prBody, issueComment, statusBody, STATUS_MARK } from "./report.mjs";
 
 // Pinned so a contributor's own git config (quotePath off, signed commits) can't change the outcome.
 const git = (cwd, ...args) => {
@@ -117,6 +117,26 @@ describe("agent text in a PR body", () => {
   });
   it("says why when it skips", () => {
     expect(issueComment({ kind: "skipped", reason: "it is closed" })).toMatch(/not starting this one.*it is closed/);
+  });
+});
+
+describe("the issue's live status comment", () => {
+  const t = (s) => new Date(`2026-10-17T${s}:00Z`);
+  it("shows the current state and keeps a timestamped history", () => {
+    const one = statusBody("", "working: spec, implementation, internal reviews", { at: t("00:51"), link: "https://x/run/1" });
+    const two = statusBody(one, "PR #364 opened — in the review loop", { at: t("01:20") });
+    expect(two.startsWith(STATUS_MARK)).toBe(true);
+    expect(two).toContain("🤖 **Issue agent:** PR #364 opened — in the review loop");
+    expect(two).toMatch(/\| 10-17 00:51 \| working: spec, implementation, internal reviews · \[run\]\(https:\/\/x\/run\/1\) \|\n\| 10-17 01:20 \| PR #364 opened/);
+  });
+  it("caps the history and can't be broken by the text it shows", () => {
+    let body = "";
+    for (let i = 0; i < 30; i++) body = statusBody(body, `step ${i}`, { at: t("02:00") });
+    expect((body.match(/^\| 10-17/gm) ?? []).length).toBe(25);
+    const odd = statusBody("", "a | b <!-- x @someone", { at: t("03:00") });
+    expect(odd).not.toContain("<!-- x");
+    expect(odd).toContain("a \\| b");
+    expect(odd).not.toMatch(/@someone/);
   });
 });
 
