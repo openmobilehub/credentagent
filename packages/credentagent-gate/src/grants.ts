@@ -40,7 +40,7 @@ export type GrantDoorCode =
   | "per-spend-exceeded" // this one purchase is over the per-spend cap (engine: over-cap)
   | "budget-exceeded" // the cumulative budget is spent out (engine: over-total)
   | "wrong-merchant" // outside the granted merchant scope (engine: out-of-scope)
-  | "step-up" // needs a live human — e.g. age-restricted goods are NON-delegable
+  | "step-up" // needs a live human — e.g. an age-restricted item the grant's ageProof doesn't cover
   | "revoked" // the grant was revoked; nothing spends against it again
   | "expired" // the grant's validity window passed (or hasn't started)
   | "agent-held-key" // the agent holds this grant's key — it spends with `DelegatedIntent` at the merchant, not here
