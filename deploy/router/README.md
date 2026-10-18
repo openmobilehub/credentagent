@@ -1,8 +1,9 @@
 # credentagent.ai router
 
 The Vercel project **`credentagent-router`** (team `cbg6`) owns the `credentagent.ai` and
-`www.credentagent.ai` domains. Apart from one small function (`/api/ask`, below) it hosts nothing
-itself — `vercel.json` forwards each path to the demo that serves it:
+`www.credentagent.ai` domains. Apart from one small function (`/api/ask`, below) and `index.md` (the
+domain described in Markdown, for agents), it hosts nothing itself — `vercel.json` forwards each
+other path to the site that serves it:
 
 | Public URL | Served by |
 | --- | --- |

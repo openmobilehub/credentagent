@@ -27,9 +27,12 @@ function hasMatches(has = [], headers) {
   });
 }
 
+// Vercel serves a file in the output directory (this folder, `outputDirectory: "."`) before any rewrite.
+const isFile = (path) => path !== '/' && existsSync(new URL(`.${path}`, import.meta.url));
+
 function resolve(path, headers = {}) {
-  let destination = null;
-  for (const r of config.rewrites ?? []) {
+  let destination = isFile(path) ? path : null;
+  for (const r of destination ? [] : config.rewrites ?? []) {
     const params = matchSource(r.source, path);
     if (params && hasMatches(r.has, headers)) {
       destination = r.destination.replace(':path*', params.path ?? '');
@@ -101,6 +104,14 @@ describe('router: index.md, the domain\'s Markdown copy', () => {
 
   it('is a file in this folder, so Vercel serves it before any rewrite', () => {
     expect(existsSync(file)).toBe(true);
+    expect(config.outputDirectory).toBe('.');
+    expect(resolve('/index.md').destination).toBe(MARKDOWN);
+  });
+
+  it('is what the Markdown rewrite for / points at, not a path the catch-all would proxy', () => {
+    const dest = resolve('/', { accept: 'text/markdown' }).destination;
+    expect(dest).toBe(MARKDOWN);
+    expect(isFile(dest)).toBe(true);
   });
 
   it('is typed text/markdown when fetched directly at /index.md', () => {
