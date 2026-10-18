@@ -1,13 +1,13 @@
 // The router's vercel.json (#370): `/` answers Markdown to an agent that asks for it (Accept: text/markdown)
-// and HTML to everyone else. The Markdown is this folder's index.md, which describes the whole domain, with `Vary: Accept` so a CDN never serves one copy to the other.
+// and HTML to everyone else. The Markdown is this folder's domain.md, which describes the whole domain, with `Vary: Accept` so a CDN never serves one copy to the other.
 // Vercel's edge can't run here, so this resolves the config the way Vercel does: the first matching
 // rewrite wins, every matching `headers` entry applies, and a `has` header value is a regex.
 import { describe, it, expect } from 'vitest';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 
 const config = JSON.parse(readFileSync(new URL('./vercel.json', import.meta.url), 'utf8'));
-const HTML = 'https://openmobilehub.org/credentagent/';
-const MARKDOWN = '/index.md';
+const HTML = 'https://openmobilehub.github.io/credentagent-website/';
+const MARKDOWN = '/domain.md';
 
 // The source patterns vercel.json uses: a literal path, or a prefix with a trailing `:path*`.
 function matchSource(source, path) {
@@ -27,8 +27,12 @@ function hasMatches(has = [], headers) {
   });
 }
 
-// Vercel serves a file in the output directory (this folder, `outputDirectory: "."`) before any rewrite.
-const isFile = (path) => path !== '/' && existsSync(new URL(`.${path}`, import.meta.url));
+// Vercel serves a file in the output directory (this folder, `outputDirectory: "."`) before any rewrite,
+// and that includes `/`: a root `index.*` file answers `/` for every request, so no rewrite for `/` runs.
+// (#399 shipped `index.md` here and credentagent.ai served Markdown to browsers; is-agentic dropped to 70.)
+const rootIndex = () => readdirSync(new URL('.', import.meta.url)).find((f) => /^index\./i.test(f));
+const isFile = (path) =>
+  path === '/' ? Boolean(rootIndex()) : existsSync(new URL(`.${path}`, import.meta.url));
 
 function resolve(path, headers = {}) {
   let destination = isFile(path) ? path : null;
@@ -99,12 +103,20 @@ describe('router: other routes are unaffected by Accept: text/markdown', () => {
   }
 });
 
-describe('router: index.md, the domain\'s Markdown copy', () => {
-  const file = new URL('./index.md', import.meta.url);
+describe('router: domain.md, the domain\'s Markdown copy', () => {
+  const file = new URL('./domain.md', import.meta.url);
 
   it('is a file in this folder, so Vercel serves it before any rewrite', () => {
     expect(existsSync(file)).toBe(true);
     expect(config.outputDirectory).toBe('.');
+    expect(resolve('/domain.md').destination).toBe(MARKDOWN);
+  });
+
+  it('there is no index.* file in this folder: Vercel would serve it for / to browsers too', () => {
+    expect(rootIndex()).toBeUndefined();
+  });
+
+  it('/index.md (listed in the website\'s sitemap) is rewritten to it', () => {
     expect(resolve('/index.md').destination).toBe(MARKDOWN);
   });
 
@@ -114,8 +126,9 @@ describe('router: index.md, the domain\'s Markdown copy', () => {
     expect(isFile(dest)).toBe(true);
   });
 
-  it('is typed text/markdown when fetched directly at /index.md', () => {
+  it('is typed text/markdown when fetched directly at /index.md or /domain.md', () => {
     expect(resolve('/index.md').headers['content-type']).toBe('text/markdown; charset=utf-8');
+    expect(resolve('/domain.md').headers['content-type']).toBe('text/markdown; charset=utf-8');
   });
 
   it('names the domain\'s MCP endpoints, the presence-only trust level and the walletless demo path', () => {
