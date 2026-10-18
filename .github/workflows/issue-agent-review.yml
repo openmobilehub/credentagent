@@ -96,11 +96,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           INPUT_PR: ${{ inputs.pr }}
-          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          # The PR the review ran for, from the run itself — a branch name alone can match more than
+          # one PR (a fork's, or the same branch into another base) now that any branch can be in the loop.
+          RUN_PR: ${{ github.event.workflow_run.pull_requests[0].number }}
         run: |
-          if [ -n "$INPUT_PR" ]; then n="$INPUT_PR"; else
-            n=$(gh pr list -R "$GITHUB_REPOSITORY" --head "$HEAD_BRANCH" --state open --json number --jq '.[0].number // empty')
-          fi
+          n="${INPUT_PR:-$RUN_PR}"
           case "$n" in ''|*[!0-9]*) echo "::notice::No open PR for this review."; n="" ;; esac
           echo "number=$n" >> "$GITHUB_OUTPUT"
       - name: Read the review

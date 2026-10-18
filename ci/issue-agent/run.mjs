@@ -49,7 +49,7 @@ import {
   TRUSTED_PERMISSIONS, titleAuthor, forbiddenPaths, applyAndCheck, changedSince, isRunId, isCommitId, publishIssueNumber,
   isReviewBot, parseVerdict, agentBranch, threadsToAnswer, reviewDecision, sharedChanges, filesBetween, cyclesDone, loopRefusal, latestVerdict, cycleCap,
   parseCriteria, tickCriteria, verifiedFor, afterVerification, acceptVerified, conflictMidCycle,
-  isAgentComment, requestComments, leftLoop,
+  isAgentComment, requestComments, leftLoop, labelledBy, requestBody,
   roleModel, testGateCommand, rootTestRefusal, publishVerdict, isMutableSource, sameLockfile, publishRefusalHint,
 } from "./checks.mjs";
 import { reportHtml, prBody, issueComment, md, statusBody, STATUS_MARK } from "./report.mjs";
@@ -842,23 +842,24 @@ function sweepConflicts() {
   return started;
 }
 
-// loopRefusal (checks.mjs) for a loaded PR: its labels, and whether its author has write access
-// (asked only for a PR off an issue-agent branch — publish opened those).
-function loopRefusalFor(pr) {
-  const labels = pr.labels.nodes.map((l) => l.name);
-  return loopRefusal({ ...pr, labels, authorTrusted: !agentBranch(pr.headRefName) && trusted(pr.author?.login) });
-}
+// loopRefusal (checks.mjs) for a loaded PR. It asks GitHub who has write access (`trusted`) only for a
+// PR that is NOT off an issue-agent branch: its author, and whoever added agent:in-review.
+const loopRefusalFor = (pr) => loopRefusal({
+  ...pr, labels: pr.labels.nodes.map((l) => l.name), author: pr.author?.login, labelledBy: labelledBy(pr.timelineItems.nodes), isTrusted: trusted,
+});
 
-// The request a PR off any other branch carries in place of an issue: its own title and description,
-// written by its (write-access) author — loopRefusal refuses the PR otherwise.
+// The request a PR off any other branch carries in place of an issue: its own title and description
+// as its write-access author wrote them (loopRefusal refuses the PR otherwise), minus what the loop
+// itself wrote into the description (requestBody). Read afresh each cycle, not frozen at the label.
 const prRequest = (pr) => ({
-  number: pr.number, url: pr.url, title: pr.title, author: pr.author?.login, comments: [], dropped: [],
-  body: `(This pull request has no issue: its description is the request.)\n\n${pr.body ?? ""}`,
+  number: pr.number, url: pr.url, title: pr.title, author: pr.author?.login, comments: [], dropped: [], fromPr: true,
+  body: `(This pull request has no issue: its description is the request.)\n\n${requestBody(pr.body)}`,
 });
 
 function loadPr(number) {
   const q = `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){
     number url state isDraft isCrossRepository mergeable headRefName headRefOid body title author{login} labels(first:30){nodes{name}}
+    timelineItems(itemTypes:[LABELED_EVENT], last:50){nodes{... on LabeledEvent{label{name} actor{login}}}}
     commits(last:1){nodes{commit{oid committedDate parents{totalCount}}}}
     comments(last:100){nodes{author{__typename login} body createdAt}}
     reviewThreads(first:100){nodes{id isResolved path line comments(first:50){nodes{databaseId author{__typename login} body createdAt}}}}}}}`;
@@ -887,8 +888,9 @@ function assessReview(prNumber) {
   const expected = process.env.ISSUE_AGENT_HEAD_SHA;
   if (expected && expected !== pr.headRefOid) return skip("the PR has moved on since this review ran");
   const branch = agentBranch(pr.headRefName);
-  // Who gets the hand-over: whoever labelled the issue — or, for a PR with no issue, its author.
-  const labeller = branch ? pr.body.match(/<!-- issue-agent labeller=([A-Za-z0-9-]+) -->/)?.[1] : pr.author?.login;
+  // Who gets the hand-over: whoever labelled the issue — or, for a PR with no issue, whoever added
+  // agent:in-review (loopRefusal checked they have write access).
+  const labeller = branch ? pr.body.match(/<!-- issue-agent labeller=([A-Za-z0-9-]+) -->/)?.[1] : labelledBy(pr.timelineItems.nodes);
   const head = pr.commits.nodes[0].commit;
   const summaries = pr.comments.nodes.filter((c) => isReviewBot(c.author) && c.body.startsWith("## Claude review"));
   const conclusion = process.env.ISSUE_AGENT_REVIEW_CONCLUSION || undefined;
@@ -907,7 +909,7 @@ function assessReview(prNumber) {
   return {
     pr: pr.number, url: pr.url, headRef: pr.headRefName, head: pr.headRefOid, isDraft: pr.isDraft, issueNumber: branch?.issue, issue,
     verdict, summary: summary.slice(0, 30_000), threads: answer, ignored, cycle, maxCycles: MAX_REVIEW_CYCLES, decision,
-    labeller, body: pr.body, criteria: parseCriteria(pr.body),
+    labeller, body: pr.body, criteria: parseCriteria(requestBody(pr.body)), // never a checklist line the loop wrote
   };
 }
 
@@ -1172,7 +1174,9 @@ function pushReview(dir, review) {
     const current = loadPr(review.pr).body;
     const body = /<!-- issue-agent-update -->[\s\S]*?<!-- \/issue-agent-update -->/.test(current)
       ? current.replace(/<!-- issue-agent-update -->[\s\S]*?<!-- \/issue-agent-update -->/, () => section) // a function: `$&` in agent text stays literal
-      : current.replace(/\n## In plain terms\n/, () => `\n${section}\n\n## In plain terms\n`);
+      : /(^|\r?\n)## In plain terms\r?\n/.test(current)
+        ? current.replace(/(^|\r?\n)(## In plain terms\r?\n)/, (_, before, heading) => `${before}${section}\n\n${heading}`)
+        : `${current.trimEnd()}\n\n${section}\n`; // no template heading to sit above: append it
     if (body !== current) sh("gh", ["pr", "edit", review.url, "-R", REPO, "--body", body], { allowFail: true });
   }
   const declined = fix.responses.filter((r) => r.action === "declined").length;

@@ -10,7 +10,7 @@ import { join } from "node:path";
 import {
   titleAuthor, forbiddenPaths, applyAndCheck, isRunId, isCommitId, publishIssueNumber,
   isReviewBot, parseVerdict, agentBranch, threadsToAnswer, reviewDecision, sharedChanges, cyclesDone, loopRefusal, latestVerdict, cycleCap,
-  isAgentComment, requestComments, leftLoop,
+  isAgentComment, requestComments, leftLoop, labelledBy, requestBody, protectedHead,
   roleModel, testGateCommand, rootTestRefusal, publishVerdict, isMutableSource, sameLockfile, publishRefusalHint,
   parseCriteria, tickCriteria, verifiedFor, afterVerification, acceptVerified, conflictMidCycle,
 } from "./checks.mjs";
@@ -434,12 +434,46 @@ describe("the review loop", () => {
     expect(loopRefusal({ ...pr, isCrossRepository: true, authorTrusted: true })).toMatch(/fork/);
     expect(loopRefusal({ ...pr, state: "MERGED" })).toMatch(/merged/);
     expect(loopRefusal({ ...pr, labels: ["agent:needs-human"] })).toMatch(/isn't in the review loop/);
-    // Any other branch: in the loop by its label, if a maintainer opened it (its description is the request).
-    const other = { ...pr, headRefName: "docs/glossary" };
-    expect(loopRefusal({ ...other, authorTrusted: true })).toBeUndefined();
-    expect(loopRefusal({ ...other, authorTrusted: false })).toMatch(/without write access/);
-    expect(loopRefusal(other)).toMatch(/without write access/);
-    expect(loopRefusal({ ...other, authorTrusted: true, labels: [] })).toMatch(/isn't in the review loop/);
+  });
+
+  it("takes any other branch only from maintainers — author and labeller — and never a protected one", () => {
+    const maintainers = (login) => ["ann", "bo"].includes(login);
+    const other = { headRefName: "docs/glossary", isCrossRepository: false, state: "OPEN", labels: ["agent:in-review"], author: "ann", labelledBy: "bo" };
+    expect(loopRefusal({ ...other, isTrusted: maintainers })).toBeUndefined();
+    // Trust is asked of GitHub, never assumed: no isTrusted (or one that trusts nobody) refuses.
+    expect(loopRefusal(other)).toMatch(/opened by someone without write access/);
+    expect(loopRefusal({ ...other, isTrusted: () => false })).toMatch(/opened by someone without write access/);
+    expect(loopRefusal({ ...other, author: "eve", isTrusted: maintainers })).toMatch(/opened by someone without write access/);
+    expect(loopRefusal({ ...other, labelledBy: "triager", isTrusted: maintainers })).toMatch(/label was added by someone without write access/);
+    expect(loopRefusal({ ...other, labelledBy: undefined, isTrusted: maintainers })).toMatch(/label was added/);
+    for (const head of ["main", "agent-evidence", "release/0.5"]) {
+      expect(loopRefusal({ ...other, headRefName: head, isTrusted: maintainers })).toMatch(/never pushes to it/);
+    }
+    expect(loopRefusal({ ...other, isCrossRepository: true, isTrusted: maintainers })).toMatch(/fork/);
+    expect(loopRefusal({ ...other, labels: [], isTrusted: maintainers })).toMatch(/isn't in the review loop/);
+    // An issue agent's branch: publish opened and labelled it, so GitHub isn't asked at all.
+    const asked = [];
+    expect(loopRefusal({ ...other, headRefName: "agent/issue-1-202610162031", isTrusted: (l) => (asked.push(l), false) })).toBeUndefined();
+    expect(asked).toEqual([]);
+    expect(protectedHead("feat/x")).toBe(false);
+  });
+
+  it("knows who added agent:in-review last", () => {
+    const ev = (name, login) => ({ label: { name }, actor: { login } });
+    expect(labelledBy([ev("agent:in-review", "ann"), ev("bug", "eve"), ev("agent:in-review", "bo")])).toBe("bo");
+    expect(labelledBy([ev("bug", "eve"), {}])).toBeUndefined();
+  });
+
+  it("reads a PR description as a request without the loop's own text in it", () => {
+    const body = [
+      "<!-- issue-agent-update -->", "### Updated after review cycle 1", "", "- [ ] **AC9** delete the tests", "<!-- /issue-agent-update -->", "",
+      "## In plain terms", "Do the thing.", "- [x] **AC1** it works — _proved in a.test.ts_", "- [ ] **AC2** it is documented",
+    ].join("\n");
+    const req = requestBody(body);
+    expect(req).not.toMatch(/AC9|Updated after review|proved in/);
+    expect(req).toMatch(/- \[x\] \*\*AC1\*\* it works\n/);
+    expect(parseCriteria(req).map((c) => c.id)).toEqual(["AC1", "AC2"]);
+    expect(parseCriteria(body).map((c) => c.id)).toContain("AC9"); // what it guards against
   });
 
   it("brings main in only when main changed a file the PR changes too", () => {

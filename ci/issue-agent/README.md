@@ -156,9 +156,10 @@ Claude review finishes on an agent:in-review PR  (or: main moved, and the PR now
 - **Any maintainer's PR can join — e.g. one a coding agent opened.** Mark it ready for review and
   add `agent:in-review` (`gh pr edit <n> --add-label agent:in-review`): from the next Claude review
   on, the loop answers it exactly as it does an issue agent's PR. With no issue behind it, the PR's
-  own title and description are the agents' request (so its author must have write access — the
-  loop refuses the PR otherwise), a `- [ ] **AC1** …` checklist in the description is checked before
-  hand-over like an issue's, and the hand-over @-mentions the PR's author. The label must be on
+  own title and description are the agents' request — so both its author and whoever added the
+  label must have write access, or the loop refuses it — and a `- [ ] **AC1** …` checklist in the
+  description is checked before hand-over like an issue's. The hand-over goes to whoever added the
+  label. The loop never takes a PR whose branch is `main`, `agent-evidence` or `release/*`. The label must be on
   before the review finishes; to start on a review that already finished, run the loop by hand
   (below). Every job checks out `main`'s harness
   code (`run.mjs`), even when started by hand from another branch — but a hand-started run uses
@@ -209,7 +210,7 @@ execute it. So the design limits **what that code can reach** and **who can stee
 | | |
 | --- | --- |
 | **Who can start it** | Anyone who can add a label — and the workflow then requires **write access**. |
-| **Whose words reach the agents** | Only the title, body and comments **by people with write access** (for the title: its author, or whoever renamed it last), frozen at the label. Anything by others, or written/edited after the label, is left out and listed in the report; an outsider's title becomes "Issue #n". An issue edited or renamed after its label is refused until re-labelled. |
+| **Whose words reach the agents** | Only the title, body and comments **by people with write access** (for the title: its author, or whoever renamed it last), frozen at the label. Anything by others, or written/edited after the label, is left out and listed in the report; an outsider's title becomes "Issue #n". An issue edited or renamed after its label is refused until re-labelled. A PR in the review loop with no issue behind it (any branch but `agent/issue-*`) is different: its title and description are the request, read afresh each cycle — its author and labeller must have write access, and what the loop itself wrote into the description (the "Updated after review" section, a checklist line's evidence) is removed first, so agent text never comes back as a maintainer's. |
 | **GitHub credentials** | **None in the job that runs agent code** (CI): the `implement` job has read-only access, its checkout keeps no credential, and no token is in its environment — the same for the review loop's `fix` job. Only the trusted jobs hold a write token (`publish`, and the review loop's `assess` and `push`), all run from `main`, and none installs or runs anything the agents wrote — they apply a patch. |
 | **What publish takes from the agents' job** | Treated as untrusted input. The issue number comes from the workflow and must match; the title is re-read from GitHub through the same filter; the base must be a commit on `main`; the files touched are read from git after the patch is applied (not from the patch's own headers), and a change touching `.github/`, or `.claude/` outside `.claude/skills/`, is never pushed. Code running in the agents' job *could* rewrite the patch or the report it hands over (the recorded sha256 catches accidents, not that) — so what reaches GitHub is a PR — a draft, or with the review loop on, an `agent:in-review` PR the Claude review reads first — that a human approves like any other before it merges. The agent never merges. |
 | **Claude credential** | The agents need one to run, so it is in *their* environment — an agent's tools can read it. Code the agents wrote (npm scripts, tests, builds) runs with **every** credential stripped. |

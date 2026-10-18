@@ -254,15 +254,41 @@ export const cyclesDone = (comments, isTrusted) =>
  * Whether the review loop may act on a PR at all: a branch in THIS repository (never a fork — its
  * code would be run, then pushed here with a write token), still open, and opted into the loop with
  * `agent:in-review` — by publish for an issue-agent branch, or by hand (or by a coding agent) for any
- * other PR, which must then be opened by someone with write access: its description becomes the
- * agents' request, as an issue's body does. Returns the reason it may not, or undefined.
+ * other PR. Such a PR's description becomes the agents' request, as an issue's body does, so both
+ * its author and whoever added the label must have write access (`isTrusted`, asked only for it);
+ * and the loop never pushes to a branch that isn't a PR's own (main, agent-evidence, release/*).
+ * Returns the reason it may not, or undefined.
  */
-export function loopRefusal({ headRefName, isCrossRepository, state, labels, authorTrusted }) {
+export function loopRefusal({ headRefName, isCrossRepository, state, labels, author, labelledBy, isTrusted = () => false }) {
   if (isCrossRepository) return "the PR comes from a fork — the loop only works on branches in this repository";
-  if (!agentBranch(headRefName) && !authorTrusted) return "the PR was opened by someone without write access — the loop only takes its request from maintainers";
+  if (!agentBranch(headRefName)) {
+    if (protectedHead(headRefName)) return `the PR's branch is ${headRefName} — the loop never pushes to it`;
+    if (!isTrusted(author)) return "the PR was opened by someone without write access — the loop only takes its request from maintainers";
+    if (labels.includes("agent:in-review") && !isTrusted(labelledBy)) return "the agent:in-review label was added by someone without write access";
+  }
   if (state !== "OPEN") return `the PR is ${String(state).toLowerCase()}`;
   if (!labels.includes("agent:in-review")) return "the PR isn't in the review loop (no agent:in-review label) — a human may be working on it";
   return undefined;
+}
+
+/** Branches that are never a PR's own to push to: the default branch, the evidence branch, releases. */
+export const protectedHead = (ref) => ["main", "master", "agent-evidence"].includes(ref) || /^release\//.test(String(ref));
+
+/** Who added `label` most recently, from a PR's LabeledEvent timeline items (oldest first). */
+export const labelledBy = (events, label = "agent:in-review") =>
+  events.filter((e) => e?.label?.name === label).at(-1)?.actor?.login;
+
+/**
+ * A PR description as a request: without what the loop itself wrote into it — the "Updated after
+ * review" section and the evidence a criteria check appended to a checklist line — since that is
+ * agent text under a trusted account, which must never come back as a maintainer's words (as
+ * isAgentComment keeps the agent's comments out). The criteria are read from this too, so an agent
+ * can't add a checklist line through its description update.
+ */
+export function requestBody(body) {
+  return String(body ?? "")
+    .replace(/<!-- issue-agent-update -->[\s\S]*?<!-- \/issue-agent-update -->\n*/g, "")
+    .replace(/^(- \[(?: |x)\] \*\*AC\d+\*\* .*?) — _[^\n]*_$/gm, "$1");
 }
 
 /**
