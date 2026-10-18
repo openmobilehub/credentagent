@@ -6,8 +6,13 @@ one credential among others.
 
 This file is domain language only: what each word means and which word to use. How things
 are built lives in [ARCHITECTURE.md](ARCHITECTURE.md) and [docs/reference/](docs/reference/).
-Terms marked _(proposed)_ are a draft choice awaiting the maintainer; see
+An entry ending in _(proposed)_ is a draft choice awaiting the maintainer: the marker
+covers the whole entry, its _Avoid_ list included. See
 [Flagged ambiguities](#flagged-ambiguities).
+
+_Avoid_ lists govern prose, docs and UI copy. Exported API names (`VerificationStore`,
+`DelegatedGate`, the `gate()` effect, a `verified` wire field) keep their names until a
+deliberate API change renames them.
 
 ## Language
 
@@ -20,7 +25,8 @@ _Avoid_: bot, assistant, client
 
 **User**:
 The human whose consent is being proven. Use **buyer** only inside a purchase flow.
-_Avoid_: person, principal, subject, cardholder, customer _(proposed)_
+_Avoid_: person, principal, subject (except in the protocol term "subject binding"),
+cardholder, customer _(proposed)_
 
 **Holder**:
 The protocol role of whoever controls a credential's key and presents it. Usually the
@@ -38,7 +44,7 @@ _Avoid_: using it for the gate minting mandates (say "the gate signs")
 
 **Merchant**:
 The seller whose action is being gated, and the payee a payment is bound to.
-_Avoid_: store (except for a running **Storefront**), vendor
+_Avoid_: store (except in **Storefront** and **Store DID document**), vendor
 
 **Host**:
 The server application a developer mounts the gate on. The **Storefront** is one host.
@@ -110,9 +116,10 @@ presentation.
 _Avoid_: verification flow, handshake
 
 **Rail**:
-A self-contained kind of ceremony the gate serves: **passkey**, **credential** (age,
-membership, custom), **dc-payment** (amount-bound wallet payment), and the opt-in
-**delegated verifier** rail.
+A self-contained kind of ceremony the gate serves. At checkout: **passkey**, **credential**
+(age, membership, custom), **dc-payment** (amount-bound wallet payment), and the opt-in
+**delegated verifier** rail. For a **Spending grant**, the wallet signing ceremonies
+(**intent-sign**, **grant-credential**).
 _Avoid_: "credential-gate" for the credential rail _(proposed)_
 
 **Presentation**:
@@ -160,9 +167,10 @@ settlement fails the order.
 ### Trust and honesty
 
 **Trust level**:
-How far the gate's own checks justify trusting a proof, carried on every manifest entry,
-proof and mandate. From weakest to strongest: **server-issued demo**, **presence-only
-demo**, **device-signed**, **issuer-verified**.
+How far the checks behind a proof justify trusting it, carried on each **Proof** and each
+**Requires manifest** entry (`trust_level`). From weakest to strongest: **presence-only
+demo**, **device-signed**, **issuer-verified**. A click-approved **Spending grant** carries
+a weaker label, **server-issued demo**, outside this type.
 
 **Disclosure**:
 The wallet revealed the explicit positive claim asked for.
@@ -176,12 +184,14 @@ The claim chains back to a genuine issuer and device. The one property the built
 do not yet have.
 
 **Server-issued demo**:
-The server takes the user's click as consent. No credential is involved.
+The server takes the user's click as consent. No credential is involved. Today a label on
+click-approved spending grants only, not a **Trust level** value _(proposed)_.
 
 **Presence-only demo**:
-Disclosure and binding are enforced; trust is not. A self-crafted credential would pass.
-Never a real safety control.
-_Avoid_: verified, secure, trusted
+On a real ceremony, disclosure and binding are enforced; trust is not. A self-crafted
+credential would pass. Never a real safety control. The **Instant demo** path is recorded
+with this level too, though it enforces neither.
+_Avoid_: verified, secure, trusted (as a claim about trust)
 
 **Device-signed**:
 The holder's signature over the exact terms is verified, but the credential behind it has
@@ -194,7 +204,7 @@ gate never asserts this itself; only a delegated verifier can bring it.
 **Delegated verifier**:
 An external service the host plugs in to check presentations against a real trust anchor.
 Trust is delegable; binding is not.
-_Avoid_: bare "delegated", checker, attestor
+_Avoid_: bare "delegated", checker, attestor _(proposed)_
 
 **Enforcement point**:
 Where a requirement is enforced: at **checkout** (the normal, consolidated flow) or inside
@@ -208,14 +218,19 @@ and that no copy may claim more.
 ### Signing and identity
 
 **Gate origin**:
-The public origin the gate serves its pages from, and the identity every ceremony binds
-to. Configured as `walletOrigin`, despite the name.
+The public origin the gate serves its pages from, configured as `walletOrigin` despite
+the name; it builds the links and page URLs the gate hands out. Each ceremony binds to
+the origin of the request it runs on, so the two must agree in a deployment.
 _Avoid_: wallet origin (in prose) _(proposed)_
 
 **Mandate**:
-A signed record of what the user authorized, shaped after AP2. A **cart mandate** carries
-a signed order on the link; a **payment mandate** records a checkout; an **open mandate**
-is the user's standing authorization that the agent closes per purchase.
+An AP2-shaped record of an order or an authorization. How it is sealed depends on its
+kind, and only some kinds show that the user authorized anything. A **cart mandate**
+carries the order on the link, sealed with the server's HMAC: the server issued it, not
+the user. A **payment mandate** records a checkout, with a dev integrity hash (passkey) or
+no seal (dc-payment). An **open mandate** is the user's standing authorization, which the
+agent closes per purchase; it carries the wallet's signature only when the grant was
+approved on the phone, not when it was click-approved.
 
 **Dev-signed mandate**:
 A mandate sealed with an integrity hash instead of a real key. Integrity, not
@@ -239,19 +254,24 @@ _Avoid_: HP / HNP in user-facing copy
 
 **Spending grant**:
 A bounded, revocable pre-approval the user gives so the agent can buy while they are away:
-which merchant, what limit, which items, until when.
+which merchant, a total budget, a per-spend cap, and optionally which items. It lapses
+after a fixed validity window; a grant does not yet take its own expiry.
 _Avoid_: permission, spending limit, allowance, delegation; reserve "intent mandate" for the
 AP2 artifact that records a grant _(proposed)_
 
 **Spend**:
-One purchase the agent makes against a spending grant.
+One order the agent places against a spending grant.
 _Avoid_: draw, redeem, charge _(proposed)_
 
 **Step-up**:
-A spend that exceeds a grant's bounds and so needs the user back in the loop.
+A spend the user must approve live: one inside a grant's limits but above its presence
+threshold, or one a grant can never cover (age-restricted goods). A spend over the limits
+is refused, not stepped up.
 
 **Revoke**:
-The user withdrawing a spending grant. Any later spend is refused.
+The user withdrawing a spending grant. Any later spend through the gate is refused. A
+grant whose signed permission the agent holds (an agent-held key) is not recalled: it stays
+spendable within its limits until its validity window ends.
 _Avoid_: kill-switch, cancel
 
 ## Relationships
@@ -266,7 +286,9 @@ _Avoid_: kill-switch, cancel
 
 ## Flagged ambiguities
 
-Open items; resolve each, then update the entry above and drop _(proposed)_.
+Open items, tracked for decision in
+[#402](https://github.com/openmobilehub/credentagent/issues/402). Resolve each, then update
+the entry above and drop _(proposed)_.
 
 - **"gate"** means seven things: the library, one check ("age gate"), the blocking effect, the host's policy resolver, the post-ceremony mandate checks ("Gate 1/2"), the human-not-present spender class, and a label on a proof. Proposed: **Gate** is the library only; one check is a **Requirement**; mandate steps are **Mandate checks**; the effect is **block**. "Age gate" stays acceptable as marketing shorthand for an age **Requirement**.
 - **"delegated"** means five things: the external-verifier rail, the AP2 delegation chain, human-not-present spending, a presence value, and an authorization value. Proposed: never use it bare. Say **Delegated verifier** or **human-not-present**.
@@ -274,7 +296,8 @@ Open items; resolve each, then update the entry above and drop _(proposed)_.
 - **Grant vocabulary** (grant / permission / spending limit / intent mandate / delegation) and **spend vocabulary** (spend / draw / redeem). Proposed: **Spending grant** and **Spend**.
 - **Mandate kinds** blur together. CLAUDE.md says "the AP2 mandate is dev-signed" generically, but mandates are now dev-signed, HMAC-sealed, or wallet-signed depending on kind. Spec 013 says the cart and intent mandates "no longer exist" in AP2, yet both still ship.
 - **Rail count and names**: docs variously say "three rails" and "four rails", and "credential" vs "credential-gate". Proposed: four rails, named **passkey / credential / dc-payment / delegated verifier**.
-- **Server-issued demo** is described both as outside the trust-level type and as one of its values. The field also appears as both `trust_level` and `trustLevel`.
+- **Server-issued demo** is described both as outside the trust-level type and as one of its values. The field also appears as both `trust_level` and `trustLevel`. Proposed: keep it outside the type, as a grant label only.
+- **Instant demo's trust level**: the tap-to-continue path records `presence-only-demo`, though it enforces no disclosure or binding. Proposed: give it its own label, or say so wherever the level is shown.
 - **"Issuer-verified is the v0.2 line"** (CLAUDE.md, ARCHITECTURE.md, execution-contexts.md) reads as stale against the 0.5.0 package, and conflicts with "reachable today through the delegated verifier".
 - **Passkey trust**: some tables call it "real WebAuthn crypto" in the trust column, but its trust level is **presence-only demo** because its mandate is dev-signed.
 - **"approve"** names three different links: a per-requirement link, the grant signing page, and the order page.
