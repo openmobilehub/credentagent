@@ -51,6 +51,13 @@ conflicting with CI unable to run at all — and it conflicted on every branch t
 it (it was the sole merge conflict in both #41 reconciles). Anything derivable from
 `git`/`gh` should be **derived, not transcribed**.
 
+## Domain language — `GLOSSARY.md`
+
+Before naming a type, writing docs or copy, or reviewing wording, read
+[`GLOSSARY.md`](GLOSSARY.md) and use its terms (it lists what to avoid). When a term is
+contested or a new one is needed, use the `domain-modeling` skill: it updates the glossary
+and records hard-to-reverse decisions as ADRs in `docs/adr/`.
+
 ## Architecture (where things live)
 
 The gate is the security surface; the storefront is a reference consumer.

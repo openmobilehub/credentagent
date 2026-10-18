@@ -82,7 +82,14 @@ defaults.
 `trust_level` stays **`presence-only-demo`** for the OpenID4VP rails until
 issuer-trust verification lands (the v0.2 line). No doc, README, comment, or UI
 copy in the diff may imply issuer-verified trust exists, and a presence-only gate
-is never presented as a real safety control.
+is never presented as a real safety control. Check trust wording against the
+**Trust and honesty** terms in [`GLOSSARY.md`](GLOSSARY.md): a word it lists under
+_Avoid_ for a trust level, used as a claim about trust (e.g. calling a presence-only
+proof "verified", "secure" or "trusted"), is request-changes. Saying a check ran
+("the age claim was checked") is not a trust claim, and neither is an existing exported
+name or wire field (`verified`); shipped UI copy that reads as a trust claim (e.g. "✓ Age
+verified" on a presence-only rail) is flagged for an issue, not blocking on an unrelated
+diff.
 
 ## 5. Conventions (expected; flag, don't block alone)
 
@@ -92,6 +99,10 @@ is never presented as a real safety control.
   `dcql`/`request`/`verify`/`page`/`routes` split (the `add-ceremony-rail` skill
   scaffolds it) rather than bolting onto an existing rail.
 - The two package READMEs stay in sync with any API surface the diff changes.
+- **Domain terms match [`GLOSSARY.md`](GLOSSARY.md).** New docs and copy use its terms;
+  flag prose that uses a word an entry lists under _Avoid_ (e.g. "kill-switch" for
+  **Revoke**, "handshake" for **Ceremony**). An entry ending in _(proposed)_ isn't settled
+  yet, so don't flag its words; and exported API names keep their names.
 - **Readable to someone who didn't write it.** The PR description leads with a plain-language
   summary a non-specialist follows from the first paragraph — clear and concrete, not clever.
   Every term is defined on first use; no bare cross-reference (`#85`, `invariant 4`, a rail
