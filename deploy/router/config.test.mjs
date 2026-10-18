@@ -1,13 +1,13 @@
 // The router's vercel.json (#370): `/` answers Markdown to an agent that asks for it (Accept: text/markdown)
-// and HTML to everyone else, with `Vary: Accept` so a CDN never serves one copy to the other.
+// and HTML to everyone else. The Markdown is this folder's index.md, which describes the whole domain, with `Vary: Accept` so a CDN never serves one copy to the other.
 // Vercel's edge can't run here, so this resolves the config the way Vercel does: the first matching
 // rewrite wins, every matching `headers` entry applies, and a `has` header value is a regex.
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 
 const config = JSON.parse(readFileSync(new URL('./vercel.json', import.meta.url), 'utf8'));
 const HTML = 'https://openmobilehub.org/credentagent/';
-const MARKDOWN = 'https://openmobilehub.org/credentagent/index.md';
+const MARKDOWN = '/index.md';
 
 // The source patterns vercel.json uses: a literal path, or a prefix with a trailing `:path*`.
 function matchSource(source, path) {
@@ -94,4 +94,23 @@ describe('router: other routes are unaffected by Accept: text/markdown', () => {
       expect(res.headers['content-type']).toBeUndefined();
     });
   }
+});
+
+describe('router: index.md, the domain\'s Markdown copy', () => {
+  const file = new URL('./index.md', import.meta.url);
+
+  it('is a file in this folder, so Vercel serves it before any rewrite', () => {
+    expect(existsSync(file)).toBe(true);
+  });
+
+  it('is typed text/markdown when fetched directly at /index.md', () => {
+    expect(resolve('/index.md').headers['content-type']).toBe('text/markdown; charset=utf-8');
+  });
+
+  it('names the domain\'s MCP endpoints and the presence-only trust level', () => {
+    const md = readFileSync(file, 'utf8');
+    expect(md).toContain('https://credentagent.ai/marketplace/mcp');
+    expect(md).toContain('https://credentagent.ai/marketplace-dev/mcp');
+    expect(md).toContain('presence-only-demo');
+  });
 });
