@@ -107,10 +107,11 @@ describe('router: index.md, the domain\'s Markdown copy', () => {
     expect(resolve('/index.md').headers['content-type']).toBe('text/markdown; charset=utf-8');
   });
 
-  it('names the domain\'s MCP endpoints and the presence-only trust level', () => {
+  it('names the domain\'s MCP endpoints, the presence-only trust level and the walletless demo path', () => {
     const md = readFileSync(file, 'utf8');
     expect(md).toContain('https://credentagent.ai/marketplace/mcp');
     expect(md).toContain('https://credentagent.ai/marketplace-dev/mcp');
     expect(md).toContain('presence-only-demo');
+    expect(md).toContain('instant demo');
   });
 });

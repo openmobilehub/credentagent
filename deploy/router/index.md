@@ -14,7 +14,7 @@ This is the Markdown copy of https://credentagent.ai/ for AI agents. Browsers ge
 | --- | --- |
 | `https://credentagent.ai/marketplace/mcp` | A demo store as a remote MCP server (Streamable HTTP), built from the published npm packages. Add it to Claude, ChatGPT or Goose as a connector. |
 | `https://credentagent.ai/marketplace-dev/mcp` | The same store built from `main`'s unreleased code. It may change or break without notice. |
-| `https://credentagent.ai/marketplace/…`, `/marketplace-dev/…` | The store's checkout and consent pages. The store's tools return these links; open them in a browser, not from an agent. |
+| `https://credentagent.ai/marketplace-dev/…` | The dev store's checkout and consent pages. Its tools return these links. The production store's links still point at its own `*.vercel.app` address. Either way, the user opens them in a browser. |
 | `https://credentagent.ai/` | The product page (HTML), or this file when the request sends `Accept: text/markdown`. |
 | `https://credentagent.ai/index.md` | This file, without content negotiation. |
 
@@ -27,8 +27,9 @@ This is the Markdown copy of https://credentagent.ai/ for AI agents. Browsers ge
    `requires` list naming the credentials it needs. Give the link to the user. The order completes
    only after the user proves those credentials in their wallet; `get-order-status` reports it.
 
-An agent cannot complete a gated checkout by itself, and should not try: the proof comes from the
-user's wallet on the user's device.
+The store's MCP tools can't complete a gated checkout on their own: the proof is a separate step on
+the checkout page, meant for the user's wallet. Hand the link to the user and don't attempt that step
+yourself. This is a demo, not a real age or payment control (see below).
 
 ## Build with it
 
@@ -53,9 +54,11 @@ npm install @openmobilehub/credentagent-gate
 ## What it does not do yet
 
 The checkout gates report `trust_level: "presence-only-demo"`. The wire cryptography is real
-(WebAuthn bound to this origin, OpenID4VP decryption with nonce binding, ISO mdoc parsing), but
-there is no issuer trust anchor yet: the gate checks that the right claim was disclosed and bound
-to this request, not who issued it. A self-made credential would pass. Don't rely on it as a real
-age or payment control. Issuer-verified trust is the next milestone.
+(WebAuthn bound to the checkout page's origin, OpenID4VP decryption with nonce binding, ISO mdoc
+parsing), but there is no issuer trust anchor yet: the gate checks that the right claim was
+disclosed and bound to this request, not who issued it. A self-made credential would pass. The demo
+store also offers an "instant demo" path that accepts typed-in claims (such as `age_over_21: true`)
+with no wallet at all. So don't rely on it as a real age or payment control. Issuer-verified trust
+is the next milestone.
 
 Apache-2.0 · part of [Open Mobile Hub](https://openmobilehub.org) (Linux Foundation).

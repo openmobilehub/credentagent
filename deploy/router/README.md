@@ -60,7 +60,7 @@ with every router deploy, so it can't 404. It is also served directly at `https:
 (the file wins over the catch-all, so the website's own `index.md` isn't reachable on this domain).
 **Keep it in sync** when a route, package or trust level changes. `config.test.mjs` (run by the root
 `npm test`) resolves `vercel.json` the way Vercel does, pins both answers as configured, and checks that
-`index.md` names both MCP endpoints and the presence-only trust level. One thing only the live site
+`index.md` names both MCP endpoints, the presence-only trust level and the walletless "instant demo" path. One thing only the live site
 shows: whether Vercel sends the `Content-Type` override. The `deploy-prod` smoke test does not check it
 yet, so after a deploy that touches the router, run these by hand:
 
