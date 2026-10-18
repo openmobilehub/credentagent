@@ -35,7 +35,8 @@ yourself. This is a demo, not a real age or payment control (see below).
 
 The store also has spending-grant tools (`create-spending-grant`, `get-grant-status`,
 `spend-from-grant`, `revoke-grant`): the user approves a bounded spending limit once at a link, and
-the agent can then buy within it without the user present. Grants are the same presence-only demo.
+the agent can then buy within it without the user present. Grants are demo-grade too: see
+`trustLevel` below.
 
 ## Build with it
 
@@ -59,7 +60,10 @@ npm install @openmobilehub/credentagent-gate
 
 ## What it does not do yet
 
-The checkout gates and spending grants report `trust_level: "presence-only-demo"`. The wire
+The checkout gates report `trust_level: "presence-only-demo"`. Spending grants report
+`trustLevel: "device-signed"` (the user's wallet signed the limits, but its key comes from a
+self-made demo credential) or `"server-issued-demo"` (a click on the page, with no credential at
+all; this sits below `presence-only-demo`). The wire
 cryptography is real (WebAuthn bound to the checkout page's origin, OpenID4VP decryption with nonce
 binding, ISO mdoc parsing), but there is no issuer trust anchor yet: the gate checks that the right
 claim was disclosed and bound to this request, not who issued it. A self-made credential would pass.
