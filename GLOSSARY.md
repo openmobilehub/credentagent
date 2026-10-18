@@ -265,8 +265,9 @@ _Avoid_: draw, redeem, charge _(proposed)_
 
 **Step-up**:
 A spend the user must approve live: one inside a grant's limits but above its presence
-threshold, or one a grant can never cover (age-restricted goods). A spend over the limits
-is refused, not stepped up.
+threshold, or an age-restricted item the grant's own age proof doesn't cover (the user can
+prove their age when approving the grant, and then the agent may buy such items later). A
+spend over the limits is refused, not stepped up.
 
 **Revoke**:
 The user withdrawing a spending grant. Any later spend through the gate is refused. A
