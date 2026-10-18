@@ -9,7 +9,7 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "
 export const md = (s) => String(s ?? "").split(/(`[^`\n]*`)/).map((part, i) => i % 2
   ? part
   : part.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/@(?=[A-Za-z0-9-])/g, "@​")).join("");
-const MARK = "<!-- issue-agent -->";
+const MARK = "<!-- issue-agent -->", REFUSAL_MARK = "<!-- issue-agent-refusal -->", ERROR_MARK = "<!-- issue-agent-error -->";
 
 const STYLE = `
 :root{--bg:#fbfbfa;--fg:#1f2328;--muted:#656d76;--card:#fff;--line:#d0d7de;--ok:#1a7f37;--bad:#cf222e;--warn:#9a6700;--code:#f6f8fa}
@@ -61,8 +61,8 @@ function mediaFigures(manifest, mediaBase) {
     ? `<figure><video controls muted playsinline src="${esc(mediaBase + e.file)}"></video><figcaption>🎬 ${esc(e.caption)}</figcaption></figure>`
     : `<figure><a href="${esc(mediaBase + e.file)}"><img src="${esc(mediaBase + e.file)}" alt="${esc(e.caption)}" loading="lazy"></a><figcaption>${esc(e.caption)}</figcaption></figure>`;
   const dialogs = manifest.filter((e) => e.kind === "events" && e.events.length);
-  return ["before", "after", "proof"].map((side) => group(side).length
-    ? `<h2>${side === "proof" ? "Test proof" : side === "before" ? "Before (main)" : "After (this change)"}</h2><div class="grid">${group(side).map(fig).join("")}</div>`
+  return ["example", "before", "after", "proof"].map((side) => group(side).length
+    ? `<h2>${{ example: "Before and after", proof: "Test proof", before: "Before (main)", after: "After (this change)" }[side]}</h2><div class="grid">${group(side).map(fig).join("")}</div>`
     : "").join("") + (dialogs.length
     ? `<h2>What the browser saw</h2><div class="card"><table>${dialogs.map((d) => `<tr><td>${esc(d.side)} · ${esc(d.session)}</td><td><pre>${esc(JSON.stringify(d.events, null, 1))}</pre></td></tr>`).join("")}</table></div>` : "");
 }
@@ -94,6 +94,23 @@ const checkedGates = (gates) => {
   return `the ${others.length ? `${others.join(", ")} and ` : ""}full test suite`;
 };
 
+// A code block that can't be closed early by the text inside it (agent-written output can hold ```).
+const fence = (text, lang = "") => { const t = String(text ?? ""); const n = Math.max(3, ...[...t.matchAll(/`+/g)].map((m) => m[0].length + 1)); return `${"`".repeat(n)}${lang}\n${t}\n${"`".repeat(n)}`; };
+
+// The PR's first section (README, "Before and after"): what a developer sees on main and with the
+// change — the example the pipeline ran, or a page's screenshots — before any prose.
+function beforeAfter(r, show) {
+  const ui = show("before", "❌ Before — main") + show("after", "✅ After — this change");
+  if (ui.trim()) return `## Before and after\n\n${ui}`;
+  const ex = r.example;
+  if (!ex) return "";
+  if (ex.notApplicable) return `## Before and after\n\n_No developer-facing change: ${md(ex.notApplicable)}_\n`;
+  if (ex.failed) return `## Before and after\n\n_The pipeline couldn't record one: ${md(ex.failed)}_\n`;
+  const pic = show("example", "");
+  const out = (label, x) => `**${label}** · exit ${Number(x.code)}\n\n${fence(x.out || "(no output)", "text")}`;
+  return `## Before and after\n\n**${md(ex.title)}**\n\n${pic ? `${pic}\n` : ""}${fence(ex.code, /^[a-z]{1,12}$/.test(ex.lang) ? ex.lang : "")}\n\n${fence(`$ ${(ex.cmd ?? []).join(" ")}`, "sh")}\n\n${out("❌ Before — main", ex.before)}\n\n${out("✅ After — this change", ex.after)}\n${ex.same ? "\n> [!WARNING]\n> Main and this change printed the same thing: the example doesn't show the difference. Check it by hand.\n" : ""}\n_The pipeline ran this itself, in a clean checkout of main and of this change._\n`;
+}
+
 // `commands`: the repo's "How to test" (config.mjs `reproduce`, `focusedTest` with <file>, and
 // `build: false` when it has no build step); this repo's own by default. `harnessRepo`: where ci/issue-agent lives, when it isn't the PR's repo.
 export function prBody(r, { mediaBase, repo, harnessRepo = repo, commands ={ reproduce: "npm ci && npm run build && npm test", focused: "npx vitest run <file>" } }) {
@@ -105,9 +122,10 @@ export function prBody(r, { mediaBase, repo, harnessRepo = repo, commands ={ rep
   // File names come from the evidence agent: only plain media names reach a src/href.
   const media = r.manifest.filter((e) => (e.kind === "image" || e.kind === "video") && /^[A-Za-z0-9._-]+\.(png|webm)$/.test(String(e.file)));
   const show = (side, title) => {
-    const items = media.filter((e) => e.side === side);
+    // The before/after picture is a still: its scroll-through video adds nothing.
+    const items = media.filter((e) => e.side === side && !(side === "example" && e.kind === "video"));
     if (!items.length) return "";
-    return `#### ${title}\n\n${items.map((e) => e.kind === "image" ? `<img src="${mediaBase}${e.file}" width="640" alt="${esc(e.caption)}">\n\n_${md(e.caption)}_` : `🎬 [${md(e.caption)}](${mediaBase}${e.file})`).join("\n\n")}\n`;
+    return `${title ? `#### ${title}\n\n` : ""}${items.map((e) => e.kind === "image" ? `<img src="${mediaBase}${e.file}" width="${side === "example" ? 860 : 640}" alt="${esc(e.caption)}">${side === "example" ? "" : `\n\n_${md(e.caption)}_`}` : `🎬 [${md(e.caption)}](${mediaBase}${e.file})`).join("\n\n")}\n`;
   };
   const g = r.last.gates.map((x) => `\`${x.name}\` ${notFullRun(x, r.patchSha256) ? `⚠️ ${notFullRun(x, r.patchSha256)}` : x.green ? "✅" : x.ok ? "⚠️ red on main too, not this change" : "❌"}${x.summary ? ` ${md(x.summary)}` : ""}`).join(" · ");
   const m = r.last.mutation;
@@ -116,11 +134,12 @@ export function prBody(r, { mediaBase, repo, harnessRepo = repo, commands ={ rep
   const report = `https://htmlpreview.github.io/?${mediaBase.replace("https://raw.githubusercontent.com/", "https://github.com/").replace(/\/agent-evidence\//, "/blob/agent-evidence/")}index.html`;
   const files = (r.files ?? []).map((f) => `\`${String(f).replace(/[`\n]/g, "'")}\``).join(", ");
   return `${MARK}
-${r.done ? "" : `> [!WARNING]\n> **Not finished${r.stopped ? `: ${md(r.stopped)}` : ""}.** The open findings are listed below — a human has to take this over.\n\n`}## In plain terms
+${r.done ? "" : `> [!WARNING]\n> **Not finished${r.stopped ? `: ${md(r.stopped)}` : ""}.** The open findings are listed below — a human has to take this over.\n\n`}${beforeAfter(r, show)}
+## In plain terms
 
 ${md(r.spec.summary)}
 
-Fixes #${r.issue.number} — ${md(r.issue.title)}.
+Fixes #${r.issue.number} — ${md(r.issue.title)}.${r.spec.from_brief ? ` Built from **brief v${r.spec.from_brief}**, which you approved on the issue: its acceptance criteria are the checklist below, word for word.` : ""}
 
 ## What you're approving
 
@@ -138,8 +157,6 @@ gh pr checkout <this PR> && ${commands.reproduce}
 \`\`\`
 ${m?.applicable && m.tests?.length ? `\nThe changed tests: \`${commands.focused.replace("<file>", m.tests.join(" "))}\`. To see them catch the problem, undo the source change (\`git checkout origin/main -- ${(m.reverted ?? []).join(" ")}\`), ${commands.build === false ? "" : "rebuild, "}and run them again: they fail.\n` : ""}
 ${r.evidence ? `\n**What the recordings show:** ${md(r.evidence.demonstrates)}${r.evidence.limitations ? `\n\n_What they don't show:_ ${md(r.evidence.limitations)}` : ""}\n` : ""}
-${show("before", "Before (main)")}
-${show("after", "After (this change)")}
 ${show("proof", "Test proof")}
 📄 [Full report with playable videos](${report})
 
@@ -150,7 +167,7 @@ ${show("proof", "Test proof")}
 ### Acceptance criteria (checked by the spec reviewer)
 
 ${acs}
-
+${(r.spec.after_merge ?? []).length ? `\n### For you to check after it merges\n\n${r.spec.after_merge.map((c) => `- [ ] ${md(c.id)}: ${md(c.text)}`).join("\n")}\n\n_Not part of the agents' checklist (it can't be checked before the merge)._\n` : ""}
 ${blocking.length ? `### Open blocking findings\n\n${blocking.join("\n")}\n\n` : ""}${suggestions.length ? `<details><summary>Reviewer suggestions (non-blocking)</summary>\n\n${suggestions.join("\n")}\n</details>\n\n` : ""}${(r.last.impl.open_questions ?? []).length ? `### Open questions\n\n${r.last.impl.open_questions.map((q) => `- ${md(q)}`).join("\n")}\n\n` : ""}<sub>Opened by the issue agent (\`ci/issue-agent\` in ${harnessRepo}) · run \`${r.id}\` · ${r.rounds.length} round(s) · ${r.model} · ~$${r.costUsd.toFixed(2)}. Draft until a human has read it.</sub>
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
@@ -173,10 +190,16 @@ export function issueComment({ kind, reason, prUrl, report, where }) {
   const retry = "Remove and re-add the `agent` label to run it again.";
   switch (kind) {
     case "skipped": return `${MARK}\n🤖 **Issue agent: not starting this one** — ${md(reason)}.`;
+    // `agent:approved` refused, and a failed run: their own markers, because neither means a run read
+    // the comments (brief.mjs, briefState).
+    case "refused": return `${REFUSAL_MARK}\n🤖 **Issue agent: not starting this one** — ${md(reason)}.`;
     case "blocked": return `${MARK}\n🤖 **Issue agent: not starting this one.** After reading the code, the spec agent found it isn't actionable yet:\n\n> ${md(reason)}\n\n${retry}`;
     // `reason`: a failure the pipeline recognised (checks.mjs, publishRefusalHint) — it says what to do.
-    case "error": return `${MARK}\n🤖 **Issue agent: the run failed before it could open a PR.**${reason ? ` ${md(reason)}.` : ""}${where ? ` Logs: ${where}` : ""}\n\n${retry}`;
+    case "error": return `${ERROR_MARK}\n🤖 **Issue agent: the run failed before it could open a PR.**${reason ? ` ${md(reason)}.` : ""}${where ? ` Logs: ${where}` : ""}\n\n${retry}`;
     case "needs-human-nopr": return `${MARK}\n🤖 **Issue agent: no PR** — ${md(reason ?? "the run stopped early")}.${where ? ` Logs and transcripts: ${where}` : ""}\n\n${retry}`;
+    // A brief that turned out to be about a security hole in code people use today (card.mjs, isPrivate):
+    // nothing about it is said here — SECURITY.md says it is reported privately.
+    case "security-stop": return `${MARK}\n🤖 **Issue agent: stopped.** This looks like a security problem in code people use today, so the agents posted nothing about it, and the run kept only its outcome. A maintainer should move it to a private security advisory (the repository's Security tab) and fix it there — see SECURITY.md.`;
     case "pr-in-review": return `${MARK}\n🤖 **Issue agent:** a PR is up and the agent is now working through the Claude review on it: ${prUrl}\n\nIt will ask for a human review once every review is resolved (or say why it stopped).`;
     default: {
       const ok = kind === "pr";

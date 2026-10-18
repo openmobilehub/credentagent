@@ -60,6 +60,14 @@ on:
         description: "Skip the preflight (labels / existing PRs)"
         type: boolean
         default: false
+      trigger:
+        description: 'What started it: "label:agent", "label:agent:approved", "comment" or "dispatch" (only matters with briefs on — README, "The brief")'
+        type: string
+        default: "label:agent"
+      wait_seconds:
+        description: "Wait this long before reading the issue (a comment run: quick follow-up comments are folded in)"
+        type: number
+        default: 0
       claude_auth:
         description: '"api" for ANTHROPIC_API_KEY; empty for CLAUDE_CODE_OAUTH_TOKEN'
         type: string
@@ -87,6 +95,10 @@ on:
         required: false
       AGENT_GH_TOKEN:
         required: false
+      ISSUE_AGENT_DISCUSS_ROUTINE:
+        required: false
+      ISSUE_AGENT_DISCUSS_TOKEN:
+        required: false
 
 permissions: {}
 
@@ -105,12 +117,21 @@ jobs:
       pull-requests: read
     outputs:
       skip: ${{ steps.snap.outputs.skip }}
+      phase: ${{ steps.snap.outputs.phase }}
+      asof: ${{ steps.snap.outputs.asof }}
     steps:
+      - name: Wait for follow-up comments
+        if: inputs.wait_seconds > 0
+        run: sleep ${{ inputs.wait_seconds }}
       - name: Only for maintainers
         env:
           GH_TOKEN: ${{ github.token }}
           SENDER: ${{ inputs.sender }}
+          TRIGGER: ${{ inputs.trigger }}
         run: |
+          # The hourly check (issue-agent.yml) starts comment runs as the workflow's own bot. That's safe:
+          # a comment run only ever answers comments written by people with write access (run.mjs).
+          if [ "$TRIGGER" = comment ] && [ "$SENDER" = "github-actions[bot]" ]; then echo "::notice::started by the hourly check — answering a maintainer's comment."; exit 0; fi
           perm=$(gh api "repos/${{ github.repository }}/collaborators/$SENDER/permission" --jq .permission)
           case "$perm" in
             admin|maintain|write) echo "::notice::$SENDER has $perm access — starting." ;;
@@ -136,6 +157,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           ISSUE_AGENT_SNAPSHOT_AT: ${{ inputs.snapshot_at }}
           ISSUE_AGENT_LABELLER: ${{ inputs.sender }}
+          ISSUE_AGENT_TRIGGER: ${{ inputs.trigger }}
           FORCE: ${{ inputs.force && '--force' || '' }}
         run: node harness/ci/issue-agent/run.mjs snapshot "$ISSUE" --target target --out issue.json --comment ${FORCE:+"$FORCE"}
       - uses: actions/upload-artifact@v4
@@ -169,9 +191,12 @@ jobs:
           node-version: "22"
       - name: Install the harness and a browser
         working-directory: harness/ci/issue-agent
+        env:
+          PHASE: ${{ needs.snapshot.outputs.phase }}
         run: |
           npm ci --no-audit --no-fund
-          npx playwright install --with-deps chromium
+          # A brief reproduces and writes; only a build records screenshots.
+          if [ "$PHASE" != "brief" ]; then npx playwright install --with-deps chromium; fi
       - uses: actions/download-artifact@v4
         with:
           name: issue-agent-snapshot
@@ -180,6 +205,7 @@ jobs:
           CLAUDE_AUTH: ${{ inputs.claude_auth }}
           API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          PHASE: ${{ needs.snapshot.outputs.phase }}
         run: |
           # Export only the chosen Claude credential. No GitHub token exists in this job.
           if [ "$CLAUDE_AUTH" = "api" ]; then
@@ -190,9 +216,12 @@ jobs:
             export CLAUDE_CODE_OAUTH_TOKEN="$OAUTH_TOKEN"
           fi
           unset API_KEY OAUTH_TOKEN
-          node harness/ci/issue-agent/run.mjs implement issue.json --target target --dir "$RUNNER_TEMP/issue-agent/run"
+          # "brief" or "implement" (an empty phase is a run from before briefs: implement).
+          node harness/ci/issue-agent/run.mjs "$([ "$PHASE" = brief ] && echo brief || echo implement)" issue.json --target target --dir "$RUNNER_TEMP/issue-agent/run"
       - name: Hand the run to publish (and keep it)
-        if: always()
+        # A brief that failed part-way may hold notes on a security hole it never got to judge: it
+        # uploads nothing (publish then says the run failed).
+        if: always() && (needs.snapshot.outputs.phase != 'brief' || success())
         uses: actions/upload-artifact@v4
         with:
           name: issue-agent-run
@@ -244,6 +273,12 @@ jobs:
           ISSUE_AGENT_REVIEW_LOOP: ${{ inputs.review_loop && secrets.AGENT_GH_TOKEN != '' && 'on' || '' }}
           ISSUE_AGENT_LABELLER: ${{ inputs.sender }}
           ISSUE_AGENT_MAX_REVIEW_CYCLES: ${{ inputs.max_review_cycles }} # the banner states the cap
+          # Optional: the brief's "talk it through live" link (README, "Talking it through").
+          ISSUE_AGENT_DISCUSS_ROUTINE: ${{ secrets.ISSUE_AGENT_DISCUSS_ROUTINE }}
+          ISSUE_AGENT_DISCUSS_TOKEN: ${{ secrets.ISSUE_AGENT_DISCUSS_TOKEN }}
+          PHASE: ${{ needs.snapshot.outputs.phase }}
+          ISSUE_AGENT_TRIGGER: ${{ inputs.trigger }}
+          ISSUE_AGENT_BRIEF_ASOF: ${{ needs.snapshot.outputs.asof }} # when the run read the issue
         run: |
           mkdir -p "$RUNNER_TEMP/issue-agent/run"
-          node harness/ci/issue-agent/run.mjs publish "$RUNNER_TEMP/issue-agent/run" --target target --issue "$ISSUE"
+          node harness/ci/issue-agent/run.mjs "$([ "$PHASE" = brief ] && echo publish-brief || echo publish)" "$RUNNER_TEMP/issue-agent/run" --target target --issue "$ISSUE"

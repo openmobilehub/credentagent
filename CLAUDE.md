@@ -180,8 +180,10 @@ Quick gate for any new/changed public API (full list in the rubric):
   ceremony rail mirrors the existing rail layout; it does not bolt onto an existing one.
 - Keep the two package READMEs honest and in sync with the API surface — they are the
   published docs.
-- **Write PR/issue descriptions for a human who did NOT write the code.** Lead with plain
-  language — clear and concrete, not clever. Define each term on first use, spell out
+- **Write PR/issue descriptions for a human who did NOT write the code.** A PR opens with
+  **Before and after** (a few lines of real code and what `main` and the change each print — run
+  them, don't invent the output — or a screenshot of each), then plain language — clear and
+  concrete, not clever. Define each term on first use, spell out
   cross-references (never a bare `#85` or `invariant 4`), prefer everyday use cases, use at
   most one universal analogy and only for an abstract idea, and keep the technical detail
   below a divider. Follow `.github/pull_request_template.md`; the review enforces it (REVIEW.md §5).
@@ -280,8 +282,14 @@ anticipate it when authoring:
 Labelling an issue **`agent`** (write access needed) runs `.github/workflows/issue-agent.yml`:
 agents spec, implement and review it, and it comes back as a **draft PR** with acceptance criteria,
 the pipeline's own gate runs, a mutation check (the changed tests fail with the fix reverted),
-three review verdicts, and before/after screenshots + video. It skips an issue that is closed,
-labelled `needs-decision`, `epic`, `wontfix`, `duplicate` or `question`, assigned to someone other
+three review verdicts, and before/after screenshots + video. **Here, it briefs before it builds**
+(`.github/issue-agent.json`, `"brief": "pause"`): the label gets a **brief** on the issue first — the
+problem reproduced on `main`, how bad it is, the fix (or options), what you're approving, how you'll
+know it's fixed, in plain words, with the acceptance criteria below. Reply to it in a comment and the
+agents answer or post a new version; add **`agent:approved`** and they build exactly that version. A
+security hole in a release or the hosted demo is never briefed in public (SECURITY.md). See
+[`ci/issue-agent/README.md`](ci/issue-agent/README.md), "The brief". It skips an issue that is closed,
+labelled `needs-decision` (unless briefs are on: approving the brief is the decision), `epic`, `wontfix`, `duplicate` or `question`, assigned to someone other
 than whoever labelled it, or already has an open PR,
 and says why in a comment on the issue. **Only words by people with write access reach the agents**
 (the title and body if their author has it, and such people's comments, frozen at the label) — so to give
@@ -312,7 +320,7 @@ How it works and how to run it locally: [`ci/issue-agent/README.md`](ci/issue-ag
 Other repos run the same pipeline through `.github/workflows/issue-agent-run.yml` and their own
 `.github/issue-agent.json` (README, "Using it in another repo") — so a change to `ci/issue-agent/` or
 that workflow reaches them too (today: credentagent-website). With no config file, the defaults are this
-repo's own setup.
+repo's own setup without the brief (`"brief": "off"`), and so without the PR's pipeline-run example.
 
 Apache-2.0 · part of [Open Mobile Hub](https://openmobilehub.org) (Linux Foundation).
 

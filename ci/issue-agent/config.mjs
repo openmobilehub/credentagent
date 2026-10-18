@@ -48,12 +48,16 @@ export const DEFAULT_CONFIG = Object.freeze({
   lenses: undefined,
   reviewRules: undefined,
   serveHint: undefined,
+  // "pause": the agents first post a brief (reproduction, how bad, the fix, the criteria) and build only
+  // after a person approves it (README.md, "The brief"). "off": the label starts the build, as before.
+  brief: "off",
 });
 
 const KINDS = {
   install: "cmd?", build: "cmd?", gates: "gates", fastTest: "fast", testRunner: "cmd", testFile: "re", source: "re",
   sourceExclude: "re?", testSummary: "re?", checkTools: "strings", focusedTest: "string", reproduce: "string",
   docs: "strings", audience: "string", implementNotes: "strings?", lenses: "lenses?", reviewRules: "string?", serveHint: "string?",
+  brief: "brief",
 };
 
 const isCmd = (v) => Array.isArray(v) && v.length > 0 && v.every((s) => typeof s === "string" && s.length > 0);
@@ -76,6 +80,7 @@ export function validateConfig(raw) {
       case "strings": if (!isStrings(value)) bad("an array of non-empty strings"); break;
       case "re": try { new RegExp(value); } catch (e) { bad(`a valid regular expression (${e.message})`); } if (typeof value !== "string") bad("a string"); break;
       case "fast": if (value !== null && value !== "vitest-workspaces") bad('"vitest-workspaces" or null'); break;
+      case "brief": if (value !== "off" && value !== "pause") bad('"off" or "pause"'); break;
       case "lenses":
         if (!value || typeof value !== "object" || Object.entries(value).some(([k, v]) => !["spec", "security", "dx"].includes(k) || typeof v !== "string" || !v)) bad('an object whose keys are "spec", "security" or "dx" and whose values are non-empty strings');
         break;
