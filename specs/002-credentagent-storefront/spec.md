@@ -162,7 +162,9 @@ in-memory transport.
   - Widget-rendering tool results MUST carry **cart-bearing `structuredContent`** — the `checkout` result
     must include `products`/`cart`, not only `{ orderId, checkoutUrl, requires }`, so a fresh ChatGPT widget
     instance does not render an **empty cart**.
-  - The widget CSP MUST allow the `data:` image placeholder; the ChatGPT bridge MUST persist/restore cart
+  - The widget MUST be able to render the `data:` image placeholder (since issue #372: the MCP
+    Apps `_meta.ui.csp` must NOT list the bare `data:` scheme — its default view CSP allows `data:`
+    images — while ChatGPT's `openai/widgetCSP` still declares `data:`); the ChatGPT bridge MUST persist/restore cart
     via `setWidgetState` (cross-instance) and read globals via `openai:set_globals`.
   - SUSPECTED, verify live in ChatGPT: `openExternal` method name, `detectHost` injection timing,
     `connect_domains` vs the order-status poll origin, the `set_globals` event-name dependency.

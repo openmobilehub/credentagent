@@ -135,6 +135,37 @@ describe("CT5 — the widget ui:// resource is registered", () => {
   });
 });
 
+describe("#372 — both widget registrations declare a specific-origin-only CSP", () => {
+  // Bypass guard: re-adding `data:` to either `_meta.ui.csp`, or dropping the skybridge
+  // copy's `_meta.ui.csp`, fails this test. The MCP Apps default view CSP allows
+  // `img-src data:`; ChatGPT's default isn't documented to, so its own `openai/widgetCSP`
+  // keeps `data:` — dropping it (blank pictures in ChatGPT) fails this test too.
+  const BARE = /^(\*|[a-z][a-z0-9+.-]*:)$/i;
+  const IMAGES = ["https://picsum.photos", "https://fastly.picsum.photos"];
+
+  it("the MCP Apps and skybridge copies both carry _meta.ui.csp, with no bare scheme or wildcard", async () => {
+    const c = await connect(createStorefront({ baseUrl: "https://shop.example/store" }));
+    const uris = (await c.listResources()).resources.map((r) => r.uri).filter((u) => u.startsWith("ui://"));
+    expect(uris.some((u) => u.endsWith(".skybridge.html"))).toBe(true);
+    expect(uris.some((u) => !u.endsWith(".skybridge.html"))).toBe(true);
+    for (const uri of uris) {
+      const meta = (await c.readResource({ uri })).contents[0]._meta as any;
+      const csp = meta?.ui?.csp;
+      expect(csp, `${uri} _meta.ui.csp`).toBeTruthy();
+      expect(csp.resourceDomains, uri).toEqual(IMAGES);
+      expect(csp.connectDomains, uri).toEqual(["https://shop.example"]);
+      for (const e of [...csp.resourceDomains, ...csp.connectDomains]) expect(e, `${uri} CSP entry`).not.toMatch(BARE);
+      if (uri.endsWith(".skybridge.html")) {
+        // ChatGPT's own key: the same origins, plus `data:` so the inline SVG images render there.
+        const openai = meta["openai/widgetCSP"];
+        expect(openai, `${uri} openai/widgetCSP`).toBeTruthy();
+        expect(openai.resource_domains).toEqual([...IMAGES, "data:"]);
+        expect(openai.connect_domains).toEqual(["https://shop.example"]);
+      }
+    }
+  });
+});
+
 describe("#55 — a missing widget bundle fails loudly (never falls back to 'dev')", () => {
   // A missing bundle is always a packaging/deploy defect. The retired "dev" fallback
   // stamped ui://product-picker/mcp-app-dev.html, which poisoned connected clients'

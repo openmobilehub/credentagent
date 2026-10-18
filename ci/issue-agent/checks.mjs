@@ -14,8 +14,18 @@ export function titleAuthor(author, renames) {
   return renames.length ? renames.at(-1)?.actor?.login ?? undefined : author;
 }
 
-/** Paths the agent may never publish a change to. */
-export const forbiddenPaths = (paths) => [...new Set(paths.filter((p) => p === ".github" || p.startsWith(".github/") || p === ".git" || p.startsWith(".git/")))];
+/**
+ * Paths the agent may never publish a change to: `.github/`, `.git/`, and everything under `.claude/`
+ * but its skills. Settings, hooks, agents and commands decide what the agents themselves may do. A skill
+ * can too (frontmatter `allowed-tools` / `hooks`, bundled scripts): it is published, but a human must
+ * review it as carefully as settings. Matched case-insensitively — on a case-insensitive disk (macOS,
+ * Windows) `.Claude/Settings.json` checks out into the real `.claude/settings.json`.
+ */
+const under = (p, dir) => p === dir || p.startsWith(`${dir}/`);
+export const forbiddenPaths = (paths) => [...new Set(paths.filter((p) => {
+  const l = p.toLowerCase();
+  return under(l, ".github") || under(l, ".git") || (under(l, ".claude") && !l.startsWith(".claude/skills/"));
+}))];
 
 /**
  * The files a staged change actually touches, as git sees them after `git apply --index` — not as

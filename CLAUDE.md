@@ -156,7 +156,8 @@ Quick gate for any new/changed public API (full list in the rubric):
 - **Verify with the ROOT `npm test`, not a per-workspace run.** `storefront-gate.test.ts`
   lives at the repo root — it checks that the two published packages compose with zero
   glue, so it belongs to neither workspace and neither workspace's vitest picks it up. The
-  root run therefore includes exactly one more file than the per-package runs: that one. A
+  root run therefore includes files the per-package runs don't: that one, and repo-level
+  checks such as `scripts/check-changelog.test.ts` (the release's changelog guard). A
   per-workspace run is a legitimate fast inner loop; it is **not** a verification. Claiming
   green off one is how issue #184 happened — a contributor ran every test CLAUDE.md told
   them to run, saw it all pass, and CI failed on the cross-package file they never ran.
@@ -278,7 +279,10 @@ than whoever labelled it, or already has an open PR,
 and says why in a comment on the issue. **Only words by people with write access reach the agents**
 (the title and body if their author has it, and such people's comments, frozen at the label) — so to give
 it a request from an outside contributor, restate it in a comment. The agents run in a job with no
-GitHub token; a separate job publishes their reviewed change. It never merges; its PRs go through
+GitHub token; a separate job publishes their reviewed change. That change may edit `.claude/skills/`
+(skills are mostly guidance, like `docs/`), but never `.github/` or any other `.claude/` path — settings and
+hooks control the agents themselves, so a patch touching them is refused. A skill's frontmatter
+(`allowed-tools`, `hooks`) and bundled scripts can grant tools too: review a skill edit as carefully as settings. It never merges; its PRs go through
 the same human review as any other. Media lives on the `agent-evidence` branch — never merge it.
 With an `AGENT_GH_TOKEN` secret, the agent also works through the Claude review on its own PR
 (`.github/workflows/issue-agent-review.yml`): it fixes or answers every thread, pushes, resolves the

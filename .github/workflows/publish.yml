@@ -26,6 +26,13 @@ jobs:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
           cache: "npm"
+      # Before anything installs or builds: CHANGELOG.md has an entry for this version, and the release
+      # tag equals the packages' version (scripts/check-changelog.mjs, no dependencies). The tag goes
+      # through env, never straight into the shell line.
+      - name: CHANGELOG has an entry for this release
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: node scripts/check-changelog.mjs --tag "$TAG"
       - run: npm ci
       - run: npm run build
       - run: npm test

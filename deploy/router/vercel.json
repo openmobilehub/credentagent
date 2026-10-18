@@ -12,7 +12,8 @@
     },
     { "source": "/", "destination": "https://openmobilehub.org/credentagent/" },
     { "source": "/marketplace-dev/:path*", "destination": "https://credentagent-demo-dev.vercel.app/:path*" },
-    { "source": "/marketplace/:path*", "destination": "https://credentagent-demo.vercel.app/:path*" }
+    { "source": "/marketplace/:path*", "destination": "https://credentagent-demo.vercel.app/:path*" },
+    { "source": "/:path*", "destination": "https://openmobilehub.org/credentagent/:path*" }
   ],
   "headers": [
     { "source": "/", "headers": [{ "key": "Vary", "value": "Accept, Accept-Encoding" }] },

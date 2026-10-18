@@ -10,6 +10,30 @@ itself — `vercel.json` forwards each path to the demo that serves it:
 | `https://credentagent.ai/marketplace-dev/mcp` | `credentagent-demo-dev` — `main`'s unpublished packages |
 | `https://credentagent.ai/marketplace-dev/checkout?…` and the other store pages | `credentagent-demo-dev` — its checkout and consent pages (see below) |
 | `https://credentagent.ai/` | the product page from https://openmobilehub.org/credentagent, served under credentagent.ai (the address bar stays on credentagent.ai) |
+| `https://credentagent.ai/<anything else>` (`/robots.txt`, `/llms.txt`, `/sitemap.xml`, `/about`, …) | the same path under https://openmobilehub.org/credentagent/ — the last rewrite, a catch-all |
+
+**The catch-all (issue #369, "serve every website path"):** every path that no other rule claims,
+and that isn't a file in this folder, passes through to Pages unchanged, so whatever the website
+publishes appears at credentagent.ai. (This project's own files — `README.md`, `lib/ask-core.mjs`, the
+`*.test.mjs` files — are served first, because `outputDirectory` is `.`; they're public in this repo
+anyway.) Pages' status code and content type come through as they are: a missing page is Pages' own
+404 (not Vercel's 79-byte `text/plain` one), `llms.txt` and `robots.txt` stay `text/plain`,
+`sitemap.xml` stays `application/xml`. So do Pages' redirects: if the website publishes a page as a
+folder (`about/index.html`), Pages answers `/about` with a 301 to
+`https://openmobilehub.org/credentagent/about/`, and the visitor leaves credentagent.ai — publish
+`about.html` instead. Linking to `/about/` with the slash probably doesn't help: `/:path*` likely
+captures `about` without the trailing slash, so Pages gets `/credentagent/about` and redirects the
+same way (the hand check below for `/about/` settles it). Don't set `"trailingSlash": true` to fix
+it — that would redirect `/marketplace/mcp` and break the store's POSTs. The catch-all must stay the **last** rewrite, after
+`/`, `/marketplace-dev/:path*` and `/marketplace/:path*` — Vercel applies the first matching rewrite.
+It doesn't capture `/api/ask`: Vercel resolves the filesystem and functions before any rewrite.
+`vercel-config.test.mjs` (root `npm test`) pins the rewrite order (every other rule before the
+catch-all). It can't pin Vercel's functions-before-rewrites order, and nothing checks that
+automatically after a deploy yet: the `deploy-prod` check below covers only the marketplace routes.
+Adding them is a workflow change (`.github/workflows/deploy-prod.yml`), left to a maintainer
+because the issue agent that made this change may not edit workflows: `/` and `/robots.txt` → 200,
+`/no-such-page` → a 404 that isn't `text/plain`, `POST /api/ask` → JSON. Leave `/llms.txt` out until
+the website publishes it, or the deploy goes red first.
 
 **Why a separate project, not a domain on `credentagent-demo`:** a demo mints its checkout and
 wallet links from `PUBLIC_URL`, falling back to `VERCEL_PROJECT_PRODUCTION_URL`, which Vercel
@@ -40,7 +64,7 @@ curl -sSL -i -H 'Accept: text/markdown' https://credentagent.ai/   # 200, text/m
 curl -sSL -i -H 'Accept: text/html'     https://credentagent.ai/   # 200, text/html
 ```
 
-To add a route, add a `rewrites` entry mapping `/<name>/:path*` to the target origin.
+To add a route, add a `rewrites` entry mapping `/<name>/:path*` to the target origin, above the catch-all.
 
 **DNS** (GoDaddy): `A @ 76.76.21.21` and `CNAME www cname.vercel-dns.com.`
 
@@ -49,6 +73,22 @@ To add a route, add a `rewrites` entry mapping `/<name>/:path*` to the target or
 Actions → deploy-prod → Run workflow → `router`), from the repository root
 with the project's Root Directory `deploy/router`. It then checks that `/marketplace/mcp` and
 `/marketplace-dev/mcp` answer through credentagent.ai.
+
+After a router deploy, check the pass-through by hand:
+
+```sh
+curl -sI https://credentagent.ai/robots.txt     # 200, content-type: text/plain
+curl -sI https://credentagent.ai/llms.txt       # 200, content-type: text/plain (once the website publishes it)
+curl -sI https://credentagent.ai/sitemap.xml    # 200, content-type: application/xml
+curl -sI https://credentagent.ai/no-such-page   # 404 from Pages, not Vercel's 79-byte text/plain 404
+curl -sI https://credentagent.ai/about          # 200; a 301 to openmobilehub.org means a folder page left the domain (see above)
+curl -sI https://credentagent.ai/about/         # a 301 to openmobilehub.org means the slash is dropped on the way to Pages
+curl -s -X POST https://credentagent.ai/api/ask -H 'Origin: https://credentagent.ai' \
+  -H 'Content-Type: application/json' -d '{"question":"hi","context":{}}'   # JSON answer from the function
+curl -s -X POST https://credentagent.ai/marketplace/mcp -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'   # the store's tools
+```
 
 ## `POST /api/ask` — the website demo's "Ask about your order" agent
 
