@@ -48,6 +48,22 @@ end — the router strips the prefix on the way in. The wallet binds to the page
 credentagent.ai. The prod demo keeps its `*.vercel.app` links until a release carries this (0.5.0's
 pages use root paths); then set `PUBLIC_URL=https://credentagent.ai/marketplace` in `deploy-prod.yml`.
 
+**Markdown for agents on `/` (#370):** a request for `/` whose `Accept` header contains
+`text/markdown` is rewritten to `https://openmobilehub.org/credentagent/index.md` and answered with
+`Content-Type: text/markdown; charset=utf-8`; every other request (browsers, `Accept: text/html`, no
+`Accept`) still gets the HTML page. `/` always carries `Vary: Accept, Accept-Encoding`, which tells a
+cache to keep the two copies apart. The Markdown file is published by the website
+(openmobilehub/credentagent-website#33); until it is live, the Markdown request gets that site's error.
+`config.test.mjs` (run by the root `npm test`) resolves `vercel.json` the way Vercel does and pins both
+answers as configured. Two things only the live site shows: whether Vercel applies the `Content-Type`
+override on this external rewrite, and whether the website serves the file. The `deploy-prod` smoke
+test does not check them yet, so after a deploy that touches the router, run both by hand:
+
+```sh
+curl -sSL -i -H 'Accept: text/markdown' https://credentagent.ai/   # 200, text/markdown, Vary: Accept, Accept-Encoding, Markdown body
+curl -sSL -i -H 'Accept: text/html'     https://credentagent.ai/   # 200, text/html
+```
+
 To add a route, add a `rewrites` entry mapping `/<name>/:path*` to the target origin, above the catch-all.
 
 **DNS** (GoDaddy): `A @ 76.76.21.21` and `CNAME www cname.vercel-dns.com.`
