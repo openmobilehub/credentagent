@@ -180,8 +180,10 @@ Quick gate for any new/changed public API (full list in the rubric):
   ceremony rail mirrors the existing rail layout; it does not bolt onto an existing one.
 - Keep the two package READMEs honest and in sync with the API surface — they are the
   published docs.
-- **Write PR/issue descriptions for a human who did NOT write the code.** Lead with plain
-  language — clear and concrete, not clever. Define each term on first use, spell out
+- **Write PR/issue descriptions for a human who did NOT write the code.** A PR opens with
+  **Before and after** (a few lines of real code and what `main` and the change each print — run
+  them, don't invent the output — or a screenshot of each), then plain language — clear and
+  concrete, not clever. Define each term on first use, spell out
   cross-references (never a bare `#85` or `invariant 4`), prefer everyday use cases, use at
   most one universal analogy and only for an abstract idea, and keep the technical detail
   below a divider. Follow `.github/pull_request_template.md`; the review enforces it (REVIEW.md §5).
@@ -318,7 +320,7 @@ How it works and how to run it locally: [`ci/issue-agent/README.md`](ci/issue-ag
 Other repos run the same pipeline through `.github/workflows/issue-agent-run.yml` and their own
 `.github/issue-agent.json` (README, "Using it in another repo") — so a change to `ci/issue-agent/` or
 that workflow reaches them too (today: credentagent-website). With no config file, the defaults are this
-repo's own setup.
+repo's own setup without the brief (`"brief": "off"`), and so without the PR's pipeline-run example.
 
 Apache-2.0 · part of [Open Mobile Hub](https://openmobilehub.org) (Linux Foundation).
 

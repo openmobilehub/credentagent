@@ -9,7 +9,7 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "
 export const md = (s) => String(s ?? "").split(/(`[^`\n]*`)/).map((part, i) => i % 2
   ? part
   : part.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/@(?=[A-Za-z0-9-])/g, "@​")).join("");
-const MARK = "<!-- issue-agent -->";
+const MARK = "<!-- issue-agent -->", REFUSAL_MARK = "<!-- issue-agent-refusal -->", ERROR_MARK = "<!-- issue-agent-error -->";
 
 const STYLE = `
 :root{--bg:#fbfbfa;--fg:#1f2328;--muted:#656d76;--card:#fff;--line:#d0d7de;--ok:#1a7f37;--bad:#cf222e;--warn:#9a6700;--code:#f6f8fa}
@@ -190,9 +190,12 @@ export function issueComment({ kind, reason, prUrl, report, where }) {
   const retry = "Remove and re-add the `agent` label to run it again.";
   switch (kind) {
     case "skipped": return `${MARK}\n🤖 **Issue agent: not starting this one** — ${md(reason)}.`;
+    // `agent:approved` refused, and a failed run: their own markers, because neither means a run read
+    // the comments (brief.mjs, briefState).
+    case "refused": return `${REFUSAL_MARK}\n🤖 **Issue agent: not starting this one** — ${md(reason)}.`;
     case "blocked": return `${MARK}\n🤖 **Issue agent: not starting this one.** After reading the code, the spec agent found it isn't actionable yet:\n\n> ${md(reason)}\n\n${retry}`;
     // `reason`: a failure the pipeline recognised (checks.mjs, publishRefusalHint) — it says what to do.
-    case "error": return `${MARK}\n🤖 **Issue agent: the run failed before it could open a PR.**${reason ? ` ${md(reason)}.` : ""}${where ? ` Logs: ${where}` : ""}\n\n${retry}`;
+    case "error": return `${ERROR_MARK}\n🤖 **Issue agent: the run failed before it could open a PR.**${reason ? ` ${md(reason)}.` : ""}${where ? ` Logs: ${where}` : ""}\n\n${retry}`;
     case "needs-human-nopr": return `${MARK}\n🤖 **Issue agent: no PR** — ${md(reason ?? "the run stopped early")}.${where ? ` Logs and transcripts: ${where}` : ""}\n\n${retry}`;
     // A brief that turned out to be about a security hole in code people use today (card.mjs, isPrivate):
     // nothing about it is said here — SECURITY.md says it is reported privately.

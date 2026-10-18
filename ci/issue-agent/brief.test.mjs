@@ -6,6 +6,7 @@ import { readFileSync } from "node:fs";
 import { cardProblems, textProblems, isPrivate, howBadLine } from "./card.mjs";
 import {
   briefBody, parseBrief, clampBrief, replyBody, challengeBody, briefState, approvalRefusal, planRun, splitConversation, specFromBrief,
+  sweepWanted, briefOutcome, briefFailure,
   BRIEF_MARK, LABEL_AWAITING, LABEL_APPROVED, MAX_BRIEFS,
 } from "./brief.mjs";
 import { isAgentComment, parseCriteria } from "./checks.mjs";
@@ -104,6 +105,33 @@ describe("a security hole in code people use today is never a public brief", () 
     expect(body).toMatch(/private security advisory/);
     expect(body).not.toMatch(/teas|payment/);
   });
+  it("stops the run, whatever else the brief says — even \"not actionable\" would describe it", () => {
+    expect(briefOutcome(brief({ card: unsafe("release") }))).toEqual({ status: "security-stop" });
+    expect(briefOutcome(brief({ card: unsafe("hosted-demo"), actionable: false, blocker: "the hole is in the release" }))).toEqual({ status: "security-stop" });
+    expect(briefOutcome(brief({ card: unsafe("main-only") }))).toEqual({ status: "brief" });
+    expect(briefOutcome(brief({ actionable: false, blocker: "needs a decision" }))).toEqual({ status: "blocked", reason: "needs a decision" });
+  });
+  it("is decided where the agents wrote the brief and again before anything is posted", () => {
+    const src = readFileSync(new URL("./run.mjs", import.meta.url), "utf8");
+    const body = (name) => src.slice(src.indexOf(`function ${name}(`), src.indexOf("\n}\n", src.indexOf(`function ${name}(`)));
+    // briefIssue: decided before anything is written, and a stop keeps only the outcome.
+    const writer = body("briefIssue");
+    expect(writer).toMatch(/const decided = briefOutcome\(brief\);\n\s+if \(decided\.status === "security-stop"\) \{\n\s+for \(const f of readdirSync\(RUN\.dir\)\) if \(f !== "repo"\) rmSync/);
+    expect(writer.indexOf("briefOutcome(brief)")).toBeLessThan(writer.indexOf("brief-result.json"));
+    // publishBrief: re-decided from the brief itself, before the first comment is posted.
+    const publisher = body("publishBrief");
+    expect(publisher).toMatch(/if \(briefOutcome\(brief\)\.status === "security-stop"\) return securityStopNotice\(n, dir\);/);
+    expect(publisher.indexOf("briefOutcome(brief)")).toBeLessThan(publisher.indexOf("briefBody("));
+    expect(publisher.indexOf("briefOutcome(brief)")).toBeLessThan(publisher.indexOf("replyBody("));
+  });
+  it("a failed brief run prints only which agent failed and how — never what it wrote", () => {
+    const e = new Error("brief agent did not finish: error_max_turns\nThe gate accepts a self-made age proof on the hosted demo: send …");
+    expect(briefFailure(e)).toBe("brief agent did not finish (error_max_turns)");
+    expect(briefFailure(new Error("brief-fix1 agent did not finish: no structured output\nsecret words"))).toBe("brief-fix1 agent did not finish (no structured output)");
+    expect(briefFailure(new Error("anything else, with words"))).toBe("Error");
+    const src = readFileSync(new URL("./run.mjs", import.meta.url), "utf8");
+    expect(src).toMatch(/await briefIssue\(issue, [^\n]*\)\.catch\(\(e\) => \{\n\s+if \(RUN\?\.dir\) appendFileSync\(join\(RUN\.dir, "run\.log"\)[^\n]*\n\s+console\.error\(`the brief run failed: \$\{briefFailure\(e\)\}/);
+  });
 });
 
 describe("the brief comment", () => {
@@ -120,6 +148,21 @@ describe("the brief comment", () => {
     const body = briefBody(data({ brief: clampBrief(huge) }));
     expect(body.length).toBeLessThan(65_536);
     expect(parseBrief(body).brief.reproduced.result).toMatch(/\[cut\]$/);
+  });
+  it("stays under the limit with every field full, in characters that grow when escaped, and still reads back", () => {
+    const big = (n) => "&".repeat(n); // md() writes each as &amp;
+    const many = (n) => Array(n).fill(big(5000));
+    const crit = Array(50).fill(0).map((_, i) => ({ id: `AC${i}`, text: big(5000), verified_by: "test" }));
+    const huge = { ...brief({ acceptance_criteria: crit, not_in_scope: many(50), files_likely: many(50), evidence_plan: big(9000), test_plan: big(9000),
+      reproduced: { confirmed: "yes", how: big(9000), result: big(9000) }, reply: big(9000), changes_since_previous: big(9000), blocker: big(9000),
+      card: { ...card(), whats_wrong: big(9000), fix: big(9000), approving: big(9000), check: big(9000), recommended: "A",
+        how_bad: { ...card().how_bad, live_detail: big(9000), who: big(9000) },
+        options: ["A", "B", "C"].map((id) => ({ id, summary: big(9000), worst_case: big(9000), size: big(9000) })) } }), extra: big(100_000) };
+    const body = briefBody(data({ v: 2, brief: clampBrief(huge), lintProblems: many(20) }));
+    expect(body.length).toBeLessThan(65_536);
+    const back = parseBrief(body);
+    expect(back.brief.card.whats_wrong).toMatch(/\[cut\]$/);
+    expect(back.brief.extra).toBeUndefined(); // a field a brief doesn't have isn't carried at all
   });
   it("is not a brief when the data in its marker was swapped", () => {
     const body = briefBody(data());
@@ -186,6 +229,16 @@ describe("approval", () => {
     expect(approvalRefusal(state([b1]), { issueEditedAt: "2026-10-17T11:00:00Z" })).toMatch(/issue was edited/);
     expect(approvalRefusal(state([b1]), { issueEditedAt: "2026-10-17T09:00:00Z" })).toBeUndefined();
   });
+  it("a question from the implementer answers only what its run read — a comment during the build still waits", () => {
+    const src = readFileSync(new URL("./run.mjs", import.meta.url), "utf8");
+    expect(src).toMatch(/challengeBody\(\{[^\n]*asOf: readAt\(\) \}\)/);
+    const q = c(BOT, challengeBody({ v: 1, criterion: "AC1", why: "w", asOf: "2026-10-17T10:05:00Z" }), "2026-10-17T10:30:00Z");
+    expect(state([b1, c(ME, "and refunds", "2026-10-17T10:10:00Z"), q]).unanswered).toBe(true);
+  });
+  it("refuses when the issue was edited while the brief was being written", () => {
+    // The run read the issue at 09:50 (asOf) and posted at 10:00; the edit at 09:55 is not in the brief.
+    expect(approvalRefusal(state([b1]), { issueEditedAt: "2026-10-17T09:55:00Z" })).toMatch(/issue was edited/);
+  });
   it("is never added by the pipeline itself — only a person approves", () => {
     const src = readFileSync(new URL("./run.mjs", import.meta.url), "utf8");
     expect(src).toMatch(/if \(l === LABELS\.approved\) throw new Error\("the pipeline never approves a brief"\)/);
@@ -193,6 +246,44 @@ describe("approval", () => {
     const adds = [...src.matchAll(/"--add-label", ([^\]\)]+)/g)].map((m) => m[1].trim());
     expect(adds.length).toBeGreaterThan(0);
     for (const a of adds) expect(a).not.toMatch(/approved|LABEL_APPROVED/);
+  });
+});
+
+describe("the hourly check for a comment nobody answered", () => {
+  const b1 = c(BOT, briefBody(data()), "2026-10-17T10:00:00Z");
+  const asked = c(ME, "also check refunds", "2026-10-17T10:10:00Z");
+  const notice = (kind, at) => c(BOT, issueComment({ kind, reason: "r", where: "https://x.test/run" }), at);
+  const wanted = (comments, now = "2026-10-17T11:00:00Z") => sweepWanted(briefState(comments, isTrusted), Date.parse(now));
+  it("answers a comment no run has seen", () => {
+    expect(wanted([b1, asked])).toBe(true);
+    expect(wanted([b1])).toBe(false);
+  });
+  it("still answers it after an approval was refused for it — that run never read the comments", () => {
+    expect(wanted([b1, asked, notice("refused", "2026-10-17T10:15:00Z")])).toBe(true);
+  });
+  it("leaves it once a run has seen it and said why it stopped", () => {
+    expect(wanted([b1, asked, notice("skipped", "2026-10-17T10:15:00Z")])).toBe(false);
+    expect(wanted([b1, asked, notice("blocked", "2026-10-17T10:15:00Z")])).toBe(false);
+  });
+  it("retries once after a failed (or cancelled) run, then leaves it", () => {
+    expect(wanted([b1, asked, notice("error", "2026-10-17T10:15:00Z")])).toBe(true);
+    expect(wanted([b1, asked, notice("error", "2026-10-17T10:15:00Z"), notice("error", "2026-10-17T10:40:00Z")])).toBe(false);
+  });
+  it("waits for the comment's own run, gives up after a day, and stops at the version cap", () => {
+    expect(wanted([b1, asked], "2026-10-17T10:20:00Z")).toBe(false);
+    expect(wanted([b1, asked], "2026-10-18T11:00:00Z")).toBe(false);
+    const v6 = c(BOT, briefBody(data({ v: MAX_BRIEFS, start: 1 })), "2026-10-17T10:00:00Z");
+    expect(wanted([v6, asked])).toBe(false);
+  });
+  it("tells the notices apart only by the pipeline's own markers — every one is still the agents' comment", () => {
+    for (const kind of ["refused", "error", "skipped"]) expect(isAgentComment(issueComment({ kind, reason: "r" }))).toBe(true);
+    expect(issueComment({ kind: "refused", reason: "r" })).toMatch(/^<!-- issue-agent-refusal -->/);
+    expect(issueComment({ kind: "error" })).toMatch(/^<!-- issue-agent-error -->/);
+  });
+  it("is what the sweep and the snapshot's refusal use", () => {
+    const src = readFileSync(new URL("./run.mjs", import.meta.url), "utf8");
+    expect(src).toMatch(/if \(!sweepWanted\(briefState\(issueComments\(number\), trusted\)\)\) continue;/);
+    expect(src).toMatch(/kind: TRIGGER === `label:\$\{LABEL_APPROVED\}` \? "refused" : "skipped"/);
   });
 });
 
@@ -360,6 +451,11 @@ describe("before and after", () => {
   });
   it("says so when main and the change print the same thing", () => {
     expect(reportWith({ ...ran, after: ran.before, same: true })).toMatch(/printed the same thing/);
+  });
+  it("runs only where briefs are on, so another repo's PRs stay as they were until it opts in", () => {
+    const src = readFileSync(new URL("./run.mjs", import.meta.url), "utf8");
+    expect(src).toContain("if (done && !spec.touches_ui && PAUSE) {");
+    expect(reportWith(undefined, { manifest: [] })).not.toContain("## Before and after");
   });
   it("says in one line when nothing a developer sees changes", () => {
     expect(reportWith({ notApplicable: "docs only" })).toContain("_No developer-facing change: docs only_");

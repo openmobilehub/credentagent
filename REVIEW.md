@@ -103,8 +103,11 @@ diff.
   flag prose that uses a word an entry lists under _Avoid_ (e.g. "kill-switch" for
   **Revoke**, "handshake" for **Ceremony**). An entry ending in _(proposed)_ isn't settled
   yet, so don't flag its words; and exported API names keep their names.
-- **Readable to someone who didn't write it.** The PR description leads with a plain-language
-  summary a non-specialist follows from the first paragraph — clear and concrete, not clever.
+- **Readable to someone who didn't write it.** The PR description opens with **Before and after**
+  (what a developer or user sees on `main` and with the change: a few lines of real code and what
+  each version prints, or a screenshot of each — or one line saying nothing visible changes), then a
+  plain-language summary a non-specialist follows — clear and concrete, not clever. Don't flag the
+  Before-and-after section for coming first; do flag one that isn't real or wouldn't print what it shows.
   Every term is defined on first use; no bare cross-reference (`#85`, `invariant 4`, a rail
   name) is left unexplained; use everyday examples; an abstract idea gets at most one universal
   analogy (a prepaid card, a key), and the technical detail sits below a divider. Template:

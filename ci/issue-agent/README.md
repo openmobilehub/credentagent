@@ -153,16 +153,23 @@ scope, and the agents' plan.
 - **A security hole is never briefed in public.** When the brief finds something **Unsafe** that a
   release or a hosted demo lets through, nothing about it is posted (SECURITY.md): the issue gets a
   short note to move it to a private advisory, the run keeps only its outcome, and the brief's log
-  never reaches the job's public console. A brief run that fails part-way uploads nothing at all.
+  never reaches the job's public console — a failed run prints only which agent failed and how. The
+  stop is decided where the brief is written and again before anything is posted (`briefOutcome`). A
+  brief run that fails part-way uploads nothing at all.
 - `needs-decision` doesn't stop a brief: approving it *is* the decision.
 - Re-adding `agent` starts over: a fresh brief, and a fresh count of versions.
 
 **Replies arrive by themselves.** A comment by a member or collaborator on an issue labelled
 `agent:awaiting-approval` starts a run; it waits two minutes first, and a newer comment replaces it, so
 three quick comments get one answer (a comment the workflow skips — an outsider's, or the agents' own —
-cancels nothing). After 6 versions it stops and suggests approving or talking it
+cancels nothing). One gap, until the workflow checks write access before a run joins that queue: an
+org member or a read-only collaborator passes the first filter, so their comment can still cancel a
+waiting answer before the write-access check refuses it; the hourly check then answers the comment
+again. After 6 versions it stops and suggests approving or talking it
 through live. Every hour, a check starts a run for any comment whose event was lost (as the workflow's
-own bot — allowed for comment runs only, which answer nothing but write-access people's comments).
+own bot — allowed for comment runs only, which answer nothing but write-access people's comments). It
+skips a comment a run has already seen and said why it stopped; a refused approval doesn't count as
+seen (that run never read the comments), and after a failed or cancelled run it tries once more.
 
 ### Talking it through live (optional)
 
@@ -197,7 +204,9 @@ Every agent PR opens with what a developer sees on `main` and with the change, b
   (1–3 files inside the checkout, a command starting with `node`, `npm` or `npx`) and puts each
   checkout back as it was.
 
-The PR template asks a human author for the same section.
+The example runs only where briefs are on (`"brief": "pause"`), so another repo's PRs keep today's
+shape until it opts in; a page change gets its screenshots first either way. The PR template asks a
+human author for the same section.
 
 ## Seeing what it's working on
 

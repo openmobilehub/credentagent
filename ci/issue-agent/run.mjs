@@ -53,8 +53,8 @@ import {
   roleModel, testGateCommand, rootTestRefusal, publishVerdict, isMutableSource, sameLockfile, publishRefusalHint,
 } from "./checks.mjs";
 import { reportHtml, prBody, issueComment, md, statusBody, STATUS_MARK } from "./report.mjs";
-import { briefBody, replyBody, challengeBody, briefState, planRun, specFromBrief, splitConversation, clampBrief, LABEL_AWAITING, LABEL_APPROVED, BRIEF_MARK, MAX_BRIEFS } from "./brief.mjs";
-import { cardProblems, isPrivate } from "./card.mjs";
+import { briefBody, replyBody, challengeBody, briefState, briefOutcome, briefFailure, planRun, specFromBrief, splitConversation, clampBrief, sweepWanted, LABEL_AWAITING, LABEL_APPROVED, BRIEF_MARK } from "./brief.mjs";
+import { cardProblems } from "./card.mjs";
 import { validateExample, runExample, exampleHtml } from "./example.mjs";
 import { loadConfig, testLabel } from "./config.mjs";
 import { startMerge, buildResolvedMerge, rebuildForPush, hasMarkers, treeOf } from "./merges.mjs";
@@ -667,7 +667,8 @@ async function finishImplement({ issue, spec, roles, n, repoDir, base, rounds, l
   // Before and after for a developer (README, "Before and after"): an agent proposes the example, the
   // pipeline runs it on main and on the change and records what each printed. A page change gets its
   // screenshots below instead.
-  if (done && !spec.touches_ui) {
+  // On with briefs (`"brief": "pause"`), so another repo keeps today's PRs until it opts in.
+  if (done && !spec.touches_ui && PAUSE) {
     try {
       const { out } = await agent("example", roles.examplePrompt({ issue, spec, beforeDir, afterDir: repoDir, reproduced: issue.brief?.brief?.reproduced }),
         { cwd: evidenceDir, schema: roles.EXAMPLE_SCHEMA, write: true, additionalDirectories: [beforeDir, repoDir], maxTurns: 60 });
@@ -740,11 +741,12 @@ async function briefIssue(issue, { dir } = {}) {
     ({ out: brief } = await agent(`brief-fix${fix}`, roles.briefFixPrompt(problems), { cwd: repoDir, schema: roles.BRIEF_SCHEMA, write: true, resume: sessionId, maxTurns: 30 }));
     problems = problemsOf(brief);
   }
-  if (isPrivate(brief.card)) { // whatever else it says — even "not actionable" would describe it
+  const decided = briefOutcome(brief);
+  if (decided.status === "security-stop") {
     for (const f of readdirSync(RUN.dir)) if (f !== "repo") rmSync(join(RUN.dir, f), { recursive: true, force: true });
-    return outcome({ status: "security-stop" });
+    return outcome(decided);
   }
-  if (!brief.actionable) return outcome({ status: "blocked", reason: brief.blocker ?? "the brief agent found it isn't actionable" });
+  if (decided.status === "blocked") return outcome(decided);
   writeFileSync(join(RUN.dir, "brief-result.json"), JSON.stringify({ brief, base, asOf: issue.snapshotAt }, null, 2));
   return outcome({ status: "brief", revised: !previous || brief.revised !== false });
 }
@@ -775,7 +777,7 @@ function publishRun(dir) {
     // The implementer questions a criterion of the approved brief: back to the maintainer, nothing built.
     const v = Number(outcome.brief);
     if (!Number.isInteger(v) || v < 1) throw new Error(`not a brief version: ${outcome.brief}`);
-    gh(["issue", "comment", String(n), "-R", REPO, "--body", challengeBody({ v, criterion: String(outcome.challenge?.criterion ?? "").slice(0, 200), why: String(outcome.challenge?.why ?? "").slice(0, 2000), asOf: new Date().toISOString() })]);
+    gh(["issue", "comment", String(n), "-R", REPO, "--body", challengeBody({ v, criterion: String(outcome.challenge?.criterion ?? "").slice(0, 200), why: String(outcome.challenge?.why ?? "").slice(0, 2000), asOf: readAt() })]);
     relabel(n, { add: [LABELS.awaiting], remove: [LABELS.approved] });
     setStatus(n, `stopped before building — the agents question part of brief v${v}; reply to settle it`, { working: false });
     return { n, status: "challenged" };
@@ -904,6 +906,13 @@ const postComment = (n, body, dir) => {
   gh(["issue", "comment", String(n), "-R", REPO, "--body-file", file]);
 };
 
+// When the run read the issue: the snapshot job's time in CI (trusted), never later than now. A comment
+// written after it is still unanswered.
+const readAt = (fallback) => {
+  const read = Date.parse(process.env.ISSUE_AGENT_BRIEF_ASOF || fallback);
+  return new Date(Number.isFinite(read) ? Math.min(read, Date.now()) : Date.now()).toISOString();
+};
+
 function securityStopNotice(n, dir) {
   postComment(n, issueComment({ kind: "security-stop" }), dir);
   relabel(n, { add: [LABELS.needsHuman], remove: [LABELS.working, LABELS.awaiting, LABELS.approved] });
@@ -959,10 +968,8 @@ async function publishBrief(dir) {
   if (!result.brief?.card || typeof result.brief.card !== "object" || !Array.isArray(result.brief.acceptance_criteria)) throw new Error("brief-result.json is not a brief");
   const brief = clampBrief(result.brief), base = result.base;
   if (!isCommitId(base)) throw new Error(`not a commit id: ${base}`);
-  if (isPrivate(brief.card)) return securityStopNotice(n, dir); // decided here again, never taken from the run
-  // When the run read the issue: the snapshot job's time in CI (trusted), never later than now.
-  const read = Date.parse(process.env.ISSUE_AGENT_BRIEF_ASOF || result.asOf);
-  const asOf = new Date(Number.isFinite(read) ? Math.min(read, Date.now()) : Date.now()).toISOString();
+  if (briefOutcome(brief).status === "security-stop") return securityStopNotice(n, dir); // decided here again, never taken from the run
+  const asOf = readAt(result.asOf);
   const state = briefState(issueComments(n), trusted);
   if (state.latest && !STARTS_OVER && outcome.revised === false && String(brief.reply ?? "").trim()) {
     postComment(n, replyBody({ v: state.latest.v, reply: brief.reply, asOf }), dir);
@@ -992,17 +999,14 @@ async function publishBrief(dir) {
 }
 
 // The safety net for a lost comment event: every hour, an issue whose brief waits on a comment the
-// agents haven't answered gets a brief run — but not while a run is working on it, not twice for the
-// same comment (any comment the pipeline posted since — an answer, a skip notice, an error — means a
-// run saw it), not past the version cap, and not for a comment older than a day.
+// agents haven't answered gets a brief run — but not while a run is working on it, and not when a run
+// already saw that comment (brief.mjs, sweepWanted).
 function sweepBriefs() {
   if (!PAUSE) return [];
   const started = [];
   for (const { number, labels } of ghJson(["issue", "list", "-R", REPO, "--state", "open", "--label", LABELS.awaiting, "--limit", "100", "--json", "number,labels"])) {
     if (labels.some((l) => l.name === LABELS.working)) continue;
-    const state = briefState(issueComments(number), trusted);
-    const age = Date.now() - state.lastPersonAt;
-    if (!state.unanswered || state.lastNoticeAt > state.lastPersonAt || state.round >= MAX_BRIEFS || age < 20 * 60_000 || age > 24 * 3600_000) continue;
+    if (!sweepWanted(briefState(issueComments(number), trusted))) continue;
     const r = sh("gh", ["workflow", "run", "issue-agent.yml", "-R", REPO, "-f", `issue=${number}`, "-f", "trigger=comment"], { allowFail: true });
     if (r.code === 0) started.push(number);
     else console.error(`(could not start a brief run for #${number}: ${r.out.trim().split("\n")[0]})`);
@@ -1434,7 +1438,9 @@ if (mode === "snapshot") {
   const { issue, skip, quiet, phase } = snapshotIssue(n, process.env.ISSUE_AGENT_SNAPSHOT_AT || undefined);
   writeFileSync(resolve(opt("--out", "issue.json")), JSON.stringify({ issue, skip, phase }, null, 2));
   console.log(skip ? `skip #${n}: ${skip}` : `snapshot #${n} (${TRIGGER} → ${phase}): ${issue.comments.length} trusted comment(s)${issue.conversation?.length ? `, ${issue.conversation.length} in the talk about the brief` : ""}${issue.dropped.length ? `; left out: ${issue.dropped.join("; ")}` : ""}`);
-  if (skip && !quiet && flag("--comment")) gh(["issue", "comment", String(n), "-R", REPO, "--body", issueComment({ kind: "skipped", reason: skip })]);
+  // Refusing `agent:approved` is its own kind of notice: that run never read the comments, so it must
+  // not stop the hourly check from answering one that waits (brief.mjs, sweepWanted).
+  if (skip && !quiet && flag("--comment")) gh(["issue", "comment", String(n), "-R", REPO, "--body", issueComment({ kind: TRIGGER === `label:${LABEL_APPROVED}` ? "refused" : "skipped", reason: skip })]);
   if (!skip && flag("--comment")) {
     if (phase === "brief") setStatus(n, issue.previousBrief ? "reading your comment — an answer or a new version of the brief comes next (usually 5–15 min)" : "reproducing the problem and writing a brief for you to approve (usually 10–20 min) — nothing is built before you approve it", { working: true });
     else {
@@ -1455,7 +1461,13 @@ if (mode === "snapshot") {
   const { issue, skip } = JSON.parse(readFileSync(resolve(arg), "utf8"));
   if (skip) { console.log(`skip: ${skip}`); process.exit(0); }
   mkdirSync(RUNS_HOME, { recursive: true });
-  const o = await briefIssue(issue, { dir: opt("--dir") && resolve(opt("--dir")) });
+  // A failure's message can carry the agent's own text (agent(): "did not finish: …\n<its answer>"),
+  // and this console is public: the error goes to run.log, which a failed brief run never uploads.
+  const o = await briefIssue(issue, { dir: opt("--dir") && resolve(opt("--dir")) }).catch((e) => {
+    if (RUN?.dir) appendFileSync(join(RUN.dir, "run.log"), `${e?.stack ?? e}\n`);
+    console.error(`the brief run failed: ${briefFailure(e)} — the details are in run.log, not here`);
+    process.exit(1);
+  });
   console.log(`\n━━ #${o.n} ${o.status === "security-stop" ? "stopped (nothing is said here about why)" : o.status}`);
 } else if (mode === "publish-brief") {
   try {

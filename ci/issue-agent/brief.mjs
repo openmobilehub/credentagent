@@ -10,7 +10,7 @@
 
 import { createHash } from "node:crypto";
 import { isAgentComment, isLoopAuthor } from "./checks.mjs";
-import { FIELDS, howBadLine, LEVELS } from "./card.mjs";
+import { FIELDS, howBadLine, isPrivate, LEVELS } from "./card.mjs";
 import { md } from "./report.mjs";
 
 export const BRIEF_MARK = "<!-- issue-agent-brief";
@@ -23,27 +23,35 @@ const encode = (data) => Buffer.from(JSON.stringify(data), "utf8").toString("bas
 const seal = (encoded, visible) => createHash("sha256").update(`${encoded}\n${visible}`).digest("hex");
 
 // GitHub refuses a comment over 65,536 characters, and the data is in the comment twice over (as text
-// and as base64): every field the agents wrote is capped before it is rendered or encoded.
-const CAPS = { result: 3000, how: 1200, field: 1200, item: 400, items: 15 };
-const cap = (s, n = CAPS.field) => { const t = String(s ?? ""); return t.length > n ? `${t.slice(0, n)} … [cut]` : t; };
-export function clampBrief(b) {
+// and as base64): every field the agents wrote is capped before it is rendered or encoded, and
+// briefBody tightens the caps further until the comment fits (escaping can make text grow fivefold).
+export const COMMENT_LIMIT = 65_536;
+const BASE_CAPS = { result: 3000, how: 1200, field: 1200, item: 400, items: 15 };
+const cap = (s, n) => { const t = String(s ?? ""); return t.length > n ? `${t.slice(0, n)} … [cut]` : t; };
+/** The brief with every field the agents wrote cut to size; `scale` < 1 cuts deeper. */
+export function clampBrief(b, scale = 1) {
+  const CAPS = Object.fromEntries(Object.entries(BASE_CAPS).map(([k, n]) => [k, Math.max(k === "items" ? 3 : 20, Math.floor(n * scale))]));
+  CAPS.reply = Math.max(20, Math.floor(2000 * scale));
   const card = b.card ?? {};
   const list = (xs, n = CAPS.items) => (Array.isArray(xs) ? xs.slice(0, n) : []);
+  const word = (s) => (s === undefined ? undefined : cap(s, 20)); // the enums: a word each
   return {
-    ...b,
-    blocker: b.blocker === undefined ? undefined : cap(b.blocker),
-    reproduced: { confirmed: b.reproduced?.confirmed, how: cap(b.reproduced?.how, CAPS.how), result: cap(b.reproduced?.result, CAPS.result) },
+    // Only the fields a brief has: anything else the run wrote would ride along in the marker uncapped.
+    actionable: b.actionable === true, behavior_change: b.behavior_change === true, touches_ui: b.touches_ui === true,
+    ...(typeof b.revised === "boolean" ? { revised: b.revised } : {}),
+    blocker: b.blocker === undefined ? undefined : cap(b.blocker, CAPS.field),
+    reproduced: { confirmed: word(b.reproduced?.confirmed), how: cap(b.reproduced?.how, CAPS.how), result: cap(b.reproduced?.result, CAPS.result) },
     card: {
-      whats_wrong: cap(card.whats_wrong), fix: cap(card.fix), approving: cap(card.approving), check: cap(card.check),
-      how_bad: { level: card.how_bad?.level, direction: card.how_bad?.direction, live: card.how_bad?.live, live_detail: cap(card.how_bad?.live_detail, CAPS.item), who: cap(card.how_bad?.who, CAPS.item) },
-      options: list(card.options, 3).map((o) => ({ id: o.id, summary: cap(o.summary, CAPS.item), worst_case: cap(o.worst_case, CAPS.item), ...(o.size ? { size: cap(o.size, CAPS.item) } : {}) })),
+      whats_wrong: cap(card.whats_wrong, CAPS.field), fix: cap(card.fix, CAPS.field), approving: cap(card.approving, CAPS.field), check: cap(card.check, CAPS.field),
+      how_bad: { level: word(card.how_bad?.level), direction: word(card.how_bad?.direction), live: word(card.how_bad?.live), live_detail: cap(card.how_bad?.live_detail, CAPS.item), who: cap(card.how_bad?.who, CAPS.item) },
+      options: list(card.options, 3).map((o) => ({ id: word(o.id), summary: cap(o.summary, CAPS.item), worst_case: cap(o.worst_case, CAPS.item), ...(o.size ? { size: cap(o.size, CAPS.item) } : {}) })),
       ...(card.recommended ? { recommended: cap(card.recommended, 4) } : {}),
     },
-    acceptance_criteria: list(b.acceptance_criteria).map((c) => ({ id: cap(c.id, 8), text: cap(c.text, CAPS.item), verified_by: c.verified_by })),
+    acceptance_criteria: list(b.acceptance_criteria).map((c) => ({ id: cap(c.id, 8), text: cap(c.text, CAPS.item), verified_by: word(c.verified_by) })),
     not_in_scope: list(b.not_in_scope).map((x) => cap(x, CAPS.item)),
-    evidence_plan: cap(b.evidence_plan), test_plan: cap(b.test_plan),
+    evidence_plan: cap(b.evidence_plan, CAPS.field), test_plan: cap(b.test_plan, CAPS.field),
     files_likely: list(b.files_likely).map((x) => cap(x, CAPS.item)),
-    reply: b.reply === undefined ? undefined : cap(b.reply, 2000),
+    reply: b.reply === undefined ? undefined : cap(b.reply, CAPS.reply),
     changes_since_previous: b.changes_since_previous === undefined ? undefined : cap(b.changes_since_previous, CAPS.item),
   };
 }
@@ -73,9 +81,14 @@ const TAG = { test: "a test", evidence: "screenshots", review: "a reviewer", "af
  * through md(); the shape is fixed here.
  */
 export function briefBody(data) {
-  const visible = briefText(data);
-  const encoded = encode(data);
-  return `${BRIEF_MARK} v=${data.v} sha=${seal(encoded, visible)} data=${encoded} -->\n${visible}`;
+  for (let scale = 1; ; scale /= 2) {
+    const d = scale === 1 ? data : { ...data, brief: clampBrief(data.brief, scale), lintProblems: (data.lintProblems ?? []).slice(0, 5).map((p) => cap(p, Math.max(20, Math.floor(400 * scale)))) };
+    const visible = briefText(d);
+    const encoded = encode(d);
+    const body = `${BRIEF_MARK} v=${d.v} sha=${seal(encoded, visible)} data=${encoded} -->\n${visible}`;
+    // A margin under the limit; past 1/64 every field is a few words, far below it.
+    if (body.length <= COMMENT_LIMIT - 1000 || scale < 1 / 64) return body;
+  }
 }
 
 function briefText(data) {
@@ -154,6 +167,10 @@ const answeredAt = (c) => {
 
 const at = (c) => Math.max(Date.parse(c.createdAt), c.lastEditedAt ? Date.parse(c.lastEditedAt) : 0);
 
+// The pipeline's notices on an issue, by kind (report.mjs, issueComment): told apart by marker and author.
+const NOTICE = /^<!-- issue-agent -->/, ERROR_NOTICE = /^<!-- issue-agent-error -->/;
+const notices = (comments, isTrusted, mark) => comments.filter((c) => mark.test(String(c.body)) && isLoopAuthor(c.author, isTrusted));
+
 /**
  * Where the conversation on an issue stands. `comments` (oldest first): { author: { login,
  * __typename }, body, createdAt, lastEditedAt }. Only the pipeline's own comments count as the agents'
@@ -181,9 +198,12 @@ export function briefState(comments, isTrusted) {
     // A person wrote (or edited a comment) after the agents last answered: they owe a reply.
     unanswered: briefs.length > 0 && lastPerson > lastOurs,
     lastPersonAt: lastPerson,
-    // The pipeline's last notice (a skip, an error, "not actionable"): a run saw the comments before it,
-    // so the hourly check doesn't start another for them.
-    lastNoticeAt: Math.max(0, ...comments.filter((c) => /^<!-- issue-agent -->/.test(String(c.body)) && isLoopAuthor(c.author, isTrusted)).map((c) => Date.parse(c.createdAt))),
+    // The pipeline's last notice (a skip, "not actionable"): a run saw the comments before it, so the
+    // hourly check doesn't start another for them. Not a refusal to approve (that run never read the
+    // comments, and its notice asks them to wait for the answer), and not a failed run (counted below).
+    lastNoticeAt: Math.max(0, ...notices(comments, isTrusted, NOTICE).map((c) => Date.parse(c.createdAt))),
+    // Failed runs since the last person's comment: the hourly check retries once, then leaves it.
+    failuresSince: notices(comments, isTrusted, ERROR_NOTICE).filter((c) => Date.parse(c.createdAt) > lastPerson).length,
   };
 }
 
@@ -193,7 +213,8 @@ export function approvalRefusal(state, { issueEditedAt } = {}) {
   if (state.latestEdited) return "the latest brief was edited by hand, so it's no longer what the agents wrote. Say what should change in a comment and they post a new version";
   if (!state.latest) return "the latest brief can't be read";
   if (state.unanswered) return "the agents haven't answered your latest comment yet. Approve the version they post next";
-  if (issueEditedAt && Date.parse(issueEditedAt) > Date.parse(state.latestAt)) return "the issue was edited after the latest brief. Comment to get a brief for the current text";
+  // Against when the brief's run read the issue, not when it posted: an edit in between is unseen.
+  if (issueEditedAt && Date.parse(issueEditedAt) > Date.parse(state.latest.asOf ?? state.latestAt)) return "the issue was edited after the latest brief. Comment to get a brief for the current text";
   return undefined;
 }
 
@@ -222,6 +243,28 @@ export function splitConversation(comments, { isTrusted, isOurs, snapshotAt, fro
 export const MAX_BRIEFS = 6;
 
 /**
+ * Whether the hourly check starts a brief run for an issue whose brief is waiting: a maintainer's
+ * comment is unanswered, no run has seen it yet (a notice after it says one did; a failed run gets one
+ * retry), the version cap isn't reached, and the comment is between 20 minutes and a day old.
+ */
+export function sweepWanted(state, now = Date.now()) {
+  const age = now - state.lastPersonAt;
+  return state.unanswered && state.lastNoticeAt <= state.lastPersonAt && (state.failuresSince ?? 0) < 2
+    && state.round < MAX_BRIEFS && age >= 20 * 60_000 && age <= 24 * 3600_000;
+}
+
+/**
+ * What a finished brief run leads to — decided the same way where the agents wrote it and again where
+ * it is published: `security-stop` for a security hole in code people use today (whatever else the
+ * brief says — even "not actionable" would describe it), `blocked` when it isn't actionable, else `brief`.
+ */
+export function briefOutcome(brief) {
+  if (isPrivate(brief.card)) return { status: "security-stop" };
+  if (!brief.actionable) return { status: "blocked", reason: brief.blocker ?? "the brief agent found it isn't actionable" };
+  return { status: "brief" };
+}
+
+/**
  * What a trigger starts: `brief` (write or revise the brief), `implement`, or a skip. `quiet` skips
  * say nothing on the issue (a comment that isn't for the agents). Without `brief: "pause"` in the
  * repo's config, everything runs as before: the label starts the build.
@@ -245,6 +288,15 @@ export function planRun({ trigger = "label:agent", pause, labels = [], state, is
     return { phase: "brief" };
   }
   return { skip: `unknown trigger "${trigger}"`, quiet: true };
+}
+
+/**
+ * What a failed brief run may say on the public console: which agent, and how it ended — never the
+ * rest of the error, which can carry the agent's own words (a brief can be about a security hole).
+ */
+export function briefFailure(e) {
+  const m = String(e?.message ?? "").match(/^([\w-]+) agent did not finish: (no structured output|[a-z_]+)/);
+  return m ? `${m[1]} agent did not finish (${m[2]})` : /^\w+$/.test(String(e?.name)) ? e.name : "Error";
 }
 
 /**
