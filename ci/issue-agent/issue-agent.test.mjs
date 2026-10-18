@@ -55,6 +55,12 @@ describe("the publish job's checks", () => {
     expect(forbiddenPaths(["packages/a.ts", ".github/workflows/x.yml", ".github/CODEOWNERS"])).toEqual([".github/workflows/x.yml", ".github/CODEOWNERS"]);
     expect(forbiddenPaths(["packages/.github-notes.md", "docs/.github/x"])).toEqual([]);
   });
+  it("forbids everything under .claude/ except its skills", () => {
+    const control = [".claude/settings.json", ".claude/settings.local.json", ".claude/hooks/x.sh", ".claude/agents/a.md", ".claude/commands/c.md", ".claude/CLAUDE.md", ".claude/skills", ".claude",
+      ".Claude/settings.json", ".claude/Settings.json", ".CLAUDE/hooks/x.sh", ".GitHub/workflows/x.yml"];
+    expect(forbiddenPaths([".claude/skills/publish-release/SKILL.md", ...control])).toEqual(control);
+    expect(forbiddenPaths(["docs/.claude/settings.json", ".claudex/x", ".claude/skills/x/SKILL.md"])).toEqual([]);
+  });
 
   describe("reads the touched paths from git, not from the patch's headers", () => {
     let repo;
@@ -79,6 +85,31 @@ describe("the publish job's checks", () => {
       });
       expect(patch).toMatch(/^diff --git "a\/\.github\//m); // git quotes it — a header regex misses it
       expect(applyAndCheck(repo, patch).forbidden).toEqual([".github/CÖDEOWNERS"]);
+    });
+
+    it("publishes a skill edit under .claude/skills/, but not one to the agents' settings", () => {
+      const skill = (src) => {
+        mkdirSync(join(src, ".claude", "skills", "x"), { recursive: true });
+        writeFileSync(join(src, ".claude", "skills", "x", "SKILL.md"), "# x\n");
+      };
+      expect(applyAndCheck(repo, patchOf(skill))).toEqual({ files: [".claude/skills/x/SKILL.md"], forbidden: [] });
+      const repo2 = mkdtempSync(join(tmpdir(), "issue-agent-"));
+      git(repo2, "init", "-q");
+      git(repo2, "commit", "-q", "--allow-empty", "-m", "base");
+      const both = patchOf((src) => { skill(src); writeFileSync(join(src, ".claude", "settings.json"), "{}\n"); });
+      expect(applyAndCheck(repo2, both).forbidden).toEqual([".claude/settings.json"]);
+    });
+
+    it("catches a .claude/ file whose name git quotes, and allows a quoted skill name", () => {
+      const patch = patchOf((src) => {
+        mkdirSync(join(src, ".claude", "hooks"), { recursive: true });
+        mkdirSync(join(src, ".claude", "skills", "ünï"), { recursive: true });
+        writeFileSync(join(src, ".claude", "hooks", "PRÉ.sh"), "exit 0\n");
+        writeFileSync(join(src, ".claude", "skills", "ünï", "SKILL.md"), "# x\n");
+      });
+      expect(patch).toMatch(/^diff --git "a\/\.claude\/hooks\//m);
+      expect(patch).toMatch(/^diff --git "a\/\.claude\/skills\//m);
+      expect(applyAndCheck(repo, patch).forbidden).toEqual([".claude/hooks/PRÉ.sh"]);
     });
 
     it("lists ordinary files as they are, and forbids nothing", () => {
@@ -206,6 +237,13 @@ describe("bringing main into a conflicting PR (merges.mjs)", () => {
     const keep = mkdtempSync(join(tmpdir(), "issue-agent-keep-"));
     write(keep, ".github/workflows/x.yml", "on: [push, pull_request]\n");
     expect(pushJob([".github/workflows/x.yml"], keep, "").replay).toMatchObject({ ok: false, why: expect.stringMatching(/never changes/) });
+  });
+
+  it("refuses a resolution of the agents' own settings under .claude/", () => {
+    makeRepo({ ".claude/settings.json": "{\"pr\":1}\n" }, { ".claude/settings.json": "{\"main\":1}\n" });
+    const keep = mkdtempSync(join(tmpdir(), "issue-agent-keep-"));
+    write(keep, ".claude/settings.json", "{\"pr\":1,\"main\":1}\n");
+    expect(pushJob([".claude/settings.json"], keep, "").replay).toMatchObject({ ok: false, why: expect.stringMatching(/never changes/) });
   });
 });
 

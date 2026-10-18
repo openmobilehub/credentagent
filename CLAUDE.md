@@ -279,7 +279,10 @@ than whoever labelled it, or already has an open PR,
 and says why in a comment on the issue. **Only words by people with write access reach the agents**
 (the title and body if their author has it, and such people's comments, frozen at the label) — so to give
 it a request from an outside contributor, restate it in a comment. The agents run in a job with no
-GitHub token; a separate job publishes their reviewed change. It never merges; its PRs go through
+GitHub token; a separate job publishes their reviewed change. That change may edit `.claude/skills/`
+(skills are mostly guidance, like `docs/`), but never `.github/` or any other `.claude/` path — settings and
+hooks control the agents themselves, so a patch touching them is refused. A skill's frontmatter
+(`allowed-tools`, `hooks`) and bundled scripts can grant tools too: review a skill edit as carefully as settings. It never merges; its PRs go through
 the same human review as any other. Media lives on the `agent-evidence` branch — never merge it.
 With an `AGENT_GH_TOKEN` secret, the agent also works through the Claude review on its own PR
 (`.github/workflows/issue-agent-review.yml`): it fixes or answers every thread, pushes, resolves the
