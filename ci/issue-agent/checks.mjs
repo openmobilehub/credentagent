@@ -200,7 +200,7 @@ export function tickCriteria(body, verdicts, escape = (s) => s) {
     const v = byId.get(id);
     if (!v) return line;
     const text = rest.replace(/ — _[^\n]*_$/, "");
-    return `- [${v.met ? "x" : " "}] **${id}** ${text}${v.evidence ? ` — _${escape(String(v.evidence).replace(/\s+/g, " ").replace(/_/g, "\\_"))}_` : ""}`;
+    return `- [${v.met ? "x" : " "}] **${id}** ${text}${v.evidence ? ` — _${escape(noComments(v.evidence).replace(/\s+/g, " ").replace(/_/g, "\\_"))}_` : ""}`;
   });
 }
 
@@ -251,16 +251,65 @@ export const cyclesDone = (comments, isTrusted) =>
   comments.filter((c) => /<!-- issue-agent-review cycle=\d+ /.test(c.body) && isLoopAuthor(c.author, isTrusted)).length;
 
 /**
- * Whether the review loop may act on a PR at all: an issue-agent branch in THIS repository (never a
- * fork — its code would be run, then pushed here with a write token), still open, and opted into
- * the loop by publish (`agent:in-review`). Returns the reason it may not, or undefined.
+ * Whether the review loop may act on a PR at all: a branch in THIS repository (never a fork — its
+ * code would be run, then pushed here with a write token), still open, and opted into the loop with
+ * `agent:in-review` — by publish for an issue-agent branch, or by hand (or by a coding agent) for any
+ * other PR. Such a PR's description becomes the agents' request, as an issue's body does, so both
+ * its author and whoever added the label must have write access (`isTrusted`, asked only for it);
+ * and the loop never pushes to a branch that isn't a PR's own (main, agent-evidence, release/*).
+ * Returns the reason it may not, or undefined.
  */
-export function loopRefusal({ headRefName, isCrossRepository, state, labels }) {
+export function loopRefusal({ headRefName, isCrossRepository, state, labels, author, labelledBy, isTrusted = () => false }) {
   if (isCrossRepository) return "the PR comes from a fork — the loop only works on branches in this repository";
-  if (!agentBranch(headRefName)) return `${headRefName} is not an issue-agent branch`;
+  if (!agentBranch(headRefName)) {
+    if (protectedHead(headRefName)) return `the PR's branch is ${headRefName} — the loop never pushes to it`;
+    if (!isTrusted(author)) return "the PR was opened by someone without write access — the loop only takes its request from maintainers";
+    if (labels.includes("agent:in-review") && !isTrusted(labelledBy)) return "the agent:in-review label was added by someone without write access";
+  }
   if (state !== "OPEN") return `the PR is ${String(state).toLowerCase()}`;
   if (!labels.includes("agent:in-review")) return "the PR isn't in the review loop (no agent:in-review label) — a human may be working on it";
   return undefined;
+}
+
+/** Branches that are never a PR's own to push to: the default branch, the evidence branch, releases. */
+export const protectedHead = (ref) => ["main", "master", "agent-evidence"].includes(ref) || /^release\//.test(String(ref));
+
+/** Who added `label` most recently, from a PR's LabeledEvent timeline items (oldest first). */
+export const labelledBy = (events, label = "agent:in-review") =>
+  events.filter((e) => e?.label?.name === label).at(-1)?.actor?.login;
+
+/**
+ * The "Updated after review cycle k" section the push job writes into a PR description from the
+ * agent's `description_update`. The agent's text can never open or close an HTML comment — not even
+ * inside a code span, which `escape` (report.mjs md) leaves as it is — so it can't end the section
+ * early (and survive requestBody as a maintainer's words), nor plant a marker the loop reads back
+ * (`<!-- issue-agent labeller=… -->`, `<!-- issue-agent-verified … -->`).
+ */
+export function updateSection(cycle, text, escape = (s) => s) {
+  return `<!-- issue-agent-update -->\n### Updated after review cycle ${cycle}\n\n${escape(noComments(text))}\n<!-- /issue-agent-update -->`;
+}
+
+/**
+ * Agent text with no way left to open or close an HTML comment: `<!--` and `-->` are removed until
+ * none remains, since one pass can rebuild a marker from nested text (`<!<!---->--` → `<!--`).
+ */
+export function noComments(text) {
+  let s = String(text ?? ""), prev;
+  do { prev = s; s = s.replace(/<!--|-->/g, ""); } while (s !== prev);
+  return s;
+}
+
+/**
+ * A PR description as a request: without what the loop itself wrote into it — the "Updated after
+ * review" section and the evidence a criteria check appended to a checklist line — since that is
+ * agent text under a trusted account, which must never come back as a maintainer's words (as
+ * isAgentComment keeps the agent's comments out). The criteria are read from this too, so an agent
+ * can't add a checklist line through its description update.
+ */
+export function requestBody(body) {
+  return String(body ?? "")
+    .replace(/<!-- issue-agent-update -->[\s\S]*?<!-- \/issue-agent-update -->\n*/g, "")
+    .replace(/^(- \[(?: |x)\] \*\*AC\d+\*\* .*?) — _[^\n]*_$/gm, "$1");
 }
 
 /**

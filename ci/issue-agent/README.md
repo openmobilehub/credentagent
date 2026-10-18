@@ -117,7 +117,7 @@ Claude review runs on it, and `.github/workflows/issue-agent-review.yml` takes o
 review:
 
 ```
-Claude review finishes on an agent/issue-* PR   (or: main moved, and the PR now conflicts with it)
+Claude review finishes on an agent:in-review PR, or the label is added   (or: main moved, and the PR now conflicts with it)
   ├─ assess   read the verdict + the open threads (the review bot's and maintainers' only)    (script)
   │             conflicts with main → fix: merge main, resolve the conflicts (or hand over at the cap)
   │             ✅ Ready to merge, or 💬 with no thread open → verify first:
@@ -150,12 +150,24 @@ Claude review finishes on an agent/issue-* PR   (or: main moved, and the PR now 
   **💬 counts as ready**: the PR goes to you as `agent:ready-for-human` with the open notes listed
   and linked. **⛔ at the cap never does** — that stops as `agent:needs-human` (as #347 did after
   cycle 3; its fourth cycle was started by hand).
-- **Only PRs the loop opened, only from this repository.** It acts only on `agent/issue-*` branches
+- **Only PRs labelled into the loop, only from this repository.** It acts only on PRs from branches
   in this repository that carry `agent:in-review` (so a PR a human has taken over is left alone),
   and spends no fix session when `AGENT_GH_TOKEN` is missing. Every job checks out `main`'s harness
   code (`run.mjs`), even when started by hand from another branch — but a hand-started run uses
   *that branch's workflow file* (which steps run, where secrets go), so only people with write
   access, who can start runs, can choose it.
+- **Any maintainer's PR can join — e.g. one a coding agent opened.** Mark it ready for review and
+  add `agent:in-review` (`gh pr edit <n> --add-label agent:in-review`). **Adding the label starts a
+  run at once** (`pull_request_target: labeled`, which runs `main`'s copy of the workflow). It
+  looks up the latest Claude review of the PR's head and acts on it as that review's own run
+  would: fix, verify, or hand over (a head that only merges `main` in reuses the last verdict; a
+  failed review goes to a human). If that review is still running, or there is none yet, it waits,
+  and the review finishing starts the cycle. Runs for any other label skip in a queue of their own. From then on the loop answers the PR exactly as it does an
+  issue agent's. With no issue behind it, the PR's own title and description are the agents'
+  request — so both its author and whoever added the label must have write access, or the loop
+  refuses it — and a `- [ ] **AC1** …` checklist in the description is checked before hand-over
+  like an issue's. The hand-over goes to whoever added the label. The loop never takes a PR whose
+  branch is `main`, `agent-evidence` or `release/*`.
 - **Never stranded.** A review that fails, or ends with no verdict for the latest commit (paused),
   hands the PR to a human with that reason — and so does a PR still in the loop once
   `AGENT_GH_TOKEN` is gone. A head that only merges `main` in (GitHub's *Update branch*) isn't
@@ -187,8 +199,8 @@ Claude review finishes on an agent/issue-* PR   (or: main moved, and the PR now 
 - **To run it by hand:** *Actions → issue-agent-review → Run workflow* with the PR number, or
   locally: `run.mjs assess-review <pr> --dry-run`, `run.mjs fix-review review.json`,
   `run.mjs push-review <fix-dir> --review review.json --pr <pr> --dry-run`. A PR that was already
-  handed over needs its `agent:in-review` label back first (swap it for `agent:needs-human` or
-  `agent:ready-for-human`); to give it more cycles than the cap, raise the cap — the repo variable
+  handed over goes back into the loop by putting its `agent:in-review` label back (swap it for
+  `agent:needs-human` or `agent:ready-for-human`), which starts a run by itself; to give it more cycles than the cap, raise the cap — the repo variable
   `ISSUE_AGENT_MAX_REVIEW_CYCLES` (`gh variable set ISSUE_AGENT_MAX_REVIEW_CYCLES --body 4`) for
   Actions runs, or the same environment variable locally. A review cancelled by hand without a new
   push starts nothing: run the loop by hand to resume it.
@@ -201,7 +213,7 @@ execute it. So the design limits **what that code can reach** and **who can stee
 | | |
 | --- | --- |
 | **Who can start it** | Anyone who can add a label — and the workflow then requires **write access**. |
-| **Whose words reach the agents** | Only the title, body and comments **by people with write access** (for the title: its author, or whoever renamed it last), frozen at the label. Anything by others, or written/edited after the label, is left out and listed in the report; an outsider's title becomes "Issue #n". An issue edited or renamed after its label is refused until re-labelled. |
+| **Whose words reach the agents** | Only the title, body and comments **by people with write access** (for the title: its author, or whoever renamed it last), frozen at the label. Anything by others, or written/edited after the label, is left out and listed in the report; an outsider's title becomes "Issue #n". An issue edited or renamed after its label is refused until re-labelled. A PR in the review loop with no issue behind it (any branch but `agent/issue-*`) is different: its title and description are the request, read afresh each cycle — its author and labeller must have write access, and what the loop itself wrote into the description (the "Updated after review" section, a checklist line's evidence) is removed first, so agent text never comes back as a maintainer's. |
 | **GitHub credentials** | **None in the job that runs agent code** (CI): the `implement` job has read-only access, its checkout keeps no credential, and no token is in its environment — the same for the review loop's `fix` job. Only the trusted jobs hold a write token (`publish`, and the review loop's `assess` and `push`), all run from `main`, and none installs or runs anything the agents wrote — they apply a patch. |
 | **What publish takes from the agents' job** | Treated as untrusted input. The issue number comes from the workflow and must match; the title is re-read from GitHub through the same filter; the base must be a commit on `main`; the files touched are read from git after the patch is applied (not from the patch's own headers), and a change touching `.github/`, or `.claude/` outside `.claude/skills/`, is never pushed. Code running in the agents' job *could* rewrite the patch or the report it hands over (the recorded sha256 catches accidents, not that) — so what reaches GitHub is a PR — a draft, or with the review loop on, an `agent:in-review` PR the Claude review reads first — that a human approves like any other before it merges. The agent never merges. |
 | **Claude credential** | The agents need one to run, so it is in *their* environment — an agent's tools can read it. Code the agents wrote (npm scripts, tests, builds) runs with **every** credential stripped. |
