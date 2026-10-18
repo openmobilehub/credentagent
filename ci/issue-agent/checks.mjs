@@ -200,7 +200,7 @@ export function tickCriteria(body, verdicts, escape = (s) => s) {
     const v = byId.get(id);
     if (!v) return line;
     const text = rest.replace(/ — _[^\n]*_$/, "");
-    return `- [${v.met ? "x" : " "}] **${id}** ${text}${v.evidence ? ` — _${escape(String(v.evidence).replace(/\s+/g, " ").replace(/_/g, "\\_"))}_` : ""}`;
+    return `- [${v.met ? "x" : " "}] **${id}** ${text}${v.evidence ? ` — _${escape(noComments(v.evidence).replace(/\s+/g, " ").replace(/_/g, "\\_"))}_` : ""}`;
   });
 }
 
@@ -286,8 +286,17 @@ export const labelledBy = (events, label = "agent:in-review") =>
  * (`<!-- issue-agent labeller=… -->`, `<!-- issue-agent-verified … -->`).
  */
 export function updateSection(cycle, text, escape = (s) => s) {
-  const safe = String(text ?? "").replace(/<!--|-->/g, "");
-  return `<!-- issue-agent-update -->\n### Updated after review cycle ${cycle}\n\n${escape(safe)}\n<!-- /issue-agent-update -->`;
+  return `<!-- issue-agent-update -->\n### Updated after review cycle ${cycle}\n\n${escape(noComments(text))}\n<!-- /issue-agent-update -->`;
+}
+
+/**
+ * Agent text with no way left to open or close an HTML comment: `<!--` and `-->` are removed until
+ * none remains, since one pass can rebuild a marker from nested text (`<!<!---->--` → `<!--`).
+ */
+export function noComments(text) {
+  let s = String(text ?? ""), prev;
+  do { prev = s; s = s.replace(/<!--|-->/g, ""); } while (s !== prev);
+  return s;
 }
 
 /**

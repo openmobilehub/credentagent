@@ -41,7 +41,9 @@ on:
 
 concurrency:
   # By PR number, whether started by a review or by hand, so the two can't run on one PR at once.
-  group: ${{ github.event_name == 'push' && 'issue-agent-review-sweep' || format('issue-agent-review-pr-{0}', github.event.workflow_run.pull_requests[0].number || github.event.pull_request.number || inputs.pr) }}
+  # Any other label's run (its jobs all skip) gets a group of its own: in the PR's group it would
+  # take the one pending slot GitHub keeps, and silently cancel a loop run waiting its turn.
+  group: ${{ github.event_name == 'push' && 'issue-agent-review-sweep' || (github.event_name == 'pull_request_target' && github.event.label.name != 'agent:in-review') && format('issue-agent-review-other-label-{0}', github.run_id) || format('issue-agent-review-pr-{0}', github.event.workflow_run.pull_requests[0].number || github.event.pull_request.number || inputs.pr) }}
   cancel-in-progress: false
 
 permissions: {}
@@ -89,6 +91,7 @@ jobs:
       contents: read
       pull-requests: write # labels, reviewer request, the hand-over comment
       issues: write
+      actions: read # a label-started run looks up the head's latest Claude review
     outputs:
       decision: ${{ steps.assess.outputs.decision }}
       pr: ${{ steps.pr.outputs.number }}
@@ -112,6 +115,24 @@ jobs:
           n="${INPUT_PR:-$RUN_PR}"
           case "$n" in ''|*[!0-9]*) echo "::notice::No open PR for this review."; n="" ;; esac
           echo "number=$n" >> "$GITHUB_OUTPUT"
+      - name: The head's latest Claude review (a label-started run)
+        # A review-started run is told how its review ended; a label-started one finds out. Finished →
+        # act on it, as that review's own run would have (a merge-only head reuses the last verdict, a
+        # failed review hands over). Still running, or none → empty: assess waits, and that review
+        # finishing starts the cycle — so a label never leaves a PR waiting with nothing to wake it.
+        id: review
+        if: github.event_name == 'pull_request_target' && steps.pr.outputs.number != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          latest=$(gh api -X GET "repos/$GITHUB_REPOSITORY/actions/workflows/claude-code-review.yml/runs" \
+            -f head_sha="$HEAD_SHA" -f event=pull_request -F per_page=20 \
+            --jq '[.workflow_runs[]] | sort_by(.created_at) | last // empty | "\(.status) \(.conclusion // "")"')
+          read -r status conclusion <<< "$latest"
+          if [ "$status" = completed ] && [ "$conclusion" != cancelled ]; then c="$conclusion"; else c=""; fi
+          echo "latest review of ${HEAD_SHA:0:7}: ${latest:-none} → conclusion '${c}'"
+          echo "conclusion=$c" >> "$GITHUB_OUTPUT"
       - name: Read the review
         id: assess
         if: steps.pr.outputs.number != ''
@@ -119,7 +140,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ steps.pr.outputs.number }}
           ISSUE_AGENT_HEAD_SHA: ${{ github.event.workflow_run.head_sha || github.event.pull_request.head.sha }}
-          ISSUE_AGENT_REVIEW_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          ISSUE_AGENT_REVIEW_CONCLUSION: ${{ github.event.workflow_run.conclusion || steps.review.outputs.conclusion }}
           # The cycle cap: the repo variable if set (e.g. raise it, then run by hand), else 3.
           ISSUE_AGENT_MAX_REVIEW_CYCLES: ${{ vars.ISSUE_AGENT_MAX_REVIEW_CYCLES }}
           # Off without a token whose pushes start workflows: then no fix session is spent at all.

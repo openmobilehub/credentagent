@@ -158,9 +158,11 @@ Claude review finishes on an agent:in-review PR, or the label is added   (or: ma
   access, who can start runs, can choose it.
 - **Any maintainer's PR can join — e.g. one a coding agent opened.** Mark it ready for review and
   add `agent:in-review` (`gh pr edit <n> --add-label agent:in-review`). **Adding the label starts a
-  run at once** (`pull_request_target: labeled`, which runs `main`'s copy of the workflow): on a
-  review that has already finished it fixes right away; with none finished yet it waits, and the
-  review finishing starts the cycle. From then on the loop answers the PR exactly as it does an
+  run at once** (`pull_request_target: labeled`, which runs `main`'s copy of the workflow). It
+  looks up the latest Claude review of the PR's head and acts on it as that review's own run
+  would: fix, verify, or hand over (a head that only merges `main` in reuses the last verdict; a
+  failed review goes to a human). If that review is still running, or there is none yet, it waits,
+  and the review finishing starts the cycle. Runs for any other label skip in a queue of their own. From then on the loop answers the PR exactly as it does an
   issue agent's. With no issue behind it, the PR's own title and description are the agents'
   request — so both its author and whoever added the label must have write access, or the loop
   refuses it — and a `- [ ] **AC1** …` checklist in the description is checked before hand-over
