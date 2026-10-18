@@ -1,16 +1,18 @@
 # credentagent.ai router
 
 The Vercel project **`credentagent-router`** (team `cbg6`) owns the `credentagent.ai` and
-`www.credentagent.ai` domains. Apart from one small function (`/api/ask`, below) it hosts nothing
-itself — `vercel.json` forwards each path to the demo that serves it:
+`www.credentagent.ai` domains. Apart from one small function (`/api/ask`, below) and `domain.md` (the
+domain described in Markdown, for agents), it hosts nothing itself — `vercel.json` forwards each
+other path to the site that serves it:
 
 | Public URL | Served by |
 | --- | --- |
 | `https://credentagent.ai/marketplace/mcp` | `credentagent-demo` — the published npm packages |
 | `https://credentagent.ai/marketplace-dev/mcp` | `credentagent-demo-dev` — `main`'s unpublished packages |
 | `https://credentagent.ai/marketplace-dev/checkout?…` and the other store pages | `credentagent-demo-dev` — its checkout and consent pages (see below) |
-| `https://credentagent.ai/` | the product page from https://openmobilehub.org/credentagent, served under credentagent.ai (the address bar stays on credentagent.ai) |
-| `https://credentagent.ai/<anything else>` (`/robots.txt`, `/llms.txt`, `/sitemap.xml`, `/about`, …) | the same path under https://openmobilehub.org/credentagent/ — the last rewrite, a catch-all |
+| `https://credentagent.ai/` | the product page from GitHub Pages (https://openmobilehub.github.io/credentagent-website/), served under credentagent.ai (the address bar stays on credentagent.ai); with `Accept: text/markdown`, this folder's `domain.md` (see below) |
+| `https://credentagent.ai/index.md` | this folder's `domain.md` — the domain described in Markdown, for agents (also at `/domain.md`) |
+| `https://credentagent.ai/<anything else>` (`/robots.txt`, `/llms.txt`, `/sitemap.xml`, `/about`, …) | the same path under https://openmobilehub.github.io/credentagent-website/ — the last rewrite, a catch-all |
 
 **The catch-all (issue #369, "serve every website path"):** every path that no other rule claims,
 and that isn't a file in this folder, passes through to Pages unchanged, so whatever the website
@@ -19,12 +21,14 @@ publishes appears at credentagent.ai. (This project's own files — `README.md`,
 anyway.) Pages' status code and content type come through as they are: a missing page is Pages' own
 404 (not Vercel's 79-byte `text/plain` one), `llms.txt` and `robots.txt` stay `text/plain`,
 `sitemap.xml` stays `application/xml`. So do Pages' redirects: if the website publishes a page as a
-folder (`about/index.html`), Pages answers `/about` with a 301 to
-`https://openmobilehub.org/credentagent/about/`, and the visitor leaves credentagent.ai — publish
-`about.html` instead. Linking to `/about/` with the slash probably doesn't help: `/:path*` likely
-captures `about` without the trailing slash, so Pages gets `/credentagent/about` and redirects the
-same way (the hand check below for `/about/` settles it). Don't set `"trailingSlash": true` to fix
-it — that would redirect `/marketplace/mcp` and break the store's POSTs. The catch-all must stay the **last** rewrite, after
+folder (`about/index.html`), Pages answers `/about` with a 301 to its own `/about/`, and the visitor
+leaves credentagent.ai — publish `about.html` instead. **Proxy to `openmobilehub.github.io`, not
+`openmobilehub.org/credentagent`:** openmobilehub.org is its own Vercel project with
+`"trailingSlash": true`, so it 308s `/credentagent/about` to `/credentagent/about/` — a relative
+`Location` that lands on `credentagent.ai/credentagent/about/`, a 404 (and Pages 404s `/about/` anyway,
+since the file is `about.html`). That made `/about`, `/contact` and `/privacy` unreachable here.
+`vercel-config.test.mjs` refuses an `openmobilehub.org` destination. Don't set `"trailingSlash": true` on
+this router either — that would redirect `/marketplace/mcp` and break the store's POSTs. The catch-all must stay the **last** rewrite, after
 `/`, `/marketplace-dev/:path*` and `/marketplace/:path*` — Vercel applies the first matching rewrite.
 It doesn't capture `/api/ask`: Vercel resolves the filesystem and functions before any rewrite.
 `vercel-config.test.mjs` (root `npm test`) pins the rewrite order (every other rule before the
@@ -48,6 +52,31 @@ end — the router strips the prefix on the way in. The wallet binds to the page
 credentagent.ai. The prod demo keeps its `*.vercel.app` links until a release carries this (0.5.0's
 pages use root paths); then set `PUBLIC_URL=https://credentagent.ai/marketplace` in `deploy-prod.yml`.
 
+**Markdown for agents on `/` (#370):** a request for `/` whose `Accept` header contains
+`text/markdown` is rewritten to this folder's [`domain.md`](./domain.md) and answered with
+`Content-Type: text/markdown; charset=utf-8`; every other request (browsers, `Accept: text/html`, no
+`Accept`) still gets the HTML page. `/` always carries `Vary: Accept, Accept-Encoding`, which tells a
+cache to keep the two copies apart. `domain.md` belongs to the router, not the website, because it
+describes the whole domain — the product in brief, the `/marketplace/mcp` and `/marketplace-dev/mcp`
+endpoints, how an agent tries the store, the packages, and what the gate doesn't do yet — and it ships
+with every router deploy, so it can't 404. It is also served directly at `https://credentagent.ai/index.md`
+(a rewrite ahead of the catch-all, so the website's own `index.md` isn't reachable on this domain) and at `/domain.md`.
+**Never name it `index.md` (or add any `index.*` here):** with `outputDirectory: "."`, Vercel serves a root
+`index.*` file for `/` before any rewrite, so every visitor — browsers included — gets it. That happened
+with #399: credentagent.ai answered `text/markdown` to `Accept: text/html`, the homepage HTML checks all
+failed, and is-agentic.com dropped from 72 to 70. `config.test.mjs` models this and fails if one appears.
+**Keep it in sync** when a route, package or trust level changes. `config.test.mjs` (run by the root
+`npm test`) resolves `vercel.json` the way Vercel does, pins both answers as configured, and checks that
+`domain.md` names both MCP endpoints, the presence-only trust level and the walletless "instant demo" path. One thing only the live site
+shows: whether Vercel sends the `Content-Type` override. The `deploy-prod` smoke test does not check it
+yet, so after a deploy that touches the router, run these by hand:
+
+```sh
+curl -sSL -i -H 'Accept: text/markdown' https://credentagent.ai/   # 200, text/markdown, Vary: Accept, Accept-Encoding, Markdown body
+curl -sSL -i -H 'Accept: text/html'     https://credentagent.ai/   # 200, text/html (text/markdown here means an index.* file is back)
+curl -sSI https://credentagent.ai/index.md                          # 200, text/markdown
+```
+
 To add a route, add a `rewrites` entry mapping `/<name>/:path*` to the target origin, above the catch-all.
 
 **DNS** (GoDaddy): `A @ 76.76.21.21` and `CNAME www cname.vercel-dns.com.`
@@ -65,8 +94,9 @@ curl -sI https://credentagent.ai/robots.txt     # 200, content-type: text/plain
 curl -sI https://credentagent.ai/llms.txt       # 200, content-type: text/plain (once the website publishes it)
 curl -sI https://credentagent.ai/sitemap.xml    # 200, content-type: application/xml
 curl -sI https://credentagent.ai/no-such-page   # 404 from Pages, not Vercel's 79-byte text/plain 404
-curl -sI https://credentagent.ai/about          # 200; a 301 to openmobilehub.org means a folder page left the domain (see above)
-curl -sI https://credentagent.ai/about/         # a 301 to openmobilehub.org means the slash is dropped on the way to Pages
+curl -sI https://credentagent.ai/about          # 200; a 301/308 means a folder page or a trailing-slash proxy (see above)
+curl -sI https://credentagent.ai/contact        # 200
+curl -sI https://credentagent.ai/privacy        # 200
 curl -s -X POST https://credentagent.ai/api/ask -H 'Origin: https://credentagent.ai' \
   -H 'Content-Type: application/json' -d '{"question":"hi","context":{}}'   # JSON answer from the function
 curl -s -X POST https://credentagent.ai/marketplace/mcp -H 'Content-Type: application/json' \

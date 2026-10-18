@@ -49,7 +49,7 @@ import {
   TRUSTED_PERMISSIONS, titleAuthor, forbiddenPaths, applyAndCheck, changedSince, isRunId, isCommitId, publishIssueNumber,
   isReviewBot, parseVerdict, agentBranch, threadsToAnswer, reviewDecision, sharedChanges, filesBetween, cyclesDone, loopRefusal, latestVerdict, cycleCap,
   parseCriteria, tickCriteria, verifiedFor, afterVerification, acceptVerified, conflictMidCycle,
-  isAgentComment, requestComments, leftLoop, isLoopAuthor,
+  isAgentComment, requestComments, leftLoop, isLoopAuthor, labelledBy, requestBody, updateSection,
   roleModel, testGateCommand, rootTestRefusal, publishVerdict, isMutableSource, sameLockfile, publishRefusalHint,
 } from "./checks.mjs";
 import { reportHtml, prBody, issueComment, md, statusBody, STATUS_MARK } from "./report.mjs";
@@ -156,7 +156,7 @@ let RUN; // per issue: { id, dir, costUsd, log() }
 // a security hole, which is never described in public — see briefIssue).
 const newRun = (n, dir, { quiet = false } = {}) => {
   const id = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 12);
-  dir ??= join(RUNS_HOME, `issue-${n}-${id}`);
+  dir ??= join(RUNS_HOME, `${typeof n === "number" ? `issue-${n}` : n}-${id}`); // n: an issue number, or e.g. "pr-396"
   mkdirSync(dir, { recursive: true });
   return { id, dir, costUsd: 0, models: {}, log: (s) => { if (!quiet) console.log(s); appendFileSync(join(dir, "run.log"), s + "\n"); } };
 };
@@ -271,7 +271,12 @@ const READ_TOOLS = ["Read", "Grep", "Glob"];
 const INSPECT_BASH = ["Bash(git diff *)", "Bash(git diff)", "Bash(git log *)", "Bash(git show *)", "Bash(git status *)", "Bash(git status)", "Bash(ls *)", "Bash(grep *)", "Bash(sed -n *)", "Bash(head *)", "Bash(tail *)", "Bash(wc *)", "Bash(cat *)"];
 // Running the project's checks executes the implementer's code; reviewers may, but their tree is reset after.
 const CHECK_BASH = CONFIG.checkTools;
-const WRITE_TOOLS = ["Edit", "Write", "MultiEdit", "Bash(npm *)", "Bash(npx *)", "Bash(node *)", "Bash(mkdir *)"];
+// Claude Code refuses writes under .claude/ unless a rule names the path, so skills get explicit rules
+// (both the cwd-relative `path` form and the project-root-relative `/path` form). Nothing else under .claude/ is allowed, and the
+// publish step refuses it anyway (checks.mjs, forbiddenPaths). Unconfirmed that the SDK honours these
+// over its .claude/ protection: check with a local --no-publish run on an issue that edits a skill.
+const SKILL_EDITS = ["Edit", "Write", "MultiEdit"].flatMap((t) => [`${t}(.claude/skills/**)`, `${t}(/.claude/skills/**)`]);
+const WRITE_TOOLS = ["Edit", "Write", "MultiEdit", ...SKILL_EDITS, "Bash(npm *)", "Bash(npx *)", "Bash(node *)", "Bash(mkdir *)"];
 // Denies are a tidiness rule, not a security boundary: `node`/`npm` can do any of these. The boundary is
 // that there is no GitHub credential to use and only the reviewed patch is ever published.
 const NEVER = ["Bash(git push *)", "Bash(git commit *)", "Bash(git reset *)", "Bash(git checkout *)", "Bash(gh *)", "Bash(curl *)", "Bash(wget *)", "WebFetch", "WebSearch"];
@@ -699,7 +704,7 @@ async function finishImplement({ issue, spec, roles, n, repoDir, base, rounds, l
   const manifest = JSON.parse(readFileSync(join(evidenceDir, "manifest.json"), "utf8"));
   const report = {
     issue, spec, rounds, last, done: done && !forbidden.length, evidence, example, manifest, base, model: MODEL, models: RUN.models, costUsd: RUN.costUsd, id: RUN.id,
-    stopped: forbidden.length ? `the change touches ${forbidden.join(", ")} — workflow changes are never published by the agent` : stopped,
+    stopped: forbidden.length ? `the change touches ${forbidden.join(", ")} — the agent never publishes changes under .github/, or under .claude/ outside its skills` : stopped,
     patchSha256: createHash("sha256").update(patch).digest("hex"), files: touched,
   };
   writeFileSync(join(RUN.dir, "report.json"), JSON.stringify(report, null, 2));
@@ -820,7 +825,7 @@ function publishRun(dir) {
   const { files, forbidden } = applyAndCheck(wt, patch);
   if (forbidden.length) {
     git(["worktree", "remove", "--force", wt], { allowFail: true });
-    const reason = `the change touches ${forbidden.join(", ")} — the agent never publishes changes under .github/`;
+    const reason = `the change touches ${forbidden.join(", ")} — the agent never publishes changes under .github/, or under .claude/ outside its skills`;
     gh(["issue", "comment", String(n), "-R", REPO, "--body", issueComment({ kind: "needs-human-nopr", reason, where: actionsRunUrl() })]);
     setStatus(n, `stopped, no PR — ${reason}`, { working: false });
     return { n, status: "needs-human", reason };
@@ -1060,24 +1065,38 @@ function dispatchReviewLoop(pr) {
 // After main moves: every PR still in the loop that now conflicts with main gets a conflict cycle
 // (GitHub runs no review on a conflicting PR, so without this it would wait forever).
 function sweepConflicts() {
-  const prs = ghJson(["pr", "list", "-R", REPO, "--state", "open", "--label", LABELS.inReview, "--limit", "50", "--json", "number,headRefName"])
-    .filter((p) => agentBranch(p.headRefName));
+  const prs = ghJson(["pr", "list", "-R", REPO, "--state", "open", "--label", LABELS.inReview, "--limit", "50", "--json", "number,headRefName"]);
   const started = [];
   for (const { number } of prs) {
     const pr = loadPrSettled(number);
     console.log(`  #${number}: ${pr.mergeable}`);
-    if (pr.mergeable === "CONFLICTING" && !loopRefusal({ ...pr, labels: pr.labels.nodes.map((l) => l.name) })) {
+    if (pr.mergeable === "CONFLICTING" && !loopRefusalFor(pr)) {
       dispatchReviewLoop(number);
-      setStatus(agentBranch(pr.headRefName).issue, `main moved and ${pr.url} now conflicts with it — the agent is resolving that`, { working: true });
+      setStatus(agentBranch(pr.headRefName)?.issue, `main moved and ${pr.url} now conflicts with it — the agent is resolving that`, { working: true });
       started.push(number);
     }
   }
   return started;
 }
 
+// loopRefusal (checks.mjs) for a loaded PR. It asks GitHub who has write access (`trusted`) only for a
+// PR that is NOT off an issue-agent branch: its author, and whoever added agent:in-review.
+const loopRefusalFor = (pr) => loopRefusal({
+  ...pr, labels: pr.labels.nodes.map((l) => l.name), author: pr.author?.login, labelledBy: labelledBy(pr.timelineItems.nodes), isTrusted: trusted,
+});
+
+// The request a PR off any other branch carries in place of an issue: its own title and description
+// as its write-access author wrote them (loopRefusal refuses the PR otherwise), minus what the loop
+// itself wrote into the description (requestBody). Read afresh each cycle, not frozen at the label.
+const prRequest = (pr) => ({
+  number: pr.number, url: pr.url, title: pr.title, author: pr.author?.login, comments: [], dropped: [], fromPr: true,
+  body: `(This pull request has no issue: its description is the request.)\n\n${requestBody(pr.body)}`,
+});
+
 function loadPr(number) {
   const q = `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){
     number url state isDraft isCrossRepository mergeable headRefName headRefOid body title author{login} labels(first:30){nodes{name}}
+    timelineItems(itemTypes:[LABELED_EVENT], last:50){nodes{... on LabeledEvent{label{name} actor{login}}}}
     commits(last:1){nodes{commit{oid committedDate parents{totalCount}}}}
     comments(last:100){nodes{author{__typename login} body createdAt}}
     reviewThreads(first:100){nodes{id isResolved path line comments(first:50){nodes{databaseId author{__typename login} body createdAt}}}}}}}`;
@@ -1101,12 +1120,14 @@ function assessReview(prNumber) {
   // issue's agent:working label has to come off; a merely stale review leaves it alone.
   const skip = (reason, left = false) => ({ pr: pr.number, url: pr.url, issueNumber: agentBranch(pr.headRefName)?.issue, decision: { action: "skip", reason, left } });
   const labels = pr.labels.nodes.map((l) => l.name);
-  const refusal = loopRefusal({ ...pr, labels });
+  const refusal = loopRefusalFor(pr);
   if (refusal) return skip(refusal, leftLoop({ ...pr, labels })); // tested in checks.mjs
   const expected = process.env.ISSUE_AGENT_HEAD_SHA;
   if (expected && expected !== pr.headRefOid) return skip("the PR has moved on since this review ran");
   const branch = agentBranch(pr.headRefName);
-  const labeller = pr.body.match(/<!-- issue-agent labeller=([A-Za-z0-9-]+) -->/)?.[1];
+  // Who gets the hand-over: whoever labelled the issue — or, for a PR with no issue, whoever added
+  // agent:in-review (loopRefusal checked they have write access).
+  const labeller = branch ? pr.body.match(/<!-- issue-agent labeller=([A-Za-z0-9-]+) -->/)?.[1] : labelledBy(pr.timelineItems.nodes);
   const head = pr.commits.nodes[0].commit;
   const summaries = pr.comments.nodes.filter((c) => isReviewBot(c.author) && c.body.startsWith("## Claude review"));
   const conclusion = process.env.ISSUE_AGENT_REVIEW_CONCLUSION || undefined;
@@ -1120,11 +1141,12 @@ function assessReview(prNumber) {
     verdict, open: answer.length, cycle, maxCycles: MAX_REVIEW_CYCLES, conclusion, loopOn: REVIEW_LOOP,
     conflicting: pr.mergeable === "CONFLICTING", verified: verifiedFor(pr.comments.nodes, pr.headRefOid, trusted),
   });
-  const issue = snapshotIssue(branch.issue).issue ?? { number: branch.issue, title: `Issue #${branch.issue}`, body: "", comments: [], dropped: [] };
+  const issue = !branch ? prRequest(pr)
+    : snapshotIssue(branch.issue).issue ?? { number: branch.issue, title: `Issue #${branch.issue}`, body: "", comments: [], dropped: [] };
   return {
-    pr: pr.number, url: pr.url, headRef: pr.headRefName, head: pr.headRefOid, isDraft: pr.isDraft, issueNumber: branch.issue, issue,
+    pr: pr.number, url: pr.url, headRef: pr.headRefName, head: pr.headRefOid, isDraft: pr.isDraft, issueNumber: branch?.issue, issue,
     verdict, summary: summary.slice(0, 30_000), threads: answer, ignored, cycle, maxCycles: MAX_REVIEW_CYCLES, decision,
-    labeller, body: pr.body, criteria: parseCriteria(pr.body),
+    labeller, body: pr.body, criteria: parseCriteria(requestBody(pr.body)), // never a checklist line the loop wrote
   };
 }
 
@@ -1164,7 +1186,7 @@ function handOver(review, kind, reason) {
 
 async function fixReview(review, { dir } = {}) {
   const roles = (await import("./roles.mjs")).forRepo(CONFIG);
-  RUN = newRun(review.issueNumber, dir);
+  RUN = newRun(review.issueNumber ?? `pr-${review.pr}`, dir);
   RUN.log(`\n━━ PR #${review.pr} review cycle ${review.cycle + 1}/${review.maxCycles} · ${review.threads.length} thread(s) · verdict ${review.verdict} · ${RUN.dir}`);
   const outcome = (o) => { writeFileSync(join(RUN.dir, "outcome.json"), JSON.stringify({ pr: review.pr, id: RUN.id, head: review.head, ...o }, null, 2)); return { pr: review.pr, dir: RUN.dir, ...o }; };
   const repoDir = join(RUN.dir, "repo");
@@ -1215,6 +1237,7 @@ async function fixReview(review, { dir } = {}) {
   }
   const mainBase = git(["merge-base", "origin/main", resolved.length ? mainSha : head], { cwd: repoDir }).out.trim();
 
+  const whose = review.issueNumber ? `issue #${review.issueNumber}'s` : `PR #${review.pr}'s`; // a PR with no issue: its own checklist
   if (mode === "verify") {
     // Check the issue's own acceptance criteria (the checklist publish wrote) on the final code.
     const criteria = review.criteria ?? [];
@@ -1223,7 +1246,7 @@ async function fixReview(review, { dir } = {}) {
       writeFileSync(join(RUN.dir, "verify.json"), JSON.stringify({ criteria: [], note: "no acceptance-criteria checklist in the PR description" }, null, 2));
       return outcome({ status: "verified", patchSha256: createHash("sha256").update("").digest("hex"), note: "no acceptance-criteria checklist in the PR description" });
     }
-    const vspec = asSpec(`Verify issue #${review.issueNumber}'s acceptance criteria on PR #${review.pr}'s final code.`, criteria.map((c) => ({ id: c.id, text: c.text, verified_by: "review" })));
+    const vspec = asSpec(`Verify ${whose} acceptance criteria on PR #${review.pr}'s final code.`, criteria.map((c) => ({ id: c.id, text: c.text, verified_by: "review" })));
     const { out } = await agent("review-verify", roles.reviewPrompt("spec", review.issue, vspec, mainBase) + reviewDiff(repoDir, mainBase),
       { cwd: repoDir, schema: roles.REVIEW_SCHEMA, check: true, maxTurns: 80 });
     verification = criteria.map((c) => out.criteria?.find((v) => v.id === c.id) ?? { id: c.id, met: false, evidence: "the spec reviewer gave no verdict for it" });
@@ -1236,7 +1259,7 @@ async function fixReview(review, { dir } = {}) {
       return outcome({ status: next.action === "verified" ? "verified" : "needs-human", reason: next.reason, patchSha256: createHash("sha256").update("").digest("hex") });
     }
     // Some aren't: make them true, through the same gates and reviews.
-    spec = asSpec(`Make the unmet acceptance criteria of issue #${review.issueNumber} true.`, unmet.map((v) => ({ id: v.id, text: `${criteria.find((c) => c.id === v.id).text} (not met yet: ${v.evidence})`, verified_by: "review" })));
+    spec = asSpec(`Make ${whose} unmet acceptance criteria true.`, unmet.map((v) => ({ id: v.id, text: `${criteria.find((c) => c.id === v.id).text} (not met yet: ${v.evidence})`, verified_by: "review" })));
     firstPrompt = roles.implementPrompt(review.issue, spec);
     diffBase = head;
   } else if (mode === "conflict" && resolved.length) {
@@ -1296,7 +1319,7 @@ function pushReview(dir, review) {
   const pr = loadPr(review.pr);
   if (pr.headRefOid !== review.head) return { pr: review.pr, status: "skipped", reason: "the PR moved on while the fix was being made" };
   if (pr.headRefName !== review.headRef) throw new Error(`unexpected PR branch ${pr.headRefName}`);
-  const refusal = loopRefusal({ ...pr, labels: pr.labels.nodes.map((l) => l.name) });
+  const refusal = loopRefusalFor(pr);
   if (refusal) return { pr: review.pr, status: "skipped", reason: refusal }; // re-checked here: push holds the write token
   if (!REVIEW_LOOP) return handOver(review, "needs-human", "the review loop needs an AGENT_GH_TOKEN secret: a fix pushed with the default token would never be reviewed again");
   const outcomeFile = join(dir, "outcome.json");
@@ -1384,11 +1407,13 @@ function pushReview(dir, review) {
   // one "Updated after review" section that each cycle replaces (escaped like all agent text).
   const update = String(fix.description_update ?? fix.last?.impl?.description_update ?? "").trim().replace(/^#{1,6} [^\n]*\n+/, ""); // our heading, not the agent's
   if (update) {
-    const section = `<!-- issue-agent-update -->\n### Updated after review cycle ${k}\n\n${md(update)}\n<!-- /issue-agent-update -->`;
+    const section = updateSection(k, update, md); // agent text can't open or close a comment (checks.mjs)
     const current = loadPr(review.pr).body;
     const body = /<!-- issue-agent-update -->[\s\S]*?<!-- \/issue-agent-update -->/.test(current)
       ? current.replace(/<!-- issue-agent-update -->[\s\S]*?<!-- \/issue-agent-update -->/, () => section) // a function: `$&` in agent text stays literal
-      : current.replace(/\n## In plain terms\n/, () => `\n${section}\n\n## In plain terms\n`);
+      : /(^|\r?\n)## In plain terms\r?\n/.test(current)
+        ? current.replace(/(^|\r?\n)(## In plain terms\r?\n)/, (_, before, heading) => `${before}${section}\n\n${heading}`)
+        : `${current.trimEnd()}\n\n${section}\n`; // no template heading to sit above: append it
     if (body !== current) sh("gh", ["pr", "edit", review.url, "-R", REPO, "--body", body], { allowFail: true });
   }
   const declined = fix.responses.filter((r) => r.action === "declined").length;

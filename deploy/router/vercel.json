@@ -5,9 +5,25 @@
   "outputDirectory": ".",
   "functions": { "api/ask.mjs": { "maxDuration": 30 } },
   "rewrites": [
-    { "source": "/", "destination": "https://openmobilehub.org/credentagent/" },
+    {
+      "source": "/",
+      "has": [{ "type": "header", "key": "accept", "value": ".*text/markdown.*" }],
+      "destination": "/domain.md"
+    },
+    { "source": "/", "destination": "https://openmobilehub.github.io/credentagent-website/" },
+    { "source": "/index.md", "destination": "/domain.md" },
     { "source": "/marketplace-dev/:path*", "destination": "https://credentagent-demo-dev.vercel.app/:path*" },
     { "source": "/marketplace/:path*", "destination": "https://credentagent-demo.vercel.app/:path*" },
-    { "source": "/:path*", "destination": "https://openmobilehub.org/credentagent/:path*" }
+    { "source": "/:path*", "destination": "https://openmobilehub.github.io/credentagent-website/:path*" }
+  ],
+  "headers": [
+    { "source": "/", "headers": [{ "key": "Vary", "value": "Accept, Accept-Encoding" }] },
+    {
+      "source": "/",
+      "has": [{ "type": "header", "key": "accept", "value": ".*text/markdown.*" }],
+      "headers": [{ "key": "Content-Type", "value": "text/markdown; charset=utf-8" }]
+    },
+    { "source": "/index.md", "headers": [{ "key": "Content-Type", "value": "text/markdown; charset=utf-8" }] },
+    { "source": "/domain.md", "headers": [{ "key": "Content-Type", "value": "text/markdown; charset=utf-8" }] }
   ]
 }

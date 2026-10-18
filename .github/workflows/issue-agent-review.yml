@@ -1,11 +1,12 @@
 name: issue-agent-review
 # In the Actions list: which agent branch (it carries the issue number), or which PR when run by hand.
-run-name: "issue-agent-review · ${{ github.event_name == 'push' && 'main moved: checking agent PRs for conflicts' || github.event.workflow_run.head_branch || format('PR #{0} (run by hand)', inputs.pr) }}"
+run-name: "issue-agent-review · ${{ github.event_name == 'push' && 'main moved: checking agent PRs for conflicts' || github.event_name == 'pull_request_target' && format('PR #{0} labelled {1}', github.event.pull_request.number, github.event.label.name) || github.event.workflow_run.head_branch || format('PR #{0} (run by hand)', inputs.pr) }}"
 
-# The review loop: after every Claude review of an issue agent's PR (branch agent/issue-*), the agent
-# fixes what the review asks, pushes, replies to and resolves each thread — and the push starts the
-# next review. It hands the PR to a human only when the review is ✅ Ready to merge, or 💬 with every
-# thread resolved, or when it stops (cycle cap, budget, a change it may not publish), saying why.
+# The review loop: after every Claude review of a PR in the loop (labelled agent:in-review — an issue
+# agent's PR, or any maintainer's PR given the label, e.g. by a coding agent), the agent fixes what
+# the review asks, pushes, replies to and resolves each thread — and the push starts the next review.
+# It hands the PR to a human only when the review is ✅ Ready to merge, or 💬 with every thread
+# resolved, or when it stops (cycle cap, budget, a change it may not publish), saying why.
 # How it works and what it trusts: ci/issue-agent/README.md, "The review loop".
 #
 # Same three-job split as issue-agent.yml, so code an agent writes never shares a job with a token:
@@ -24,17 +25,25 @@ on:
   workflow_run:
     workflows: ["Claude Code Review"]
     types: [completed]
+  # Adding agent:in-review starts a run at once, on the review already there — no waiting for the
+  # next one, nor running it by hand. pull_request_target, not pull_request: it runs main's copy of
+  # this file (as workflow_run does), so a PR can't rewrite the workflow that gets the secrets; and
+  # no job here runs the PR's code with a token. With no finished review yet, assess just waits.
+  pull_request_target:
+    types: [labeled]
   push:
     branches: [main]
   workflow_dispatch:
     inputs:
       pr:
-        description: "Agent PR number"
+        description: "PR number (labelled agent:in-review)"
         required: true
 
 concurrency:
   # By PR number, whether started by a review or by hand, so the two can't run on one PR at once.
-  group: ${{ github.event_name == 'push' && 'issue-agent-review-sweep' || format('issue-agent-review-pr-{0}', github.event.workflow_run.pull_requests[0].number || inputs.pr) }}
+  # Any other label's run (its jobs all skip) gets a group of its own: in the PR's group it would
+  # take the one pending slot GitHub keeps, and silently cancel a loop run waiting its turn.
+  group: ${{ github.event_name == 'push' && 'issue-agent-review-sweep' || (github.event_name == 'pull_request_target' && github.event.label.name != 'agent:in-review') && format('issue-agent-review-other-label-{0}', github.run_id) || format('issue-agent-review-pr-{0}', github.event.workflow_run.pull_requests[0].number || github.event.pull_request.number || inputs.pr) }}
   cancel-in-progress: false
 
 permissions: {}
@@ -64,21 +73,25 @@ jobs:
         run: node ci/issue-agent/run.mjs sweep-conflicts
 
   assess:
-    # Only reviews of PRs from agent branches in this repository (run.mjs re-checks: same repo, agent
-    # branch, agent:in-review). Any conclusion but "cancelled" (a newer push superseded it): a failed
-    # or verdict-less review is handed to a human rather than left waiting.
+    # Only reviews of PRs from branches in this repository. Which of those are in the loop is decided by
+    # run.mjs from main (loopRefusal: agent:in-review, and a write-access author unless it's an issue
+    # agent's branch); the rest skip in seconds. Any conclusion but "cancelled" (a newer push superseded
+    # it): a failed or verdict-less review is handed to a human rather than left waiting.
     if: >-
       github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request_target' &&
+       github.event.label.name == 'agent:in-review' &&
+       github.event.pull_request.head.repo.full_name == github.repository) ||
       (github.event.workflow_run.event == 'pull_request' &&
        github.event.workflow_run.conclusion != 'cancelled' &&
-       github.event.workflow_run.head_repository.full_name == github.repository &&
-       startsWith(github.event.workflow_run.head_branch, 'agent/issue-'))
+       github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: read
       pull-requests: write # labels, reviewer request, the hand-over comment
       issues: write
+      actions: read # a label-started run looks up the head's latest Claude review
     outputs:
       decision: ${{ steps.assess.outputs.decision }}
       pr: ${{ steps.pr.outputs.number }}
@@ -95,21 +108,39 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           INPUT_PR: ${{ inputs.pr }}
-          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          # The PR the review ran for, from the run itself — a branch name alone can match more than
+          # one PR (a fork's, or the same branch into another base) now that any branch can be in the loop.
+          RUN_PR: ${{ github.event.workflow_run.pull_requests[0].number || github.event.pull_request.number }}
         run: |
-          if [ -n "$INPUT_PR" ]; then n="$INPUT_PR"; else
-            n=$(gh pr list -R "$GITHUB_REPOSITORY" --head "$HEAD_BRANCH" --state open --json number --jq '.[0].number // empty')
-          fi
+          n="${INPUT_PR:-$RUN_PR}"
           case "$n" in ''|*[!0-9]*) echo "::notice::No open PR for this review."; n="" ;; esac
           echo "number=$n" >> "$GITHUB_OUTPUT"
+      - name: The head's latest Claude review (a label-started run)
+        # A review-started run is told how its review ended; a label-started one finds out. Finished →
+        # act on it, as that review's own run would have (a merge-only head reuses the last verdict, a
+        # failed review hands over). Still running, or none → empty: assess waits, and that review
+        # finishing starts the cycle — so a label never leaves a PR waiting with nothing to wake it.
+        id: review
+        if: github.event_name == 'pull_request_target' && steps.pr.outputs.number != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          latest=$(gh api -X GET "repos/$GITHUB_REPOSITORY/actions/workflows/claude-code-review.yml/runs" \
+            -f head_sha="$HEAD_SHA" -f event=pull_request -F per_page=20 \
+            --jq '[.workflow_runs[]] | sort_by(.created_at) | last // empty | "\(.status) \(.conclusion // "")"')
+          read -r status conclusion <<< "$latest"
+          if [ "$status" = completed ] && [ "$conclusion" != cancelled ]; then c="$conclusion"; else c=""; fi
+          echo "latest review of ${HEAD_SHA:0:7}: ${latest:-none} → conclusion '${c}'"
+          echo "conclusion=$c" >> "$GITHUB_OUTPUT"
       - name: Read the review
         id: assess
         if: steps.pr.outputs.number != ''
         env:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ steps.pr.outputs.number }}
-          ISSUE_AGENT_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
-          ISSUE_AGENT_REVIEW_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          ISSUE_AGENT_HEAD_SHA: ${{ github.event.workflow_run.head_sha || github.event.pull_request.head.sha }}
+          ISSUE_AGENT_REVIEW_CONCLUSION: ${{ github.event.workflow_run.conclusion || steps.review.outputs.conclusion }}
           # The cycle cap: the repo variable if set (e.g. raise it, then run by hand), else 3.
           ISSUE_AGENT_MAX_REVIEW_CYCLES: ${{ vars.ISSUE_AGENT_MAX_REVIEW_CYCLES }}
           # Off without a token whose pushes start workflows: then no fix session is spent at all.

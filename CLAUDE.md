@@ -51,6 +51,13 @@ conflicting with CI unable to run at all — and it conflicted on every branch t
 it (it was the sole merge conflict in both #41 reconciles). Anything derivable from
 `git`/`gh` should be **derived, not transcribed**.
 
+## Domain language — `GLOSSARY.md`
+
+Before naming a type, writing docs or copy, or reviewing wording, read
+[`GLOSSARY.md`](GLOSSARY.md) and use its terms (it lists what to avoid). When a term is
+contested or a new one is needed, use the `domain-modeling` skill: it updates the glossary
+and records hard-to-reverse decisions as ADRs in `docs/adr/`.
+
 ## Architecture (where things live)
 
 The gate is the security surface; the storefront is a reference consumer.
@@ -285,7 +292,10 @@ than whoever labelled it, or already has an open PR,
 and says why in a comment on the issue. **Only words by people with write access reach the agents**
 (the title and body if their author has it, and such people's comments, frozen at the label) — so to give
 it a request from an outside contributor, restate it in a comment. The agents run in a job with no
-GitHub token; a separate job publishes their reviewed change. It never merges; its PRs go through
+GitHub token; a separate job publishes their reviewed change. That change may edit `.claude/skills/`
+(skills are mostly guidance, like `docs/`), but never `.github/` or any other `.claude/` path — settings and
+hooks control the agents themselves, so a patch touching them is refused. A skill's frontmatter
+(`allowed-tools`, `hooks`) and bundled scripts can grant tools too: review a skill edit as carefully as settings. It never merges; its PRs go through
 the same human review as any other. Media lives on the `agent-evidence` branch — never merge it.
 With an `AGENT_GH_TOKEN` secret, the agent also works through the Claude review on its own PR
 (`.github/workflows/issue-agent-review.yml`): it fixes or answers every thread, pushes, resolves the
@@ -296,6 +306,12 @@ as does any other stated reason. Before any hand-over as ready it checks the iss
 criteria on the final code and ticks the PR's checklist. If `main` moves and an agent PR now
 conflicts with it, the loop resolves the conflict itself (a sweep runs on every push to `main`) or
 hands over. Don't review an `agent:in-review` PR yet; you'll be asked.
+**A PR you (a coding agent) open can use the same loop:** open it ready for review (not a draft)
+from a branch in this repo, write the description as the request — what it must do, and optionally
+an acceptance-criteria checklist (`- [ ] **AC1** …`) the loop checks before hand-over — and add the
+label: `gh pr edit <n> --add-label agent:in-review` (adding it starts the loop; with no review
+finished yet it waits for one). Add that label only when you want the loop to
+take the PR over; never on a PR a human is iterating on, since the loop pushes fixes to its branch.
 To see what it's working on: the 🤖 status comment on the issue (edited at each step), the
 `agent:working` label (`is:open label:agent:working`), and Actions runs named `issue-agent #<n> · …`.
 How it works and how to run it locally: [`ci/issue-agent/README.md`](ci/issue-agent/README.md).

@@ -4,7 +4,9 @@ import { readFileSync } from 'node:fs';
 
 const config = JSON.parse(readFileSync(new URL('./vercel.json', import.meta.url), 'utf8'));
 const rewrites = config.rewrites;
-const PAGES = 'https://openmobilehub.org/credentagent';
+// GitHub Pages itself, not openmobilehub.org/credentagent: that proxy has `trailingSlash: true`, so it
+// 308s /about to /credentagent/about/, which 404s on credentagent.ai (the file is about.html).
+const PAGES = 'https://openmobilehub.github.io/credentagent-website';
 const CATCH_ALL = { source: '/:path*', destination: `${PAGES}/:path*` };
 
 // Enough of Vercel's path-to-regexp for these sources: `:name*` matches zero or more segments.
@@ -13,6 +15,10 @@ const matches = (source, path) =>
 const indexOf = (source) => rewrites.findIndex((r) => r.source === source);
 
 describe('router vercel.json', () => {
+  it('proxies to GitHub Pages directly, not through openmobilehub.org (trailing-slash redirects)', () => {
+    for (const r of rewrites) expect(r.destination).not.toContain('openmobilehub.org');
+  });
+
   it('ends with a catch-all that forwards every other path to Pages', () => {
     expect(rewrites.at(-1)).toEqual(CATCH_ALL);
     for (const path of ['/robots.txt', '/llms.txt', '/sitemap.xml', '/about', '/no-such-page']) {
