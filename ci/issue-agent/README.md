@@ -117,7 +117,7 @@ Claude review runs on it, and `.github/workflows/issue-agent-review.yml` takes o
 review:
 
 ```
-Claude review finishes on an agent:in-review PR  (or: main moved, and the PR now conflicts with it)
+Claude review finishes on an agent:in-review PR, or the label is added   (or: main moved, and the PR now conflicts with it)
   ├─ assess   read the verdict + the open threads (the review bot's and maintainers' only)    (script)
   │             conflicts with main → fix: merge main, resolve the conflicts (or hand over at the cap)
   │             ✅ Ready to merge, or 💬 with no thread open → verify first:
@@ -152,19 +152,20 @@ Claude review finishes on an agent:in-review PR  (or: main moved, and the PR now
   cycle 3; its fourth cycle was started by hand).
 - **Only PRs labelled into the loop, only from this repository.** It acts only on PRs from branches
   in this repository that carry `agent:in-review` (so a PR a human has taken over is left alone),
-  and spends no fix session when `AGENT_GH_TOKEN` is missing.
-- **Any maintainer's PR can join — e.g. one a coding agent opened.** Mark it ready for review and
-  add `agent:in-review` (`gh pr edit <n> --add-label agent:in-review`): from the next Claude review
-  on, the loop answers it exactly as it does an issue agent's PR. With no issue behind it, the PR's
-  own title and description are the agents' request — so both its author and whoever added the
-  label must have write access, or the loop refuses it — and a `- [ ] **AC1** …` checklist in the
-  description is checked before hand-over like an issue's. The hand-over goes to whoever added the
-  label. The loop never takes a PR whose branch is `main`, `agent-evidence` or `release/*`. The label must be on
-  before the review finishes; to start on a review that already finished, run the loop by hand
-  (below). Every job checks out `main`'s harness
+  and spends no fix session when `AGENT_GH_TOKEN` is missing. Every job checks out `main`'s harness
   code (`run.mjs`), even when started by hand from another branch — but a hand-started run uses
   *that branch's workflow file* (which steps run, where secrets go), so only people with write
   access, who can start runs, can choose it.
+- **Any maintainer's PR can join — e.g. one a coding agent opened.** Mark it ready for review and
+  add `agent:in-review` (`gh pr edit <n> --add-label agent:in-review`). **Adding the label starts a
+  run at once** (`pull_request_target: labeled`, which runs `main`'s copy of the workflow): on a
+  review that has already finished it fixes right away; with none finished yet it waits, and the
+  review finishing starts the cycle. From then on the loop answers the PR exactly as it does an
+  issue agent's. With no issue behind it, the PR's own title and description are the agents'
+  request — so both its author and whoever added the label must have write access, or the loop
+  refuses it — and a `- [ ] **AC1** …` checklist in the description is checked before hand-over
+  like an issue's. The hand-over goes to whoever added the label. The loop never takes a PR whose
+  branch is `main`, `agent-evidence` or `release/*`.
 - **Never stranded.** A review that fails, or ends with no verdict for the latest commit (paused),
   hands the PR to a human with that reason — and so does a PR still in the loop once
   `AGENT_GH_TOKEN` is gone. A head that only merges `main` in (GitHub's *Update branch*) isn't
@@ -196,8 +197,8 @@ Claude review finishes on an agent:in-review PR  (or: main moved, and the PR now
 - **To run it by hand:** *Actions → issue-agent-review → Run workflow* with the PR number, or
   locally: `run.mjs assess-review <pr> --dry-run`, `run.mjs fix-review review.json`,
   `run.mjs push-review <fix-dir> --review review.json --pr <pr> --dry-run`. A PR that was already
-  handed over needs its `agent:in-review` label back first (swap it for `agent:needs-human` or
-  `agent:ready-for-human`); to give it more cycles than the cap, raise the cap — the repo variable
+  handed over goes back into the loop by putting its `agent:in-review` label back (swap it for
+  `agent:needs-human` or `agent:ready-for-human`), which starts a run by itself; to give it more cycles than the cap, raise the cap — the repo variable
   `ISSUE_AGENT_MAX_REVIEW_CYCLES` (`gh variable set ISSUE_AGENT_MAX_REVIEW_CYCLES --body 4`) for
   Actions runs, or the same environment variable locally. A review cancelled by hand without a new
   push starts nothing: run the loop by hand to resume it.

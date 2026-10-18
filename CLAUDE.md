@@ -296,7 +296,8 @@ hands over. Don't review an `agent:in-review` PR yet; you'll be asked.
 **A PR you (a coding agent) open can use the same loop:** open it ready for review (not a draft)
 from a branch in this repo, write the description as the request — what it must do, and optionally
 an acceptance-criteria checklist (`- [ ] **AC1** …`) the loop checks before hand-over — and add the
-label: `gh pr edit <n> --add-label agent:in-review`. Add that label only when you want the loop to
+label: `gh pr edit <n> --add-label agent:in-review` (adding it starts the loop; with no review
+finished yet it waits for one). Add that label only when you want the loop to
 take the PR over; never on a PR a human is iterating on, since the loop pushes fixes to its branch.
 To see what it's working on: the 🤖 status comment on the issue (edited at each step), the
 `agent:working` label (`is:open label:agent:working`), and Actions runs named `issue-agent #<n> · …`.
