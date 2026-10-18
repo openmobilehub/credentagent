@@ -279,6 +279,18 @@ export const labelledBy = (events, label = "agent:in-review") =>
   events.filter((e) => e?.label?.name === label).at(-1)?.actor?.login;
 
 /**
+ * The "Updated after review cycle k" section the push job writes into a PR description from the
+ * agent's `description_update`. The agent's text can never open or close an HTML comment — not even
+ * inside a code span, which `escape` (report.mjs md) leaves as it is — so it can't end the section
+ * early (and survive requestBody as a maintainer's words), nor plant a marker the loop reads back
+ * (`<!-- issue-agent labeller=… -->`, `<!-- issue-agent-verified … -->`).
+ */
+export function updateSection(cycle, text, escape = (s) => s) {
+  const safe = String(text ?? "").replace(/<!--|-->/g, "");
+  return `<!-- issue-agent-update -->\n### Updated after review cycle ${cycle}\n\n${escape(safe)}\n<!-- /issue-agent-update -->`;
+}
+
+/**
  * A PR description as a request: without what the loop itself wrote into it — the "Updated after
  * review" section and the evidence a criteria check appended to a checklist line — since that is
  * agent text under a trusted account, which must never come back as a maintainer's words (as

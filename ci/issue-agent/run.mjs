@@ -49,7 +49,7 @@ import {
   TRUSTED_PERMISSIONS, titleAuthor, forbiddenPaths, applyAndCheck, changedSince, isRunId, isCommitId, publishIssueNumber,
   isReviewBot, parseVerdict, agentBranch, threadsToAnswer, reviewDecision, sharedChanges, filesBetween, cyclesDone, loopRefusal, latestVerdict, cycleCap,
   parseCriteria, tickCriteria, verifiedFor, afterVerification, acceptVerified, conflictMidCycle,
-  isAgentComment, requestComments, leftLoop, labelledBy, requestBody,
+  isAgentComment, requestComments, leftLoop, labelledBy, requestBody, updateSection,
   roleModel, testGateCommand, rootTestRefusal, publishVerdict, isMutableSource, sameLockfile, publishRefusalHint,
 } from "./checks.mjs";
 import { reportHtml, prBody, issueComment, md, statusBody, STATUS_MARK } from "./report.mjs";
@@ -1170,7 +1170,7 @@ function pushReview(dir, review) {
   // one "Updated after review" section that each cycle replaces (escaped like all agent text).
   const update = String(fix.description_update ?? fix.last?.impl?.description_update ?? "").trim().replace(/^#{1,6} [^\n]*\n+/, ""); // our heading, not the agent's
   if (update) {
-    const section = `<!-- issue-agent-update -->\n### Updated after review cycle ${k}\n\n${md(update)}\n<!-- /issue-agent-update -->`;
+    const section = updateSection(k, update, md); // agent text can't open or close a comment (checks.mjs)
     const current = loadPr(review.pr).body;
     const body = /<!-- issue-agent-update -->[\s\S]*?<!-- \/issue-agent-update -->/.test(current)
       ? current.replace(/<!-- issue-agent-update -->[\s\S]*?<!-- \/issue-agent-update -->/, () => section) // a function: `$&` in agent text stays literal
