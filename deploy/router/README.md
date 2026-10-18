@@ -1,15 +1,17 @@
 # credentagent.ai router
 
 The Vercel project **`credentagent-router`** (team `cbg6`) owns the `credentagent.ai` and
-`www.credentagent.ai` domains. Apart from one small function (`/api/ask`, below) it hosts nothing
-itself — `vercel.json` forwards each path to the demo that serves it:
+`www.credentagent.ai` domains. Apart from one small function (`/api/ask`, below) and `index.md` (the
+domain described in Markdown, for agents), it hosts nothing itself — `vercel.json` forwards each
+other path to the site that serves it:
 
 | Public URL | Served by |
 | --- | --- |
 | `https://credentagent.ai/marketplace/mcp` | `credentagent-demo` — the published npm packages |
 | `https://credentagent.ai/marketplace-dev/mcp` | `credentagent-demo-dev` — `main`'s unpublished packages |
 | `https://credentagent.ai/marketplace-dev/checkout?…` and the other store pages | `credentagent-demo-dev` — its checkout and consent pages (see below) |
-| `https://credentagent.ai/` | the product page from https://openmobilehub.org/credentagent, served under credentagent.ai (the address bar stays on credentagent.ai) |
+| `https://credentagent.ai/` | the product page from https://openmobilehub.org/credentagent, served under credentagent.ai (the address bar stays on credentagent.ai); with `Accept: text/markdown`, this folder's `index.md` (see below) |
+| `https://credentagent.ai/index.md` | this folder's `index.md` — the domain described in Markdown, for agents |
 | `https://credentagent.ai/<anything else>` (`/robots.txt`, `/llms.txt`, `/sitemap.xml`, `/about`, …) | the same path under https://openmobilehub.org/credentagent/ — the last rewrite, a catch-all |
 
 **The catch-all (issue #369, "serve every website path"):** every path that no other rule claims,
@@ -49,19 +51,24 @@ credentagent.ai. The prod demo keeps its `*.vercel.app` links until a release ca
 pages use root paths); then set `PUBLIC_URL=https://credentagent.ai/marketplace` in `deploy-prod.yml`.
 
 **Markdown for agents on `/` (#370):** a request for `/` whose `Accept` header contains
-`text/markdown` is rewritten to `https://openmobilehub.org/credentagent/index.md` and answered with
+`text/markdown` is rewritten to this folder's [`index.md`](./index.md) and answered with
 `Content-Type: text/markdown; charset=utf-8`; every other request (browsers, `Accept: text/html`, no
 `Accept`) still gets the HTML page. `/` always carries `Vary: Accept, Accept-Encoding`, which tells a
-cache to keep the two copies apart. The Markdown file is published by the website
-(openmobilehub/credentagent-website#33); until it is live, the Markdown request gets that site's error.
-`config.test.mjs` (run by the root `npm test`) resolves `vercel.json` the way Vercel does and pins both
-answers as configured. Two things only the live site shows: whether Vercel applies the `Content-Type`
-override on this external rewrite, and whether the website serves the file. The `deploy-prod` smoke
-test does not check them yet, so after a deploy that touches the router, run both by hand:
+cache to keep the two copies apart. `index.md` belongs to the router, not the website, because it
+describes the whole domain — the product in brief, the `/marketplace/mcp` and `/marketplace-dev/mcp`
+endpoints, how an agent tries the store, the packages, and what the gate doesn't do yet — and it ships
+with every router deploy, so it can't 404. It is also served directly at `https://credentagent.ai/index.md`
+(the file wins over the catch-all, so the website's own `index.md` isn't reachable on this domain).
+**Keep it in sync** when a route, package or trust level changes. `config.test.mjs` (run by the root
+`npm test`) resolves `vercel.json` the way Vercel does, pins both answers as configured, and checks that
+`index.md` names both MCP endpoints, the presence-only trust level and the walletless "instant demo" path. One thing only the live site
+shows: whether Vercel sends the `Content-Type` override. The `deploy-prod` smoke test does not check it
+yet, so after a deploy that touches the router, run these by hand:
 
 ```sh
 curl -sSL -i -H 'Accept: text/markdown' https://credentagent.ai/   # 200, text/markdown, Vary: Accept, Accept-Encoding, Markdown body
 curl -sSL -i -H 'Accept: text/html'     https://credentagent.ai/   # 200, text/html
+curl -sSI https://credentagent.ai/index.md                          # 200, text/markdown
 ```
 
 To add a route, add a `rewrites` entry mapping `/<name>/:path*` to the target origin, above the catch-all.
