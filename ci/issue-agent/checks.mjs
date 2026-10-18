@@ -251,13 +251,15 @@ export const cyclesDone = (comments, isTrusted) =>
   comments.filter((c) => /<!-- issue-agent-review cycle=\d+ /.test(c.body) && isLoopAuthor(c.author, isTrusted)).length;
 
 /**
- * Whether the review loop may act on a PR at all: an issue-agent branch in THIS repository (never a
- * fork — its code would be run, then pushed here with a write token), still open, and opted into
- * the loop by publish (`agent:in-review`). Returns the reason it may not, or undefined.
+ * Whether the review loop may act on a PR at all: a branch in THIS repository (never a fork — its
+ * code would be run, then pushed here with a write token), still open, and opted into the loop with
+ * `agent:in-review` — by publish for an issue-agent branch, or by hand (or by a coding agent) for any
+ * other PR, which must then be opened by someone with write access: its description becomes the
+ * agents' request, as an issue's body does. Returns the reason it may not, or undefined.
  */
-export function loopRefusal({ headRefName, isCrossRepository, state, labels }) {
+export function loopRefusal({ headRefName, isCrossRepository, state, labels, authorTrusted }) {
   if (isCrossRepository) return "the PR comes from a fork — the loop only works on branches in this repository";
-  if (!agentBranch(headRefName)) return `${headRefName} is not an issue-agent branch`;
+  if (!agentBranch(headRefName) && !authorTrusted) return "the PR was opened by someone without write access — the loop only takes its request from maintainers";
   if (state !== "OPEN") return `the PR is ${String(state).toLowerCase()}`;
   if (!labels.includes("agent:in-review")) return "the PR isn't in the review loop (no agent:in-review label) — a human may be working on it";
   return undefined;

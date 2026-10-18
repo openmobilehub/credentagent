@@ -427,13 +427,19 @@ describe("the review loop", () => {
     expect(leftLoop({ ...pr, headRefName: "feat/x" })).toBe(false);
   });
 
-  it("refuses forks, non-agent branches, closed PRs and PRs out of the loop", () => {
+  it("refuses forks, outsiders' PRs, closed PRs and PRs out of the loop", () => {
     const pr = { headRefName: "agent/issue-1-202610162031", isCrossRepository: false, state: "OPEN", labels: ["agent:in-review"] };
     expect(loopRefusal(pr)).toBeUndefined();
     expect(loopRefusal({ ...pr, isCrossRepository: true })).toMatch(/fork/);
-    expect(loopRefusal({ ...pr, headRefName: "feat/x" })).toMatch(/not an issue-agent branch/);
+    expect(loopRefusal({ ...pr, isCrossRepository: true, authorTrusted: true })).toMatch(/fork/);
     expect(loopRefusal({ ...pr, state: "MERGED" })).toMatch(/merged/);
     expect(loopRefusal({ ...pr, labels: ["agent:needs-human"] })).toMatch(/isn't in the review loop/);
+    // Any other branch: in the loop by its label, if a maintainer opened it (its description is the request).
+    const other = { ...pr, headRefName: "docs/glossary" };
+    expect(loopRefusal({ ...other, authorTrusted: true })).toBeUndefined();
+    expect(loopRefusal({ ...other, authorTrusted: false })).toMatch(/without write access/);
+    expect(loopRefusal(other)).toMatch(/without write access/);
+    expect(loopRefusal({ ...other, authorTrusted: true, labels: [] })).toMatch(/isn't in the review loop/);
   });
 
   it("brings main in only when main changed a file the PR changes too", () => {

@@ -141,7 +141,7 @@ const ensureLabels = () => {
 let RUN; // per issue: { id, dir, costUsd, log() }
 const newRun = (n, dir) => {
   const id = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 12);
-  dir ??= join(RUNS_HOME, `issue-${n}-${id}`);
+  dir ??= join(RUNS_HOME, `${typeof n === "number" ? `issue-${n}` : n}-${id}`); // n: an issue number, or e.g. "pr-396"
   mkdirSync(dir, { recursive: true });
   return { id, dir, costUsd: 0, models: {}, log: (s) => { console.log(s); appendFileSync(join(dir, "run.log"), s + "\n"); } };
 };
@@ -828,20 +828,33 @@ function dispatchReviewLoop(pr) {
 // After main moves: every PR still in the loop that now conflicts with main gets a conflict cycle
 // (GitHub runs no review on a conflicting PR, so without this it would wait forever).
 function sweepConflicts() {
-  const prs = ghJson(["pr", "list", "-R", REPO, "--state", "open", "--label", LABELS.inReview, "--limit", "50", "--json", "number,headRefName"])
-    .filter((p) => agentBranch(p.headRefName));
+  const prs = ghJson(["pr", "list", "-R", REPO, "--state", "open", "--label", LABELS.inReview, "--limit", "50", "--json", "number,headRefName"]);
   const started = [];
   for (const { number } of prs) {
     const pr = loadPrSettled(number);
     console.log(`  #${number}: ${pr.mergeable}`);
-    if (pr.mergeable === "CONFLICTING" && !loopRefusal({ ...pr, labels: pr.labels.nodes.map((l) => l.name) })) {
+    if (pr.mergeable === "CONFLICTING" && !loopRefusalFor(pr)) {
       dispatchReviewLoop(number);
-      setStatus(agentBranch(pr.headRefName).issue, `main moved and ${pr.url} now conflicts with it — the agent is resolving that`, { working: true });
+      setStatus(agentBranch(pr.headRefName)?.issue, `main moved and ${pr.url} now conflicts with it — the agent is resolving that`, { working: true });
       started.push(number);
     }
   }
   return started;
 }
+
+// loopRefusal (checks.mjs) for a loaded PR: its labels, and whether its author has write access
+// (asked only for a PR off an issue-agent branch — publish opened those).
+function loopRefusalFor(pr) {
+  const labels = pr.labels.nodes.map((l) => l.name);
+  return loopRefusal({ ...pr, labels, authorTrusted: !agentBranch(pr.headRefName) && trusted(pr.author?.login) });
+}
+
+// The request a PR off any other branch carries in place of an issue: its own title and description,
+// written by its (write-access) author — loopRefusal refuses the PR otherwise.
+const prRequest = (pr) => ({
+  number: pr.number, url: pr.url, title: pr.title, author: pr.author?.login, comments: [], dropped: [],
+  body: `(This pull request has no issue: its description is the request.)\n\n${pr.body ?? ""}`,
+});
 
 function loadPr(number) {
   const q = `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){
@@ -869,12 +882,13 @@ function assessReview(prNumber) {
   // issue's agent:working label has to come off; a merely stale review leaves it alone.
   const skip = (reason, left = false) => ({ pr: pr.number, url: pr.url, issueNumber: agentBranch(pr.headRefName)?.issue, decision: { action: "skip", reason, left } });
   const labels = pr.labels.nodes.map((l) => l.name);
-  const refusal = loopRefusal({ ...pr, labels });
+  const refusal = loopRefusalFor(pr);
   if (refusal) return skip(refusal, leftLoop({ ...pr, labels })); // tested in checks.mjs
   const expected = process.env.ISSUE_AGENT_HEAD_SHA;
   if (expected && expected !== pr.headRefOid) return skip("the PR has moved on since this review ran");
   const branch = agentBranch(pr.headRefName);
-  const labeller = pr.body.match(/<!-- issue-agent labeller=([A-Za-z0-9-]+) -->/)?.[1];
+  // Who gets the hand-over: whoever labelled the issue — or, for a PR with no issue, its author.
+  const labeller = branch ? pr.body.match(/<!-- issue-agent labeller=([A-Za-z0-9-]+) -->/)?.[1] : pr.author?.login;
   const head = pr.commits.nodes[0].commit;
   const summaries = pr.comments.nodes.filter((c) => isReviewBot(c.author) && c.body.startsWith("## Claude review"));
   const conclusion = process.env.ISSUE_AGENT_REVIEW_CONCLUSION || undefined;
@@ -888,9 +902,10 @@ function assessReview(prNumber) {
     verdict, open: answer.length, cycle, maxCycles: MAX_REVIEW_CYCLES, conclusion, loopOn: REVIEW_LOOP,
     conflicting: pr.mergeable === "CONFLICTING", verified: verifiedFor(pr.comments.nodes, pr.headRefOid, trusted),
   });
-  const issue = snapshotIssue(branch.issue).issue ?? { number: branch.issue, title: `Issue #${branch.issue}`, body: "", comments: [], dropped: [] };
+  const issue = !branch ? prRequest(pr)
+    : snapshotIssue(branch.issue).issue ?? { number: branch.issue, title: `Issue #${branch.issue}`, body: "", comments: [], dropped: [] };
   return {
-    pr: pr.number, url: pr.url, headRef: pr.headRefName, head: pr.headRefOid, isDraft: pr.isDraft, issueNumber: branch.issue, issue,
+    pr: pr.number, url: pr.url, headRef: pr.headRefName, head: pr.headRefOid, isDraft: pr.isDraft, issueNumber: branch?.issue, issue,
     verdict, summary: summary.slice(0, 30_000), threads: answer, ignored, cycle, maxCycles: MAX_REVIEW_CYCLES, decision,
     labeller, body: pr.body, criteria: parseCriteria(pr.body),
   };
@@ -932,7 +947,7 @@ function handOver(review, kind, reason) {
 
 async function fixReview(review, { dir } = {}) {
   const roles = (await import("./roles.mjs")).forRepo(CONFIG);
-  RUN = newRun(review.issueNumber, dir);
+  RUN = newRun(review.issueNumber ?? `pr-${review.pr}`, dir);
   RUN.log(`\n━━ PR #${review.pr} review cycle ${review.cycle + 1}/${review.maxCycles} · ${review.threads.length} thread(s) · verdict ${review.verdict} · ${RUN.dir}`);
   const outcome = (o) => { writeFileSync(join(RUN.dir, "outcome.json"), JSON.stringify({ pr: review.pr, id: RUN.id, head: review.head, ...o }, null, 2)); return { pr: review.pr, dir: RUN.dir, ...o }; };
   const repoDir = join(RUN.dir, "repo");
@@ -983,6 +998,7 @@ async function fixReview(review, { dir } = {}) {
   }
   const mainBase = git(["merge-base", "origin/main", resolved.length ? mainSha : head], { cwd: repoDir }).out.trim();
 
+  const whose = review.issueNumber ? `issue #${review.issueNumber}'s` : `PR #${review.pr}'s`; // a PR with no issue: its own checklist
   if (mode === "verify") {
     // Check the issue's own acceptance criteria (the checklist publish wrote) on the final code.
     const criteria = review.criteria ?? [];
@@ -991,7 +1007,7 @@ async function fixReview(review, { dir } = {}) {
       writeFileSync(join(RUN.dir, "verify.json"), JSON.stringify({ criteria: [], note: "no acceptance-criteria checklist in the PR description" }, null, 2));
       return outcome({ status: "verified", patchSha256: createHash("sha256").update("").digest("hex"), note: "no acceptance-criteria checklist in the PR description" });
     }
-    const vspec = asSpec(`Verify issue #${review.issueNumber}'s acceptance criteria on PR #${review.pr}'s final code.`, criteria.map((c) => ({ id: c.id, text: c.text, verified_by: "review" })));
+    const vspec = asSpec(`Verify ${whose} acceptance criteria on PR #${review.pr}'s final code.`, criteria.map((c) => ({ id: c.id, text: c.text, verified_by: "review" })));
     const { out } = await agent("review-verify", roles.reviewPrompt("spec", review.issue, vspec, mainBase) + reviewDiff(repoDir, mainBase),
       { cwd: repoDir, schema: roles.REVIEW_SCHEMA, check: true, maxTurns: 80 });
     verification = criteria.map((c) => out.criteria?.find((v) => v.id === c.id) ?? { id: c.id, met: false, evidence: "the spec reviewer gave no verdict for it" });
@@ -1004,7 +1020,7 @@ async function fixReview(review, { dir } = {}) {
       return outcome({ status: next.action === "verified" ? "verified" : "needs-human", reason: next.reason, patchSha256: createHash("sha256").update("").digest("hex") });
     }
     // Some aren't: make them true, through the same gates and reviews.
-    spec = asSpec(`Make the unmet acceptance criteria of issue #${review.issueNumber} true.`, unmet.map((v) => ({ id: v.id, text: `${criteria.find((c) => c.id === v.id).text} (not met yet: ${v.evidence})`, verified_by: "review" })));
+    spec = asSpec(`Make ${whose} unmet acceptance criteria true.`, unmet.map((v) => ({ id: v.id, text: `${criteria.find((c) => c.id === v.id).text} (not met yet: ${v.evidence})`, verified_by: "review" })));
     firstPrompt = roles.implementPrompt(review.issue, spec);
     diffBase = head;
   } else if (mode === "conflict" && resolved.length) {
@@ -1064,7 +1080,7 @@ function pushReview(dir, review) {
   const pr = loadPr(review.pr);
   if (pr.headRefOid !== review.head) return { pr: review.pr, status: "skipped", reason: "the PR moved on while the fix was being made" };
   if (pr.headRefName !== review.headRef) throw new Error(`unexpected PR branch ${pr.headRefName}`);
-  const refusal = loopRefusal({ ...pr, labels: pr.labels.nodes.map((l) => l.name) });
+  const refusal = loopRefusalFor(pr);
   if (refusal) return { pr: review.pr, status: "skipped", reason: refusal }; // re-checked here: push holds the write token
   if (!REVIEW_LOOP) return handOver(review, "needs-human", "the review loop needs an AGENT_GH_TOKEN secret: a fix pushed with the default token would never be reviewed again");
   const outcomeFile = join(dir, "outcome.json");

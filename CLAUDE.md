@@ -293,6 +293,11 @@ as does any other stated reason. Before any hand-over as ready it checks the iss
 criteria on the final code and ticks the PR's checklist. If `main` moves and an agent PR now
 conflicts with it, the loop resolves the conflict itself (a sweep runs on every push to `main`) or
 hands over. Don't review an `agent:in-review` PR yet; you'll be asked.
+**A PR you (a coding agent) open can use the same loop:** open it ready for review (not a draft)
+from a branch in this repo, write the description as the request — what it must do, and optionally
+an acceptance-criteria checklist (`- [ ] **AC1** …`) the loop checks before hand-over — and add the
+label: `gh pr edit <n> --add-label agent:in-review`. Add that label only when you want the loop to
+take the PR over; never on a PR a human is iterating on, since the loop pushes fixes to its branch.
 To see what it's working on: the 🤖 status comment on the issue (edited at each step), the
 `agent:working` label (`is:open label:agent:working`), and Actions runs named `issue-agent #<n> · …`.
 How it works and how to run it locally: [`ci/issue-agent/README.md`](ci/issue-agent/README.md).

@@ -117,7 +117,7 @@ Claude review runs on it, and `.github/workflows/issue-agent-review.yml` takes o
 review:
 
 ```
-Claude review finishes on an agent/issue-* PR   (or: main moved, and the PR now conflicts with it)
+Claude review finishes on an agent:in-review PR  (or: main moved, and the PR now conflicts with it)
   ├─ assess   read the verdict + the open threads (the review bot's and maintainers' only)    (script)
   │             conflicts with main → fix: merge main, resolve the conflicts (or hand over at the cap)
   │             ✅ Ready to merge, or 💬 with no thread open → verify first:
@@ -150,9 +150,17 @@ Claude review finishes on an agent/issue-* PR   (or: main moved, and the PR now 
   **💬 counts as ready**: the PR goes to you as `agent:ready-for-human` with the open notes listed
   and linked. **⛔ at the cap never does** — that stops as `agent:needs-human` (as #347 did after
   cycle 3; its fourth cycle was started by hand).
-- **Only PRs the loop opened, only from this repository.** It acts only on `agent/issue-*` branches
+- **Only PRs labelled into the loop, only from this repository.** It acts only on PRs from branches
   in this repository that carry `agent:in-review` (so a PR a human has taken over is left alone),
-  and spends no fix session when `AGENT_GH_TOKEN` is missing. Every job checks out `main`'s harness
+  and spends no fix session when `AGENT_GH_TOKEN` is missing.
+- **Any maintainer's PR can join — e.g. one a coding agent opened.** Mark it ready for review and
+  add `agent:in-review` (`gh pr edit <n> --add-label agent:in-review`): from the next Claude review
+  on, the loop answers it exactly as it does an issue agent's PR. With no issue behind it, the PR's
+  own title and description are the agents' request (so its author must have write access — the
+  loop refuses the PR otherwise), a `- [ ] **AC1** …` checklist in the description is checked before
+  hand-over like an issue's, and the hand-over @-mentions the PR's author. The label must be on
+  before the review finishes; to start on a review that already finished, run the loop by hand
+  (below). Every job checks out `main`'s harness
   code (`run.mjs`), even when started by hand from another branch — but a hand-started run uses
   *that branch's workflow file* (which steps run, where secrets go), so only people with write
   access, who can start runs, can choose it.
