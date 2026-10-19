@@ -211,6 +211,28 @@ describe("#357 review — an order the server forgot keeps its age check", () =>
     expect((await pay(s.app, order)).body).toMatchObject({ completed: false, reason: "age" });
   });
 
+  // The server keeps ONE registered `age`: a later 21+ order overwrites the 25+ order's rule, so
+  // only the per-order memory still knows ORD-1 asked for 25. A 21+ proof is on record for it.
+  const twoAges = () => {
+    const s = setup();
+    const order = s.open("ORD-1", "gift-card", [required(age.over(25)), required(payment.in("usd"))]);
+    s.open("ORD-2", "gift-card", [required(age.over(21)), required(payment.in("usd"))]);
+    s.host.verificationStore.write("ORD-1", { ageVerified: true, ageVerifiedOver: 21 });
+    return { s, order };
+  };
+
+  it("BYPASS (invariant 1+5): a 21+ proof can't pay for a 25+ order after a 21+ order took the server's age rule", async () => {
+    const { s, order } = twoAges();
+    expect((await pay(s.app, order)).body).toMatchObject({ completed: false, reason: "age" });
+    expect(s.completed.has("ORD-1")).toBe(false);
+  });
+
+  it("BYPASS (invariant 1+5): …nor complete it on the host's own action path (host.complete)", async () => {
+    const { s, order } = twoAges();
+    expect(await s.host.complete(s.input(order))).toMatchObject({ completed: false, reason: "age" });
+    expect(s.completed.has("ORD-1")).toBe(false);
+  });
+
   it("BYPASS (invariant 1): …and so is one passed to mount(app, { policyAge }) (the explicit-seams path)", async () => {
     const s = setup({ mountWith: { policyAge: (id) => (id === "ORD-1" ? 21 : undefined) } });
     const order = s.create("ORD-1", "gift-card");
