@@ -246,4 +246,8 @@ describe("#357 review — age.over() refuses a threshold it could never check", 
   it.each([NaN, 0, -1, 20.5, Infinity])("age.over(%s) throws instead of switching the age check off", (n) => {
     expect(() => age.over(n)).toThrow(/whole number above 0/);
   });
+
+  it("a string age (process.env read without Number()) is named as one, not shown as a valid-looking 21", () => {
+    expect(() => age.over("21" as unknown as number)).toThrow('age.over("21"): the age must be a whole number above 0, like age.over(21) — got a string.');
+  });
 });

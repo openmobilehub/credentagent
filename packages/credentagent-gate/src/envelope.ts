@@ -30,7 +30,7 @@ export type BuiltinKind = "age" | "membership" | "payment";
  */
 export function ageDcql(minAge = 21): DcqlQuery {
   const over = (ns: string, n: number) => ({ path: [ns, `age_over_${n}`], intent_to_retain: false });
-  const claimsIn = (ns: string) => (minAge > 18 ? [over(ns, minAge), over(ns, 18)] : [over(ns, 18)]);
+  const claimsIn = (ns: string) => (minAge !== 18 ? [over(ns, minAge), over(ns, 18)] : [over(ns, 18)]);
   return {
     credentials: [
       {

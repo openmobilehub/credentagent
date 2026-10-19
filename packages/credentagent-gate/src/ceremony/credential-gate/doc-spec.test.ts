@@ -33,6 +33,10 @@ describe("mdocDocSpec — the iOS age request asks for the order's own threshold
     expect(mdocDocSpec("age", 25).elements).toEqual(["age_over_25", "age_over_18"]);
   });
 
+  it("a 16+ order asks for age_over_16 — 18 alone could never prove it", () => {
+    expect(mdocDocSpec("age", 16).elements).toEqual(["age_over_16", "age_over_18"]);
+  });
+
   it("the usual 21+ and 18+ requests are unchanged", () => {
     expect(mdocDocSpec("age", 21).elements).toEqual(["age_over_21", "age_over_18"]);
     expect(mdocDocSpec("age", 18).elements).toEqual(["age_over_18"]);

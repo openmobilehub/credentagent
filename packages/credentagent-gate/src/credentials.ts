@@ -135,7 +135,11 @@ export const age = {
     // failed. Refuse it at construction, like the other builders (e.g. `age.over(Number(env))`
     // with the variable unset).
     if (!Number.isInteger(minAge) || minAge <= 0) {
-      throw new Error(`age.over(${String(minAge)}): the age must be a whole number above 0, like age.over(21).`);
+      // Name the value's type: `age.over("21")` (a string read from process.env) must not read
+      // like `age.over(21)` in the message.
+      const shown = typeof minAge === "string" ? JSON.stringify(minAge) : String(minAge);
+      const got = typeof minAge === "number" ? "" : ` — got a ${typeof minAge}`;
+      throw new Error(`age.over(${shown}): the age must be a whole number above 0, like age.over(21)${got}.`);
     }
     return makeCredential({
       id: "age",
