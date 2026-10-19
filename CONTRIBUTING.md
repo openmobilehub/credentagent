@@ -197,7 +197,9 @@ previous version:
   into its pages: the nav pill, the NEW strip, the storefront `npm i` line and the JSON-LD in
   `index.html`, plus `index.md`, `llms.txt` and its CLAUDE.md.
 
-`publish.yml`'s **catch-up** job opens both PRs once npm serves the release. It needs the
+`publish.yml`'s **catch-up** job opens both PRs once npm serves the release. It skips, on purpose,
+a pre-release and a backport (a release older than what the demo already runs, such as 0.5.3
+after 0.6.0), which would move the demo and the site backwards. It needs the
 `AGENT_GH_TOKEN` secret with write access to both repos; without it the job only warns, and you
 open them by hand (commit with `-s`):
 
