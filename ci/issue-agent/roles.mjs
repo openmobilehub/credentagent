@@ -6,6 +6,7 @@
 // contributor — these prompts don't restate them, they point at them.
 
 import { DEFAULT_CONFIG, checkCommand, testLabel } from "./config.mjs";
+import { SCOPE_LIMITS } from "./scope.mjs";
 
 const issueBlock = (issue) =>
   `<issue number="${issue.number}" url="${issue.url}">\n<title>${issue.title}</title>\n<body>\n${issue.body}\n</body>\n${
@@ -67,7 +68,7 @@ export function forRepo(cfg = DEFAULT_CONFIG) {
   const text = (description) => ({ type: "string", description });
   const BRIEF_SCHEMA = {
     type: "object",
-    required: ["actionable", "reproduced", "card", "acceptance_criteria", "not_in_scope", "behavior_change", "touches_ui", "evidence_plan", "test_plan", "revised"],
+    required: ["actionable", "reproduced", "card", "acceptance_criteria", "not_in_scope", "behavior_change", "touches_ui", "evidence_plan", "test_plan", "revised", "scope"],
     properties: {
       actionable: { type: "boolean", description: "false if it is not code in this repo, already fixed on main, or blocked on unmerged work" },
       blocker: text("when not actionable: exactly what is missing and who must act"),
@@ -126,6 +127,31 @@ export function forRepo(cfg = DEFAULT_CONFIG) {
       evidence_plan: text("if touches_ui: which URL, which input, what before vs after shows. Otherwise 'test proof'"),
       test_plan: text("which test files get which tests; for a security fix, the bypass test and the control it must fail without"),
       files_likely: { type: "array", items: { type: "string" } },
+      scope: {
+        type: "object",
+        required: ["verdict", "why"],
+        description: "one pull request, or a plan of several (the to-tickets skill)",
+        properties: {
+          verdict: { type: "string", enum: ["single", "split"] },
+          why: text("plain words: why this is one change, or why it is several and in what order. Shown on the card"),
+          design: text("split only: the decisions no single ticket may make alone — what is stored and where, the interfaces between the tickets, the security controls and their bypass tests (the codebase-design and to-spec skills). Code names are fine"),
+          tickets: {
+            type: "array",
+            description: "split only: 2–8 tracer-bullet tickets (the to-tickets skill), blockers first",
+            items: {
+              type: "object",
+              required: ["id", "title", "delivers", "criteria", "blocked_by"],
+              properties: {
+                id: { type: "string", description: "T1, T2, …" },
+                title: text("short, in everyday words"),
+                delivers: text("the end-to-end behaviour this ticket makes work, from the person's side — demoable or checkable on its own"),
+                criteria: { type: "array", items: { type: "string" }, description: "the acceptance criterion ids this ticket delivers; every criterion belongs to exactly one ticket" },
+                blocked_by: { type: "array", items: { type: "string" }, description: "ticket ids that must be done first; empty if it can start now" },
+              },
+            },
+          },
+        },
+      },
       revised: { type: "boolean", description: "true when this is a new version of the brief; false when you only answered a question and the previous version stands" },
       reply: text("your answer to the maintainer's latest comment(s), in plain words — empty on a first brief"),
       changes_since_previous: text("one line: what moved since the previous version (empty on a first brief)"),
@@ -152,6 +178,11 @@ Do this:
    - Don't overclaim (safe, secure, guarantees, proves age) and don't play it down ("just a demo", "none known" next to a working reproduction).
 6. Acceptance criteria (below the card; code names are fine here): what a reviewer can check without you. A behavior change needs at least one checked by a test; a security fix lists every bad case it refuses and the good case that still works, and its test must fail when the control is removed. Things only a person can check after the merge are "after-merge".
 7. Say what is NOT in scope.
+8. Decide the scope: is this ONE pull request a reviewer can hold in their head, or several? First read .claude/skills/to-tickets/SKILL.md, .claude/skills/codebase-design/SKILL.md and .claude/skills/to-spec/SKILL.md (they don't load on their own; follow them here — if this checkout has none of them, apply the rules below as stated). Split when the change does more than one thing a person could ship and check alone, adds a new security mechanism alongside other work, changes stored data that other stores must hold, or goes past ${SCOPE_LIMITS.criteria} acceptance criteria or ${SCOPE_LIMITS.files} likely files. Splitting:
+   - "design": the decisions a builder must not make alone, per codebase-design and to-spec's "Implementation Decisions" (new state and where it lives, the interfaces at each seam, every security control and the test that fails without it). This is what keeps each ticket from guessing.
+   - "tickets": tracer-bullet vertical slices per to-tickets — each a narrow but complete path that works and is checked on its own, prefactoring first — with "blocked_by" edges. Give every acceptance criterion to exactly one ticket; write the criteria so that's possible.
+   - The tickets are opened as issues when the maintainer approves, and built one pull request at a time, so step 4's quiz in to-tickets is the maintainer reading your brief: say in "why" what order they go in and why.
+   Otherwise "single", with one line of why.
 
 Don't write criteria that only restate the pipeline's own gates (${gateExamples}): it runs ${gatesRun} itself. Return the structured result.`;
 

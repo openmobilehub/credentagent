@@ -115,7 +115,28 @@ your diff will be held against.
   bot threads included. Fix the finding, or reply with why you won't, then resolve the thread.
 - Keep PRs small and well-scoped — one clear purpose per PR. Prefer a new, well-bounded module over
   growing a file past its single responsibility, and match the style, naming, and comment density of
-  the surrounding code.
+  the surrounding code. A big change is planned and split first: see *Big changes*.
+
+### Big changes
+
+A pull request past **400 changed lines or 15 files** (docs, `specs/` and lockfiles don't count) fails
+the `pr-scope` check unless it delivers **one ticket of a plan**. Before writing the code:
+
+1. **Write the plan down.** An issue labelled `epic` whose body is the spec — the problem, the
+   solution, and the decisions a builder must not make alone: what is stored and where, the
+   interfaces between the pieces, each security control and the test that fails without it. The
+   `to-spec` and `codebase-design` skills in `.claude/skills/` walk you through it. A feature big
+   enough to keep beside the code can instead live in `specs/NNN-name/` with a `tasks.md`.
+2. **Break it into tickets** with the `to-tickets` skill: thin slices that each work and are checked
+   on their own, prefactoring first, each saying what blocks it. Open them as sub-issues of the
+   epic, or list them as T1, T2, … in `tasks.md`.
+3. **One pull request per ticket.** Say which in the description — `Fixes #123` for a sub-issue, or
+   `specs/016-name/tasks.md T2` — and stay inside it.
+
+If a change truly can't be split (a mechanical rename across the codebase, say), explain why in a
+comment and a maintainer can add `scope:approved`. The automated review checks the same thing
+(REVIEW.md §8). For an issue the agents build, the brief does this for you (`ci/issue-agent/README.md`,
+"Splitting a big issue").
 
 ## Tests must exercise the bypass paths
 

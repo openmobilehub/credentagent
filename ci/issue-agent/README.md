@@ -189,6 +189,59 @@ Each brief then fires the routine once and links the session it returns. Without
 call fails) the brief just says "reply here". Whatever you agree in the session reaches the agents the
 same way as any comment: on the issue.
 
+## Splitting a big issue — one plan, several small PRs
+
+Some issues are several pieces of work wearing one title: a list of purchases, a list of refusals, a
+new passkey step and a Revoke button, say. Built as one PR, the design gets decided inside a single
+agent session, and the review is too big to hold in your head. So the brief decides the **scope**
+first: one pull request, or several.
+
+```
+brief      reproduce · criteria · scope: single, or split into a design + tickets           (agent)
+  │          the brief agent reads the to-tickets, codebase-design and to-spec skills in
+  │          .claude/skills/ (Matt Pocock's, vendored with their licence) and follows them
+  ├─ check   the card's plain words (card.mjs) and the plan's shape (scope.mjs)              (script)
+you add `agent:approved` to a split brief
+  └─ split   open each ticket as a sub-issue of this one, blockers first · label this one   (script)
+               `epic` · label `agent` on the tickets nothing blocks
+each ticket labelled `agent`
+  └─ build   the pipeline above, with the ticket as the approved spec — no second brief
+a ticket closes (its PR merged)
+  └─ unblock label `agent` on the tickets that were waiting only on it                       (script)
+```
+
+**When it splits.** The brief agent splits when the change does more than one thing a person could ship
+and check alone, adds a new security mechanism alongside other work, changes stored data that other
+stores must hold, or passes 8 acceptance criteria or 12 likely files (`SCOPE_LIMITS`). A brief that
+stays single past those limits has to say why in one line, or the check sends it back.
+
+**What a split brief shows.** The card as usual, then *"This is N pieces of work"* with the tickets in
+order. Below the divider: **the design** (what is stored and where, the interfaces between tickets, each
+security control and its bypass test — the decisions no single ticket may make alone) and a table of
+tickets, the criteria each delivers, and what blocks it. `scope.mjs` checks the plan holds together:
+every acceptance criterion belongs to exactly one ticket, blockers name real tickets, there is no
+cycle, and at least one ticket can start now. A plan that fails it is never split; approval is refused
+with the reason.
+
+**Tickets are built as approved.** Each ticket's issue body is the to-tickets template (Parent, What to
+build, Acceptance criteria, Blocked by) plus its slice of the approved brief, sealed with a hash like a
+brief. Labelled `agent`, a sealed ticket goes straight to the build — you approved the plan once, on
+the parent — with only its own criteria as the contract and the other tickets listed as out of scope.
+A ticket still blocked by an open one is skipped with a notice. Edit a ticket and the seal breaks: it
+becomes an ordinary issue that gets a brief of its own. If the builder challenges a ticket's criterion,
+it says so on the ticket and stops; edit the ticket or revise the plan on the parent.
+
+**Starting the next one.** When a ticket closes, the `unblock` job labels `agent` on the tickets whose
+blockers are now all closed, and comments on the parent once the last one is done (the parent is left
+open for you to check its after-merge criteria). Labels added with the default `GITHUB_TOKEN` start no
+workflow, so this needs `AGENT_GH_TOKEN`; without it, add `agent` to the next ticket by hand.
+
+**Pull requests from people.** The same bar applies to a PR nobody briefed: `ci/pr-scope/check.mjs`
+(the `pr-scope` workflow, and REVIEW.md §8) fails a PR past 400 changed lines or 15 files (docs, specs
+and lockfiles not counted) unless it delivers one ticket of a plan — a sub-issue of an `epic` with
+several, or a task named in a `specs/…/tasks.md` — or a maintainer adds `scope:approved`. Its comment
+says how to split it (CONTRIBUTING.md, "Big changes").
+
 ## Before and after — the first thing in every PR
 
 Every agent PR opens with what a developer sees on `main` and with the change, before any prose:
@@ -462,10 +515,13 @@ has to merge in; without it GitHub refuses that push and the loop hands the PR t
 ## Files
 
 - `run.mjs` — the orchestrator: `snapshot`, `implement`, `publish` (CI runs them as three jobs; locally
-  they run back to back) — and with briefs on, `brief` / `publish-brief` in the same three jobs.
+  they run back to back) — and with briefs on, `brief` / `publish-brief` in the same three jobs, and
+  `publish-split` / `unblock` for a split brief's tickets.
 - `brief.mjs` — the brief: its comment (and reading it back exactly), where the conversation stands,
   what approval refuses, what each trigger starts. `card.mjs` — the card's plain-language check.
   `brief.test.mjs` — their tests; each fails if its check is removed.
+- `scope.mjs` — splitting a big issue: the plan's check, the ticket issues (sealed like a brief), and
+  which tickets can start. `scope.test.mjs` — its tests, and `ci/pr-scope/` the same bar for people's PRs.
 - `example.mjs` — the PR's "Before and after": checking the proposed example, running it on both
   checkouts, the side-by-side picture. Tested in `brief.test.mjs`.
 - `config.mjs` — what the pipeline needs to know about the repo it works on (`.github/issue-agent.json`,

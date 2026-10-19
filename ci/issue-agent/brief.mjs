@@ -12,6 +12,7 @@ import { createHash } from "node:crypto";
 import { isAgentComment, isLoopAuthor } from "./checks.mjs";
 import { FIELDS, howBadLine, isPrivate, LEVELS } from "./card.mjs";
 import { md } from "./report.mjs";
+import { clampScope, designSection, isSplit, planSection } from "./scope.mjs";
 
 export const BRIEF_MARK = "<!-- issue-agent-brief";
 export const REPLY_MARK = "<!-- issue-agent-reply";
@@ -53,6 +54,7 @@ export function clampBrief(b, scale = 1) {
     files_likely: list(b.files_likely).map((x) => cap(x, CAPS.item)),
     reply: b.reply === undefined ? undefined : cap(b.reply, CAPS.reply),
     changes_since_previous: b.changes_since_previous === undefined ? undefined : cap(b.changes_since_previous, CAPS.item),
+    ...(b.scope ? { scope: clampScope(b.scope, CAPS) } : {}),
   };
 }
 const oneLine = (s) => md(String(s ?? "").replace(/[\r\n]+/g, " ").trim());
@@ -95,14 +97,18 @@ function briefText(data) {
   const { v, brief, base, lintProblems = [], discussUrl } = data;
   const levelWord = LEVELS[brief.card?.how_bad?.level] ?? "?";
   const pick = (brief.card.options ?? []).length > 1 ? ` — that approves option ${oneLine(brief.card.recommended)}, the recommended one; to pick another, say so in a comment` : "";
+  const split = isSplit(brief);
+  const after = split
+    ? ` Approving opens the ${brief.scope.tickets.length} tickets as sub-issues and starts the ones nothing blocks; each is built and reviewed as its own pull request, and the next starts when the one before it is done.`
+    : "";
   const repro = brief.reproduced ?? {};
   return `🤖 **Brief v${v} · ${levelWord} · waiting for your approval.** Nothing is built until you approve it.${
   brief.reply ? `\n\n**Re your comment:** ${md(brief.reply)}` : ""}${
   v > 1 && brief.changes_since_previous ? `\n\n**Changed since v${v - 1}:** ${oneLine(brief.changes_since_previous)}` : ""}
 
 ${cardText(brief)}
-${lintProblems.length ? `\n> [!WARNING]\n> The plain-language check still flags: ${lintProblems.map(oneLine).join("; ")}. Say what's unclear and the next version fixes it.\n` : ""}
-**Your move:** add the \`${LABEL_APPROVED}\` label to approve **this version**${pick}. Something off, or a question? Reply here in your own words — the agents answer, and post a new version if anything changes.${discussUrl ? ` Or [talk it through live](${discussUrl}).` : ""}
+${split ? `\n${planSection(brief)}` : ""}${lintProblems.length ? `\n> [!WARNING]\n> The plain-language check still flags: ${lintProblems.map(oneLine).join("; ")}. Say what's unclear and the next version fixes it.\n` : ""}
+**Your move:** add the \`${LABEL_APPROVED}\` label to approve **this version**${pick}.${after} Something off, or a question? Reply here in your own words — the agents answer, and post a new version if anything changes.${discussUrl ? ` Or [talk it through live](${discussUrl}).` : ""}
 
 ---
 
@@ -118,7 +124,7 @@ ${String(repro.result ?? "").replace(/```/g, "'''").slice(0, 4000)}
 
 ${(brief.acceptance_criteria ?? []).map((c) => `- [ ] **${oneLine(c.id)}** ${oneLine(c.text)} _(checked by ${TAG[c.verified_by] ?? "?"})_`).join("\n")}
 
-### Not in scope
+${split ? `${designSection(brief)}\n` : ""}### Not in scope
 
 ${(brief.not_in_scope ?? []).length ? brief.not_in_scope.map((s) => `- ${oneLine(s)}`).join("\n") : "- nothing called out"}
 
@@ -269,7 +275,9 @@ export function briefOutcome(brief) {
  * say nothing on the issue (a comment that isn't for the agents). Without `brief: "pause"` in the
  * repo's config, everything runs as before: the label starts the build.
  */
-export function planRun({ trigger = "label:agent", pause, labels = [], state, issueEditedAt }) {
+export function planRun({ trigger = "label:agent", pause, labels = [], state, issueEditedAt, ticket }) {
+  // A ticket from an approved plan (scope.mjs) is built as is: its plan was approved once, on its parent.
+  if (ticket && (trigger === "label:agent" || trigger === "dispatch")) return { phase: "implement", brief: ticket };
   if (!pause) {
     if (trigger === "label:agent" || trigger === "dispatch") return { phase: "implement" };
     return { skip: "briefs are off for this repo", quiet: true };
@@ -279,6 +287,8 @@ export function planRun({ trigger = "label:agent", pause, labels = [], state, is
     const refusal = approvalRefusal(state, { issueEditedAt });
     if (refusal) return { skip: `not starting the build — ${refusal}` };
     if (!state.latest.brief.actionable) return { skip: "not starting the build — the latest brief says this isn't actionable" };
+    // A split brief builds nothing itself: approving it opens its tickets (scope.mjs).
+    if (isSplit(state.latest.brief)) return { phase: "split", brief: state.latest };
     return { phase: "implement", brief: state.latest };
   }
   if (trigger === "comment") {
@@ -316,5 +326,7 @@ export function specFromBrief(brief) {
     evidence_plan: brief.evidence_plan,
     test_plan: brief.test_plan,
     files_likely: brief.files_likely ?? [],
+    // A ticket of an approved plan (scope.mjs): the design every ticket of that plan follows.
+    ...(brief.design ? { design: brief.design } : {}),
   };
 }

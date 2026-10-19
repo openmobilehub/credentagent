@@ -53,7 +53,8 @@ import {
   roleModel, testGateCommand, rootTestRefusal, publishVerdict, isMutableSource, sameLockfile, publishRefusalHint,
 } from "./checks.mjs";
 import { reportHtml, prBody, issueComment, md, statusBody, STATUS_MARK } from "./report.mjs";
-import { briefBody, replyBody, challengeBody, briefState, briefOutcome, briefFailure, planRun, specFromBrief, splitConversation, clampBrief, sweepWanted, LABEL_AWAITING, LABEL_APPROVED, BRIEF_MARK } from "./brief.mjs";
+import { briefBody, replyBody, challengeBody, briefState, briefOutcome, briefFailure, planRun, specFromBrief, splitConversation, clampBrief, sweepWanted, approvalRefusal, LABEL_AWAITING, LABEL_APPROVED, BRIEF_MARK } from "./brief.mjs";
+import { frontier, isSplit, parseTicket, scopeProblems, ticketAsBrief, ticketBody, ticketOrder, ticketSpec } from "./scope.mjs";
 import { cardProblems } from "./card.mjs";
 import { validateExample, runExample, exampleHtml } from "./example.mjs";
 import { loadConfig, testLabel } from "./config.mjs";
@@ -200,10 +201,11 @@ function permissionOf(login) {
   return permissionCache.get(login);
 }
 const trusted = (login) => TRUSTED_PERMISSIONS.includes(permissionOf(login));
+const issueState = (n) => ghJson(["issue", "view", String(n), "-R", REPO, "--json", "state"]).state;
 
 function snapshotIssue(n, snapshotAt = new Date().toISOString()) {
   const q = `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issue(number:$n){
-    number title body url state lastEditedAt author{login} labels(first:50){nodes{name}} assignees(first:10){nodes{login}}
+    number title body url state lastEditedAt author{login __typename} labels(first:50){nodes{name}} assignees(first:10){nodes{login}}
     timelineItems(itemTypes:[RENAMED_TITLE_EVENT], last:20){nodes{... on RenamedTitleEvent{createdAt actor{login}}}}
     comments(last:100){nodes{author{login __typename} body createdAt lastEditedAt}}}}}`;
   const i = ghJson(["api", "graphql", "-f", `query=${q}`, "-f", `o=${OWNER}`, "-f", `r=${NAME}`, "-F", `n=${n}`]).data.repository.issue;
@@ -213,11 +215,14 @@ function snapshotIssue(n, snapshotAt = new Date().toISOString()) {
   // has write access. A rename after the label is refused like a body edit (lastEditedAt misses renames).
   const renames = i.timelineItems.nodes;
   if (renames.some((e) => after(e.createdAt))) return { skip: `the issue was renamed after it was labelled; remove and re-add the \`${TRIGGER_LABEL}\` label to run on the current title` };
+  // A ticket the pipeline opened from an approved plan (scope.mjs): its words are the approved brief's.
+  const ticket = isLoopAuthor(i.author, trusted) ? parseTicket(i.body) : undefined;
   const titleBy = titleAuthor(i.author?.login, renames);
   let title = i.title;
-  if (!trusted(titleBy)) { dropped.push(`the issue title (by ${titleBy ?? "a deleted user"}, who has no write access)`); title = `Issue #${i.number}`; }
+  if (ticket && !renames.length) { /* the pipeline's own title, never renamed */ }
+  else if (!trusted(titleBy)) { dropped.push(`the issue title (by ${titleBy ?? "a deleted user"}, who has no write access)`); title = `Issue #${i.number}`; }
   let body = i.body ?? "";
-  if (!trusted(i.author?.login)) { dropped.push(`the issue body (by ${i.author?.login ?? "a deleted user"}, who has no write access)`); body = ""; }
+  if (!ticket && !trusted(i.author?.login)) { dropped.push(`the issue body (by ${i.author?.login ?? "a deleted user"}, who has no write access)`); body = ""; }
   else if (after(i.lastEditedAt)) return { skip: `the issue was edited after it was labelled (${i.lastEditedAt}); remove and re-add the \`${TRIGGER_LABEL}\` label to run on the current text` };
   const nodes = i.comments.nodes;
   const { comments, dropped: droppedComments } = requestComments(nodes, { isTrusted: trusted, snapshotAt });
@@ -228,7 +233,11 @@ function snapshotIssue(n, snapshotAt = new Date().toISOString()) {
   // Briefs first: what this trigger starts, and the talk so far. The request is what came before the
   // first brief; everything after it is the conversation, the agents' own answers included.
   const state = briefState(nodes, trusted);
-  const plan = planRun({ trigger: TRIGGER, pause: PAUSE, labels: issue.labels, state, issueEditedAt: i.lastEditedAt });
+  const plan = planRun({ trigger: TRIGGER, pause: PAUSE, labels: issue.labels, state, issueEditedAt: i.lastEditedAt, ticket: ticket && ticketAsBrief(ticket) });
+  if (ticket && plan.phase === "implement") {
+    const open = (ticket.blockedBy ?? []).filter((b) => issueState(b) !== "CLOSED");
+    if (open.length) return { issue, skip: `this ticket is blocked by ${open.map((b) => `#${b}`).join(", ")} — it starts on its own when ${open.length > 1 ? "they close" : "that closes"}` };
+  }
   if (plan.skip) return { issue, skip: plan.skip, quiet: plan.quiet };
   if (PAUSE && state.firstAt && !STARTS_OVER) {
     const { before, conversation } = splitConversation(nodes, { isTrusted: trusted, isOurs: (a) => isLoopAuthor(a, trusted), snapshotAt, fromVersion: state.roundStart });
@@ -555,7 +564,7 @@ async function implementIssue(issue, { dir } = {}) {
   });
   if (challenge) {
     RUN.log(`  the implementer challenges ${challenge.criterion} of the approved brief — back to the maintainer`);
-    return outcome({ status: "challenged", challenge, brief: issue.brief.v, reason: `${challenge.criterion}: ${challenge.why}` });
+    return outcome({ status: "challenged", challenge, brief: issue.brief.v, ...(issue.brief.ticket ? { ticket: issue.brief.ticket } : {}), reason: `${challenge.criterion}: ${challenge.why}` });
   }
   if (!rounds.length) return outcome({ status: "needs-human", reason: stopped ?? "no implementation round completed" });
   const last = rounds.at(-1);
@@ -733,7 +742,7 @@ async function briefIssue(issue, { dir } = {}) {
   checkout(repoDir, "origin/main");
   const base = git(["rev-parse", "HEAD"], { cwd: repoDir }).out.trim();
   const previous = issue.previousBrief;
-  const problemsOf = (b) => (b.actionable ? cardProblems(b.card, { criteria: b.acceptance_criteria, behaviorChange: b.behavior_change }) : []);
+  const problemsOf = (b) => (b.actionable ? [...cardProblems(b.card, { criteria: b.acceptance_criteria, behaviorChange: b.behavior_change }), ...scopeProblems(b)] : []);
   let { out: brief, sessionId } = await agent("brief", roles.briefPrompt(issue, { previous }), { cwd: repoDir, schema: roles.BRIEF_SCHEMA, write: true, maxTurns: 100 });
   let problems = problemsOf(brief);
   for (let fix = 1; problems.length && fix <= 2; fix++) {
@@ -777,8 +786,17 @@ function publishRun(dir) {
     // The implementer questions a criterion of the approved brief: back to the maintainer, nothing built.
     const v = Number(outcome.brief);
     if (!Number.isInteger(v) || v < 1) throw new Error(`not a brief version: ${outcome.brief}`);
-    gh(["issue", "comment", String(n), "-R", REPO, "--body", challengeBody({ v, criterion: String(outcome.challenge?.criterion ?? "").slice(0, 200), why: String(outcome.challenge?.why ?? "").slice(0, 2000), asOf: readAt() })]);
-    relabel(n, { add: [LABELS.awaiting], remove: [LABELS.approved] });
+    const challenge = { v, criterion: String(outcome.challenge?.criterion ?? "").slice(0, 200), why: String(outcome.challenge?.why ?? "").slice(0, 2000), asOf: readAt() };
+    if (outcome.ticket) {
+      // A ticket has no brief of its own to revise: the plan changes where it was approved, or the
+      // ticket is edited — which makes it an ordinary issue that gets its own brief.
+      const parent = Number(outcome.ticket.parent);
+      gh(["issue", "comment", String(n), "-R", REPO, "--body", `${challengeBody(challenge).split("\n\nReply to settle it")[0]}\n\nThis is a ticket of the plan approved on #${parent}. To settle it, edit this issue (it then gets a brief of its own) and re-add \`${TRIGGER_LABEL}\`, or reply on #${parent} to revise the plan.`]);
+      relabel(n, { remove: [TRIGGER_LABEL] });
+    } else {
+      gh(["issue", "comment", String(n), "-R", REPO, "--body", challengeBody(challenge)]);
+      relabel(n, { add: [LABELS.awaiting], remove: [LABELS.approved] });
+    }
     setStatus(n, `stopped before building — the agents question part of brief v${v}; reply to settle it`, { working: false });
     return { n, status: "challenged" };
   }
@@ -979,7 +997,7 @@ async function publishBrief(dir) {
   }
   const v = state.versions + 1;
   const start = STARTS_OVER || !state.latest ? v : state.latest.start ?? 1;
-  const lintProblems = cardProblems(brief.card, { criteria: brief.acceptance_criteria, behaviorChange: brief.behavior_change });
+  const lintProblems = [...cardProblems(brief.card, { criteria: brief.acceptance_criteria, behaviorChange: brief.behavior_change }), ...scopeProblems(brief)];
   const discussUrl = await fireDiscuss(n, v);
   postComment(n, briefBody({ v, start, asOf, brief, base, lintProblems, ...(discussUrl ? { discussUrl } : {}) }), dir);
   // Older versions fold away (GitHub's "outdated"), so the thread reads as the latest brief plus the talk.
@@ -1012,6 +1030,91 @@ function sweepBriefs() {
     else console.error(`(could not start a brief run for #${number}: ${r.out.trim().split("\n")[0]})`);
   }
   return started;
+}
+
+// ── splitting a big issue (trusted; GitHub write access; no agent runs) ───────────────────────────
+// README.md, "Splitting a big issue". Approving a split brief opens its tickets as sub-issues, in an
+// order where each comes after its blockers, and labels the ones nothing blocks: each is then built
+// like an approved brief. Everything is re-read and re-checked here from the issue's own comments —
+// approval, the brief's seal, the plan's shape — never taken from a run. A retry finds the tickets it
+// already opened (by their markers) and opens only the rest.
+const subIssues = (n) => {
+  const q = `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issue(number:$n){subIssues(first:50){nodes{id number state body author{login __typename} labels(first:30){nodes{name}}}}}}}`;
+  return ghJson(["api", "graphql", "-f", `query=${q}`, "-f", `o=${OWNER}`, "-f", `r=${NAME}`, "-F", `n=${n}`]).data.repository.issue.subIssues.nodes
+    .map((i) => ({ ...i, labels: i.labels.nodes.map((l) => l.name), ticket: isLoopAuthor(i.author, trusted) ? parseTicket(i.body) : undefined }));
+};
+const DRY = () => flag("--dry-run") || flag("--no-publish");
+
+function publishSplit(n, dir) {
+  RUN ??= { id: "split", dir, costUsd: 0, log: (s) => { console.log(s); appendFileSync(join(dir, "publish.log"), s + "\n"); } };
+  mkdirSync(dir, { recursive: true });
+  const state = briefState(issueComments(n), trusted);
+  const refusal = approvalRefusal(state);
+  if (refusal || !isSplit(state.latest?.brief)) throw new Error(`not opening tickets for #${n}: ${refusal ?? "the latest brief is not a split"}`);
+  const { v, brief } = state.latest;
+  const problems = scopeProblems(brief);
+  if (problems.length) {
+    const reason = `the approved plan doesn't hold together (${problems.join("; ")}) — reply on the brief so the agents post a version that does, then approve that one`;
+    postComment(n, issueComment({ kind: "blocked", reason }), dir);
+    relabel(n, { add: [LABELS.awaiting], remove: [LABELS.working] });
+    setStatus(n, `not split — ${reason}`, { working: false });
+    return { n, status: "blocked", reason };
+  }
+  const existing = DRY() ? [] : subIssues(n);
+  const opened = new Map(existing.filter((i) => i.ticket?.parent === n && i.ticket.v === v).map((i) => [i.ticket.id, i]));
+  const numbers = new Map([...opened].map(([id, i]) => [id, i.number]));
+  for (const t of ticketOrder(brief.scope.tickets)) {
+    if (numbers.has(t.id)) continue;
+    const blockedBy = (t.blocked_by ?? []).map((b) => numbers.get(b));
+    const body = ticketBody({ parent: n, v, id: t.id, spec: ticketSpec(brief, t), blockedBy });
+    const title = `${t.title} (#${n}, ${t.id})`;
+    if (DRY()) {
+      writeFileSync(join(dir, `ticket-${t.id}.md`), `# ${title}\n\n${body}`);
+      numbers.set(t.id, 100000 + numbers.size); // a stand-in, so later tickets can name it
+      RUN.log(`  dry run — ticket ${t.id} → ${join(dir, `ticket-${t.id}.md`)}`);
+      continue;
+    }
+    const file = join(dir, `ticket-${t.id}.md`);
+    writeFileSync(file, body);
+    const url = gh(["issue", "create", "-R", REPO, "--title", title, "--body-file", file]).trim();
+    const number = Number(url.match(/\/issues\/(\d+)$/)?.[1]);
+    if (!number) throw new Error(`gh issue create gave no issue number: ${url}`);
+    const id = ghJson(["api", `repos/${REPO}/issues/${number}`]).id;
+    sh("gh", ["api", "-X", "POST", `repos/${REPO}/issues/${n}/sub_issues`, "-F", `sub_issue_id=${id}`], { allowFail: true });
+    numbers.set(t.id, number);
+    RUN.log(`  ticket ${t.id} → #${number}`);
+  }
+  const tickets = ticketOrder(brief.scope.tickets);
+  const start = tickets.filter((t) => !(t.blocked_by ?? []).length).map((t) => numbers.get(t.id));
+  if (!DRY()) {
+    sh("gh", ["label", "create", "epic", "-R", REPO, "--color", "3E4B9E", "--description", "A plan of several tickets (sub-issues)"], { allowFail: true });
+    for (const t of start) sh("gh", ["issue", "edit", String(t), "-R", REPO, "--add-label", TRIGGER_LABEL], { allowFail: true });
+    sh("gh", ["issue", "edit", String(n), "-R", REPO, "--add-label", "epic"], { allowFail: true });
+  }
+  relabel(n, { remove: [LABELS.working, LABELS.awaiting, LABELS.approved, TRIGGER_LABEL] });
+  postComment(n, `${"<!-- issue-agent -->"}\n🤖 **The approved plan (brief v${v}) is now ${tickets.length} tickets.** Each is built and reviewed as its own pull request; a ticket starts on its own once everything blocking it is closed.\n\n${tickets.map((t, i) => `${i + 1}. #${numbers.get(t.id)} — ${t.title}${(t.blocked_by ?? []).length ? ` _(after ${t.blocked_by.map((b) => `#${numbers.get(b)}`).join(", ")})_` : " _(starting now)_"}`).join("\n")}\n\nThis issue is labelled \`epic\`: the agents won't build it as a whole.`, dir);
+  setStatus(n, `split into ${tickets.length} tickets — ${start.map((s) => `#${s}`).join(", ")} started; the rest follow as their blockers close`, { working: false });
+  return { n, status: "split", tickets: Object.fromEntries(numbers) };
+}
+
+// A ticket closed (its PR merged): start the tickets it was blocking whose other blockers are closed
+// too, and say so on the plan's issue when the last one is done.
+function unblock(n, dir) {
+  const q = `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issue(number:$n){body author{login __typename}}}}`;
+  const closed = ghJson(["api", "graphql", "-f", `query=${q}`, "-f", `o=${OWNER}`, "-f", `r=${NAME}`, "-F", `n=${n}`]).data.repository.issue;
+  const ticket = isLoopAuthor(closed.author, trusted) ? parseTicket(closed.body) : undefined;
+  if (!ticket) return { n, status: "skipped", reason: "not a ticket of an approved plan" };
+  const parent = ticket.parent;
+  const siblings = subIssues(parent).filter((i) => i.ticket?.parent === parent && i.ticket.v === ticket.v)
+    .map((i) => ({ number: i.number, state: i.state, labels: i.labels, ticket: i.ticket }));
+  const next = frontier(siblings, TRIGGER_LABEL);
+  if (!DRY()) for (const t of next) sh("gh", ["issue", "edit", String(t.number), "-R", REPO, "--add-label", TRIGGER_LABEL], { allowFail: true });
+  const left = siblings.filter((t) => t.state === "OPEN");
+  if (!left.length) {
+    mkdirSync(dir, { recursive: true });
+    postComment(parent, `${"<!-- issue-agent -->"}\n🤖 **Every ticket of the approved plan is closed** (${siblings.map((t) => `#${t.number}`).join(", ")}). Check the plan's after-merge criteria, then close this issue.`, dir);
+  }
+  return { n, status: "unblocked", started: next.map((t) => t.number), open: left.length };
 }
 
 // Evidence goes on a separate orphan branch so the PR's diff stays code-only; the PR embeds it from
@@ -1442,10 +1545,14 @@ if (mode === "snapshot") {
   // not stop the hourly check from answering one that waits (brief.mjs, sweepWanted).
   if (skip && !quiet && flag("--comment")) gh(["issue", "comment", String(n), "-R", REPO, "--body", issueComment({ kind: TRIGGER === `label:${LABEL_APPROVED}` ? "refused" : "skipped", reason: skip })]);
   if (!skip && flag("--comment")) {
-    if (phase === "brief") setStatus(n, issue.previousBrief ? "reading your comment — an answer or a new version of the brief comes next (usually 5–15 min)" : "reproducing the problem and writing a brief for you to approve (usually 10–20 min) — nothing is built before you approve it", { working: true });
+    if (phase === "split") {
+      sh("gh", ["issue", "edit", String(n), "-R", REPO, "--remove-label", LABELS.awaiting], { allowFail: true });
+      setStatus(n, `opening the ${issue.brief.brief.scope.tickets.length} tickets of the approved plan (brief v${issue.brief.v}) as sub-issues`, { working: true });
+    } else if (phase === "brief") setStatus(n, issue.previousBrief ? "reading your comment — an answer or a new version of the brief comes next (usually 5–15 min)" : "reproducing the problem and writing a brief for you to approve (usually 10–20 min) — nothing is built before you approve it", { working: true });
     else {
       if (issue.brief) sh("gh", ["issue", "edit", String(n), "-R", REPO, "--remove-label", LABELS.awaiting], { allowFail: true });
-      setStatus(n, issue.brief ? `building the approved brief v${issue.brief.v} — implementation, checks and three internal reviews (usually 10–40 min); the PR comes next` : "working on it — spec, implementation, checks and three internal reviews (usually 10–40 min); the PR comes next", { working: true });
+      setStatus(n, issue.brief?.ticket ? `building ticket ${issue.brief.ticket.id} of the plan approved on #${issue.brief.ticket.parent} — implementation, checks and three internal reviews (usually 10–40 min); the PR comes next`
+        : issue.brief ? `building the approved brief v${issue.brief.v} — implementation, checks and three internal reviews (usually 10–40 min); the PR comes next` : "working on it — spec, implementation, checks and three internal reviews (usually 10–40 min); the PR comes next", { working: true });
     }
   }
   if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `skip=${skip ? "true" : "false"}\nphase=${phase ?? ""}\nasof=${issue?.snapshotAt ?? ""}\n`);
@@ -1480,6 +1587,22 @@ if (mode === "snapshot") {
     setStatus(n, "the run failed while posting the brief", { working: false });
     process.exitCode = 1;
   }
+} else if (mode === "publish-split") {
+  // Approving a split brief (scope.mjs): open its tickets. Trusted; no agent runs.
+  const n = Number(opt("--issue") ?? arg);
+  try {
+    const o = publishSplit(n, resolve(opt("--dir", join(RUNS_HOME, `split-${n}`))));
+    console.log(`\n━━ #${o.n} ${o.status}${o.tickets ? ` ${JSON.stringify(o.tickets)}` : ""}${o.reason ? ` — ${o.reason}` : ""}`);
+  } catch (e) {
+    console.error(e);
+    if (n && !flag("--dry-run")) sh("gh", ["issue", "comment", String(n), "-R", REPO, "--body", issueComment({ kind: "error", where: actionsRunUrl() })], { allowFail: true });
+    setStatus(n, "the run failed while opening the plan's tickets", { working: false });
+    process.exitCode = 1;
+  }
+} else if (mode === "unblock") {
+  // A ticket closed: start the tickets it was blocking (scope.mjs, frontier).
+  const o = unblock(Number(arg), resolve(opt("--dir", join(RUNS_HOME, `unblock-${arg}`))));
+  console.log(`#${o.n} ${o.status}${o.started ? ` — started ${o.started.map((x) => `#${x}`).join(", ") || "nothing"}; ${o.open} open` : ""}${o.reason ? ` — ${o.reason}` : ""}`);
 } else if (mode === "sweep-briefs") {
   const started = sweepBriefs();
   console.log(started.length ? `started brief runs for ${started.map((n) => `#${n}`).join(", ")}` : "no brief waits on an unanswered comment");
@@ -1546,7 +1669,7 @@ if (mode === "snapshot") {
     ? ghJson(["issue", "list", "-R", REPO, "--state", "open", "--label", TRIGGER_LABEL, "--limit", "50", "--json", "number"]).map((i) => i.number)
     : argv.filter((a) => /^\d+$/.test(a)).map(Number);
   if (!numbers.length) {
-    console.error("usage: run.mjs <issue>… | --poll  [--no-publish] [--force] [--repo owner/name] [--runs dir]\n       run.mjs snapshot <n> --out f | implement <f> | publish <run-dir> | publish-evidence <run-dir>\n       run.mjs brief <f> | publish-brief <run-dir> | sweep-briefs   (briefs: config \"brief\": \"pause\")");
+    console.error("usage: run.mjs <issue>… | --poll  [--no-publish] [--force] [--repo owner/name] [--runs dir]\n       run.mjs snapshot <n> --out f | implement <f> | publish <run-dir> | publish-evidence <run-dir>\n       run.mjs brief <f> | publish-brief <run-dir> | sweep-briefs   (briefs: config \"brief\": \"pause\")\n       run.mjs publish-split <n> | unblock <n>   (a split brief's tickets: scope.mjs)");
     process.exit(flag("--poll") ? 0 : 2);
   }
   mkdirSync(RUNS_HOME, { recursive: true });
@@ -1557,6 +1680,7 @@ if (mode === "snapshot") {
       // --poll sees every `agent` issue: one whose brief already waits on you isn't briefed again.
       if (!skip && phase === "brief" && STARTS_OVER && flag("--poll") && issue.labels.includes(LABELS.awaiting)) { outcomes.push({ n, status: "skipped", reason: "its brief is waiting for approval" }); continue; }
       if (skip) { console.log(`\n━━ #${n} skipped — ${skip}`); outcomes.push({ n, status: "skipped", reason: skip }); continue; }
+      if (phase === "split") { outcomes.push(publishSplit(n, join(RUNS_HOME, `split-${n}`))); continue; }
       if (phase === "brief") {
         setStatus(n, "writing a brief (run locally) — nothing is built before you approve it", { working: true });
         const o = await briefIssue(issue);

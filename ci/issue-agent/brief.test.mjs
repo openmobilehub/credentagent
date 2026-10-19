@@ -231,7 +231,8 @@ describe("approval", () => {
   });
   it("a question from the implementer answers only what its run read — a comment during the build still waits", () => {
     const src = readFileSync(new URL("./run.mjs", import.meta.url), "utf8");
-    expect(src).toMatch(/challengeBody\(\{[^\n]*asOf: readAt\(\) \}\)/);
+    expect(src).toMatch(/const challenge = \{[^\n]*asOf: readAt\(\) \};/);
+    expect(src).toMatch(/challengeBody\(challenge\)/);
     const q = c(BOT, challengeBody({ v: 1, criterion: "AC1", why: "w", asOf: "2026-10-17T10:05:00Z" }), "2026-10-17T10:30:00Z");
     expect(state([b1, c(ME, "and refunds", "2026-10-17T10:10:00Z"), q]).unanswered).toBe(true);
   });
