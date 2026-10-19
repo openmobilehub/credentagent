@@ -606,20 +606,23 @@ completion path (a hard block, independent of `required`/`optional`). Worked pac
 > The same goes for an `age.over(n)` that only the policy asks for (no `minimumAge` on the item).
 > An instance that doesn't know the order's policy (another worker, a restart, or an order old
 > enough to have been forgotten) holds the order to the `age` credential it has registered. So
-> declare your policy's own credentials, `.when()` included, not a bare `age.over(21)` (that one
-> would also refuse a gift card your policy never asked an age for):
+> declare the same credentials your policy uses, `.when()` included, rather than a hand-written
+> copy that can drift from it:
 >
 > ```js
-> const policy = [required(age.over(21).when((order) => order.lines.some((l) => l.minimumAge != null))), required(prescription)];
+> const policy = [required(age.over(21)), required(prescription)]; // e.g. a clinic: no item carries an age tag
 > const credentagent = new CredentAgent({ credentials: policy.map((step) => step.credential) });
 > ```
+>
+> With the quickstart's `age.over(21).when(…)`, the same line declares the `.when()` too, so an
+> item the condition leaves out (a gift card) isn't held to an age the policy never asked of it.
 >
 > A server keeps **one** registered `age`, and each `requirements()` replaces it with that
 > policy's. So where the server's age rules differ in age or in `.when()`, a forgotten order can be
 > held to a lower age, or to none
 > ([#411](https://github.com/openmobilehub/credentagent/issues/411)). There, tag age-restricted
-> items with `minimumAge` too (a tag always holds), or use `orders.serve` with a shared order
-> store, which remembers each order's own age.
+> items with `minimumAge` at the policy's age (a tag always holds, but only at its own age), or
+> use `orders.serve` with a shared order store, which remembers each order's own age.
 
 ## Honest status
 

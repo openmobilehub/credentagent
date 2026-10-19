@@ -86,9 +86,11 @@ export function requiredAgeForOrder(order: CeremonyOrder): number | null {
  * asks for one. The policy age comes from the mounted lookup; when that doesn't know the order,
  * from the registered `age` credential — the same fallback `completeOrder` uses. Every rail
  * evaluates an age proof at this threshold. `completeOrder` does not call this: it re-derives
- * the threshold inline from the same sources and enforces it. They differ only on a malformed
- * age, and fail closed there: a line `minimumAge` of NaN, or a NaN from the host's `policyAge`
- * lookup, is dropped here, while `completeOrder` refuses the whole order.
+ * the threshold inline from the same sources and enforces it. They differ in two cases. On a
+ * malformed age they fail closed: a line `minimumAge` of NaN, or a NaN from the host's `policyAge`
+ * lookup, is dropped here, while `completeOrder` refuses the whole order. And a host completion
+ * built without `credentialRegistry` has no registered `age` to fall back to, so for an order the
+ * server forgot it asks none while this asks the mount's (#411).
  */
 export async function requiredAgeFor(
   ctx: Pick<CeremonyContext, "policyAge" | "credentialRegistry" | "orderPolicies">,

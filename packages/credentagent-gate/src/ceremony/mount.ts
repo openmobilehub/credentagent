@@ -90,7 +90,8 @@ export interface CeremonySeams {
    *  `orders.serve` from its stored created orders. The rails evaluate an age
    *  proof at the stricter of it and the lines' `minimumAge`, and `mountCeremony` adds it to every
    *  rail's completion as `policyMinAge`. Absent / unknown order ⇒ the registered `age`
-   *  credential decides when it applies (fail-closed). */
+   *  credential decides when it applies. That is the order's own age only while the server has
+   *  one age rule; otherwise it can be lower, or none (#411). */
   policyAge?: PolicyAgeLookup;
   /** Where a rail returns the buyer after they prove (the "continue to checkout" link +
    *  the post-proof redirect). Absent ⇒ each rail's default `/checkout?order=<id>` (the
