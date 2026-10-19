@@ -15,7 +15,7 @@ import request from "supertest";
 import { CredentAgent } from "./client.js";
 import { defineHost } from "./host.js";
 import { age, payment, required } from "./credentials.js";
-import type { CompletedRecord } from "./ceremony/completion.js";
+import { completeOrder, type CompletedRecord } from "./ceremony/completion.js";
 import type { CartItemRef, CeremonyCatalog, CeremonyOrder, CompletionInput, DelegatedVerifier } from "./ceremony/types.js";
 import type { Credential, Step } from "./types.js";
 import type { PolicyAgeLookup } from "./ceremony/types.js";
@@ -36,7 +36,7 @@ const catalog: CeremonyCatalog = {
 // The instant-demo payment credential the dc-payment rail accepts (presence-only).
 const CARD = { issuer_name: "Demo Bank", payment_instrument_id: "pi-1", masked_account_reference: "•••• 4242", holder_name: "Demo Buyer", expiry_date: "2032-09-01" };
 
-function setup(opts: { verifier?: DelegatedVerifier; credentials?: Credential[]; policyAge?: PolicyAgeLookup; mountWith?: { policyAge: PolicyAgeLookup } } = {}) {
+function setup(opts: { verifier?: DelegatedVerifier; credentials?: Credential[]; policyAge?: PolicyAgeLookup } = {}) {
   const created = new Map<string, CeremonyOrder>();
   const completed = new Map<string, CompletedRecord>();
   const host = defineHost({
@@ -52,9 +52,7 @@ function setup(opts: { verifier?: DelegatedVerifier; credentials?: Credential[];
   // A lookup the host itself publishes for the ceremony (e.g. a durable one) — set before mount.
   if (opts.policyAge) (app.locals.credentagent as Record<string, unknown>).policyAge = opts.policyAge;
   const credentagent = new CredentAgent({ walletOrigin: "http://127.0.0.1", ...(opts.credentials ? { credentials: opts.credentials } : {}) });
-  // `mountWith` takes the explicit-seams path, `mount(app, { … })`; the rest come from app.locals.
-  if (opts.mountWith) credentagent.mount(app, opts.mountWith);
-  else credentagent.mount(app);
+  credentagent.mount(app);
   // An order this instance knows of but never resolved (requirements() ran elsewhere, or before a restart).
   const create = (id: string, productId: string): CeremonyOrder => {
     const order = catalog.createOrder([{ productId, quantity: 1 }], id);
@@ -70,6 +68,44 @@ function setup(opts: { verifier?: DelegatedVerifier; credentials?: Credential[];
     order, mandateId: "m", amount: order.total, currency: "USD", method: "demo", gates: [{ gate: "demo", pass: true, detail: "" }],
   });
   return { app, host, credentagent, create, open, input, completed };
+}
+
+// A custom site on the EXPLICIT-seams path, `mount(app, { orderStore, catalog, completion, … })`,
+// binding its own completion over the client's store — the store the rails write — so an age proof
+// on record reaches completion (the shape mount.test.ts uses for custom gates).
+function explicitSetup(opts: { policyAge?: PolicyAgeLookup; localsPolicyAge?: PolicyAgeLookup } = {}) {
+  const created = new Map<string, CeremonyOrder>();
+  const completed = new Map<string, CompletedRecord>();
+  const credentagent = new CredentAgent({ walletOrigin: "http://127.0.0.1" });
+  const app = express();
+  app.use(express.json());
+  // A lookup the site put in its shared app settings instead of passing it to mount().
+  if (opts.localsPolicyAge) app.locals.credentagent = { policyAge: opts.localsPolicyAge };
+  const completion = (input: CompletionInput) =>
+    completeOrder(input, {
+      catalog,
+      verificationStore: credentagent.store,
+      records: { read: async (id) => completed.get(id), write: async (rec) => void completed.set(rec.orderId, rec) },
+      credentialRegistry: (app.locals.credentagent as { credentialRegistry?: ReadonlyMap<string, Credential> } | undefined)?.credentialRegistry,
+    });
+  credentagent.mount(app, {
+    orderStore: { read: (id) => created.get(id) ?? null },
+    catalog,
+    completion,
+    allowEphemeralKey: true,
+    ...(opts.policyAge ? { policyAge: opts.policyAge } : {}),
+  });
+  const create = (id: string, productId: string): CeremonyOrder => {
+    const order = catalog.createOrder([{ productId, quantity: 1 }], id);
+    created.set(id, order);
+    return order;
+  };
+  const open = (id: string, productId: string, policy: Step[]): CeremonyOrder => {
+    const order = create(id, productId);
+    credentagent.requirements(order, policy);
+    return order;
+  };
+  return { app, credentagent, create, open, completed };
 }
 
 const proveAge = (app: express.Express, order: string, claims: Record<string, boolean>) =>
@@ -233,8 +269,39 @@ describe("#357 review — an order the server forgot keeps its age check", () =>
     expect(s.completed.has("ORD-1")).toBe(false);
   });
 
-  it("BYPASS (invariant 1): …and so is one passed to mount(app, { policyAge }) (the explicit-seams path)", async () => {
-    const s = setup({ mountWith: { policyAge: (id) => (id === "ORD-1" ? 21 : undefined) } });
+});
+
+// The explicit-seams path a custom site uses, `mount(app, { orderStore, catalog, completion, … })`:
+// the same two-ages bypass, and both places a site can hand it a lookup (#357 review).
+describe("#357 review — the explicit mount path uses each order's own age too", () => {
+  const twoAgesExplicit = (provenAt: number) => {
+    const s = explicitSetup();
+    const order = s.open("ORD-1", "gift-card", [required(age.over(25)), required(payment.in("usd"))]);
+    s.open("ORD-2", "gift-card", [required(age.over(21)), required(payment.in("usd"))]); // slot = 21 now
+    s.credentagent.store.write("ORD-1", { ageVerified: true, ageVerifiedOver: provenAt });
+    return { s, order };
+  };
+
+  it("BYPASS (invariant 1+5): a 21+ proof can't pay for a 25+ order after a 21+ order took the server's age rule", async () => {
+    const { s, order } = twoAgesExplicit(21);
+    expect((await pay(s.app, order)).body).toMatchObject({ completed: false, reason: "age" });
+    expect(s.completed.has("ORD-1")).toBe(false);
+  });
+
+  it("control: a 25+ proof pays for it", async () => {
+    const { s, order } = twoAgesExplicit(25);
+    expect((await pay(s.app, order)).body.completed).toBe(true);
+  });
+
+  it("BYPASS (invariant 1): a lookup passed to mount(app, { policyAge }) is consulted for an order this instance never resolved", async () => {
+    const s = explicitSetup({ policyAge: (id) => (id === "ORD-1" ? 21 : undefined) });
+    const order = s.create("ORD-1", "gift-card");
+    expect((await pay(s.app, order)).body).toMatchObject({ completed: false, reason: "age" });
+    expect(s.completed.has("ORD-1")).toBe(false);
+  });
+
+  it("BYPASS (invariant 1): …and so is one the site put on app.locals.credentagent, like the other seams", async () => {
+    const s = explicitSetup({ localsPolicyAge: (id) => (id === "ORD-1" ? 21 : undefined) });
     const order = s.create("ORD-1", "gift-card");
     expect((await pay(s.app, order)).body).toMatchObject({ completed: false, reason: "age" });
     expect(s.completed.has("ORD-1")).toBe(false);

@@ -363,7 +363,10 @@ export class CredentAgent {
     // fetch on the other two, and every mandate this gate signed would be uncheckable there.
     this.publishSigningKey(app);
     if (ceremony) {
-      mountCeremony(app as CeremonyApp, { ...this.basePathSeam(), ...ceremony, verificationStore: this.store, readerIdentity: this.readerIdentity, credentialRegistry: this.registry, orderPolicies: this.orderPolicies, policyAge: this.policyAgeWith(ceremony.policyAge), ...(this.branding ? { branding: this.branding } : {}), ...(this.inspectPresentations ? { inspectPresentations: true } : {}) });
+      // A lookup the host passed here wins; one it put on app.locals is still read, like the
+      // other seams on this path (mountCeremony's `options ?? locals`) — never silently dropped.
+      const hostPolicyAge = ceremony.policyAge ?? (app.locals.credentagent as Partial<CeremonySeams> | undefined)?.policyAge;
+      mountCeremony(app as CeremonyApp, { ...this.basePathSeam(), ...ceremony, verificationStore: this.store, readerIdentity: this.readerIdentity, credentialRegistry: this.registry, orderPolicies: this.orderPolicies, policyAge: this.policyAgeWith(hostPolicyAge), ...(this.branding ? { branding: this.branding } : {}), ...(this.inspectPresentations ? { inspectPresentations: true } : {}) });
       this.mountedRoutes = true;
       if (ceremony.verifier) this.delegated = true;
       // #25 doctor(): a host owns the serving surface here; capture the signing key it supplied via
