@@ -23,6 +23,7 @@
 import { resolveOrder, type CeremonyApp, type CeremonyContext, type RailRegistrar } from "../mount.js";
 import { decodeCartMandateParam } from "../cartMandate.js";
 import { checkoutRail } from "../theme.js";
+import { ageStepFor } from "../credential-gate/verify.js";
 import { buildBindingFields } from "../mandate.js";
 import type { RequestLike } from "../origin.js";
 import type { CompletionInput } from "../types.js";
@@ -99,10 +100,11 @@ export const registerDelegatedPaymentGate: RailRegistrar = (app: CeremonyApp, ct
     // not only this order's own — see issue #353.
     const hasPayment = policyHasPayment(ctx, order);
     const identityStep = hasPayment ? undefined : delegatedPolicyEntries(ctx.credentialRegistry, order)[0];
+    const ageStep = await ageStepFor(ctx, order, verified); // policy age too (#414)
     const rail = hasPayment
-      ? checkoutRail(order, "pay", { ageVerified: verified.ageVerified === true })
+      ? checkoutRail(order, "pay", ageStep)
       : checkoutRail(order, identityStep?.credentialId ?? "verify", {
-          ageVerified: verified.ageVerified === true,
+          ...ageStep,
           currentLabel: identityStep ? (ctx.credentialRegistry?.get(identityStep.credentialId)?.ui.label ?? identityStep.credentialId) : "Verify",
           includePay: false,
         });

@@ -14,7 +14,7 @@ import express from "express";
 import request from "supertest";
 import { CredentAgent } from "./client.js";
 import { defineHost } from "./host.js";
-import { age, payment, required } from "./credentials.js";
+import { age, membership, payment, required, optional } from "./credentials.js";
 import type { CompletedRecord } from "./ceremony/completion.js";
 import type { CartItemRef, CeremonyCatalog, CeremonyOrder, CompletionInput, DelegatedVerifier } from "./ceremony/types.js";
 import type { Credential, Step } from "./types.js";
@@ -271,5 +271,54 @@ describe("#357 review — age.over() refuses a threshold it could never check", 
 
   it("a string age (process.env read without Number()) is named as one, not shown as a valid-looking 21", () => {
     expect(() => age.over("21" as unknown as number)).toThrow('age.over("21"): the age must be a whole number above 0, like age.over(21) — got a string.');
+  });
+});
+
+// #414 — the pay pages' progress rail (Age → Membership → Pay) must show the Age step the order
+// will actually be asked for — its policy's age too, not only an item's `minimumAge` tag — and
+// tick it only when the proof on record covers that age, the same rule completion enforces.
+describe("#414 — the pay pages show the Age step the order's policy asks for", () => {
+  // The rail's steps as [label, state]: "done" (✓), "current", or "" (still to come).
+  const railOf = (html: string) =>
+    [...html.matchAll(/<div class="rail-step ([a-z]*)"><div class="rail-dot">[^<]*<\/div><div class="rail-label">([^<]*)<\/div>/g)].map((m) => [m[2], m[1]]);
+  const page = async (app: express.Express, path: string) => railOf((await request(app).get(path)).text);
+  const POLICY = [required(age.over(21)), required(payment.in("usd"))];
+
+  it.each(["dc-payment", "passkey"])("the %s page of an untagged item under a 21+ policy shows Age, not yet done", async (rail) => {
+    const s = setup();
+    s.open("ORD-1", "gift-card", POLICY);
+    expect(await page(s.app, `/credentagent/${rail}?order=ORD-1`)).toEqual([["Age", ""], ["Pay", "current"]]);
+  });
+
+  it("the outside verifier's (delegated) page shows it too", async () => {
+    const s = setup({ verifier: { buildRequest: vi.fn(), consume: vi.fn() } as unknown as DelegatedVerifier });
+    s.open("ORD-1", "gift-card", POLICY);
+    expect(await page(s.app, "/credentagent/delegated?order=ORD-1")).toEqual([["Age", ""], ["Pay", "current"]]);
+  });
+
+  it("the membership page shows it before Membership", async () => {
+    const s = setup();
+    s.open("ORD-1", "gift-card", [required(age.over(21)), optional(membership.discount(10)), required(payment.in("usd"))]);
+    expect(await page(s.app, "/credentagent/credential?order=ORD-1&cred=membership")).toEqual([["Age", ""], ["Membership", "current"], ["Pay", ""]]);
+  });
+
+  it("a 21+ proof on a 25+ order leaves Age un-ticked — completion will refuse it", async () => {
+    const s = setup();
+    s.open("ORD-1", "gift-card", [required(age.over(25)), required(payment.in("usd"))]);
+    s.host.verificationStore.write("ORD-1", { ageVerified: true, ageVerifiedOver: 21 });
+    expect(await page(s.app, "/credentagent/dc-payment?order=ORD-1")).toEqual([["Age", ""], ["Pay", "current"]]);
+  });
+
+  it("control: a 25+ proof on that order ticks Age", async () => {
+    const s = setup();
+    s.open("ORD-1", "gift-card", [required(age.over(25)), required(payment.in("usd"))]);
+    s.host.verificationStore.write("ORD-1", { ageVerified: true, ageVerifiedOver: 25 });
+    expect(await page(s.app, "/credentagent/dc-payment?order=ORD-1")).toEqual([["Age", "done"], ["Pay", "current"]]);
+  });
+
+  it("control: a policy with no age shows no Age step", async () => {
+    const s = setup();
+    s.open("ORD-1", "gift-card", [required(payment.in("usd"))]);
+    expect(await page(s.app, "/credentagent/dc-payment?order=ORD-1")).toEqual([["Pay", "current"]]);
   });
 });

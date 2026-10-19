@@ -29,6 +29,7 @@ import { buildDcPaymentRequest } from "./request.js";
 import { buildDcMandate, runDcGates, verifyDcPresentation, type DcMandate, type GateResult } from "./verify.js";
 import { renderDcPaymentPage } from "./page.js";
 import { checkoutRail, proofLinksHtml } from "../theme.js";
+import { ageStepFor } from "../credential-gate/verify.js";
 import { withoutPresentations } from "../proofs.js";
 import { presentationForInspection } from "../inspect.js";
 
@@ -88,7 +89,7 @@ export const registerDcPaymentGate: RailRegistrar = (app: CeremonyApp, ctx: Cere
     // Order-derived stepper with Pay current: reflects only the gates THIS order has, and
     // shows Age ✓ only when it was ACTUALLY verified (read from the store) — never hardcoded.
     const verified = (await ctx.verificationStore.read(order.id)) ?? {};
-    const rail = checkoutRail(order, "pay", { ageVerified: verified.ageVerified === true });
+    const rail = checkoutRail(order, "pay", await ageStepFor(ctx, order, verified)); // policy age too (#414)
     res.status(200).type("html").send(
       renderDcPaymentPage({
         order: order.id,

@@ -30,7 +30,7 @@
 //                amount, so a forged loyalty state would reduce the charge).
 import * as jose from "jose";
 import { age, membership } from "../../credentials.js";
-import { DEFAULT_LOYALTY_DISCOUNT_PCT } from "../mandate.js";
+import { DEFAULT_LOYALTY_DISCOUNT_PCT, recordedAgeCovers } from "../mandate.js";
 import type { CeremonyOrder } from "../types.js";
 import type { CeremonyContext } from "../mount.js";
 import type { Credential } from "../../types.js";
@@ -98,6 +98,21 @@ export async function requiredAgeFor(
   const policyAge = (await ctx.policyAge?.(order.id)) ?? registeredMinAge(gateOrder, ctx.credentialRegistry, ctx.orderPolicies?.get(order.id));
   const age = Math.max(requiredAgeForOrder(order) ?? 0, policyAge);
   return age > 0 ? age : null;
+}
+
+/**
+ * The pay pages' Age step for THIS order (#414): the age completion will ask (`requiredAgeFor`,
+ * 0 = none) and whether the proof on record covers it (`recordedAgeCovers`, completion's own
+ * rule). Pass it to `checkoutRail` so the progress rail shows an Age step for an age only the
+ * policy asks for, and never ticks a proof made below the order's age.
+ */
+export async function ageStepFor(
+  ctx: Pick<CeremonyContext, "policyAge" | "credentialRegistry" | "orderPolicies">,
+  order: CeremonyOrder,
+  record: { ageVerified?: boolean; ageVerifiedOver?: number } | null | undefined,
+): Promise<{ requiredAge: number; ageVerified: boolean }> {
+  const requiredAge = (await requiredAgeFor(ctx, order)) ?? 0;
+  return { requiredAge, ageVerified: recordedAgeCovers(record, requiredAgeForOrder(order) ?? 0, requiredAge) };
 }
 
 /**

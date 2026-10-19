@@ -290,6 +290,23 @@ export interface SealedAgeProof {
  * be re-derived from the catalog-priced lines — never read off a token or a request body.
  * `nowMs` is epoch milliseconds (the same clock seam `checkDraw` reads).
  */
+/**
+ * Does the age proof RECORDED for an order (its `VerificationRecord`) cover `requiredAge`? The one
+ * rule `completeOrder` enforces, shared with the pay pages' Age step so a page never ticks an age
+ * that completion would refuse (#414). The proof must be explicitly positive and made at an age at
+ * or above `requiredAge` (`ageVerifiedOver`, #354). A record from before rails stored that age
+ * counts as proven at the threshold they used then: the line age, or 21 when no line set one.
+ */
+export function recordedAgeCovers(
+  record: { ageVerified?: boolean; ageVerifiedOver?: number } | null | undefined,
+  lineAge: number,
+  requiredAge: number,
+): boolean {
+  if (record?.ageVerified !== true) return false;
+  const provenAge = record.ageVerifiedOver ?? (lineAge > 0 ? lineAge : 21);
+  return provenAge >= requiredAge;
+}
+
 export function ageProofCovers(proof: SealedAgeProof | undefined, requiredAge: number, nowMs: number = Date.now()): boolean {
   if (!proof || typeof proof.provenAge !== "number" || !Number.isFinite(proof.provenAge)) return false;
   if (proof.provenAge < requiredAge) return false;

@@ -35,7 +35,7 @@ import type { Credential } from "../../types.js";
 import type { RequestLike } from "../origin.js";
 import type { CeremonyOrder } from "../types.js";
 import { buildCredentialRequest, buildSignedRequestForDcql } from "./request.js";
-import { evaluateCredential, evaluateCustom, requiredAgeFor, verifyCredentialPresentation, type CredentialKind, type PresentationResult } from "./verify.js";
+import { ageStepFor, evaluateCredential, evaluateCustom, requiredAgeFor, verifyCredentialPresentation, type CredentialKind, type PresentationResult } from "./verify.js";
 import { inspectionResponse } from "../inspect.js";
 import { upsertProof, type ProofEntry } from "../proofs.js";
 import { verifyMdocPresentation } from "./mdoc-verify.js";
@@ -181,8 +181,9 @@ export const registerCredentialGate: RailRegistrar = (app: CeremonyApp, ctx: Cer
     const cart = typeof req.query.cart === "string" ? req.query.cart : undefined;
     // Order-derived stepper with THIS gate current — only the gates the order actually has,
     // Age ✓ only when truly verified (from the store), never a hardcoded Age · Membership · Pay.
+    // The Age step is the age completion will ask, policy included (#414).
     const verified = (await ctx.verificationStore.read(order.id)) ?? {};
-    const ageVerified = verified.ageVerified === true;
+    const ageStep = await ageStepFor(ctx, order, verified);
     if (resolved.credential) {
       // Custom credential (007): render from its own ui + a demo claim derived from its request.
       // #59 finding 5: the instant-demo synthesizes boolean-`true` for every requested claim leaf,
@@ -204,7 +205,7 @@ export const registerCredentialGate: RailRegistrar = (app: CeremonyApp, ctx: Cer
           demoClaims,
           demoAvailable,
           cart,
-          rail: checkoutRail(order, resolved.credential.id, { ageVerified, currentLabel: resolved.credential.ui.label }),
+          rail: checkoutRail(order, resolved.credential.id, { ...ageStep, currentLabel: resolved.credential.ui.label }),
           branding: ctx.branding,
           basePath: ctx.basePath,
         }),
@@ -221,7 +222,7 @@ export const registerCredentialGate: RailRegistrar = (app: CeremonyApp, ctx: Cer
         currency: order.currency,
         percent: percentFor(order),
         cart,
-        rail: checkoutRail(order, resolved.kind, { ageVerified }),
+        rail: checkoutRail(order, resolved.kind, ageStep),
         branding: ctx.branding,
         basePath: ctx.basePath,
       }),
