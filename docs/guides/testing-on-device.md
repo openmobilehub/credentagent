@@ -48,7 +48,7 @@ badge.
 
 1. Start the demo gate (from the `feat/demo-pki` checkout). It's the **real storefront**
    quickstart (`createStorefront` + `mount` + `store.gate`) plus the demo `readerIdentity`
-   (`certs/reader-cert.pem`, SAN=`localhost`) and one **seeded order** (`ORD-DEMO`):
+   (`certs/reader-cert.pem`, whose SAN includes `localhost`) and one **seeded order** (`ORD-DEMO`):
 
    ```bash
    (cd packages/credentagent-gate && npm run build)        # once
@@ -56,7 +56,7 @@ badge.
    node tools/demo-pki/run-gate.mjs                         # gate on :3007 (~5s to boot)
    ```
 2. Reverse-tunnel the port so the phone sees it as `localhost` (this is why the demo reader
-   cert's SAN is `localhost`; `localhost` is also a secure context, so the DC-API works over
+   cert's SAN includes `localhost`; `localhost` is also a secure context, so the DC-API works over
    plain `http`):
 
    ```bash
