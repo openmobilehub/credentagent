@@ -36,7 +36,7 @@ const catalog: CeremonyCatalog = {
 // The instant-demo payment credential the dc-payment rail accepts (presence-only).
 const CARD = { issuer_name: "Demo Bank", payment_instrument_id: "pi-1", masked_account_reference: "•••• 4242", holder_name: "Demo Buyer", expiry_date: "2032-09-01" };
 
-function setup(opts: { verifier?: DelegatedVerifier; credentials?: Credential[]; policyAge?: PolicyAgeLookup } = {}) {
+function setup(opts: { verifier?: DelegatedVerifier; credentials?: Credential[]; policyAge?: PolicyAgeLookup; mountWith?: { policyAge: PolicyAgeLookup } } = {}) {
   const created = new Map<string, CeremonyOrder>();
   const completed = new Map<string, CompletedRecord>();
   const host = defineHost({
@@ -52,7 +52,9 @@ function setup(opts: { verifier?: DelegatedVerifier; credentials?: Credential[];
   // A lookup the host itself publishes for the ceremony (e.g. a durable one) — set before mount.
   if (opts.policyAge) (app.locals.credentagent as Record<string, unknown>).policyAge = opts.policyAge;
   const credentagent = new CredentAgent({ walletOrigin: "http://127.0.0.1", ...(opts.credentials ? { credentials: opts.credentials } : {}) });
-  credentagent.mount(app);
+  // `mountWith` takes the explicit-seams path, `mount(app, { … })`; the rest come from app.locals.
+  if (opts.mountWith) credentagent.mount(app, opts.mountWith);
+  else credentagent.mount(app);
   // An order this instance knows of but never resolved (requirements() ran elsewhere, or before a restart).
   const create = (id: string, productId: string): CeremonyOrder => {
     const order = catalog.createOrder([{ productId, quantity: 1 }], id);
@@ -207,6 +209,13 @@ describe("#357 review — an order the server forgot keeps its age check", () =>
     const s = setup({ policyAge: (id) => (id === "ORD-1" ? 21 : undefined) });
     const order = s.create("ORD-1", "gift-card");
     expect((await pay(s.app, order)).body).toMatchObject({ completed: false, reason: "age" });
+  });
+
+  it("BYPASS (invariant 1): …and so is one passed to mount(app, { policyAge }) (the explicit-seams path)", async () => {
+    const s = setup({ mountWith: { policyAge: (id) => (id === "ORD-1" ? 21 : undefined) } });
+    const order = s.create("ORD-1", "gift-card");
+    expect((await pay(s.app, order)).body).toMatchObject({ completed: false, reason: "age" });
+    expect(s.completed.has("ORD-1")).toBe(false);
   });
 });
 

@@ -3,6 +3,7 @@ import { CredentAgent } from "./client.js";
 import { age, payment, membership, required, optional, defineCredential, dcql, gate } from "./credentials.js";
 import type { CompletionInput, CompletionResult } from "./ceremony/types.js";
 import { Orders, MemoryOrderStore, type CompletedOrder } from "./orders.js";
+import { MemoryVerificationStore } from "./store.js";
 import * as jose from "jose";
 import { Encoder, Tag } from "cbor-x";
 
@@ -221,6 +222,28 @@ describe("orders.serve — checkout wiring", () => {
     it("control: the same untagged item completes when its policy asks no age", async () => {
       const { app, id } = await serveWith([]);
       expect((await seamOf(app)(stickerInput(id))).completed).toBe(true);
+    });
+
+    // The server keeps ONE registered `age`, so a later 21+ order overwrites a 25+ order's rule.
+    // Only orders.serve's per-order lookup still knows the first order asked for 25 (#357 review).
+    const twoAgesWithProof = async (provenAt: number) => {
+      const store = new MemoryVerificationStore();
+      const ca = new CredentAgent({ walletOrigin: "http://localhost:4000", store });
+      const app = fakeApp();
+      ca.orders.serve(app);
+      const { id } = await ca.orders.create({ order: stickerOrder(), policy: [required(age.over(25))] });
+      await app._get.get("/credentagent/orders/:id")!({ params: { id } }, fakeRes()); // re-resolves: slot = 25
+      await ca.orders.create({ order: stickerOrder(), policy: [required(age.over(21))] }); // slot = 21 now
+      store.write(id, { ageVerified: true, ageVerifiedOver: provenAt });
+      return seamOf(app)(stickerInput(id));
+    };
+
+    it("BYPASS (invariant 1+5): a 21+ proof can't complete a 25+ order after a 21+ order took the server's age rule", async () => {
+      expect(await twoAgesWithProof(21)).toMatchObject({ completed: false, reason: "age" });
+    });
+
+    it("control: a 25+ proof completes that order", async () => {
+      expect((await twoAgesWithProof(25)).completed).toBe(true);
     });
   });
 
