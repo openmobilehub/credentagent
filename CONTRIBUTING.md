@@ -184,4 +184,31 @@ turns up something off, fix it or flag it.
 - [ ] A change someone using the npm packages would notice adds a line under `[Unreleased]` in [`CHANGELOG.md`](CHANGELOG.md) — marked **BREAKING** if their code has to change.
 - [ ] Anything broken you noticed along the way is fixed or filed — never silently ignored.
 
+## After a release — the catch-up PRs
+
+Publishing to npm changes nothing people see. Until two catch-up PRs merge, both still show the
+previous version:
+
+- **The hosted demo** (https://credentagent.ai/marketplace) runs the *published* packages that
+  [`examples/quickstart/package.json`](examples/quickstart/package.json) pins. Below 1.0 a caret
+  (`^0.5.0`) never reaches the next minor, so the pin has to move with every release.
+- **The site** (https://credentagent.ai, repo
+  [credentagent-website](https://github.com/openmobilehub/credentagent-website)) writes the version
+  into its pages: the nav pill, the NEW strip, the storefront `npm i` line and the JSON-LD in
+  `index.html`, plus `index.md`, `llms.txt` and its CLAUDE.md.
+
+`publish.yml`'s **catch-up** job opens both PRs once npm serves the release. It needs the
+`AGENT_GH_TOKEN` secret with write access to both repos; without it the job only warns. To open
+them by hand, run [`scripts/post-release-bump.mjs`](scripts/post-release-bump.mjs)
+(`quickstart <version>`, then `website <site checkout> <version> "<release title>" <date>`) and
+commit with `-s`. A release isn't done until:
+
+- [ ] You've read the release's **BREAKING** and **Migration** notes. One that changes the merchant
+      id (`ap2.merchant.id`) or the grant format means grants signed on the prod demo before the
+      deploy are refused: merge the quickstart PR after any upcoming demo.
+- [ ] The quickstart PR is merged, `deploy-prod` passed, and
+      `curl https://credentagent.ai/marketplace/version` reports the new version.
+- [ ] The site PR is merged, after checking what no script bumps: the site's trust table and its
+      CLAUDE.md "Trust levels" note, and any code sample an API change affects.
+
 Apache-2.0 · part of [Open Mobile Hub](https://openmobilehub.org) (Linux Foundation).
