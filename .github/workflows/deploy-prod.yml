@@ -94,10 +94,11 @@ jobs:
       - name: Deploy credentagent-demo (production)
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-        # CREDENTAGENT_BUILD labels this deployment at GET /version (prod + commit). The demo runs
-        # the PUBLISHED storefront, so the label (and /version itself) only takes effect once a
-        # release that includes them is published and the quickstart is bumped to it.
-        run: npx vercel@latest deploy --prod --yes --token "$VERCEL_TOKEN" --env CREDENTAGENT_BUILD="prod.${GITHUB_SHA::7}"
+        # CREDENTAGENT_BUILD labels this deployment at GET /version (prod + commit).
+        # PUBLIC_URL is where buyers reach this store: the credentagent.ai router serves it under
+        # /marketplace (deploy/router/vercel.json), so its checkout and consent pages open on
+        # credentagent.ai, not *.vercel.app (#226; path support shipped in 0.6.0, #228).
+        run: npx vercel@latest deploy --prod --yes --token "$VERCEL_TOKEN" --env CREDENTAGENT_BUILD="prod.${GITHUB_SHA::7}" --env PUBLIC_URL=https://credentagent.ai/marketplace
       # The same security-bearing assertions ci.yml runs against a local server, pointed at
       # the live demo.
       - name: Smoke the live demo
