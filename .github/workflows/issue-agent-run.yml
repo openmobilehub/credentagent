@@ -168,7 +168,8 @@ jobs:
 
   implement:
     needs: snapshot
-    if: needs.snapshot.outputs.skip == 'false'
+    # An approved split brief builds nothing: publish opens its tickets (ci/issue-agent/scope.mjs).
+    if: needs.snapshot.outputs.skip == 'false' && needs.snapshot.outputs.phase != 'split'
     runs-on: ubuntu-latest
     timeout-minutes: 180
     permissions:
@@ -257,6 +258,7 @@ jobs:
         with:
           node-version: "22"
       - uses: actions/download-artifact@v4
+        if: needs.snapshot.outputs.phase != 'split'
         continue-on-error: true # an implement job that died before uploading still gets a comment
         with:
           name: issue-agent-run
@@ -281,4 +283,9 @@ jobs:
           ISSUE_AGENT_BRIEF_ASOF: ${{ needs.snapshot.outputs.asof }} # when the run read the issue
         run: |
           mkdir -p "$RUNNER_TEMP/issue-agent/run"
+          # An approved split brief: open its tickets as sub-issues, re-read from the issue itself.
+          if [ "$PHASE" = split ]; then
+            node harness/ci/issue-agent/run.mjs publish-split "$ISSUE" --target target --issue "$ISSUE" --dir "$RUNNER_TEMP/issue-agent/run"
+            exit $?
+          fi
           node harness/ci/issue-agent/run.mjs "$([ "$PHASE" = brief ] && echo publish-brief || echo publish)" "$RUNNER_TEMP/issue-agent/run" --target target --issue "$ISSUE"

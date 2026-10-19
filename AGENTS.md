@@ -110,20 +110,26 @@ a localhost `walletOrigin`, or in-memory stores on a deployment.
 
 ### AP2 mandates
 
-> **Not released yet.** This section and the `/.well-known/did.json` / `/did.json` routes are on `main`
-> but not in the published `0.5.0` package; following them against `0.5.0` fails with a
-> missing export.
+> **Since 0.6.0.** This section and the `/.well-known/did.json` / `/did.json` routes are not in
+> `0.5.0`. Against `0.5.0`, `verifyMandate` and `publicJwkFromDidDocument` are missing exports,
+> `credentagent.ap2` is `undefined`, both `mandateSigningKey` and `checkoutSigningKey` are silently
+> ignored, and `doctor()` checks neither key.
 
-A spending grant signed on a phone is recorded as an AP2 mandate (an SD-JWT signed
-ES256), and you can mint and check mandates with `credentagent.ap2`. A checkout still
-records the older dev-signed mandate.
+A spending grant signed on a phone is recorded as an AP2 mandate: an SD-JWT that the
+wallet's own key signs. Your store can mint its own mandates with `credentagent.ap2`, signed
+with `mandateSigningKey`, and anyone can check one with `verifyMandate` (below). A checkout
+still records the older payment mandate, which is not key-signed: the passkey rail's carries a
+dev integrity hash, and the dc-payment rail's carries none.
 
 The gate signs with two keys, each a stable private P-256 JWK from your secret manager:
 `mandateSigningKey` (mandates) and `checkoutSigningKey` (the merchant checkout key carts
 are quoted with — a second, different key, and one per store: its key id carries the
 `walletOrigin`, path included, so stores at different paths refuse each other's carts, but
-two deployments sharing one `walletOrigin` and the key accept them, #335). Without them the keys are generated at boot
-and everything signed stops verifying at the next restart; `doctor()` reports a missing
+two deployments sharing one `walletOrigin` and the key accept them, #335). Without them each
+instance generates its own keys at boot, so a restart, or a second instance, breaks what they
+signed: mandates your code minted with `credentagent.ap2` stop verifying, and an agent purchase
+whose cart was quoted before the restart, or by another instance, is refused with code
+`signature`. Nothing re-quotes it for you. Phone-signed permissions use neither key. `doctor()` reports a missing
 `mandateSigningKey` as an error and a missing `checkoutSigningKey` as a warning on a
 deployment.
 

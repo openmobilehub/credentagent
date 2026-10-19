@@ -8,6 +8,7 @@ other path to the site that serves it:
 | Public URL | Served by |
 | --- | --- |
 | `https://credentagent.ai/marketplace/mcp` | `credentagent-demo` — the published npm packages |
+| `https://credentagent.ai/marketplace/checkout?…` and the other store pages | `credentagent-demo` — its checkout and consent pages (see below) |
 | `https://credentagent.ai/marketplace-dev/mcp` | `credentagent-demo-dev` — `main`'s unpublished packages |
 | `https://credentagent.ai/marketplace-dev/checkout?…` and the other store pages | `credentagent-demo-dev` — its checkout and consent pages (see below) |
 | `https://credentagent.ai/` | the product page from GitHub Pages (https://openmobilehub.github.io/credentagent-website/), served under credentagent.ai (the address bar stays on credentagent.ai); with `Accept: text/markdown`, this folder's `domain.md` (see below) |
@@ -44,13 +45,17 @@ wallet links from `PUBLIC_URL`, falling back to `VERCEL_PROJECT_PRODUCTION_URL`,
 resolves to the project's *shortest* domain. A custom domain on a demo would silently move its
 links whenever that ordering changes; `PUBLIC_URL` states the address outright.
 
-**Store pages under credentagent.ai (#226):** `deploy-dev.yml` sets the dev demo's `PUBLIC_URL` to
-`https://credentagent.ai/marketplace-dev`. The gate and storefront then put `/marketplace-dev` on
-every checkout link, consent-page fetch and redirect, so a buyer stays on credentagent.ai end to
-end — the router strips the prefix on the way in. The wallet binds to the page's origin
-(`https://credentagent.ai`, from the forwarded host), so passkeys and wallet requests name
-credentagent.ai. The prod demo keeps its `*.vercel.app` links until a release carries this (0.5.0's
-pages use root paths); then set `PUBLIC_URL=https://credentagent.ai/marketplace` in `deploy-prod.yml`.
+**Store pages under credentagent.ai (#226):** each demo's deploy workflow sets its `PUBLIC_URL`:
+`deploy-prod.yml` to `https://credentagent.ai/marketplace`, `deploy-dev.yml` to
+`https://credentagent.ai/marketplace-dev`. The gate and storefront then put that path on every
+checkout link, consent-page fetch and redirect, so a buyer stays on credentagent.ai end to end — the
+router strips the prefix on the way in. (Path-prefix support shipped in 0.6.0; before that the prod
+demo kept its `*.vercel.app` links.) The wallet binds to the page's origin (`https://credentagent.ai`,
+from the forwarded host), so passkeys and wallet requests name credentagent.ai — for both demos.
+**Both demos, the website and `/api/ask` therefore share one web origin.** A page elsewhere on
+credentagent.ai could fetch a demo's challenge and run its wallet or passkey prompt; the user still has
+to approve on their device, and challenges, seals and nonces can't cross between the demos only because
+each project has its own `GATE_SECRET` — never give the two demos the same one.
 
 **Markdown for agents on `/` (#370):** a request for `/` whose `Accept` header contains
 `text/markdown` is rewritten to this folder's [`domain.md`](./domain.md) and answered with

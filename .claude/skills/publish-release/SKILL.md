@@ -56,14 +56,13 @@ what happened with v0.3.1 (published manually 2026-07-26; the release then fired
    shipped tagless via manual publishes and had to be backfilled.
 
 4. **Post-publish** — watch the `publish` workflow run go green, confirm
-   `npm view @openmobilehub/credentagent-gate version` shows the new version, then
-   open the **quickstart catch-up PR** (bump `examples/quickstart` to the new
-   versions): that PR's `quickstart-smoke` job is the real post-publish check — it
+   `npm view @openmobilehub/credentagent-gate version` shows the new version. Its
+   **catch-up** job then opens the two catch-up PRs — don't open them by hand unless it
+   warned or failed. Work through CONTRIBUTING.md's **"After a release"** checklist:
+   the **quickstart PR**'s `quickstart-smoke` job is the real post-publish check — it
    clean-installs the PUBLISHED packages — and merging it runs `deploy-prod`, which
-   deploys the live demo and re-runs the same assertions against it. Merge it with
-   **rebase** from a branch whose commits are authored and committed by the Vercel
-   team's owner account, or (after a squash) run `deploy-prod` by hand — see that
-   workflow's header for why. Nothing else to
+   deploys the live demo and re-runs the same assertions against it; the
+   **credentagent-website PR** moves credentagent.ai to the release. Nothing else to
    hand-update: the **release + merged PRs are the record** (there is no status
    file). Close any issue the release resolves.
 
