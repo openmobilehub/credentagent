@@ -47,7 +47,7 @@ regenerates the reader root, reader leaf and trust-list signer, and keeps the IA
 and Document Signer, so the shipped `.mpzpass` credentials stay valid. Use it to
 change `READER_DNS` or to replace a lost reader key. Then rebuild the trust lists
 (step 3, no re-mint), redeploy the download site (step 4), give the gate the new
-key (step 5), and re-import both lists on the phone. It runs the same steps that
+key and cert (step 5), and re-import both lists on the phone. It runs the same steps that
 made the shipped reader identity.
 
 ---
