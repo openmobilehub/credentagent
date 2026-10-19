@@ -84,8 +84,8 @@ warnings** appear — issuer (via the imported **VICAL**) *and* verifier (via th
 > demos** sign with, so for a quick check, import it and check out at
 > `https://credentagent.ai/marketplace-dev` instead. To clear the warning on *your* gate: run
 > `./gen-pki.sh --reader-only` (a new reader key + cert and trust-list signer, issuer
-> untouched), rebuild the trust lists, redeploy the download site (or push the lists over adb,
-> section 2), and **re-import both trust lists** on the phone. Don't run a full `./gen-pki.sh` for this:
+> untouched), rebuild the trust lists, redeploy the download site (or `adb push` the lists and
+> import them by hand, section 1), and **re-import both trust lists** on the phone. Don't run a full `./gen-pki.sh` for this:
 > it also replaces the issuer and orphans the shipped credentials.
 > ([#51](https://github.com/openmobilehub/credentagent/issues/51))
 
