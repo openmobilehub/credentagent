@@ -316,6 +316,9 @@ export interface CredentAgentOptions {
    *
    * The same holds for an `age.over(n)` that only the policy asks for (no `minimumAge` on the
    * item): an instance that doesn't know the order's policy enforces the age declared here.
+   * Declare the policy's own rule, `.when()` included — `credentials: policy.map((s) => s.credential)`.
+   * A server keeps ONE `age` and each `requirements()` replaces it, so with several age rules an
+   * order the server forgot can be held to a lower age, or none (#411).
    */
   credentials?: Credential[];
   /** Persist created orders (`orders.create`); default in-memory, inject a shared store for multi-instance. */

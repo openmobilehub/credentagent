@@ -400,6 +400,12 @@ interface VerificationStore {
 ```ts
 interface ExpressApp { locals: Record<string, unknown>; }   // structural — no `express` dependency
 type MountCeremony = Omit<Partial<CeremonySeams>, "verificationStore">;  // host never passes the store
+
+// MountCeremony.policyAge (also read from app.locals.credentagent.policyAge): the age an order's
+// own policy asked for — 0 when it asked none, undefined when the lookup doesn't know the order.
+// mount() asks what this instance's requirements() remembered first, then this lookup, so a host
+// can answer for orders another instance resolved (e.g. from its own durable order records).
+type PolicyAgeLookup = (orderId: string) => number | undefined | Promise<number | undefined>;
 ```
 
 ---

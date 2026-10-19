@@ -60,10 +60,8 @@ straight to the completion endpoint sails past it.
 [`ceremony/completion.ts`](../../packages/credentagent-gate/src/ceremony/completion.ts), is the
 *one* path every rail records through. `completeOrder()` re-runs the deterministic gates
 (`input.gates.every((g) => g.pass)`) and re-derives the age the order requires: the strictest of
-the catalog-priced lines' `minimumAge` and the order's own policy (`age.over(n)`, #354). When the
-server no longer remembers the order's policy (evicted, restarted, another instance), the
-registered `age` credential decides, so a forgotten order still fails closed. It refuses an
-age-restricted order whose positive per-order age claim is missing or was proven at a lower age,
+the catalog-priced lines' `minimumAge` and the order's own policy (`age.over(n)`, #354). It
+refuses an age-restricted order whose positive per-order age claim is missing or was proven at a lower age,
 and an order whose required age isn't a number — **regardless of which rail called it**:
 
 ```ts
@@ -79,6 +77,15 @@ if (requiredAge > 0 && (verification?.ageVerified !== true || provenAge < requir
 
 `provenAge` is the age the proof was made at (`VerificationRecord.ageVerifiedOver`, see
 invariant 5).
+
+**Open gap: an order the server has forgotten** (#411). The policy age is remembered per order in
+memory, for the last 10,000 orders. An order evicted from that, or completed after a restart or on
+another instance, falls back to the server's ONE registered `age` credential, the last one
+resolved. That is the order's own age only while the server has a single age rule. Where its age
+rules differ in age or in `.when()`, the fallback can ask a lower age, or none at all; with no
+`age` registered, none. Two setups are not affected: `orders.serve` with a shared order store
+(it reads each order's own policy age from the store), and a `minimumAge` tag on the item (a tag
+always holds).
 
 Because `completeOrder()` is injected-seam based (no rail-specific imports), the passkey rail,
 the `dc-payment` rail, and the storefront's `place-order` all reconcile against the *same*

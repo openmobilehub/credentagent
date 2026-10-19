@@ -261,8 +261,10 @@ async function completeOrderLocked(input: CompletionInput, ctx: CompletionContex
   // half of CT9; the demo's place-order + MCP order-completion-tool halves are wired in T014.
   const lineAge = Math.max(0, ...repriced.lines.map((l) => (typeof l.minimumAge === "number" ? l.minimumAge : 0)));
   // When nothing says what the order's policy asked (the server forgot the order, restarted, or
-  // another instance resolved it), the registered `age` credential decides — fail-closed, the
-  // same fallback as the custom-gate sweep, so a forgotten order never loses its age check.
+  // another instance resolved it), the registered `age` credential decides — the same fallback
+  // as the custom-gate sweep. It is the order's OWN age only while the server has one age rule:
+  // the registry holds the last `age` resolved, which can ask less, or nothing (its `.when()`
+  // excludes this order, or none is registered). Open gap, #411.
   const policyAge = input.policyMinAge ?? registeredMinAge(gateOrderOf(repriced), ctx.credentialRegistry, policyCredentialIds);
   // The STRICTEST threshold this order demands (lines vs policy, the stricter wins). 0 when
   // nothing is restricted. Read below to test an age proof at the RIGHT threshold, so an 18+

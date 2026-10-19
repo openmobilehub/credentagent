@@ -97,7 +97,9 @@ export function policyMinAge(order: GateOrder, policy: readonly Step[]): number 
  * The age the REGISTERED `age` credential requires of this order, or `0` when none applies —
  * what decides when the order's own policy age is unknown (the server forgot the order, it
  * restarted, or another instance resolved it). It mirrors the custom-gate sweep: scoped to the
- * order's policy when its credential ids are known, the whole registry otherwise (fail-closed).
+ * order's policy when its credential ids are known, the whole registry otherwise. The registry
+ * holds ONE `age` (the last resolved), so this is the order's own age only on a server with a
+ * single age rule; with several it can be lower, or 0 (#411).
  */
 export function registeredMinAge(
   order: GateOrder,

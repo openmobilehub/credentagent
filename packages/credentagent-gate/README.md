@@ -558,7 +558,7 @@ Built-ins, custom credentials, and effects are one shape (`Credential` + `Effect
 
 | Builder | Effect | Verifies |
 | :-- | :-- | :-- |
-| `age.over(n)` | `gate()` | the explicit positive `age_over_${n} === true` (an 18+ proof never satisfies a 21+ gate). Enforced at `n` whether or not the item carries a `minimumAge`; when both ask, the stricter wins. An instance that doesn't know the order's policy uses the `age` it has registered (see *Multi-instance* below) |
+| `age.over(n)` | `gate()` | the explicit positive `age_over_${n} === true` (an 18+ proof never satisfies a 21+ gate). Enforced at `n` whether or not the item carries a `minimumAge`; when both ask, the stricter wins. An instance that doesn't know the order's policy falls back to the one `age` it has registered, which can ask less (see *Multi-instance* below) |
 | `membership.discount(n)` | `discount({ percent: n })` | a non-empty `membership_number`; applies the discount once |
 | `payment.in(cur)` | `authorize()` | `authorized === true`; settles last, amount derived from the order |
 
@@ -605,10 +605,21 @@ completion path (a hard block, independent of `required`/`optional`). Worked pac
 >
 > The same goes for an `age.over(n)` that only the policy asks for (no `minimumAge` on the item).
 > An instance that doesn't know the order's policy (another worker, a restart, or an order old
-> enough to have been forgotten) holds the order to the `age` credential it has registered, so
-> declare that too: `credentials: [prescription, age.over(21)]`. A server keeps one registered
-> `age`, so where policies ask for different ages, tag the items with `minimumAge` too, or use
-> `orders.serve` with a shared order store, which remembers each order's own age.
+> enough to have been forgotten) holds the order to the `age` credential it has registered. So
+> declare your policy's own credentials, `.when()` included, not a bare `age.over(21)` (that one
+> would also refuse a gift card your policy never asked an age for):
+>
+> ```js
+> const policy = [required(age.over(21).when((order) => order.lines.some((l) => l.minimumAge != null))), required(prescription)];
+> const credentagent = new CredentAgent({ credentials: policy.map((step) => step.credential) });
+> ```
+>
+> A server keeps **one** registered `age`, and each `requirements()` replaces it with that
+> policy's. So where the server's age rules differ in age or in `.when()`, a forgotten order can be
+> held to a lower age, or to none
+> ([#411](https://github.com/openmobilehub/credentagent/issues/411)). There, tag age-restricted
+> items with `minimumAge` too (a tag always holds), or use `orders.serve` with a shared order
+> store, which remembers each order's own age.
 
 ## Honest status
 

@@ -61,9 +61,11 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
     item tagged 18+ now asks for 21+.
   - A policy stricter than the tags (25+ on wine tagged 21) now asks for 25+.
   - An 18+ policy on untagged items asks for 18+, not the old default of 21.
-- **BREAKING:** `age.over()` throws unless the age is a whole number above 0. For example,
-  `age.over(Number(process.env.MIN_AGE))` with the variable unset now fails at startup. Before,
-  such an age silently switched the age check off (#354).
+- **BREAKING:** `age.over()` throws unless the age is a whole number above 0. In 0.5.0 a policy's
+  age decided nothing at completion, so a bad value went unnoticed. Now that it is enforced, a
+  value it can't check would switch the check off, so it is refused at startup. What breaks on
+  upgrade: a string, such as `age.over(process.env.MIN_AGE)` with `MIN_AGE=21` (it worked in 0.5.0;
+  wrap it in `Number()`), and a fraction, 0, a negative number or NaN (#354).
 - `VerificationRecord` gains `ageVerifiedOver`, the age a proof was made at. Completion refuses a
   proof made below the order's age, so a 21+ proof can't complete a 25+ order. A record written
   before this counts as proven at the item's age, or 21 (#354).
@@ -78,9 +80,9 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
 ### Fixed
 
 - A store served under a path publishes its signing key where clients look for it (#347).
-- On iPhone (the ISO mdoc request), an age gate asks the wallet for the order's own age
-  (`age_over_25` for 25+). Before, it asked only for 18 or 21, so any other age could never be
-  proven there (#354).
+- An age gate asks the wallet for the order's own age (`age_over_25` for 25+, `age_over_16` for
+  16+). Before, the iPhone request (ISO mdoc) asked only for 18 or 21, and every request asked an
+  age under 18 for 18 alone, so those ages could never be proven (#354).
 - The storefront empties the cart when the order completes on another instance (#227), keeps the
   picker on one cart (#211), and refuses MCP listen streams that only burn serverless time (#215).
 
@@ -99,12 +101,15 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
 
 - Two stores on one host that share a checkout signing key can accept each other's price quotes.
   Give each store its own `checkoutSigningKey` (#335).
-- A server keeps one registered `age`. Where policies ask for different ages:
-  - An order the server no longer remembers (evicted, restarted, another instance) is held to the
-    age resolved last, which can be lower than its own policy's. Tag such items with `minimumAge`
-    too, or use `orders.serve` with a shared store (#359).
-  - The outside verifier's page asks the wallet for the age resolved last. Completion still
-    refuses a proof below the order's own age, so a person can be stuck, never let through (#359).
+- A server keeps one registered `age`, the last one resolved:
+  - An order the server no longer remembers (after 10,000 newer orders, a restart, or on another
+    instance) is held to that age. Where the server's age rules differ in age or in `.when()`,
+    that can be lower than the order's own policy, or no age check at all; with no `age`
+    registered, none at all. Tag age-restricted items with `minimumAge` (a tag always holds), or
+    use `orders.serve` with a shared store (#411).
+  - The outside verifier's page asks the wallet for that age. For an order the server remembers,
+    completion still refuses a proof below the order's own age, so a person can be stuck, not let
+    through (#359).
 
 ## [0.5.0] - 2026-09-26
 

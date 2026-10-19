@@ -153,8 +153,8 @@ export interface CompletionInput {
    * Supplied like `policyCredentialIds`: the mounted ceremony adds it to every rail's completion
    * (from `requirements()`), `orders.serve` from the stored created order, and `host.complete`
    * from the mounted lookup. `0` ⇒ the policy asks no age. Absent ⇒ the registered `age`
-   * credential decides when it applies (fail-closed, like the custom-gate sweep), so an order the
-   * server forgot never loses its age check.
+   * credential decides when it applies, like the custom-gate sweep. That is the order's own age
+   * only while the server has one age rule; otherwise it can be lower, or none (#411).
    */
   policyMinAge?: number;
 }

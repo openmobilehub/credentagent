@@ -87,7 +87,7 @@ export class CredentAgent {
   // applies to it (0 = the policy asks none), so completion and the rails enforce it even on an
   // item with no `minimumAge`. Remembered and evicted together with `orderPolicies` (same bound,
   // same single-process scope); an order it doesn't hold falls back to the registered `age`
-  // credential (fail-closed).
+  // credential, which can ask less than the order's policy did (#411).
   private readonly orderPolicyAges = new Map<string, number>();
   // Config facts `doctor()` inspects (#25). Retained at construction so the preflight can read
   // what was configured once — a stable gateSecret, and whether the stores are shared (injected)
@@ -164,7 +164,8 @@ export class CredentAgent {
     // completion instance may never run requirements() (checkout landed elsewhere), leaving the
     // registry empty and the completion sweep a no-op → an applicable gate() completes UNPROVEN
     // (fail-open). register-on-resolve stays for zero-config dev; this makes multi-instance
-    // deploys fail-closed. Reserved ids are inert here (the sweep + resolveCred skip them).
+    // deploys fail-closed. The sweep + resolveCred skip reserved ids, but a declared `age.over(n)`
+    // is the age fallback for an order this instance doesn't know (#354).
     for (const c of opts.credentials ?? []) this.registry.set(c.id, c);
     // The orders resource — configure-once: it reuses this client's origin + requirements(),
     // with in-memory order stores by default (inject a shared store for multi-instance deploys).
@@ -251,8 +252,9 @@ export class CredentAgent {
    * payment-last; no functions cross the wire.
    */
   /** Remember an order's resolved policy credential ids and age, bounded so a long-running process
-   *  can't grow them without limit — evicting the oldest (FIFO) drops back to the fail-closed
-   *  registry-wide sweep and the registered `age` credential for that order, never opens a gate. */
+   *  can't grow them without limit — evicting the oldest (FIFO) drops that order back to the
+   *  registry-wide custom-gate sweep, and to the ONE registered `age` for its age: the last one
+   *  resolved, which can ask less than the order's policy did, or nothing (#411). */
   private rememberOrderPolicy(orderId: string, credentialIds: readonly string[], minAge: number): void {
     this.orderPolicies.delete(orderId); // re-insert at the tail so a re-resolve refreshes recency
     this.orderPolicies.set(orderId, credentialIds);

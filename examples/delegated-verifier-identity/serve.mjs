@@ -47,9 +47,9 @@ const MODE = process.env.VERDICT || "ok"; // ok | underage | declined
 // ── The gated ACTION — not a sale. The "catalog" prices every action at $0: the gate
 //    re-derives the amount server-side as always (invariant 2), and here that amount is
 //    zero because there is nothing to pay.
-//    `minimumAge: 21` is what makes the shared completion enforce the age gate: it reads the
-//    threshold from the line, not from `age.over(21)` in the policy. Drop the tag and an
-//    18+ proof would complete (issue #354).
+//    `age.over(21)` in the policy is what makes the shared completion enforce the age gate,
+//    tag or no tag (issue #354). `minimumAge: 21` stays as a backstop: a tag always holds,
+//    even for an order the server has forgotten (issue #411).
 const ACTIONS = { "sealed-record": { name: "Sealed record", minimumAge: 21 } };
 const subjects = new Map(); // requestId → the ONE record its approval covers (server-side)
 function priceAction(items, orderId) {

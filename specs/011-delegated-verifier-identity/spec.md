@@ -121,5 +121,7 @@ the delegated approve page for the $0 action, clicks through the ceremony, sees 
   issue #352.
 - The delegated rail decides "this policy has a payment" from every policy the instance has
   resolved, not from this request's — issue #353.
-- Completion enforces age only from a line's `minimumAge`, not from `age.over(n)` in the policy;
-  the example's action carries `minimumAge: 21` for that reason — issue #354.
+- ~~Completion enforces age only from a line's `minimumAge`, not from `age.over(n)` in the
+  policy — issue #354.~~ Fixed by pull request #357: completion enforces the policy's age too. The
+  example's action keeps `minimumAge: 21` as a backstop for an order the server has forgotten —
+  issue #411.
