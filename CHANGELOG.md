@@ -34,7 +34,9 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
   key, and a merchant can verify it (#195, #235). The phone now signs the Agent Payments
   Protocol's own Mandate Content rather than a format this project invented, and the optional
   `grant.mandate.mandates` holds what it signed (#189).
-- `@openmobilehub/credentagent-gate/cards` — the grant card gallery as its own export (#258).
+- `@openmobilehub/credentagent-gate/cards` — the grant card's data contract (`GRANT_VIEW_KIND`,
+  `GrantViewData`, `GrantViewProduct`), the first slice of the card kit. The card components
+  themselves are not exported yet (#258).
 - `inspectPresentations` — links each wallet answer to Multipaz Tools so you can inspect it (#223),
   and an order proof receipt that keeps each proof with its order (#224, #225).
 - The store's checkout and consent pages can be served under a path prefix (#228).
@@ -105,8 +107,10 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
 
 ### Known issues
 
-- Two stores on one host that share a checkout signing key can accept each other's price quotes.
-  Give each store its own `checkoutSigningKey` (#335).
+- Two deployments that share one `walletOrigin` and one checkout signing key accept each other's
+  price quotes. Give each store its own `checkoutSigningKey` (#335).
+- A store's price quote never expires, so an agent can keep an old quote and spend it later; a
+  changed price is still refused (#249).
 - The gate's built-in pages accept a typed-in claim such as "over 21" with no wallet, and there's no
   switch to turn this off, even on a server that uses an outside verifier (#352). Also in 0.5.0.
 - The full list of open bugs that ship in 0.6.0 is in the

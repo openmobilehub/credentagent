@@ -251,7 +251,8 @@ but "every mandate already signed stops verifying at the next restart".
 A spending grant signed on a phone is recorded as an [AP2](https://github.com/google-agentic-commerce/AP2)
 mandate: an SD-JWT (RFC 9901) signed ES256, typed by AP2's `vct` claim. You can mint mandates
 yourself with `credentagent.ap2`, and anyone holding your public key checks them with `verifyMandate`
-(a phone-signed permission is checked when it is spent, by `verifyDelegatedPurchase`). A checkout still records the older payment mandate
+(a phone-signed permission is checked when the person signs it, and again at each purchase by
+`verifyDelegatedPurchase` when the agent holds its key). A checkout still records the older payment mandate
 (`ap2.PaymentMandate`), which is not key-signed: the passkey rail's carries a dev integrity hash, and
 the dc-payment rail's carries none. Pass the key and `mount()`
 publishes its public half, so a mandate this gate signed is verifiable by someone who does not have
@@ -887,12 +888,15 @@ is the fast-follow, and the gate **relays** that level verbatim with the attesto
 Test the whole flow **with no phone** using the exported simulated wallet — see
 [`examples/device-signed-grants.mjs`](https://github.com/openmobilehub/credentagent/blob/main/examples/device-signed-grants.mjs)
 (`devSimulateWalletSignature` produces a real device signature the way Stripe's test cards stand in
-for a real card). The **on-device** path is verified separately: the grant asks the wallet for an
-**SD-JWT** payment credential (`vct` `urn:emvco:dpc:card:1` or `com.emvco.dpc`). From a clone of
-this repo, mint one with
+for a real card). **That is the way to test today.** Signing on a real phone needs a wallet that
+supports AP2's `delegate` request, and **no released wallet does yet**: the Multipaz change
+([openwallet-foundation/multipaz#2011](https://github.com/openwallet-foundation/multipaz/pull/2011))
+was closed without merging, and a released Multipaz wallet rejects the request. With a patched
+wallet build, the grant asks for an **SD-JWT** payment credential (`vct` `urn:emvco:dpc:card:1` or
+`com.emvco.dpc`); from a clone of this repo, mint one with
 [`node tools/demo-pki/mint/mint-dpc-sdjwt.mjs --mpzpass`](https://github.com/openmobilehub/credentagent/blob/main/tools/demo-pki/mint/mint-dpc-sdjwt.mjs),
-which writes `tools/demo-pki/keys/dpc.mpzpass`. Import that file into Multipaz, and sign on the
-phone. The mdoc `payment.mpzpass` from the demo set no longer matches.
+which writes `tools/demo-pki/keys/dpc.mpzpass` to import into that build. The mdoc
+`payment.mpzpass` from the demo set no longer matches.
 
 ### Credentials on a grant — presented before you authorize, or not at all
 
