@@ -201,7 +201,8 @@ previously imported RICAL first.
 > which is why the RICAL and the reader key must be built and distributed together.
 
 The gate's serving origin must match a name in the reader cert's SAN (`READER_DNS`,
-step 1). Change it and you must rebuild the RICAL (step 3) and re-import it. On Vercel the
+step 1). Change it with `./gen-pki.sh --reader-only`, then rebuild both lists (step 3), redeploy
+the site (step 4), re-copy the reader key/cert to the gate (step 5) and re-import both lists. On Vercel the
 gate's `walletOrigin` is `PUBLIC_URL` when set (the dev demo: `https://credentagent.ai/marketplace-dev`),
 else `https://${VERCEL_PROJECT_PRODUCTION_URL}`. This repo's shipped cert covers `localhost`,
 `credentagent.ai`, `credentagent-demo.vercel.app` and `credentagent-demo-dev.vercel.app`. Deploy
