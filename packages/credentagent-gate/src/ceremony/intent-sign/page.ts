@@ -133,7 +133,7 @@ ${pageHead(title, extraCss, args.branding)}
       goDc.disabled = true;
     } else if (!DC_API) {
       goDc.disabled = true;
-      notice("Signing needs a digital wallet on a supported device — Chrome 141+ on Android (import <code>dpc.mpzpass</code> into Multipaz), or scan from another device. This browser can't run the wallet ceremony.");
+      notice("Signing needs a wallet that supports AP2's <code>delegate</code> request, on a supported device (Chrome 141+ on Android), or a scan from another device. No released wallet supports it yet; a patched Multipaz build does. This browser can't run the wallet ceremony.");
     } else {
       prefetch();
     }
