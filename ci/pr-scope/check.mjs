@@ -19,9 +19,10 @@ export const OVERRIDE_LABEL = "scope:approved";
 export const MARK = "<!-- pr-scope -->";
 
 // What doesn't count toward size: lockfiles, docs and specs (writing the plan down is the point),
-// snapshots, and generated output.
+// snapshots, and generated output. Anything under .claude/ counts, Markdown included: a skill steers the
+// agents and is reviewed like settings (CLAUDE.md).
 const IGNORED = [/(^|\/)package-lock\.json$/, /(^|\/)(pnpm-lock\.yaml|yarn\.lock)$/, /\.md$/, /^specs\//, /^docs\//, /__snapshots__\//, /\.snap$/, /(^|\/)dist\//];
-export const counts = (path) => !IGNORED.some((re) => re.test(path));
+export const counts = (path) => path.startsWith(".claude/") || !IGNORED.some((re) => re.test(path));
 
 /** Issue numbers the PR body says it delivers: closing keywords, and "Part of #N" / "Ticket of #N". */
 export function linkedIssues(body) {

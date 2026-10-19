@@ -5,7 +5,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { briefBody, parseBrief, clampBrief, briefState, planRun, specFromBrief, LABEL_APPROVED } from "./brief.mjs";
-import { scopeProblems, ticketOrder, ticketBody, parseTicket, ticketSpec, ticketAsBrief, frontier, isDone, pastLimits, planSection, SCOPE_LIMITS, STOPPED_LABEL } from "./scope.mjs";
+import { scopeProblems, ticketOrder, ticketBody, parseTicket, ticketSpec, ticketAsBrief, frontier, isDone, pastLimits, planSection, blockersLeft, planProgress, ticketHeader, SCOPE_LIMITS, STOPPED_LABEL } from "./scope.mjs";
 import { BRIEF_SCHEMA, briefPrompt } from "./roles.mjs";
 
 // Issue 406, as a split brief: the activity list, then refusals, then a passkey, then Revoke.
@@ -174,11 +174,52 @@ describe("which tickets start", () => {
     expect(src).toMatch(/needsHuman: STOPPED_LABEL/);
     expect(src).not.toMatch(/reply on #\$\{parent\} to revise the plan/);
   });
-  it("blockers are checked the same way when a ticket's own run starts", () => {
+  it("blockers are checked the same way when a ticket's own run starts — open ones wait, dropped ones never pass", () => {
+    const b = (number, state, stateReason = null) => ({ number, state, stateReason });
+    expect(blockersLeft([b(407, "CLOSED", "COMPLETED"), b(408, "OPEN"), b(409, "CLOSED", "NOT_PLANNED")])).toEqual({ open: [408], dropped: [409] });
+    expect(blockersLeft([b(407, "CLOSED", "COMPLETED")])).toEqual({ open: [], dropped: [] });
     const src = readFileSync(new URL("./run.mjs", import.meta.url), "utf8");
-    expect(src).toMatch(/\.filter\(\(b\) => !issueDone\(b\)\)/);
-    expect(src).toMatch(/--json", "state,stateReason"/);
+    expect(src).toMatch(/const left = blockersLeft\(/);
     expect(src).toMatch(/subIssues\(first:50\)\{nodes\{id number state stateReason/);
+  });
+  it("a ticket waiting on its blockers loses the label, so it can be started again later", () => {
+    const src = readFileSync(new URL("./run.mjs", import.meta.url), "utf8");
+    expect(src).toMatch(/if \(skip && unlabel && flag\("--comment"\)\) sh\("gh", \["issue", "edit", String\(n\), "-R", REPO, "--remove-label", TRIGGER_LABEL\]/);
+  });
+});
+
+describe("a ticket edited by hand", () => {
+  const b = split();
+  const sealed = (id, blockedBy) => ticketBody({ parent: 406, v: 2, id, spec: ticketSpec(b, b.scope.tickets[0]), blockedBy });
+  const edited = sealed("T1", []).replace("criterion 1", "criterion 1, reworded");
+  const issue = (number, body, state = "OPEN", stateReason = null, labels = []) => ({ number, state, stateReason, labels, head: ticketHeader(body), ticket: parseTicket(body) });
+  it("is no longer built as approved, but is still the plan's ticket", () => {
+    expect(parseTicket(edited)).toBeUndefined();
+    expect(ticketHeader(edited)).toEqual({ parent: 406, v: 2, id: "T1" });
+    expect(ticketHeader("an ordinary issue")).toBeUndefined();
+  });
+  it("blocks what the plan put after it until it is completed, and is never started itself", () => {
+    const dep = sealed("T2", [410]);
+    const open = planProgress([issue(410, edited), issue(411, dep)], { parent: 406, v: 2 });
+    expect(open.start).toEqual([]);
+    expect(open.open.map((t) => t.number)).toEqual([410, 411]);
+    const done = planProgress([issue(410, edited, "CLOSED", "COMPLETED"), issue(411, dep)], { parent: 406, v: 2 });
+    expect(done.start.map((t) => t.number)).toEqual([411]);
+  });
+  it("keeps the plan open while it is open, and is named if it is dropped", () => {
+    const p = planProgress([issue(410, edited), issue(411, sealed("T2", []), "CLOSED", "COMPLETED")], { parent: 406, v: 2 });
+    expect(p.open.map((t) => t.number)).toEqual([410]);
+    const all = planProgress([issue(410, edited, "CLOSED", "NOT_PLANNED"), issue(411, sealed("T2", []), "CLOSED", "COMPLETED")], { parent: 406, v: 2 });
+    expect(all.open).toEqual([]);
+    expect(all.dropped.map((t) => t.number)).toEqual([410]);
+  });
+  it("leaves out another version's tickets", () => {
+    const old = ticketBody({ parent: 406, v: 1, id: "T1", spec: ticketSpec(b, b.scope.tickets[0]), blockedBy: [] });
+    expect(planProgress([issue(400, old)], { parent: 406, v: 2 }).plan).toEqual([]);
+  });
+  it("keeps its words when the github-actions app opened it (only write access can edit it)", () => {
+    const src = readFileSync(new URL("./run.mjs", import.meta.url), "utf8");
+    expect(src).toMatch(/const editedTicket = !ticket && isLoopAuthor\(i\.author, trusted\) && Boolean\(ticketHeader\(i\.body\)\);/);
   });
 });
 
@@ -201,7 +242,7 @@ describe("a single brief approved past the limits", () => {
   it("opens its PR with the scope waiver, read from the approved brief on the issue", () => {
     const src = readFileSync(new URL("./run.mjs", import.meta.url), "utf8");
     expect(src).toMatch(/const briefs = PAUSE \? briefState\(issueComments\(n\), trusted\) : undefined;/);
-    expect(src).toMatch(/!approvalRefusal\(briefs\) && !isSplit\(briefs\.latest\?\.brief\) && pastLimits\(briefs\.latest\?\.brief\)/);
+    expect(src).toMatch(/const waived = Boolean\(briefs\?\.latest\) && !briefs\.latestEdited && !isSplit\(briefs\.latest\.brief\) && pastLimits\(briefs\.latest\.brief\);/);
     expect(src).toMatch(/\.\.\.\(waived \? \["--label", SCOPE_WAIVER\] : \[\]\)/);
     expect(src).toMatch(/const SCOPE_WAIVER = "scope:approved"/);
   });

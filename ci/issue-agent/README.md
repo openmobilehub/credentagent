@@ -227,21 +227,26 @@ with the reason.
 build, Acceptance criteria, Blocked by) plus its slice of the approved brief, sealed with a hash like a
 brief. Labelled `agent`, a sealed ticket goes straight to the build — you approved the plan once, on
 the parent — with only its own criteria as the contract and the other tickets listed as out of scope.
-A ticket whose blockers aren't all closed *as completed* is skipped with a notice. Edit a ticket and the
+A ticket whose blockers aren't all closed *as completed* is skipped with a notice and loses `agent`,
+so `unblock` can label it again when they are. Edit a ticket and the
 seal breaks: it becomes an ordinary issue that gets a brief of its own. If the builder challenges a
 ticket's criterion, it says so on the ticket, removes `agent` and adds `agent:needs-human`, and nothing
 restarts it until you act. There is no brief on a ticket to reply to; instead:
 
-- **change the ticket:** edit it (it gets a brief of its own) and re-add `agent`;
-- **build it as approved anyway:** remove `agent:needs-human` and re-add `agent`;
-- **change the whole plan:** close the plan's open tickets as *not planned*, remove `epic` from the
+- **change the ticket:** edit it (it gets a brief of its own) and re-add `agent`. It is still the
+  plan's ticket: what it blocks starts once it is completed;
+- **build it as approved anyway:** say in a comment on the ticket why the criterion stands (comments
+  by people with write access reach the builder), then remove `agent:needs-human` and re-add `agent`;
+- **change the whole plan:** close the plan's open tickets as *not planned* and their open pull
+  requests (an open one names the parent, which stops a new run there), remove `epic` from the
   parent and re-add `agent` there. It gets a new brief; approving that opens a new set of tickets (the
   old ones belong to the old version and are never picked up again).
 
 **Starting the next one.** When a ticket closes, the `unblock` job labels `agent` on the tickets whose
 blockers are now all **closed as completed**. A ticket closed as *not planned* or a duplicate was
-dropped, not delivered, so what it blocks waits for you. A ticket marked `agent:needs-human` is never
-picked. Once the last ticket closes, it comments on the parent, naming any that were dropped (the parent
+dropped, not delivered, so what it blocks waits for you. A ticket marked `agent:needs-human`, or
+edited by hand, is never picked, but an edited one still counts: what it blocks starts when it is
+completed, and the plan isn't finished while it is open. Once the last ticket closes, it comments on the parent, naming any that were dropped (the parent
 is left open for you to check its after-merge criteria). Labels added with the default `GITHUB_TOKEN`
 start no workflow, so this needs `AGENT_GH_TOKEN`; without it, add `agent` to the next ticket by hand.
 

@@ -199,6 +199,16 @@ export function parseTicket(body) {
 }
 
 /**
+ * Which plan an issue was opened as a ticket of — { parent, v, id } — sealed or not. A ticket edited by
+ * hand is no longer built as approved, but it is still that plan's ticket: what waits on it starts when
+ * it is completed, and the plan isn't done while it is open. Never a reason to build anything.
+ */
+export function ticketHeader(body) {
+  const m = String(body ?? "").replace(/\r\n/g, "\n").match(MARKER);
+  return m ? { parent: Number(m[1]), v: Number(m[2]), id: m[3] } : undefined;
+}
+
+/**
  * A ticket as the approved brief its build runs on (brief.mjs, specFromBrief): the parent's version,
  * and a brief holding only this ticket's slice.
  */
@@ -218,6 +228,29 @@ export const ticketAsBrief = (t) => ({
 });
 
 /**
+ * What still holds a ticket back, from its blockers' { number, state, stateReason }: `open` ones (it
+ * starts when they are completed) and `dropped` ones — closed without being completed, so it never will.
+ */
+export function blockersLeft(blockers) {
+  return {
+    open: blockers.filter((b) => b.state !== "CLOSED").map((b) => b.number),
+    dropped: blockers.filter((b) => b.state === "CLOSED" && !isDone(b)).map((b) => b.number),
+  };
+}
+
+/**
+ * Where a plan stands after one of its tickets closed. `issues`: the parent's sub-issues, each
+ * { number, state, stateReason, labels, head, ticket } (head: ticketHeader, ticket: parseTicket, both
+ * only for issues the pipeline opened). `head`: the closed ticket's. Returns the plan's tickets, those
+ * to start now, those still open, and — once none are — those closed without being completed.
+ */
+export function planProgress(issues, head, label = "agent") {
+  const plan = issues.filter((i) => i.head?.parent === head.parent && i.head.v === head.v);
+  const open = plan.filter((t) => t.state === "OPEN");
+  return { plan, start: frontier(plan, label), open, dropped: open.length ? [] : plan.filter((t) => !isDone(t)) };
+}
+
+/**
  * A blocker is done only when it was closed as completed: a ticket closed as not planned or a
  * duplicate was dropped, and what it was meant to deliver isn't on main. (GitHub's stateReason.)
  */
@@ -225,11 +258,12 @@ export const isDone = (t) => t.state === "CLOSED" && String(t.stateReason ?? "")
 
 /**
  * The tickets to start now: open, not already labelled, not stopped by a challenge nobody has settled,
- * and with every blocker done. `tickets`: [{ number, state, stateReason, labels, ticket }], `label`
- * the trigger label.
+ * and with every blocker done. `tickets`: [{ number, state, stateReason, labels, ticket }] — every
+ * ticket of the plan; `ticket` is undefined for one edited by hand, which counts as a blocker but is
+ * never started (it is an ordinary issue now). `label` the trigger label.
  */
 export function frontier(tickets, label = "agent") {
   const done = new Set(tickets.filter(isDone).map((t) => t.number));
-  return tickets.filter((t) => t.state === "OPEN" && !t.labels.includes(label) && !t.labels.includes(STOPPED_LABEL)
+  return tickets.filter((t) => t.ticket && t.state === "OPEN" &&!t.labels.includes(label) && !t.labels.includes(STOPPED_LABEL)
     && (t.ticket.blockedBy ?? []).every((n) => done.has(n)));
 }

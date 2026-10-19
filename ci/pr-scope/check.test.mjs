@@ -28,6 +28,9 @@ describe("size", () => {
     expect(counts("specs/016-grant-activity/spec.md")).toBe(false);
     expect(counts("docs/reference/api.md")).toBe(false);
     expect(counts("packages/credentagent-gate/src/grants.ts")).toBe(true);
+    // A skill steers the agents: reviewed like settings, so it counts even though it is Markdown.
+    expect(counts(".claude/skills/to-tickets/SKILL.md")).toBe(true);
+    expect(counts("README.md")).toBe(false);
     expect(assess({ files: [file("package-lock.json", 5000), file("specs/016-x/plan.md", 900), ...small] }).ok).toBe(true);
   });
 });

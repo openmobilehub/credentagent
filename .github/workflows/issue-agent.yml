@@ -1,6 +1,6 @@
 name: issue-agent
 # In the Actions list: which issue, and what started it (a run for another label shows that label and is skipped).
-run-name: "issue-agent #${{ github.event.issue.number || inputs.issue }} · ${{ github.event_name == 'schedule' && 'checking for unanswered comments on briefs' || github.event_name == 'workflow_dispatch' && format('run by hand ({0})', inputs.trigger) || github.event_name == 'issue_comment' && format('comment · {0}', github.event.issue.title) || format('labelled {0} · {1}', github.event.label.name, github.event.issue.title) }}"
+run-name: "issue-agent #${{ github.event.issue.number || inputs.issue }} · ${{ github.event_name == 'schedule' && 'checking for unanswered comments on briefs' || github.event_name == 'workflow_dispatch' && format('run by hand ({0})', inputs.trigger) || github.event_name == 'issue_comment' && format('comment · {0}', github.event.issue.title) || github.event.action == 'closed' && format('closed · {0}', github.event.issue.title) || format('labelled {0} · {1}', github.event.label.name, github.event.issue.title) }}"
 
 # Label an issue `agent` → agents implement it and a draft PR comes back with the evidence.
 # How it works and what it trusts: ci/issue-agent/README.md. The three jobs (snapshot, implement,

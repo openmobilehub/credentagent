@@ -54,7 +54,7 @@ import {
 } from "./checks.mjs";
 import { reportHtml, prBody, issueComment, md, statusBody, STATUS_MARK } from "./report.mjs";
 import { briefBody, replyBody, challengeBody, briefState, briefOutcome, briefFailure, planRun, specFromBrief, splitConversation, clampBrief, sweepWanted, approvalRefusal, LABEL_AWAITING, LABEL_APPROVED, BRIEF_MARK } from "./brief.mjs";
-import { frontier, isDone, isSplit, parseTicket, pastLimits, scopeProblems, ticketAsBrief, ticketBody, ticketOrder, ticketSpec, STOPPED_LABEL } from "./scope.mjs";
+import { blockersLeft, isSplit, parseTicket, pastLimits, planProgress, scopeProblems, ticketAsBrief, ticketBody, ticketHeader, ticketOrder, ticketSpec, STOPPED_LABEL } from "./scope.mjs";
 import { cardProblems } from "./card.mjs";
 import { validateExample, runExample, exampleHtml } from "./example.mjs";
 import { loadConfig, testLabel } from "./config.mjs";
@@ -202,7 +202,6 @@ function permissionOf(login) {
   return permissionCache.get(login);
 }
 const trusted = (login) => TRUSTED_PERMISSIONS.includes(permissionOf(login));
-const issueDone = (n) => isDone(ghJson(["issue", "view", String(n), "-R", REPO, "--json", "state,stateReason"]));
 
 function snapshotIssue(n, snapshotAt = new Date().toISOString()) {
   const q = `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issue(number:$n){
@@ -223,7 +222,10 @@ function snapshotIssue(n, snapshotAt = new Date().toISOString()) {
   if (ticket && !renames.length) { /* the pipeline's own title, never renamed */ }
   else if (!trusted(titleBy)) { dropped.push(`the issue title (by ${titleBy ?? "a deleted user"}, who has no write access)`); title = `Issue #${i.number}`; }
   let body = i.body ?? "";
-  if (!ticket && !trusted(i.author?.login)) { dropped.push(`the issue body (by ${i.author?.login ?? "a deleted user"}, who has no write access)`); body = ""; }
+  // A ticket edited by hand gets a brief like any issue. If the github-actions app opened it, its author
+  // has no permission to check, but only someone with write access can edit it: keep its words.
+  const editedTicket = !ticket && isLoopAuthor(i.author, trusted) && Boolean(ticketHeader(i.body));
+  if (!ticket && !editedTicket && !trusted(i.author?.login)) { dropped.push(`the issue body (by ${i.author?.login ?? "a deleted user"}, who has no write access)`); body = ""; }
   else if (after(i.lastEditedAt)) return { skip: `the issue was edited after it was labelled (${i.lastEditedAt}); remove and re-add the \`${TRIGGER_LABEL}\` label to run on the current text` };
   const nodes = i.comments.nodes;
   const { comments, dropped: droppedComments } = requestComments(nodes, { isTrusted: trusted, snapshotAt });
@@ -237,8 +239,11 @@ function snapshotIssue(n, snapshotAt = new Date().toISOString()) {
   const plan = planRun({ trigger: TRIGGER, pause: PAUSE, labels: issue.labels, state, issueEditedAt: i.lastEditedAt, ticket: ticket && ticketAsBrief(ticket) });
   if (ticket && plan.phase === "implement") {
     // Done means closed as completed: a blocker dropped as not planned never delivered what this needs.
-    const open = (ticket.blockedBy ?? []).filter((b) => !issueDone(b));
-    if (open.length) return { issue, skip: `this ticket is blocked by ${open.map((b) => `#${b}`).join(", ")} — it starts on its own when ${open.length > 1 ? "they are" : "that is"} closed as completed` };
+    // The label comes off (`unlabel`), so `unblock` can put it back when the blockers are done.
+    const left = blockersLeft((ticket.blockedBy ?? []).map((b) => ({ number: b, ...ghJson(["issue", "view", String(b), "-R", REPO, "--json", "state,stateReason"]) })));
+    const [open, dropped] = [left.open, left.dropped].map((ns) => ns.map((b) => `#${b}`));
+    if (dropped.length) return { issue, unlabel: true, skip: `this ticket is blocked by ${dropped.join(", ")}, which ${dropped.length > 1 ? "were" : "was"} closed without being completed, so it won't start on its own. Reopen and finish ${dropped.length > 1 ? "them" : "it"}, or edit this ticket (it then gets a brief of its own) and re-add \`${TRIGGER_LABEL}\`` };
+    if (open.length) return { issue, unlabel: true, skip: `this ticket is blocked by ${open.join(", ")} — it starts on its own when ${open.length > 1 ? "they are" : "that is"} closed as completed` };
   }
   if (plan.skip) return { issue, skip: plan.skip, quiet: plan.quiet };
   if (PAUSE && state.firstAt && !STARTS_OVER) {
@@ -794,7 +799,7 @@ function publishRun(dir) {
       // issue that gets its own brief — or the plan is replaced on the parent. Until then it is marked
       // stopped, so a sibling closing never restarts it (scope.mjs, frontier).
       const parent = Number(outcome.ticket.parent);
-      gh(["issue", "comment", String(n), "-R", REPO, "--body", `${challengeBody(challenge).split("\n\nReply to settle it")[0]}\n\nThis is a ticket of the plan approved on #${parent}, so there is no brief here to reply to. To settle it:\n\n- **Change this ticket:** edit this issue (it then gets a brief of its own) and re-add \`${TRIGGER_LABEL}\`.\n- **Build it as approved anyway:** remove \`${LABELS.needsHuman}\` and re-add \`${TRIGGER_LABEL}\`.\n- **Change the whole plan:** close the plan's open tickets as *not planned*, remove \`epic\` from #${parent} and re-add \`${TRIGGER_LABEL}\` there — it gets a new brief, and approving it opens a new set of tickets.`]);
+      gh(["issue", "comment", String(n), "-R", REPO, "--body", `${challengeBody(challenge).split("\n\nReply to settle it")[0]}\n\nThis is a ticket of the plan approved on #${parent}, so there is no brief here to reply to. To settle it:\n\n- **Change this ticket:** edit this issue (it then gets a brief of its own) and re-add \`${TRIGGER_LABEL}\`. The tickets after it still wait for it to be completed.\n- **Build it as approved anyway:** say in a comment here why the criterion stands (your comment reaches the builder), then remove \`${LABELS.needsHuman}\` and re-add \`${TRIGGER_LABEL}\`.\n- **Change the whole plan:** close the plan's open tickets as *not planned* and their open pull requests, remove \`epic\` from #${parent} and re-add \`${TRIGGER_LABEL}\` there — it gets a new brief, and approving it opens a new set of tickets.`]);
       relabel(n, { add: [LABELS.needsHuman], remove: [TRIGGER_LABEL] });
     } else {
       gh(["issue", "comment", String(n), "-R", REPO, "--body", challengeBody(challenge)]);
@@ -895,7 +900,8 @@ function publishRun(dir) {
     // size waiver the scope check asks a maintainer for (ci/pr-scope/check.mjs). Read from the issue's
     // own comments, never the run's report.
     const briefs = PAUSE ? briefState(issueComments(n), trusted) : undefined;
-    const waived = briefs && !approvalRefusal(briefs) && !isSplit(briefs.latest?.brief) && pastLimits(briefs.latest?.brief);
+    // The brief this run built (a comment since approval doesn't un-approve it; one edited by hand isn't the agents').
+    const waived = Boolean(briefs?.latest) && !briefs.latestEdited && !isSplit(briefs.latest.brief) && pastLimits(briefs.latest.brief);
     if (waived) sh("gh", ["label", "create", SCOPE_WAIVER, "-R", REPO, "--color", "BFD4F2", "--description", "Too big for one review, and a maintainer approved it anyway (pr-scope)"], { allowFail: true });
     const created = sh("gh", ["pr", "create", "-R", REPO, ...(loop ? [] : ["--draft"]), "--base", "main", "--head", branch,
       "--title", done ? issue.title : `[needs human] ${issue.title}`, "--body-file", bodyFile, ...(waived ? ["--label", SCOPE_WAIVER] : [])], { allowFail: true });
@@ -1050,7 +1056,11 @@ function sweepBriefs() {
 const subIssues = (n) => {
   const q = `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issue(number:$n){subIssues(first:50){nodes{id number state stateReason body author{login __typename} labels(first:30){nodes{name}}}}}}}`;
   return ghJson(["api", "graphql", "-f", `query=${q}`, "-f", `o=${OWNER}`, "-f", `r=${NAME}`, "-F", `n=${n}`]).data.repository.issue.subIssues.nodes
-    .map((i) => ({ ...i, labels: i.labels.nodes.map((l) => l.name), ticket: isLoopAuthor(i.author, trusted) ? parseTicket(i.body) : undefined }));
+    .map((i) => {
+      const ours = isLoopAuthor(i.author, trusted);
+      // `head`: which plan it is a ticket of, edited or not; `ticket`: what to build, only while sealed.
+      return { ...i, labels: i.labels.nodes.map((l) => l.name), head: ours ? ticketHeader(i.body) : undefined, ticket: ours ? parseTicket(i.body) : undefined };
+    });
 };
 const DRY = () => flag("--dry-run") || flag("--no-publish");
 
@@ -1070,7 +1080,7 @@ function publishSplit(n, dir) {
     return { n, status: "blocked", reason };
   }
   const existing = DRY() ? [] : subIssues(n);
-  const opened = new Map(existing.filter((i) => i.ticket?.parent === n && i.ticket.v === v).map((i) => [i.ticket.id, i]));
+  const opened = new Map(existing.filter((i) => i.head?.parent === n && i.head.v === v).map((i) => [i.head.id, i]));
   const numbers = new Map([...opened].map(([id, i]) => [id, i.number]));
   for (const t of ticketOrder(brief.scope.tickets)) {
     if (numbers.has(t.id)) continue;
@@ -1118,17 +1128,14 @@ function publishSplit(n, dir) {
 function unblock(n, dir) {
   const q = `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issue(number:$n){body author{login __typename}}}}`;
   const closed = ghJson(["api", "graphql", "-f", `query=${q}`, "-f", `o=${OWNER}`, "-f", `r=${NAME}`, "-F", `n=${n}`]).data.repository.issue;
-  const ticket = isLoopAuthor(closed.author, trusted) ? parseTicket(closed.body) : undefined;
-  if (!ticket) return { n, status: "skipped", reason: "not a ticket of an approved plan" };
-  const parent = ticket.parent;
-  const siblings = subIssues(parent).filter((i) => i.ticket?.parent === parent && i.ticket.v === ticket.v)
-    .map((i) => ({ number: i.number, state: i.state, stateReason: i.stateReason, labels: i.labels, ticket: i.ticket }));
-  const next = frontier(siblings, TRIGGER_LABEL);
+  // Edited or not: a ticket edited by hand still blocks what the plan put after it (scope.mjs, ticketHeader).
+  const head = isLoopAuthor(closed.author, trusted) ? ticketHeader(closed.body) : undefined;
+  if (!head) return { n, status: "skipped", reason: "not a ticket of an approved plan" };
+  const parent = head.parent;
+  const { plan: siblings, start: next, open: left, dropped } = planProgress(subIssues(parent), head, TRIGGER_LABEL);
   if (!DRY()) for (const t of next) sh("gh", ["issue", "edit", String(t.number), "-R", REPO, "--add-label", TRIGGER_LABEL], { allowFail: true });
-  const left = siblings.filter((t) => t.state === "OPEN");
   if (!left.length) {
     mkdirSync(dir, { recursive: true });
-    const dropped = siblings.filter((t) => !isDone(t));
     postComment(parent, `${"<!-- issue-agent -->"}\n🤖 **Every ticket of the approved plan is closed** (${siblings.map((t) => `#${t.number}`).join(", ")}).${dropped.length ? ` ${dropped.map((t) => `#${t.number}`).join(", ")} ${dropped.length > 1 ? "were" : "was"} closed without being completed, so the plan isn't fully delivered.` : ""} Check the plan's after-merge criteria, then close this issue.`, dir);
   }
   return { n, status: "unblocked", started: next.map((t) => t.number), open: left.length };
@@ -1555,7 +1562,9 @@ const [mode, arg] = argv;
 if (mode === "snapshot") {
   // CI phase 1. Exit 0 either way; `skip` in the output tells the workflow to stop.
   const n = Number(arg);
-  const { issue, skip, quiet, phase } = snapshotIssue(n, process.env.ISSUE_AGENT_SNAPSHOT_AT || undefined);
+  const { issue, skip, quiet, phase, unlabel } = snapshotIssue(n, process.env.ISSUE_AGENT_SNAPSHOT_AT || undefined);
+  // A ticket waiting on its blockers: without the label, `unblock` (scope.mjs, frontier) can start it later.
+  if (skip && unlabel && flag("--comment")) sh("gh", ["issue", "edit", String(n), "-R", REPO, "--remove-label", TRIGGER_LABEL], { allowFail: true });
   writeFileSync(resolve(opt("--out", "issue.json")), JSON.stringify({ issue, skip, phase }, null, 2));
   console.log(skip ? `skip #${n}: ${skip}` : `snapshot #${n} (${TRIGGER} → ${phase}): ${issue.comments.length} trusted comment(s)${issue.conversation?.length ? `, ${issue.conversation.length} in the talk about the brief` : ""}${issue.dropped.length ? `; left out: ${issue.dropped.join("; ")}` : ""}`);
   // Refusing `agent:approved` is its own kind of notice: that run never read the comments, so it must
