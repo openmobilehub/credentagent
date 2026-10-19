@@ -58,6 +58,14 @@ Before naming a type, writing docs or copy, or reviewing wording, read
 contested or a new one is needed, use the `domain-modeling` skill: it updates the glossary
 and records hard-to-reverse decisions as ADRs in `docs/adr/`.
 
+## Big changes — plan, then one ticket per PR
+
+A change past 400 lines or 15 files (docs, specs and lockfiles not counted) is planned before it is
+built: a spec with the design (`to-spec`, `codebase-design` skills), then tracer-bullet tickets
+(`to-tickets` skill) as sub-issues of an `epic`, then one PR per ticket. The `pr-scope` check and
+REVIEW.md §8 refuse a big PR that isn't one ticket of a plan (CONTRIBUTING.md, "Big changes"); the
+issue agent's brief splits a big issue the same way (`ci/issue-agent/README.md`, "Splitting a big issue").
+
 ## Architecture (where things live)
 
 The gate is the security surface; the storefront is a reference consumer.

@@ -23,6 +23,12 @@ Delete this comment before you submit.
 
      A page change: a screenshot of each. Nothing a developer or user sees changes? Say so in one line. -->
 
+## Which ticket
+
+<!-- Past 400 changed lines or 15 files (docs/specs/lockfiles not counted)? Say which ticket of a plan
+     this delivers — "Fixes #123" (a sub-issue of an `epic`) or "specs/016-name/tasks.md T002" — or the
+     scope check fails (CONTRIBUTING.md, "Big changes"). Smaller? Delete this section. -->
+
 ## In plain terms
 
 <!-- One or two sentences a non-specialist understands: what this is and what it does. No jargon. -->
