@@ -98,8 +98,8 @@ README's "Choose the reader SAN" section.
 
 **For the verifier warning alone, rotate only the reader side.** `./gen-pki.sh
 --reader-only` mints a new reader and trust-list signer and keeps the issuer, so the
-`.mpzpass` credentials stay valid. Then: rebuild both trust lists → point the gate at the
-new `reader-key.pem` → re-import both lists on the phone.
+`.mpzpass` credentials stay valid. Then: rebuild both trust lists → redeploy the download
+site → point the gate at the new `reader-key.pem` → re-import both lists on the phone.
 
 **A full `./gen-pki.sh` costs the whole chain.** It also mints a fresh issuer root, so
 everything signed by the old one — the `.mpzpass` credentials, the VICAL, the RICAL — is

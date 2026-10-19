@@ -83,8 +83,8 @@ warnings** appear — issuer (via the imported **VICAL**) *and* verifier (via th
 > "unknown verifier" warning **persists**. The committed RICAL matches the reader the **hosted
 > demos** sign with, so for a quick check, import it and check out at
 > `https://credentagent.ai/marketplace-dev` instead. To clear the warning on *your* gate: run
-> `./gen-pki.sh --reader-only` (a new reader key + cert, issuer untouched), rebuild the trust
-> lists, and **re-import that RICAL** on the phone. Don't run a full `./gen-pki.sh` for this:
+> `./gen-pki.sh --reader-only` (a new reader key + cert and trust-list signer, issuer
+> untouched), rebuild the trust lists, and **re-import both trust lists** on the phone. Don't run a full `./gen-pki.sh` for this:
 > it also replaces the issuer and orphans the shipped credentials.
 > ([#51](https://github.com/openmobilehub/credentagent/issues/51))
 

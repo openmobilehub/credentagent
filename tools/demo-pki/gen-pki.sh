@@ -26,7 +26,7 @@
 # --reader-only regenerates just the verifier side (reader root + leaf + trust-list
 # signer) and leaves the IACA / Document Signer alone, so the shipped .mpzpass
 # credentials stay valid. Use it to change READER_DNS or rotate a lost reader key;
-# then rebuild the trust lists (README step 3) and skip the re-mint.
+# then rebuild the trust lists (README step 3), redeploy the site, and skip the re-mint.
 set -euo pipefail
 
 READER_ONLY=0
@@ -44,10 +44,11 @@ BASE_URL="${BASE_URL:-https://credentagent-demo.example}"
 # READER_DNS is a LIST of hostnames baked into the reader cert's SubjectAltName —
 # the reader is trusted when the gate is served from ANY of them. Space- or
 # comma-separated. `localhost` covers local testing (gate at localhost:3007 via
-# `adb reverse`); add your hosted gate's STABLE host to avoid a later re-mint.
-# Changing this regenerates the reader cert → you must rebuild the RICAL and
-# re-import it on the phone (see README.md "Wire the verifier"). The default is the
-# list the shipped certs/reader-cert.pem was built with (the hosted demos + local).
+# `adb reverse`). To change it later, re-run with --reader-only (no re-mint), then
+# rebuild both trust lists, redeploy the site and re-import them on the phone (see
+# README.md "Wire the verifier"). The default is the list the shipped
+# certs/reader-cert.pem was built with (the hosted demos + local); set your own
+# hosts when you run your own gate.
 READER_DNS="${READER_DNS:-localhost credentagent.ai credentagent-demo.vercel.app credentagent-demo-dev.vercel.app}"
 
 # URIs referenced by openssl.cnf via ${ENV::...}. IssuerAltName + CRL endpoints.

@@ -82,7 +82,7 @@ console.log(
   readerIdentity
     ? `  reader identity : certs/reader-cert.pem  (SAN includes localhost, on utopia.rical → verifier shows TRUSTED)`
     : hasCert
-      ? `  reader identity : none — certs/reader-cert.pem is here, but keys/reader-key.pem is NOT.\n                    A cert can't sign without its key, so the gate self-signs per request and the\n                    wallet shows the verifier as UNTRUSTED (red). The committed cert + utopia.rical\n                    belong to the hosted demos, which hold the key; it is never shipped.\n                    To fix: ./gen-pki.sh --reader-only (keeps the issuer + credentials), rebuild\n                    BOTH trust lists, and re-import them on the phone.`
+      ? `  reader identity : none — certs/reader-cert.pem is here, but keys/reader-key.pem is NOT.\n                    A cert can't sign without its key, so the gate self-signs per request and the\n                    wallet shows the verifier as UNTRUSTED (red). The committed cert + utopia.rical\n                    belong to the hosted demos, which hold the key; it is never shipped.\n                    To fix: ./gen-pki.sh --reader-only (keeps the issuer + credentials), rebuild\n                    BOTH trust lists, redeploy the download site, and re-import them on the phone.`
       : `  reader identity : none — no demo PKI here. Self-signed per request; ceremony still works,\n                    wallet shows the verifier as UNTRUSTED (red). Run ./gen-pki.sh to mint one.`,
 );
 console.log(`  seeded order    : ORD-DEMO  (1× ${restricted.name}, age ${restricted.minimumAge ?? "n/a"}+)\n`);
