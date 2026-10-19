@@ -84,8 +84,9 @@ another instance, falls back to the server's ONE registered `age` credential, th
 resolved. That is the order's own age only while the server has a single age rule. Where its age
 rules differ in age or in `.when()`, the fallback can ask a lower age, or none at all; with no
 `age` registered, none. Two setups are not affected: `orders.serve` with a shared order store
-(it reads each order's own policy age from the store), and a `minimumAge` tag on the item (a tag
-always holds).
+(it reads each order's own policy age from the store), and a `minimumAge` tag at or above the
+policy's age on the item. A tag always holds, but only at its own age: wine tagged 21 under a 25+
+policy can still drop to 21.
 
 Because `completeOrder()` is injected-seam based (no rail-specific imports), the passkey rail,
 the `dc-payment` rail, and the storefront's `place-order` all reconcile against the *same*
@@ -250,7 +251,8 @@ mdoc paths flatten the disclosed claims and run the **same**
 The strict `=== true` survives mdoc decoding because booleans are preserved as booleans when
 flattening. The rail records the age it proved (`ageVerifiedOver`), and `completeOrder()`
 refuses a proof made below the order's required age, so a 21+ proof cannot complete an order
-whose policy asks for 25+. Membership requires a real, non-empty `membership_number` — a bare token does not
+whose policy asks for 25+ while the server remembers that order (see the open gap under
+invariant 1, #411). Membership requires a real, non-empty `membership_number` — a bare token does not
 grant the discount.
 
 **Bypass test.** CT4 in
