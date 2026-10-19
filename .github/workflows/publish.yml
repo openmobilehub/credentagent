@@ -51,12 +51,17 @@ jobs:
 
   catch-up:
     needs: publish
+    # A pre-release (0.7.0-rc.1) isn't what the demo or the site should show.
+    if: ${{ !github.event.release.prerelease }}
     runs-on: ubuntu-latest
     # Pushes and PRs use AGENT_GH_TOKEN (fine-grained PAT: contents + pull-requests write on
     # credentagent AND credentagent-website). A PR opened with GITHUB_TOKEN starts no workflow, so
     # its required checks would never run, and GITHUB_TOKEN can't push to the website repo at all.
-    # The token is only in the env of the steps that push or open a PR — never in a step that runs
-    # repo code (npm, the bump script, the site's tests) — and no step persists it.
+    # The token is only in the env of the steps that push or open a PR, and no step persists it.
+    # This job runs no code from the website repo at all — not even its tests, which the website
+    # PR's own CI runs — because every step shares one runner: code run in an earlier step could
+    # leave something behind that reads the token in a later one. The only code it runs is this
+    # repo's bump script and `npm install --ignore-scripts`.
     # Without the secret the job only warns: open the PRs by hand (CONTRIBUTING.md, "After a release").
     env:
       HAS_TOKEN: ${{ secrets.AGENT_GH_TOKEN != '' }}
@@ -79,6 +84,7 @@ jobs:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
       - name: Wait until npm serves both packages at this version
+        id: npm
         if: env.HAS_TOKEN == 'true'
         run: |
           V="${TAG#v}"
@@ -90,19 +96,23 @@ jobs:
           done
           echo "::error::npm still doesn't serve $V after 10 minutes"; exit 1
       # Commits are signed off (DCO is a required check on both repos).
+      - name: Git identity
+        if: env.HAS_TOKEN == 'true'
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
       - name: Prepare the quickstart bump (no token)
         if: env.HAS_TOKEN == 'true'
         run: |
           V="${TAG#v}"
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           node scripts/post-release-bump.mjs quickstart "$V"
           (cd examples/quickstart && npm install --package-lock-only --ignore-scripts --no-audit --no-fund)
           if git diff --quiet; then echo "::notice::examples/quickstart already runs ^$V"; exit 0; fi
           git switch -c "chore/quickstart-$V"
           git commit -s -am "Prod demo: run the published $V" -m "Bumps examples/quickstart to ^$V and regenerates its lockfile (below 1.0 a caret never reaches the next minor). Merging deploys credentagent.ai/marketplace (deploy-prod.yml)."
-      # gh hands git the token for one push; nothing is written to a git config. An existing branch
-      # (a re-run) is left alone rather than force-pushed.
+      # gh hands git the token for one push; nothing is written to a git config. A branch that
+      # already exists (a re-run) is never force-pushed: if it already has a PR the step stops,
+      # and if an earlier run pushed it but failed to open the PR, this one opens it.
       - name: Open the quickstart PR (the hosted demo at credentagent.ai/marketplace)
         if: env.HAS_TOKEN == 'true'
         env:
@@ -111,15 +121,21 @@ jobs:
         run: |
           V="${TAG#v}"; B="chore/quickstart-$V"
           git show-ref --quiet --verify "refs/heads/$B" || exit 0  # nothing to bump
-          if git ls-remote --exit-code --heads origin "$B" >/dev/null; then echo "::notice::$B already exists"; exit 0; fi
-          git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push origin "$B"
+          if git ls-remote --exit-code --heads origin "$B" >/dev/null; then
+            pr=$(gh pr list -R "$REPO" --head "$B" --state all --json url --jq '.[0].url')
+            if [ -n "$pr" ]; then echo "::notice::$B already has a PR: $pr"; exit 0; fi
+          else
+            git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push origin "$B"
+          fi
           gh pr create -R "$REPO" --base main --head "$B" --title "Prod demo: run the published $V" --body "$TAG is on npm, but the hosted demo at https://credentagent.ai/marketplace still runs the previous release: \`examples/quickstart\` pins the published packages, and below 1.0 a caret never reaches the next minor. This bumps both to \`^$V\` and regenerates the lockfile. Opened by publish.yml's catch-up job.
 
           **Before merging**, read the [CHANGELOG](https://github.com/$REPO/blob/main/CHANGELOG.md) for $V: a **BREAKING** or **Migration** note that changes the merchant id or the grant format means grants signed on the prod demo before this deploy are refused. Merge after any upcoming demo if so. A breaking API change the quickstart doesn't follow fails \`quickstart-smoke\` on this PR.
 
           **After merging**, \`deploy-prod\` deploys and smokes the demo. Check that \`curl https://credentagent.ai/marketplace/version\` reports \`$V\`."
+      # The website steps run even when a quickstart step failed: one repo's problem shouldn't
+      # hold back the other's PR.
       - name: Prepare the website bump (no token)
-        if: env.HAS_TOKEN == 'true'
+        if: ${{ !cancelled() && steps.npm.outcome == 'success' }}
         run: |
           V="${TAG#v}"
           git clone --depth 1 https://github.com/openmobilehub/credentagent-website "$SITE"
@@ -127,20 +143,23 @@ jobs:
           cd "$SITE"
           # The page is what visitors see; CLAUDE.md alone changing isn't worth a PR.
           if git diff --quiet -- index.html; then echo "::notice::credentagent.ai already shows $V"; exit 0; fi
-          node --test "tests/*.test.mjs"
           git switch -c "chore/site-$V"
           git commit -s -am "Site: show the released $V" -m "Bumps the nav pill, NEW strip, install line, JSON-LD, index.md, llms.txt and CLAUDE.md. Opened by credentagent's publish.yml."
       - name: Open the website PR (credentagent.ai)
-        if: env.HAS_TOKEN == 'true'
+        if: ${{ !cancelled() && steps.npm.outcome == 'success' }}
         env:
           GH_TOKEN: ${{ secrets.AGENT_GH_TOKEN }}
           REPO: ${{ github.repository }}
         working-directory: ${{ env.SITE }}
         run: |
-          V="${TAG#v}"; B="chore/site-$V"
+          V="${TAG#v}"; B="chore/site-$V"; SITE_REPO=openmobilehub/credentagent-website
           git show-ref --quiet --verify "refs/heads/$B" || exit 0  # nothing to bump
-          if git ls-remote --exit-code --heads origin "$B" >/dev/null; then echo "::notice::$B already exists"; exit 0; fi
-          git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push origin "$B"
-          gh pr create -R openmobilehub/credentagent-website --base main --head "$B" --title "Site: show the released $V" --body "[$TAG](https://github.com/$REPO/releases/tag/$TAG) is on npm, but credentagent.ai still shows the previous version. This bumps every place the site shows it: the nav pill, the NEW strip (now the release title), the storefront \`npm i\` line, the JSON-LD \`softwareVersion\`, \`index.md\`, \`llms.txt\` and CLAUDE.md. Opened by credentagent's publish.yml catch-up job.
+          if git ls-remote --exit-code --heads origin "$B" >/dev/null; then
+            pr=$(gh pr list -R "$SITE_REPO" --head "$B" --state all --json url --jq '.[0].url')
+            if [ -n "$pr" ]; then echo "::notice::$B already has a PR: $pr"; exit 0; fi
+          else
+            git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push origin "$B"
+          fi
+          gh pr create -R "$SITE_REPO" --base main --head "$B" --title "Site: show the released $V" --body "[$TAG](https://github.com/$REPO/releases/tag/$TAG) is on npm, but credentagent.ai still shows the previous version. This bumps every place the site shows it: the nav pill, the NEW strip (now the release title), the storefront \`npm i\` line, the JSON-LD \`softwareVersion\`, \`index.md\`, \`llms.txt\` and CLAUDE.md. Opened by credentagent's publish.yml catch-up job.
 
           **Not bumped — check by hand against the release:** the trust table and CLAUDE.md's \"Trust levels\" note, and any code sample an API change in the [CHANGELOG](https://github.com/$REPO/blob/main/CHANGELOG.md) affects. Merging redeploys the site."

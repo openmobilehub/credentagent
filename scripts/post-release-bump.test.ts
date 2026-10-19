@@ -67,6 +67,15 @@ describe("post-release-bump website", () => {
     expect(read(root, "index.html")).toContain("<b>NEW</b><span>0.7 — see what's new →</span>");
   });
 
+  it("keeps a title's parentheses from breaking CLAUDE.md at the next release", () => {
+    const root = site();
+    applyEdits(root, websiteEdits({ ...RELEASE, title: "v0.6.0 — grants (AP2). Faster checkout" }));
+    expect(read(root, "CLAUDE.md")).toContain("(released 2026-10-19: grants [AP2]. Faster checkout). The in-browser");
+    applyEdits(root, websiteEdits({ ...RELEASE, version: "0.7.0", title: "v0.7.0 — next" }));
+    expect(read(root, "CLAUDE.md")).toContain("(released 2026-10-19: next). The in-browser");
+    expect(read(root, "CLAUDE.md")).not.toContain("Faster checkout");
+  });
+
   it("writes nothing when one place no longer matches, so a redesign can't half-bump the site", () => {
     const root = site({ ...SITE_050, "llms.txt": "no version here\n" });
     expect(() => applyEdits(root, websiteEdits(RELEASE))).toThrow(/llms\.txt: expected 1 match/);

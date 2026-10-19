@@ -30,6 +30,9 @@ export function websiteEdits({ version, title, date }) {
   const minor = version.split(".").slice(0, 2).join(".");
   const headline = releaseHeadline(title, version) || "see what's new";
   const html = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  // CLAUDE.md's "(released …: <headline>)." ends at its first ")", so the next release can find
+  // it again: a title's own parentheses become brackets.
+  const inParens = headline.replace(/\(/g, "[").replace(/\)/g, "]");
   return [
     ["index.html", /"softwareVersion":"[^"]*"/, `"softwareVersion":"${version}"`],
     ["index.html", /<span class="pill">v[\d.]+ · OPEN SOURCE<\/span>/, `<span class="pill">v${minor} · OPEN SOURCE</span>`],
@@ -48,8 +51,8 @@ export function websiteEdits({ version, title, date }) {
     ["CLAUDE.md", /versioned in lockstep, both live at `[\d.]+`/, `versioned in lockstep, both live at \`${version}\``],
     [
       "CLAUDE.md",
-      /The site reflects the published \*\*[\d.]+\*\* packages \(released [\d-]+: [\s\S]*?\)\./,
-      `The site reflects the published **${version}** packages (released ${date}: ${headline}).`,
+      /The site reflects the published \*\*[\d.]+\*\* packages \(released [\d-]+: [^)]*\)\./,
+      `The site reflects the published **${version}** packages (released ${date}: ${inParens}).`,
     ],
   ];
 }

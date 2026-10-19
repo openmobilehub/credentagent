@@ -198,10 +198,18 @@ previous version:
   `index.html`, plus `index.md`, `llms.txt` and its CLAUDE.md.
 
 `publish.yml`'s **catch-up** job opens both PRs once npm serves the release. It needs the
-`AGENT_GH_TOKEN` secret with write access to both repos; without it the job only warns. To open
-them by hand, run [`scripts/post-release-bump.mjs`](scripts/post-release-bump.mjs)
-(`quickstart <version>`, then `website <site checkout> <version> "<release title>" <date>`) and
-commit with `-s`. A release isn't done until:
+`AGENT_GH_TOKEN` secret with write access to both repos; without it the job only warns, and you
+open them by hand (commit with `-s`):
+
+```bash
+# The demo — the lockfile must match, or `npm ci` in quickstart-smoke and deploy-prod refuses it
+node scripts/post-release-bump.mjs quickstart X.Y.Z
+(cd examples/quickstart && npm install --package-lock-only --ignore-scripts)
+# The site, in a credentagent-website checkout
+node scripts/post-release-bump.mjs website ../credentagent-website X.Y.Z "vX.Y.Z — the release title" YYYY-MM-DD
+```
+
+A release isn't done until:
 
 - [ ] You've read the release's **BREAKING** and **Migration** notes. One that changes the merchant
       id (`ap2.merchant.id`) or the grant format means grants signed on the prod demo before the
