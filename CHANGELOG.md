@@ -80,6 +80,9 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
 ### Fixed
 
 - A store served under a path publishes its signing key where clients look for it (#347).
+- The checkout pages' progress bar shows the Age step for an age that only the policy asks for
+  (an item with no `minimumAge`), and ticks it only when the proof on record is old enough for the
+  order. Before, such an order showed only Pay, then was refused for age (#414).
 - An age gate asks the wallet for the order's own age (`age_over_25` for 25+, `age_over_16` for
   16+). Before, the iPhone request (ISO mdoc) asked only for 18 or 21, and every request asked an
   age under 18 for 18 alone, so those ages could never be proven (#354).
