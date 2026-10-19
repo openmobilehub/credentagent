@@ -249,8 +249,9 @@ but "every mandate already signed stops verifying at the next restart".
 ### AP2 mandates — signing them, and letting anyone check
 
 A spending grant signed on a phone is recorded as an [AP2](https://github.com/google-agentic-commerce/AP2)
-mandate: an SD-JWT (RFC 9901) signed ES256, typed by AP2's `vct` claim, and you can mint and check
-mandates yourself with `credentagent.ap2`. A checkout still records the older payment mandate
+mandate: an SD-JWT (RFC 9901) signed ES256, typed by AP2's `vct` claim. You can mint mandates
+yourself with `credentagent.ap2`, and anyone holding your public key checks them with `verifyMandate`
+(a phone-signed permission is checked when it is spent, by `verifyDelegatedPurchase`). A checkout still records the older payment mandate
 (`ap2.PaymentMandate`), which is not key-signed: the passkey rail's carries a dev integrity hash, and
 the dc-payment rail's carries none. Pass the key and `mount()`
 publishes its public half, so a mandate this gate signed is verifiable by someone who does not have

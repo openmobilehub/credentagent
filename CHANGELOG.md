@@ -26,6 +26,8 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-19
+
 ### Added
 
 - AP2 delegation end to end: an agent spends a phone-signed spending permission with its own
@@ -54,6 +56,23 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
   before this change are refused there. Create a new grant and have the person sign it (an
   authorized grant can't be re-signed). A store at the root of the same host keeps accepting the old
   ones until they expire. Each deployment needs its own `walletOrigin`.
+- **BREAKING:** `buildIntentSignRequest` and `verifyIntentPresentation` also require `delegate`,
+  `mandateExp` and `allowedSkus` (#189, #195).
+- **BREAKING:** a custom `IntentVerifyBackend` receives `{ sdjwt, audience, nonce }` instead of
+  `{ deviceResponseB64url, sessionTranscript }`, and must return `delegatePayload` (the key-binding
+  JWT's `delegate_payload`, verbatim). The type marks it optional, but without it every verify fails
+  with "mandate mismatch". In its result, `IntentVerifyResult.credentialDoctype` and
+  `IntentTrustVerdict.docType` are now `credentialType`, and `SimulateOptions.overrideDocType` is
+  now `overrideVct` (#189, #195).
+- **BREAKING:** phone signing (`signing: "device"`, the default for grants) now asks the wallet for
+  an **SD-JWT** payment credential (`vct` `urn:emvco:dpc:card:1` or `com.emvco.dpc`) instead of the
+  mdoc `org.multipaz.payment.sca.1`. A wallet set up for 0.5.0 can't sign a grant until it holds one
+  (`tools/demo-pki/mint/mint-dpc-sdjwt.mjs --mpzpass` mints a demo one). No released wallet supports
+  AP2's `delegate` request yet; test with `devSimulateWalletSignature` (#189, #195).
+- **BREAKING (boot check):** on a deployment, `doctor()` reports a missing `mandateSigningKey` as an
+  **error** (`ephemeral-mandate-key`), so a host that exits when `doctor()` isn't ok won't start until
+  it passes one, even if it never mints a mandate. Whether this should be a warning is open (#361).
+  A missing `checkoutSigningKey` is a warning (#195, #235).
 - The package READMEs were brought in line with what the next release ships (#329, #310).
 
 ### Removed
@@ -66,22 +85,32 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
 ### Fixed
 
 - A store served under a path publishes its signing key where clients look for it (#347).
+- The product-picker widget's MCP Apps policy (`_meta.ui.csp`) no longer lists the bare `data:`
+  scheme, and the ChatGPT copy now declares that policy too, so MCP Apps hosts get the same one.
+  ChatGPT's own `openai/widgetCSP` still lists `data:`, so product images keep rendering there (#385).
 - The storefront empties the cart when the order completes on another instance (#227), keeps the
   picker on one cart (#211), and refuses MCP listen streams that only burn serverless time (#215).
 
 ### Security
 
 - An agent can no longer lower an order total by adding a line with a negative quantity (#346).
+  The same fix refuses a fractional quantity (half a coffee at half price) in `grant.spend`, which
+  0.3.0 to 0.5.0 accept if your code passes the agent's quantity through unchecked.
 - Consent pages no longer run script taken from a crafted checkout link (#332). **This affects
   every published version from 0.2.0 to 0.5.0 (storefront 0.2.1 too): upgrade.** It came in with
   stateless carts (#32). Below 1.0 a caret range (`^0.5.0`) never moves you to the next minor
   version on its own.
-- A completed order's status no longer returns the shopper's raw wallet answer (#327).
+- A completed order's status no longer returns the shopper's raw wallet answer (#327). The
+  option that kept it (`inspectPresentations`) is new since 0.5.0, so no published version has this.
 
 ### Known issues
 
 - Two stores on one host that share a checkout signing key can accept each other's price quotes.
   Give each store its own `checkoutSigningKey` (#335).
+- The gate's built-in pages accept a typed-in claim such as "over 21" with no wallet, and there's no
+  switch to turn this off, even on a server that uses an outside verifier (#352). Also in 0.5.0.
+- The full list of open bugs that ship in 0.6.0 is in the
+  [v0.6.0 release notes](https://github.com/openmobilehub/credentagent/releases/tag/v0.6.0).
 
 ## [0.5.0] - 2026-09-26
 
@@ -230,7 +259,8 @@ First release, under the name `@openmobilehub/attesto-*` (renamed to `attestomcp
 - The storefront: `createStorefront()`, a runnable catalog-injected MCP shopping server, and the
   pure pricing / order model.
 
-[Unreleased]: https://github.com/openmobilehub/credentagent/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/openmobilehub/credentagent/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/openmobilehub/credentagent/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/openmobilehub/credentagent/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/openmobilehub/credentagent/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/openmobilehub/credentagent/compare/v0.3.0...v0.3.1
