@@ -59,16 +59,26 @@ straight to the completion endpoint sails past it.
 **How it's enforced.** The shared completion seam,
 [`ceremony/completion.ts`](../../packages/credentagent-gate/src/ceremony/completion.ts), is the
 *one* path every rail records through. `completeOrder()` re-runs the deterministic gates
-(`input.gates.every((g) => g.pass)`) and re-derives the age restriction from the
-catalog-priced lines, refusing an age-restricted order that carries no positive per-order age
-claim — **regardless of which rail called it**:
+(`input.gates.every((g) => g.pass)`) and re-derives the age the order requires: the strictest of
+the catalog-priced lines' `minimumAge` and the order's own policy (`age.over(n)`, #354). When the
+server no longer remembers the order's policy (evicted, restarted, another instance), the
+registered `age` credential decides, so a forgotten order still fails closed. It refuses an
+age-restricted order whose positive per-order age claim is missing or was proven at a lower age,
+and an order whose required age isn't a number — **regardless of which rail called it**:
 
 ```ts
-const ageRestricted = repriced.lines.some((l) => typeof l.minimumAge === "number" && l.minimumAge > 0);
-if (ageRestricted && verification?.ageVerified !== true) {
+const lineAge = Math.max(0, ...repriced.lines.map((l) => (typeof l.minimumAge === "number" ? l.minimumAge : 0)));
+const policyAge = input.policyMinAge ?? registeredMinAge(gateOrderOf(repriced), ctx.credentialRegistry, policyCredentialIds);
+const requiredAge = Math.max(lineAge, policyAge);
+if (!Number.isFinite(requiredAge)) return { completed: false, reason: "age" };
+// …
+if (requiredAge > 0 && (verification?.ageVerified !== true || provenAge < requiredAge)) {
   return { completed: false, reason: "age" };
 }
 ```
+
+`provenAge` is the age the proof was made at (`VerificationRecord.ageVerifiedOver`, see
+invariant 5).
 
 Because `completeOrder()` is injected-seam based (no rail-specific imports), the passkey rail,
 the `dc-payment` rail, and the storefront's `place-order` all reconcile against the *same*
@@ -84,6 +94,10 @@ reached for an unverified age-restricted order.
 [`ceremony/credential-gate/credential-gate.test.ts`](../../packages/credentagent-gate/src/ceremony/credential-gate/credential-gate.test.ts)
 (CT8) asserts the shared completion seam *"refuses an unverified age-restricted order … even
 with a valid payment."*
+[`policy-age.test.ts`](../../packages/credentagent-gate/src/policy-age.test.ts) asserts the same
+for an age that only the policy asks for: paying for an untagged item under `age.over(21)` with
+no age proof is refused on the dc-payment rail, on `host.complete`, and for an order the server
+forgot.
 
 ---
 
@@ -108,8 +122,9 @@ if (repriced.total !== input.order.total) return { completed: false, reason: "re
 ```
 
 Every credential-gate route resolves the order **through** `resolveOrder` (catalog re-pricing;
-a tampered or unknown id is refused), and the required age threshold is re-derived from the
-re-priced lines via `requiredAgeForOrder(order)`, never the token
+a tampered or unknown id is refused), and the required age threshold is re-derived via
+`requiredAgeFor(ctx, order)` (the re-priced lines' strictest `minimumAge` and the order's policy
+age), never the token
 ([`ceremony/credential-gate/routes.ts`](../../packages/credentagent-gate/src/ceremony/credential-gate/routes.ts),
 [`verify.ts`](../../packages/credentagent-gate/src/ceremony/credential-gate/verify.ts)). Both
 payment rails re-sum the cart lines in their Gate 1 and ignore the stored `payment.amount`
@@ -226,7 +241,9 @@ mdoc paths flatten the disclosed claims and run the **same**
 `age.over(N).verify` / `membership.discount().verify`, so there is no second source of truth
 ([`ceremony/credential-gate/verify.ts`](../../packages/credentagent-gate/src/ceremony/credential-gate/verify.ts)).
 The strict `=== true` survives mdoc decoding because booleans are preserved as booleans when
-flattening. Membership requires a real, non-empty `membership_number` — a bare token does not
+flattening. The rail records the age it proved (`ageVerifiedOver`), and `completeOrder()`
+refuses a proof made below the order's required age, so a 21+ proof cannot complete an order
+whose policy asks for 25+. Membership requires a real, non-empty `membership_number` — a bare token does not
 grant the discount.
 
 **Bypass test.** CT4 in

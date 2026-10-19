@@ -382,6 +382,8 @@ interface DcqlQuery { credentials: DcqlCredentialOption[]; }
 ```ts
 interface VerificationRecord {
   ageVerified?: boolean;
+  ageVerifiedOver?: number;          // the age ageVerified was proven at (e.g. 21); completion
+                                     // refuses a proof below the order's required age
   loyalty?: { applied: boolean; membershipNumber: string | null };
   [credentialId: string]: unknown;   // custom credential results, keyed by id
 }

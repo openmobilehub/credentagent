@@ -85,8 +85,10 @@ export function requiredAgeForOrder(order: CeremonyOrder): number | null {
  * policy requires (`age.over(n)` — `CompletionInput.policyMinAge`, #354), or `null` when neither
  * asks for one. The policy age comes from the mounted lookup; when that doesn't know the order,
  * from the registered `age` credential — the same fallback `completeOrder` uses. Every rail
- * evaluates an age proof at this threshold and `completeOrder` enforces it, so the two cannot
- * disagree about which age an order needs.
+ * evaluates an age proof at this threshold. `completeOrder` does not call this: it re-derives
+ * the threshold inline from the same sources and enforces it. They differ in one case, and it
+ * fails closed: a line whose `minimumAge` isn't a number is skipped here, while `completeOrder`
+ * refuses the whole order.
  */
 export async function requiredAgeFor(
   ctx: Pick<CeremonyContext, "policyAge" | "credentialRegistry" | "orderPolicies">,
@@ -96,11 +98,6 @@ export async function requiredAgeFor(
   const policyAge = (await ctx.policyAge?.(order.id)) ?? registeredMinAge(gateOrder, ctx.credentialRegistry, ctx.orderPolicies?.get(order.id));
   const age = Math.max(requiredAgeForOrder(order) ?? 0, policyAge);
   return age > 0 ? age : null;
-}
-
-/** True iff this order is age-restricted but carries no positive per-order age claim. */
-export function isAgeUnsatisfied(order: CeremonyOrder, verification: { ageVerified?: boolean } | undefined | null): boolean {
-  return requiredAgeForOrder(order) != null && verification?.ageVerified !== true;
 }
 
 /**
