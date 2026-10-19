@@ -83,26 +83,32 @@ jobs:
         with:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
-      - name: Wait until npm serves both packages at this version
+      # Sets go=true when there is something to catch up. A backport (0.5.3 after 0.6.0) is older
+      # than what the demo already runs, so it would move the demo and the site backwards: skip.
+      - name: Is this the newest release, and does npm serve it yet?
         id: npm
         if: env.HAS_TOKEN == 'true'
         run: |
           V="${TAG#v}"
+          live=$(node -p 'require("./examples/quickstart/package.json").dependencies["@openmobilehub/credentagent-gate"].replace(/^\D+/, "")')
+          if [ "$(printf '%s\n%s\n' "$live" "$V" | sort -V | tail -1)" != "$V" ]; then
+            echo "::notice::$V is older than the $live the demo runs (a backport), so no catch-up PRs"; exit 0
+          fi
           for _ in $(seq 1 40); do
             g=$(npm view "@openmobilehub/credentagent-gate@$V" version 2>/dev/null || true)
             s=$(npm view "@openmobilehub/credentagent-storefront@$V" version 2>/dev/null || true)
-            [ "$g" = "$V" ] && [ "$s" = "$V" ] && exit 0
+            if [ "$g" = "$V" ] && [ "$s" = "$V" ]; then echo "go=true" >> "$GITHUB_OUTPUT"; exit 0; fi
             sleep 15
           done
           echo "::error::npm still doesn't serve $V after 10 minutes"; exit 1
       # Commits are signed off (DCO is a required check on both repos).
       - name: Git identity
-        if: env.HAS_TOKEN == 'true'
+        if: steps.npm.outputs.go == 'true'
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
       - name: Prepare the quickstart bump (no token)
-        if: env.HAS_TOKEN == 'true'
+        if: steps.npm.outputs.go == 'true'
         run: |
           V="${TAG#v}"
           node scripts/post-release-bump.mjs quickstart "$V"
@@ -110,18 +116,18 @@ jobs:
           if git diff --quiet; then echo "::notice::examples/quickstart already runs ^$V"; exit 0; fi
           git switch -c "chore/quickstart-$V"
           git commit -s -am "Prod demo: run the published $V" -m "Bumps examples/quickstart to ^$V and regenerates its lockfile (below 1.0 a caret never reaches the next minor). Merging deploys credentagent.ai/marketplace (deploy-prod.yml)."
-      # gh hands git the token for one push; nothing is written to a git config. A branch that
+      # gh hands git the token per command (ls-remote, push); nothing is written to a git config. A branch that
       # already exists (a re-run) is never force-pushed: if it already has a PR the step stops,
       # and if an earlier run pushed it but failed to open the PR, this one opens it.
       - name: Open the quickstart PR (the hosted demo at credentagent.ai/marketplace)
-        if: env.HAS_TOKEN == 'true'
+        if: steps.npm.outputs.go == 'true'
         env:
           GH_TOKEN: ${{ secrets.AGENT_GH_TOKEN }}
           REPO: ${{ github.repository }}
         run: |
           V="${TAG#v}"; B="chore/quickstart-$V"
           git show-ref --quiet --verify "refs/heads/$B" || exit 0  # nothing to bump
-          if git ls-remote --exit-code --heads origin "$B" >/dev/null; then
+          if git -c credential.helper= -c 'credential.helper=!gh auth git-credential' ls-remote --exit-code --heads origin "$B" >/dev/null; then
             pr=$(gh pr list -R "$REPO" --head "$B" --state all --json url --jq '.[0].url')
             if [ -n "$pr" ]; then echo "::notice::$B already has a PR: $pr"; exit 0; fi
           else
@@ -135,7 +141,7 @@ jobs:
       # The website steps run even when a quickstart step failed: one repo's problem shouldn't
       # hold back the other's PR.
       - name: Prepare the website bump (no token)
-        if: ${{ !cancelled() && steps.npm.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.npm.outputs.go == 'true' }}
         run: |
           V="${TAG#v}"
           git clone --depth 1 https://github.com/openmobilehub/credentagent-website "$SITE"
@@ -146,7 +152,7 @@ jobs:
           git switch -c "chore/site-$V"
           git commit -s -am "Site: show the released $V" -m "Bumps the nav pill, NEW strip, install line, JSON-LD, index.md, llms.txt and CLAUDE.md. Opened by credentagent's publish.yml."
       - name: Open the website PR (credentagent.ai)
-        if: ${{ !cancelled() && steps.npm.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.npm.outputs.go == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.AGENT_GH_TOKEN }}
           REPO: ${{ github.repository }}
@@ -154,7 +160,7 @@ jobs:
         run: |
           V="${TAG#v}"; B="chore/site-$V"; SITE_REPO=openmobilehub/credentagent-website
           git show-ref --quiet --verify "refs/heads/$B" || exit 0  # nothing to bump
-          if git ls-remote --exit-code --heads origin "$B" >/dev/null; then
+          if git -c credential.helper= -c 'credential.helper=!gh auth git-credential' ls-remote --exit-code --heads origin "$B" >/dev/null; then
             pr=$(gh pr list -R "$SITE_REPO" --head "$B" --state all --json url --jq '.[0].url')
             if [ -n "$pr" ]; then echo "::notice::$B already has a PR: $pr"; exit 0; fi
           else
