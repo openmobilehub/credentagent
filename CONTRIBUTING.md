@@ -206,4 +206,41 @@ turns up something off, fix it or flag it.
 - [ ] A change someone using the npm packages would notice adds a line under `[Unreleased]` in [`CHANGELOG.md`](CHANGELOG.md) — marked **BREAKING** if their code has to change.
 - [ ] Anything broken you noticed along the way is fixed or filed — never silently ignored.
 
+## After a release — the catch-up PRs
+
+Publishing to npm changes nothing people see. Until two catch-up PRs merge, both still show the
+previous version:
+
+- **The hosted demo** (https://credentagent.ai/marketplace) runs the *published* packages that
+  [`examples/quickstart/package.json`](examples/quickstart/package.json) pins. Below 1.0 a caret
+  (`^0.5.0`) never reaches the next minor, so the pin has to move with every release.
+- **The site** (https://credentagent.ai, repo
+  [credentagent-website](https://github.com/openmobilehub/credentagent-website)) writes the version
+  into its pages: the nav pill, the NEW strip, the storefront `npm i` line and the JSON-LD in
+  `index.html`, plus `index.md`, `llms.txt` and its CLAUDE.md.
+
+`publish.yml`'s **catch-up** job opens both PRs once npm serves the release. It skips, on purpose,
+a pre-release and a backport (a release older than what the demo already runs, such as 0.5.3
+after 0.6.0), which would move the demo and the site backwards. It needs the
+`AGENT_GH_TOKEN` secret with write access to both repos; without it the job only warns, and you
+open them by hand (commit with `-s`):
+
+```bash
+# The demo — the lockfile must match, or `npm ci` in quickstart-smoke and deploy-prod refuses it
+node scripts/post-release-bump.mjs quickstart X.Y.Z
+(cd examples/quickstart && npm install --package-lock-only --ignore-scripts)
+# The site, in a credentagent-website checkout
+node scripts/post-release-bump.mjs website ../credentagent-website X.Y.Z "vX.Y.Z — the release title" YYYY-MM-DD
+```
+
+A release isn't done until:
+
+- [ ] You've read the release's **BREAKING** and **Migration** notes. One that changes the merchant
+      id (`ap2.merchant.id`) or the grant format means grants signed on the prod demo before the
+      deploy are refused: merge the quickstart PR after any upcoming demo.
+- [ ] The quickstart PR is merged, `deploy-prod` passed, and
+      `curl https://credentagent.ai/marketplace/version` reports the new version.
+- [ ] The site PR is merged, after checking what no script bumps: the site's trust table and its
+      CLAUDE.md "Trust levels" note, and any code sample an API change affects.
+
 Apache-2.0 · part of [Open Mobile Hub](https://openmobilehub.org) (Linux Foundation).

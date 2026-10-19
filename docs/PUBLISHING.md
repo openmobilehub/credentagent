@@ -73,11 +73,13 @@ path also skips the record: 0.3.0/0.3.1 shipped tagless and had to be backfilled
    gh release create vX.Y.Z --title "vX.Y.Z — a plain-language headline" --notes-file notes.md --latest
    ```
 
-3. **Verify** — watch the `publish` run go green and `npm view` show the new versions, then open
-   the **quickstart catch-up PR** (bump `examples/quickstart` to the new versions): that PR's
-   `quickstart-smoke` is the real post-publish check — a clean install of the PUBLISHED
-   packages — and merging it runs the `deploy-prod` workflow, which deploys the live demo with
-   the `VERCEL_TOKEN` secret and re-runs the same assertions against it.
+3. **Verify** — watch the `publish` run go green and `npm view` show the new versions. Its
+   **catch-up** job then opens the two catch-up PRs (open them by hand only if it warned or
+   failed), and [CONTRIBUTING.md, "After a release"](../CONTRIBUTING.md#after-a-release--the-catch-up-prs)
+   is the checklist for them. The **quickstart PR**'s `quickstart-smoke` is the real post-publish
+   check — a clean install of the PUBLISHED packages — and merging it runs the `deploy-prod`
+   workflow, which deploys the live demo with the `VERCEL_TOKEN` secret and re-runs the same
+   assertions against it. The **credentagent-website PR** moves credentagent.ai to the release.
 
 Release notes are **public copy, written for someone who didn't follow development**: plain
 language, each feature stated by what it does for the integrator, and the honesty gate (below)
