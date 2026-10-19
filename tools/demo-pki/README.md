@@ -38,9 +38,16 @@ gate presenting the reader **and** the wallet trusting the RICAL.
 already-built `.mpzpass` and the VICAL/RICAL (they were signed by the previous
 keys), changes the reader key/cert the gate presents, and invalidates anything
 already imported on a phone. So treat step 1 as **generate-once**. If you *do*
-re-run it (e.g. to change the reader SAN, below), you must re-run **every** later
-step: re-mint → rebuild trust lists → redeploy → **re-copy the reader key/cert to
-the gate** → re-import on the phone.
+re-run it in full, you must re-run **every** later step: re-mint → rebuild trust
+lists → redeploy → **re-copy the reader key/cert to the gate** → re-import on the
+phone.
+
+**Changing only the verifier side? Use `./gen-pki.sh --reader-only`.** It
+regenerates the reader root, reader leaf and trust-list signer, and keeps the IACA
+and Document Signer, so the shipped `.mpzpass` credentials stay valid. Use it to
+change `READER_DNS` or to replace a lost reader key. Then rebuild the trust lists
+(step 3, no re-mint), give the gate the new key (step 5), and re-import both lists
+on the phone. This is how the shipped reader identity was made.
 
 ---
 

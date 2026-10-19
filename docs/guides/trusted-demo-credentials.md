@@ -80,12 +80,13 @@ new CredentAgent({
 });
 ```
 
-> **You have to generate that key yourself.** This repo ships a reader *certificate* and a
-> RICAL built around it, but the matching private key is deliberately never committed —
-> and without it, that certificate can't sign anything. The shipped pair is a worked
-> reference, not a usable identity. Producing your own means regenerating the PKI, which
-> also invalidates the shipped credentials and both trust lists — see the producer path
-> below for what that costs.
+> **The shipped reader is the one the hosted demo uses.** Its private key is never
+> committed: the hosted demos at `credentagent.ai/marketplace` and
+> `credentagent.ai/marketplace-dev` hold it, so importing the shipped `out/utopia.rical`
+> clears the "unknown verifier" warning there with nothing to build. A gate *you* run
+> can't sign as that reader without the key. To trust your own gate, mint your own
+> reader with `./gen-pki.sh --reader-only` (see the producer path below); that keeps the
+> shipped credentials valid.
 
 ## Producer path — build your own
 
@@ -95,12 +96,16 @@ page). The one decision that matters is the reader certificate's host (`READER_D
 it must match wherever your **gate** is served (`localhost` for local testing); see that
 README's "Choose the reader SAN" section.
 
-**Budget for the whole chain, not just the key.** `gen-pki.sh` mints a fresh issuer root
-and reader root, so everything signed by the old ones — the `.mpzpass` credentials, the
-VICAL, the RICAL — is dead the moment you run it. Clearing the "unknown verifier" warning
-therefore means: regenerate the PKI → re-mint the credentials → rebuild both trust lists →
-re-import all of it on the phone → point the gate at the new `reader-key.pem`. There is no
-shortcut that skips a step, because each artifact is signed by the one above it.
+**For the verifier warning alone, rotate only the reader side.** `./gen-pki.sh
+--reader-only` mints a new reader and trust-list signer and keeps the issuer, so the
+`.mpzpass` credentials stay valid. Then: rebuild both trust lists → point the gate at the
+new `reader-key.pem` → re-import both lists on the phone.
+
+**A full `./gen-pki.sh` costs the whole chain.** It also mints a fresh issuer root, so
+everything signed by the old one — the `.mpzpass` credentials, the VICAL, the RICAL — is
+dead the moment you run it: regenerate → re-mint the credentials → rebuild both trust lists
+→ re-import all of it on the phone → point the gate at the new `reader-key.pem`. No step can
+be skipped, because each artifact is signed by the one above it.
 
 > **For agents:** this pipeline is being packaged as a `demo-pki` skill
 > ([#53](https://github.com/openmobilehub/credentagent/issues/53)) so it runs in one

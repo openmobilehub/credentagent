@@ -22,7 +22,19 @@
 # script checks the version and auto-detects BSD/macOS vs GNU/Linux `date`, so it
 # runs on both. Override the binary and demo host with env vars:
 #   OPENSSL=/opt/homebrew/opt/openssl@3/bin/openssl  BASE_URL=https://your-host  ./gen-pki.sh
+#
+# --reader-only regenerates just the verifier side (reader root + leaf + trust-list
+# signer) and leaves the IACA / Document Signer alone, so the shipped .mpzpass
+# credentials stay valid. Use it to change READER_DNS or rotate a lost reader key;
+# then rebuild the trust lists (README step 3) and skip the re-mint.
 set -euo pipefail
+
+READER_ONLY=0
+case "${1:-}" in
+  --reader-only) READER_ONLY=1 ;;
+  "") ;;
+  *) echo "usage: $0 [--reader-only]" >&2; exit 2 ;;
+esac
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$HERE"
@@ -34,8 +46,9 @@ BASE_URL="${BASE_URL:-https://credentagent-demo.example}"
 # comma-separated. `localhost` covers local testing (gate at localhost:3007 via
 # `adb reverse`); add your hosted gate's STABLE host to avoid a later re-mint.
 # Changing this regenerates the reader cert → you must rebuild the RICAL and
-# re-import it on the phone (see README.md "Wire the verifier").
-READER_DNS="${READER_DNS:-localhost credentagent-demo.example}"
+# re-import it on the phone (see README.md "Wire the verifier"). The default is the
+# list the shipped certs/reader-cert.pem was built with (the hosted demos + local).
+READER_DNS="${READER_DNS:-localhost credentagent.ai credentagent-demo.vercel.app credentagent-demo-dev.vercel.app}"
 
 # URIs referenced by openssl.cnf via ${ENV::...}. IssuerAltName + CRL endpoints.
 # They need not resolve for a demo; they must merely be present & well-formed.
@@ -91,6 +104,10 @@ genkey() { "$OPENSSL" genpkey -algorithm EC -pkeyopt "ec_paramgen_curve:${CURVE}
 echo ">> OpenSSL: $("$OPENSSL" version)"
 echo ">> BASE_URL=$BASE_URL  reader SAN=[$READER_SAN]"
 
+if [ "$READER_ONLY" = 1 ]; then
+  [ -f certs/iaca-cert.pem ] || { echo "ERROR: --reader-only needs the existing issuer (certs/iaca-cert.pem)." >&2; exit 1; }
+  echo ">> --reader-only: keeping the IACA + Document Signer (shipped credentials stay valid)"
+else
 # ---- 1. IACA root (self-signed) ----
 genkey keys/iaca-key.pem
 "$OPENSSL" req -new -x509 -key keys/iaca-key.pem -sha256 -not_before "$NB" -not_after "$CA_NA" \
@@ -109,6 +126,7 @@ genkey keys/ds-key.pem
   -out certs/ds-cert.pem
 rm -f keys/ds.csr
 echo ">> Document Signer  -> certs/ds-cert.pem (${DS_DAYS}d)"
+fi
 
 # ---- 3. Reader root (self-signed) ----
 genkey keys/reader-root-key.pem
@@ -138,13 +156,15 @@ genkey keys/list-signer-key.pem
 echo ">> List signer      -> certs/list-signer-cert.pem"
 
 # ---- 6. DS chain (leaf first) for the mdoc x5chain ----
-cat certs/ds-cert.pem certs/iaca-cert.pem > certs/ds-chain.pem
-echo ">> DS chain         -> certs/ds-chain.pem"
+if [ "$READER_ONLY" = 0 ]; then
+  cat certs/ds-cert.pem certs/iaca-cert.pem > certs/ds-chain.pem
+  echo ">> DS chain         -> certs/ds-chain.pem"
+fi
 
 # ---- verify the two issued chains cryptographically ----
 echo
 echo ">> Verifying chains (purpose 'any' — the ISO EKU OID is not a TLS purpose):"
-"$OPENSSL" verify -CAfile certs/iaca-cert.pem -purpose any certs/ds-cert.pem || true
+[ "$READER_ONLY" = 1 ] || "$OPENSSL" verify -CAfile certs/iaca-cert.pem -purpose any certs/ds-cert.pem || true
 "$OPENSSL" verify -CAfile certs/reader-root-cert.pem -purpose any certs/reader-cert.pem || true
 
 echo
