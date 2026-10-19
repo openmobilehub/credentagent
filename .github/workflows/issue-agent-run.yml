@@ -1,0 +1,284 @@
+name: issue-agent-run
+# The issue agent's three jobs, for any repo: this one (issue-agent.yml) and others that call it, e.g.
+#
+#   jobs:
+#     run:
+#       if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'agent'
+#       uses: openmobilehub/credentagent/.github/workflows/issue-agent-run.yml@main
+#       permissions: { contents: write, pull-requests: write, issues: write }
+#       with: { issue: "…", sender: "…", snapshot_at: "…", claude_auth: "${{ vars.CLAUDE_AUTH }}", review_loop: false }
+#       secrets: inherit
+#
+# The calling repo is the TARGET: its main is checked out at target/, and its .github/issue-agent.json
+# says how to install, build and test it (ci/issue-agent/config.mjs; without one, this repo's own setup).
+# The HARNESS (ci/issue-agent, this repo at `harness_ref`) is checked out next to it at harness/. Both are
+# trusted code: the target's main and this repo's main. How it works and what it trusts:
+# ci/issue-agent/README.md.
+#
+# Three jobs, so that code an agent writes never shares a job with a GitHub write token:
+#
+#   snapshot   trusted code. Checks the labeller has write access, runs the preflight, and freezes the
+#              request — only text by people with write access, as of the label. Comments on the issue
+#              when it skips.
+#   implement  the agents and the gates. Read-only repo access and NO GitHub token: the checkouts keep
+#              no credential and none is in the environment. Hands back a run directory (the reviewed
+#              change as a patch, the report, the media).
+#   publish    trusted code again, with write access. Applies the reviewed patch to a clean checkout,
+#              pushes the branch and the evidence, opens the draft PR, comments on the issue. It never
+#              installs or runs anything the agents wrote.
+#
+# The draft is never merged by the agent: the target's branch protection still needs a human approval.
+#
+# Auth: `claude_auth` (the caller's CLAUDE_AUTH variable). Unset → the subscription login
+# (CLAUDE_CODE_OAUTH_TOKEN); "api" → ANTHROPIC_API_KEY. Spend is capped per agent and per run
+# (ISSUE_AGENT_BUDGET_USD, ISSUE_AGENT_RUN_BUDGET_USD).
+#
+# The AGENT_GH_TOKEN secret (fine-grained PAT: contents, pull-requests, issues, workflows write) is in
+# practice required, and only ever used by the publish job. Without it the default GITHUB_TOKEN can open
+# the PR only if the repo lets "GitHub Actions create and approve pull requests" (leave that off: it also
+# lets workflows approve PRs) — otherwise publish pushes the branch and tells the issue to open the PR by
+# hand. And a PR opened with GITHUB_TOKEN starts no other workflow (GitHub's rule): no CI, no Claude
+# review. With the token, `review_loop: false` still keeps the PR a draft for a human — for a repo
+# without the review loop (issue-agent-review.yml), where nothing would pick it up.
+
+on:
+  workflow_call:
+    inputs:
+      issue:
+        description: "Issue number"
+        type: string
+        required: true
+      sender:
+        description: "Who labelled the issue (or started the run): needs write access to the target"
+        type: string
+        required: true
+      snapshot_at:
+        description: "The label time: text written or edited after it never reaches the agents (empty: now)"
+        type: string
+        default: ""
+      force:
+        description: "Skip the preflight (labels / existing PRs)"
+        type: boolean
+        default: false
+      trigger:
+        description: 'What started it: "label:agent", "label:agent:approved", "comment" or "dispatch" (only matters with briefs on — README, "The brief")'
+        type: string
+        default: "label:agent"
+      wait_seconds:
+        description: "Wait this long before reading the issue (a comment run: quick follow-up comments are folded in)"
+        type: number
+        default: 0
+      claude_auth:
+        description: '"api" for ANTHROPIC_API_KEY; empty for CLAUDE_CODE_OAUTH_TOKEN'
+        type: string
+        default: ""
+      review_loop:
+        description: "Hand a finished PR to the review loop (needs issue-agent-review.yml in the target)"
+        type: boolean
+        default: true
+      max_review_cycles:
+        description: "The review loop's cycle cap, stated in the PR banner (empty: 3)"
+        type: string
+        default: ""
+      harness_repo:
+        description: "Where ci/issue-agent lives"
+        type: string
+        default: openmobilehub/credentagent
+      harness_ref:
+        description: "Which commit of it to run"
+        type: string
+        default: main
+    secrets:
+      ANTHROPIC_API_KEY:
+        required: false
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: false
+      AGENT_GH_TOKEN:
+        required: false
+      ISSUE_AGENT_DISCUSS_ROUTINE:
+        required: false
+      ISSUE_AGENT_DISCUSS_TOKEN:
+        required: false
+
+permissions: {}
+
+env:
+  ISSUE: ${{ inputs.issue }}
+  # Credit the harness in the PR footer when it isn't the target repo.
+  ISSUE_AGENT_HARNESS_REPO: ${{ inputs.harness_repo != github.repository && inputs.harness_repo || '' }}
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write # to say why it skipped
+      pull-requests: read
+    outputs:
+      skip: ${{ steps.snap.outputs.skip }}
+      phase: ${{ steps.snap.outputs.phase }}
+      asof: ${{ steps.snap.outputs.asof }}
+    steps:
+      - name: Wait for follow-up comments
+        if: inputs.wait_seconds > 0
+        run: sleep ${{ inputs.wait_seconds }}
+      - name: Only for maintainers
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SENDER: ${{ inputs.sender }}
+          TRIGGER: ${{ inputs.trigger }}
+        run: |
+          # The hourly check (issue-agent.yml) starts comment runs as the workflow's own bot. That's safe:
+          # a comment run only ever answers comments written by people with write access (run.mjs).
+          if [ "$TRIGGER" = comment ] && [ "$SENDER" = "github-actions[bot]" ]; then echo "::notice::started by the hourly check — answering a maintainer's comment."; exit 0; fi
+          perm=$(gh api "repos/${{ github.repository }}/collaborators/$SENDER/permission" --jq .permission)
+          case "$perm" in
+            admin|maintain|write) echo "::notice::$SENDER has $perm access — starting." ;;
+            *) echo "::error::$SENDER has '$perm' access; the issue agent needs write."; exit 1 ;;
+          esac
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }} # trusted code from main, even when started by hand from another branch
+          path: target
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.harness_repo }}
+          ref: ${{ inputs.harness_ref }}
+          path: harness
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Freeze the request
+        id: snap
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_AGENT_SNAPSHOT_AT: ${{ inputs.snapshot_at }}
+          ISSUE_AGENT_LABELLER: ${{ inputs.sender }}
+          ISSUE_AGENT_TRIGGER: ${{ inputs.trigger }}
+          FORCE: ${{ inputs.force && '--force' || '' }}
+        run: node harness/ci/issue-agent/run.mjs snapshot "$ISSUE" --target target --out issue.json --comment ${FORCE:+"$FORCE"}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: issue-agent-snapshot
+          path: issue.json
+          retention-days: 30
+
+  implement:
+    needs: snapshot
+    if: needs.snapshot.outputs.skip == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: target
+          fetch-depth: 0
+          persist-credentials: false # nothing in .git/config for an agent to find
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.harness_repo }}
+          ref: ${{ inputs.harness_ref }}
+          path: harness
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install the harness and a browser
+        working-directory: harness/ci/issue-agent
+        env:
+          PHASE: ${{ needs.snapshot.outputs.phase }}
+        run: |
+          npm ci --no-audit --no-fund
+          # A brief reproduces and writes; only a build records screenshots.
+          if [ "$PHASE" != "brief" ]; then npx playwright install --with-deps chromium; fi
+      - uses: actions/download-artifact@v4
+        with:
+          name: issue-agent-snapshot
+      - name: Run the agents
+        env:
+          CLAUDE_AUTH: ${{ inputs.claude_auth }}
+          API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          PHASE: ${{ needs.snapshot.outputs.phase }}
+        run: |
+          # Export only the chosen Claude credential. No GitHub token exists in this job.
+          if [ "$CLAUDE_AUTH" = "api" ]; then
+            [ -n "$API_KEY" ] || { echo "::error::CLAUDE_AUTH is \"api\" but ANTHROPIC_API_KEY is not set."; exit 1; }
+            export ANTHROPIC_API_KEY="$API_KEY"
+          else
+            [ -n "$OAUTH_TOKEN" ] || { echo "::error::CLAUDE_CODE_OAUTH_TOKEN is not set."; exit 1; }
+            export CLAUDE_CODE_OAUTH_TOKEN="$OAUTH_TOKEN"
+          fi
+          unset API_KEY OAUTH_TOKEN
+          # "brief" or "implement" (an empty phase is a run from before briefs: implement).
+          node harness/ci/issue-agent/run.mjs "$([ "$PHASE" = brief ] && echo brief || echo implement)" issue.json --target target --dir "$RUNNER_TEMP/issue-agent/run"
+      - name: Hand the run to publish (and keep it)
+        # A brief that failed part-way may hold notes on a security hole it never got to judge: it
+        # uploads nothing (publish then says the run failed).
+        if: always() && (needs.snapshot.outputs.phase != 'brief' || success())
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-agent-run
+          path: |
+            ${{ runner.temp }}/issue-agent/run/
+            !${{ runner.temp }}/issue-agent/run/repo/
+            !${{ runner.temp }}/issue-agent/run/before/
+          retention-days: 30
+
+  publish:
+    needs: [snapshot, implement]
+    if: always() && needs.snapshot.outputs.skip == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }} # trusted code from main holds the write token
+          path: target
+          fetch-depth: 0
+          persist-credentials: false # pushes go through `gh auth git-credential`
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.harness_repo }}
+          ref: ${{ inputs.harness_ref }}
+          path: harness
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/download-artifact@v4
+        continue-on-error: true # an implement job that died before uploading still gets a comment
+        with:
+          name: issue-agent-run
+          path: ${{ runner.temp }}/issue-agent/run
+      - name: Git identity (commits are DCO signed off)
+        run: |
+          git config --global user.name "credentagent-issue-agent[bot]"
+          git config --global user.email "issue-agent@users.noreply.github.com"
+      - name: Publish the reviewed change
+        env:
+          GH_TOKEN: ${{ secrets.AGENT_GH_TOKEN || github.token }}
+          # With a token whose events start workflows, the PR opens for the Claude review and the
+          # review loop (issue-agent-review.yml) takes it from there; without one it opens as a draft.
+          ISSUE_AGENT_REVIEW_LOOP: ${{ inputs.review_loop && secrets.AGENT_GH_TOKEN != '' && 'on' || '' }}
+          ISSUE_AGENT_LABELLER: ${{ inputs.sender }}
+          ISSUE_AGENT_MAX_REVIEW_CYCLES: ${{ inputs.max_review_cycles }} # the banner states the cap
+          # Optional: the brief's "talk it through live" link (README, "Talking it through").
+          ISSUE_AGENT_DISCUSS_ROUTINE: ${{ secrets.ISSUE_AGENT_DISCUSS_ROUTINE }}
+          ISSUE_AGENT_DISCUSS_TOKEN: ${{ secrets.ISSUE_AGENT_DISCUSS_TOKEN }}
+          PHASE: ${{ needs.snapshot.outputs.phase }}
+          ISSUE_AGENT_TRIGGER: ${{ inputs.trigger }}
+          ISSUE_AGENT_BRIEF_ASOF: ${{ needs.snapshot.outputs.asof }} # when the run read the issue
+        run: |
+          mkdir -p "$RUNNER_TEMP/issue-agent/run"
+          node harness/ci/issue-agent/run.mjs "$([ "$PHASE" = brief ] && echo publish-brief || echo publish)" "$RUNNER_TEMP/issue-agent/run" --target target --issue "$ISSUE"

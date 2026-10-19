@@ -305,7 +305,7 @@ export function isCatalogSource(x: Product[] | CatalogSource | undefined): x is 
   return !!x && !Array.isArray(x) && typeof (x as CatalogSource).load === "function";
 }
 
-/** A tiny runnable catalog (incl. one age-restricted item) so the package demos itself. */
+/** A tiny runnable catalog (incl. two age-restricted items) so the package demos itself. */
 // Generated, self-contained product images (see generated-images.ts) — emoji tiles
 // embedded as data URIs, so the catalog needs no external image service.
 export const SAMPLE_CATALOG: Product[] = [

@@ -12,15 +12,34 @@ and pinned by a **bypass test** — a test that POSTs the attack and asserts it 
 test that would still pass with the security control removed is not a useful test, so the
 bypass test must fail if you delete the control it guards.
 
-> **Honesty boundary.** CredentAgent v0.1 is `trust_level: "presence-only-demo"`. The *wire
-> crypto* is real — WebAuthn assertion verification, OpenID4VP JWE/ECDH-ES decryption with
+> **Honesty boundary.** Every check reports a `trust_level`. From weakest to strongest:
+>
+> - **`"server-issued-demo"`** — click-approved page-mode spending grants
+>   (`grants.create({ signing: "page" })`) and `DelegatedGate.preApprove`. No credential is
+>   involved at all: the server takes the human's word for it. This is a grant's
+>   `trustLevel`, not a `TrustLevel` value; it exists for demos, examples and CI.
+> - **`"presence-only-demo"`** — the built-in checkout rails (`passkey`, `credential`,
+>   `dc-payment`) and `verifyDelegatedPurchase`. The gate enforces *disclosure* and *binding*
+>   only.
+> - **`"device-signed"`** — device-signed spending grants. The holder's signature over the
+>   exact terms is really verified, but its trust anchor is a self-minted demo credential,
+>   not a CA.
+> - **`"issuer-verified"`** — reserved. The library does not ship it: the gate never reports
+>   it for its own checks, and only an external verifier on the `delegated` seam may relay it.
+>
+> The last three are the `TrustLevel` type in
+> [`types.ts`](./packages/credentagent-gate/src/types.ts).
+>
+> The *wire crypto* is real — WebAuthn assertion verification, OpenID4VP JWE/ECDH-ES decryption with
 > nonce binding, HPKE-decrypt of the iOS `org-iso-mdoc` path, and ISO 18013-5 mdoc parsing
 > all run for real. What is **not** yet real is the **issuer / device-signature trust
 > anchor**: the mdoc's issuer and device COSE signatures are not checked against a CA (the
-> reference server self-signs its mdoc certs), and the AP2 mandate is dev-signed
+> reference server self-signs its mdoc certs), and the checkout Payment Mandate is dev-signed
 > (`alg: "MOCK-DEV-SIGNER"`). A presence-only gate proves *a credential was disclosed and
 > bound to this request* — it does **not** prove the issuer vouched for it. Never present a
-> presence-only gate as a real safety control. Issuer-verified trust is the v0.2 line. The
+> presence-only gate as a real safety control. A self-crafted mdoc would pass, and so would a
+> self-crafted credential on a device-signed grant. Issuer-verified trust is planned, not
+> shipped. The
 > invariants below are exactly what *can* be enforced honestly today; do not let "it's a
 > demo" become a reason to weaken any of them.
 
@@ -260,7 +279,7 @@ The origin / RP-ID is derived once from the request (honoring `x-forwarded-*` be
 TLS-terminating proxy) in [`ceremony/origin.ts`](../../packages/credentagent-gate/src/ceremony/origin.ts).
 
 > This is real wire binding, **not** issuer trust. The COSE issuer/device signatures are *not*
-> verified against a CA in v0.1 — see the honesty boundary above. Do not describe origin/replay
+> verified against a CA — see the honesty boundary above. Do not describe origin/replay
 > binding as proof the credential is genuine; it proves it was disclosed *to us, for this
 > request*.
 

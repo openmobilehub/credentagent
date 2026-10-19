@@ -36,7 +36,7 @@ import type { RequestLike } from "../origin.js";
 import type { CeremonyOrder } from "../types.js";
 import { buildCredentialRequest, buildSignedRequestForDcql } from "./request.js";
 import { evaluateCredential, evaluateCustom, requiredAgeFor, verifyCredentialPresentation, type CredentialKind, type PresentationResult } from "./verify.js";
-import { inspectionResponse, presentationForInspection } from "../inspect.js";
+import { inspectionResponse } from "../inspect.js";
 import { upsertProof, type ProofEntry } from "../proofs.js";
 import { verifyMdocPresentation } from "./mdoc-verify.js";
 import { buildMdocRequestParts, sealMdocContext } from "../mdoc/mdoc-iso.js";
@@ -312,20 +312,21 @@ export const registerCredentialGate: RailRegistrar = (app: CeremonyApp, ctx: Cer
       }
       if (out.verified) {
         // The order proof receipt: what this gate proved, kept with the order. The instant demo
-        // is labelled as such — never passed off as a wallet proof.
+        // is labelled as such — never passed off as a wallet proof. Never the wallet's raw answer
+        // (#320): whoever completes the payment reads this record back, with only the order id.
         const proof: ProofEntry = {
           gate: credential ? credential.ui.label : kind === "age" ? `Age ${minimumAge}+` : "Membership",
           rail: result && typeof result === "object" ? "credential" : "instant-demo",
           trust_level: out.trust_level,
           checks: out.gates,
           presentedAt: new Date().toISOString(),
-          ...(ctx.inspectPresentations && out.deviceResponse ? { presentation: presentationForInspection(out.deviceResponse) } : {}),
         };
         if (credential) await recordVerifiedGate(ctx, order.id, credential.id, proof);
         else await recordVerified(ctx, order.id, kind, out.membershipNumber, proof, minimumAge);
       }
       // The wallet's DeviceResponse goes back to this page only when the host opted in
-      // (inspectPresentations) — for a refused proof too, the case worth inspecting.
+      // (inspectPresentations) — for a refused proof too, the case worth inspecting. This
+      // response is the ONLY place it goes: nothing stores it.
       res.json(inspectionResponse(out, ctx.inspectPresentations));
     } catch (err) {
       res.status(400).json({ verified: false, error: (err as Error).message, trust_level: "presence-only-demo" });

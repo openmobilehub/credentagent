@@ -133,6 +133,9 @@ const DESIGN_CSS = `
   .summary table { width: 100%; border-collapse: collapse; }
   .summary td { padding: 8px 0; font-size: .95rem; }
   .summary .line td { border-bottom: 1px solid var(--hairline); }
+  /* With no Total row (showAmounts:false) the last line's rule would dangle. Scoped to the
+     card orderSummaryCard marks .no-amounts, so other .summary cards keep their dividers. */
+  .summary.no-amounts .line:last-child td { border-bottom: none; }
   .summary .qty { color: var(--muted); font-variant-numeric: tabular-nums; }
   .summary .disc td { color: var(--accent); font-weight: 600; }
   .summary .total td { padding-top: 12px; border-top: 1px solid var(--hairline); font-weight: 700; font-size: 1.05rem; }
@@ -351,11 +354,22 @@ export function settlingBar(id = "settling"): string {
  * polls). An optional secondary link returns to the checkout hub for a pure-browser
  * flow. Built server-side and embedded into the gate page's receipt script.
  */
-export function completionHandoffBanner(returnUrl?: string): string {
-  const ret = returnUrl
-    ? `<a class="ret" href="${escapeHtml(returnUrl)}">Staying in the browser? Return to checkout ›</a>`
-    : "";
-  return `<div class="complete-banner"><div class="big">✓ Order complete</div><div class="sub">Your agent has your order and will pick up from here. You can close this window and continue in your agent.</div>${closeWindowButton()}${ret ? `<div>${ret}</div>` : ""}</div>`;
+export function completionHandoffBanner(returnUrl?: string, labels: CompletionLabels = {}): string {
+  const {
+    headline = "✓ Order complete",
+    sub = "Your agent has your order and will pick up from here. You can close this window and continue in your agent.",
+    returnLabel = "Staying in the browser? Return to checkout ›",
+  } = labels;
+  const ret = returnUrl ? `<a class="ret" href="${escapeHtml(returnUrl)}">${escapeHtml(returnLabel)}</a>` : "";
+  return `<div class="complete-banner"><div class="big">${escapeHtml(headline)}</div><div class="sub">${escapeHtml(sub)}</div>${closeWindowButton()}${ret ? `<div>${ret}</div>` : ""}</div>`;
+}
+
+/** Wording overrides for a ceremony that is NOT a purchase (an identity-only gate has no
+ *  order to complete and no checkout to return to). Defaults keep the checkout wording. */
+export interface CompletionLabels {
+  headline?: string;
+  sub?: string;
+  returnLabel?: string;
 }
 
 /**
@@ -468,6 +482,11 @@ export interface OrderSummaryArgs {
   discountLabel?: string;
   /** Optional caption above the table (e.g. "Order ORD-1 · 2 items"). */
   caption?: string;
+  /** Render the money column + Total row. Default true. Pass `false` for a ceremony that
+   *  prices nothing (an identity-only gate): the card still names WHAT is being gated —
+   *  the one thing the user is consenting to — but "$0.00 / Total $0.00" would frame an
+   *  access decision as a free purchase. */
+  showAmounts?: boolean;
 }
 
 /** The order summary card: line items, an accent discount row, a bold Total with a
@@ -475,23 +494,27 @@ export interface OrderSummaryArgs {
  *  same everywhere. */
 export function orderSummaryCard(args: OrderSummaryArgs): string {
   const cur = args.currency;
+  const showAmounts = args.showAmounts !== false;
   const rows = args.lines
     .map(
       (l) =>
-        `<tr class="line"><td>${escapeHtml(l.name)} <span class="qty">×${l.quantity}</span></td><td class="num">${money(l.lineTotal, l.currency ?? cur)}</td></tr>`,
+        `<tr class="line"><td>${escapeHtml(l.name)} <span class="qty">×${l.quantity}</span></td>${showAmounts ? `<td class="num">${money(l.lineTotal, l.currency ?? cur)}</td>` : ""}</tr>`,
     )
     .join("\n");
   const discount = args.discount ?? 0;
   const discRow =
-    discount > 0
+    showAmounts && discount > 0
       ? `<tr class="disc"><td>${escapeHtml(args.discountLabel ?? "Discount")}</td><td class="num">-${money(discount, cur)}</td></tr>`
       : "";
+  const totalRow = showAmounts
+    ? `<tr class="total"><td>Total</td><td class="num">${money(args.total, cur)}</td></tr>`
+    : "";
   const caption = args.caption ? `<p class="card-title">${escapeHtml(args.caption)}</p>` : "";
-  return `<div class="card summary">
+  return `<div class="card summary${showAmounts ? "" : " no-amounts"}">
   ${caption}<table>
     ${rows}
     ${discRow}
-    <tr class="total"><td>Total</td><td class="num">${money(args.total, cur)}</td></tr>
+    ${totalRow}
   </table>
 </div>`;
 }
@@ -536,7 +559,9 @@ export function progressRail(steps: RailStep[], currentIndex: number): string {
 export function checkoutRail(
   order: { lines: { minimumAge?: number }[]; discount: number; total: number },
   current: string, // "age" | "membership" | "pay" | a custom credential id
-  opts: { ageVerified?: boolean; currentLabel?: string } = {},
+  // `includePay: false` drops the Pay step for a policy with NO payment credential — the
+  // delegated rail builds no settle step for it, so a priced order must not imply a Pay step.
+  opts: { ageVerified?: boolean; currentLabel?: string; includePay?: boolean } = {},
 ): string {
   const isBuiltin = current === "age" || current === "membership" || current === "pay";
   const gates = [
@@ -544,7 +569,7 @@ export function checkoutRail(
     { key: "membership", label: "Membership", applies: order.discount > 0, done: order.discount > 0 },
     // A custom gate isn't implied by the order — surface it only while it's the current step.
     ...(isBuiltin ? [] : [{ key: current, label: opts.currentLabel ?? current, applies: false, done: false }]),
-    { key: "pay", label: "Pay", applies: order.total > 0, done: false },
+    { key: "pay", label: "Pay", applies: opts.includePay !== false && order.total > 0, done: false },
   ];
   const steps = gates.filter((g) => g.applies || g.key === current);
   const currentIndex = steps.findIndex((g) => g.key === current);
@@ -594,7 +619,9 @@ export function recordLinkScript(statusUrl: string | undefined): string {
  * Server-rendered "What was proven" block for a finished order: one line per proof (gate · trust
  * level, or "instant demo"), with the Multipaz Tools links a wallet proof carries (Inspect this
  * presentation, Issuer certificate), one "Check the signatures" link to the Multipaz verifier when
- * any wallet proof is shown, and "Order record ›" to the store's order-status record. Only
+ * any wallet proof is shown, and "Order record ›" to the store's order-status record. Only the
+ * payment step's own proof can carry those links, for the browser that just presented it; stored
+ * proofs never do (#320). Only
  * tools.multipaz.org URLs and a root-relative / https record URL are ever linked; labels are
  * escaped. Empty when there is nothing to show.
  */

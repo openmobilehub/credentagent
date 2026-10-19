@@ -6,10 +6,10 @@
 
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 // Outside `code spans` only: inside one, GitHub shows `&lt;` literally — and HTML there is inert anyway.
-const md = (s) => String(s ?? "").split(/(`[^`\n]*`)/).map((part, i) => i % 2
+export const md = (s) => String(s ?? "").split(/(`[^`\n]*`)/).map((part, i) => i % 2
   ? part
   : part.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/@(?=[A-Za-z0-9-])/g, "@​")).join("");
-const MARK = "<!-- issue-agent -->";
+const MARK = "<!-- issue-agent -->", REFUSAL_MARK = "<!-- issue-agent-refusal -->", ERROR_MARK = "<!-- issue-agent-error -->";
 
 const STYLE = `
 :root{--bg:#fbfbfa;--fg:#1f2328;--muted:#656d76;--card:#fff;--line:#d0d7de;--ok:#1a7f37;--bad:#cf222e;--warn:#9a6700;--code:#f6f8fa}
@@ -25,12 +25,18 @@ table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid var(--li
 figcaption{font-size:13px;color:var(--muted);margin-top:4px}`;
 
 const gateWord = (g) => (g.green ? "pass" : g.ok ? "red on main too — not this change" : "FAIL");
+// A `test` entry that isn't the root `npm test` on exactly this patch — only the quick tests ran (a
+// round stopped before the root run), or the root run checked an earlier version — never reads as passed.
+// A failed one still reads as failed: this only softens a pass.
+export const notFullRun = (g, patchSha256) => g.name !== "test" || !g.ok ? ""
+  : g.scope === "fast" ? "quick tests only, not the full run"
+  : g.patchSha256 && patchSha256 && g.patchSha256 !== patchSha256 ? "ran on an earlier version of this change, not this one" : "";
 const specVerdicts = (r) => r.last.reviews?.find((x) => x.lens === "spec")?.criteria ?? [];
 
 // The page the pipeline records as a video for every issue: what it checked, with its own outputs.
-export function proofHtml({ issue, spec, last, base }) {
+export function proofHtml({ issue, spec, last, base, patchSha256 }) {
   const m = last.mutation;
-  const gateRows = last.gates.map((g) => `<tr><td>${esc(g.name)}</td><td class="${g.green ? "ok" : g.ok ? "warn" : "bad"}">${gateWord(g)}</td><td>${esc(g.preexisting ? g.fingerprints.join("; ") : g.summary ?? "")}</td></tr>`).join("");
+  const gateRows = last.gates.map((g) => `<tr><td>${esc(g.name)}</td>${notFullRun(g, patchSha256) ? `<td class="warn">${esc(notFullRun(g, patchSha256))}</td>` : `<td class="${g.green ? "ok" : g.ok ? "warn" : "bad"}">${gateWord(g)}</td>`}<td>${esc(g.preexisting ? g.fingerprints.join("; ") : g.summary ?? "")}</td></tr>`).join("");
   const crit = last.reviews?.find((r) => r.lens === "spec")?.criteria ?? [];
   const critRows = spec.acceptance_criteria.map((ac) => {
     const c = crit.find((x) => x.id === ac.id);
@@ -55,8 +61,8 @@ function mediaFigures(manifest, mediaBase) {
     ? `<figure><video controls muted playsinline src="${esc(mediaBase + e.file)}"></video><figcaption>🎬 ${esc(e.caption)}</figcaption></figure>`
     : `<figure><a href="${esc(mediaBase + e.file)}"><img src="${esc(mediaBase + e.file)}" alt="${esc(e.caption)}" loading="lazy"></a><figcaption>${esc(e.caption)}</figcaption></figure>`;
   const dialogs = manifest.filter((e) => e.kind === "events" && e.events.length);
-  return ["before", "after", "proof"].map((side) => group(side).length
-    ? `<h2>${side === "proof" ? "Test proof" : side === "before" ? "Before (main)" : "After (this change)"}</h2><div class="grid">${group(side).map(fig).join("")}</div>`
+  return ["example", "before", "after", "proof"].map((side) => group(side).length
+    ? `<h2>${{ example: "Before and after", proof: "Test proof", before: "Before (main)", after: "After (this change)" }[side]}</h2><div class="grid">${group(side).map(fig).join("")}</div>`
     : "").join("") + (dialogs.length
     ? `<h2>What the browser saw</h2><div class="card"><table>${dialogs.map((d) => `<tr><td>${esc(d.side)} · ${esc(d.session)}</td><td><pre>${esc(JSON.stringify(d.events, null, 1))}</pre></td></tr>`).join("")}</table></div>` : "");
 }
@@ -81,7 +87,33 @@ ${(r.last.impl.open_questions ?? []).length ? `<h2>Open questions for a human</h
 
 // The PR body follows .github/pull_request_template.md: plain terms, what you're approving, how to
 // test, then the detail below the divider.
-export function prBody(r, { mediaBase, repo }) {
+// The gates a round ran, in words: "the build, typecheck, lint and full test suite" here; another repo
+// names its own (config.mjs).
+const checkedGates = (gates) => {
+  const others = gates.filter((x) => x.name !== "test").map((x) => md(x.name));
+  return `the ${others.length ? `${others.join(", ")} and ` : ""}full test suite`;
+};
+
+// A code block that can't be closed early by the text inside it (agent-written output can hold ```).
+const fence = (text, lang = "") => { const t = String(text ?? ""); const n = Math.max(3, ...[...t.matchAll(/`+/g)].map((m) => m[0].length + 1)); return `${"`".repeat(n)}${lang}\n${t}\n${"`".repeat(n)}`; };
+
+// The PR's first section (README, "Before and after"): what a developer sees on main and with the
+// change — the example the pipeline ran, or a page's screenshots — before any prose.
+function beforeAfter(r, show) {
+  const ui = show("before", "❌ Before — main") + show("after", "✅ After — this change");
+  if (ui.trim()) return `## Before and after\n\n${ui}`;
+  const ex = r.example;
+  if (!ex) return "";
+  if (ex.notApplicable) return `## Before and after\n\n_No developer-facing change: ${md(ex.notApplicable)}_\n`;
+  if (ex.failed) return `## Before and after\n\n_The pipeline couldn't record one: ${md(ex.failed)}_\n`;
+  const pic = show("example", "");
+  const out = (label, x) => `**${label}** · exit ${Number(x.code)}\n\n${fence(x.out || "(no output)", "text")}`;
+  return `## Before and after\n\n**${md(ex.title)}**\n\n${pic ? `${pic}\n` : ""}${fence(ex.code, /^[a-z]{1,12}$/.test(ex.lang) ? ex.lang : "")}\n\n${fence(`$ ${(ex.cmd ?? []).join(" ")}`, "sh")}\n\n${out("❌ Before — main", ex.before)}\n\n${out("✅ After — this change", ex.after)}\n${ex.same ? "\n> [!WARNING]\n> Main and this change printed the same thing: the example doesn't show the difference. Check it by hand.\n" : ""}\n_The pipeline ran this itself, in a clean checkout of main and of this change._\n`;
+}
+
+// `commands`: the repo's "How to test" (config.mjs `reproduce`, `focusedTest` with <file>, and
+// `build: false` when it has no build step); this repo's own by default. `harnessRepo`: where ci/issue-agent lives, when it isn't the PR's repo.
+export function prBody(r, { mediaBase, repo, harnessRepo = repo, commands ={ reproduce: "npm ci && npm run build && npm test", focused: "npx vitest run <file>" } }) {
   const verdicts = specVerdicts(r);
   const acs = r.spec.acceptance_criteria.map((ac) => {
     const c = verdicts.find((x) => x.id === ac.id);
@@ -90,41 +122,41 @@ export function prBody(r, { mediaBase, repo }) {
   // File names come from the evidence agent: only plain media names reach a src/href.
   const media = r.manifest.filter((e) => (e.kind === "image" || e.kind === "video") && /^[A-Za-z0-9._-]+\.(png|webm)$/.test(String(e.file)));
   const show = (side, title) => {
-    const items = media.filter((e) => e.side === side);
+    // The before/after picture is a still: its scroll-through video adds nothing.
+    const items = media.filter((e) => e.side === side && !(side === "example" && e.kind === "video"));
     if (!items.length) return "";
-    return `#### ${title}\n\n${items.map((e) => e.kind === "image" ? `<img src="${mediaBase}${e.file}" width="640" alt="${esc(e.caption)}">\n\n_${md(e.caption)}_` : `🎬 [${md(e.caption)}](${mediaBase}${e.file})`).join("\n\n")}\n`;
+    return `${title ? `#### ${title}\n\n` : ""}${items.map((e) => e.kind === "image" ? `<img src="${mediaBase}${e.file}" width="${side === "example" ? 860 : 640}" alt="${esc(e.caption)}">${side === "example" ? "" : `\n\n_${md(e.caption)}_`}` : `🎬 [${md(e.caption)}](${mediaBase}${e.file})`).join("\n\n")}\n`;
   };
-  const g = r.last.gates.map((x) => `\`${x.name}\` ${x.green ? "✅" : x.ok ? "⚠️ red on main too, not this change" : "❌"}${x.summary ? ` ${md(x.summary)}` : ""}`).join(" · ");
+  const g = r.last.gates.map((x) => `\`${x.name}\` ${notFullRun(x, r.patchSha256) ? `⚠️ ${notFullRun(x, r.patchSha256)}` : x.green ? "✅" : x.ok ? "⚠️ red on main too, not this change" : "❌"}${x.summary ? ` ${md(x.summary)}` : ""}`).join(" · ");
   const m = r.last.mutation;
   const findings = (sev) => (r.last.reviews ?? []).flatMap((rv) => rv.findings.filter((f) => f.severity === sev).map((f) => `- **${rv.lens}** ${f.file ? `\`${md(f.file)}${f.line ? `:${f.line}` : ""}\` ` : ""}${md(f.summary)}`));
   const blocking = findings("blocking"), suggestions = findings("suggestion");
   const report = `https://htmlpreview.github.io/?${mediaBase.replace("https://raw.githubusercontent.com/", "https://github.com/").replace(/\/agent-evidence\//, "/blob/agent-evidence/")}index.html`;
   const files = (r.files ?? []).map((f) => `\`${String(f).replace(/[`\n]/g, "'")}\``).join(", ");
   return `${MARK}
-${r.done ? "" : `> [!WARNING]\n> **Not finished${r.stopped ? `: ${md(r.stopped)}` : ""}.** The open findings are listed below — a human has to take this over.\n\n`}## In plain terms
+${r.done ? "" : `> [!WARNING]\n> **Not finished${r.stopped ? `: ${md(r.stopped)}` : ""}.** The open findings are listed below — a human has to take this over.\n\n`}${beforeAfter(r, show)}
+## In plain terms
 
 ${md(r.spec.summary)}
 
-Fixes #${r.issue.number} — ${md(r.issue.title)}.
+Fixes #${r.issue.number} — ${md(r.issue.title)}.${r.spec.from_brief ? ` Built from **brief v${r.spec.from_brief}**, which you approved on the issue: its acceptance criteria are the checklist below, word for word.` : ""}
 
 ## What you're approving
 
 ${md(r.last.impl.summary)}
 
 - **Changes:** ${files || "none"}.
-- **Checked by a machine, not by the agent that wrote it:** the build, typecheck, lint and full test suite (${g}); ${m?.applicable ? (m.ok ? `with the source change undone, the changed tests **fail** — so they guard it (${(m.tests ?? []).map((t) => `\`${t}\``).join(", ")}). That is checked per test file: a reviewer should still confirm each new test case would fail on its own.` : `❌ the test-proof check failed: ${md(m.reason)}.`) : `no test-proof check (${md(m?.reason ?? "not run")}).`}
+- **Checked by a machine, not by the agent that wrote it:** ${checkedGates(r.last.gates)} (${g}); ${m?.applicable ? (m.ok ? `with the source change undone, the changed tests **fail** — so they guard it (${(m.tests ?? []).map((t) => `\`${t}\``).join(", ")}). That is checked per test file: a reviewer should still confirm each new test case would fail on its own.` : `❌ the test-proof check failed: ${md(m.reason)}.`) : `no test-proof check (${md(m?.reason ?? "not run")}).`}
 - **Reviewed by three agents that didn't write it** (spec, security, developer experience): ${(r.last.reviews ?? []).map((v) => `${v.lens} ${v.verdict === "approve" ? "✅" : "❌"}`).join(" · ") || "not reached"}.
 - **Not a substitute for your review.** Agents wrote this from the issue text${r.issue.dropped?.length ? `, leaving out: ${md(r.issue.dropped.join("; "))}` : ""}.
 
 ## How to test
 
 \`\`\`sh
-gh pr checkout <this PR> && npm ci && npm run build && npm test
+gh pr checkout <this PR> && ${commands.reproduce}
 \`\`\`
-${m?.applicable && m.tests?.length ? `\nThe changed tests: \`npx vitest run ${m.tests.join(" ")}\`. To see them catch the problem, undo the source change (\`git checkout origin/main -- ${(m.reverted ?? []).join(" ")}\`), rebuild, and run them again: they fail.\n` : ""}
+${m?.applicable && m.tests?.length ? `\nThe changed tests: \`${commands.focused.replace("<file>", m.tests.join(" "))}\`. To see them catch the problem, undo the source change (\`git checkout origin/main -- ${(m.reverted ?? []).join(" ")}\`), ${commands.build === false ? "" : "rebuild, "}and run them again: they fail.\n` : ""}
 ${r.evidence ? `\n**What the recordings show:** ${md(r.evidence.demonstrates)}${r.evidence.limitations ? `\n\n_What they don't show:_ ${md(r.evidence.limitations)}` : ""}\n` : ""}
-${show("before", "Before (main)")}
-${show("after", "After (this change)")}
 ${show("proof", "Test proof")}
 📄 [Full report with playable videos](${report})
 
@@ -135,24 +167,49 @@ ${show("proof", "Test proof")}
 ### Acceptance criteria (checked by the spec reviewer)
 
 ${acs}
-
-${blocking.length ? `### Open blocking findings\n\n${blocking.join("\n")}\n\n` : ""}${suggestions.length ? `<details><summary>Reviewer suggestions (non-blocking)</summary>\n\n${suggestions.join("\n")}\n</details>\n\n` : ""}${(r.last.impl.open_questions ?? []).length ? `### Open questions\n\n${r.last.impl.open_questions.map((q) => `- ${md(q)}`).join("\n")}\n\n` : ""}<sub>Opened by the issue agent (\`ci/issue-agent\` in ${repo}) · run \`${r.id}\` · ${r.rounds.length} round(s) · ${r.model} · ~$${r.costUsd.toFixed(2)}. Draft until a human has read it.</sub>
+${(r.spec.after_merge ?? []).length ? `\n### For you to check after it merges\n\n${r.spec.after_merge.map((c) => `- [ ] ${md(c.id)}: ${md(c.text)}`).join("\n")}\n\n_Not part of the agents' checklist (it can't be checked before the merge)._\n` : ""}
+${blocking.length ? `### Open blocking findings\n\n${blocking.join("\n")}\n\n` : ""}${suggestions.length ? `<details><summary>Reviewer suggestions (non-blocking)</summary>\n\n${suggestions.join("\n")}\n</details>\n\n` : ""}${(r.last.impl.open_questions ?? []).length ? `### Open questions\n\n${r.last.impl.open_questions.map((q) => `- ${md(q)}`).join("\n")}\n\n` : ""}<sub>Opened by the issue agent (\`ci/issue-agent\` in ${harnessRepo}) · run \`${r.id}\` · ${r.rounds.length} round(s) · ${r.model} · ~$${r.costUsd.toFixed(2)}. Draft until a human has read it.</sub>
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 `;
+}
+
+// The issue's live status comment: one comment, edited in place — the current state on top, a
+// timestamped history underneath (newest last, capped). `previous` is that comment's current body.
+export const STATUS_MARK = "<!-- issue-agent-status -->";
+export function statusBody(previous, state, { at = new Date(), link, max = 25 } = {}) {
+  const rows = String(previous ?? "").split("\n").filter((l) => /^\| \d{2}-\d{2} \d{2}:\d{2} \|/.test(l));
+  const when = at.toISOString().slice(5, 16).replace("T", " "); // MM-DD HH:MM, UTC
+  // One line, everywhere it's shown: a line break in a reason could otherwise plant a fake history row.
+  const line = md(String(state).replace(/[\r\n]+/g, " "));
+  rows.push(`| ${when} | ${line.replace(/\|/g, "\\|")}${link ? ` · [run](${link})` : ""} |`);
+  return `${STATUS_MARK}\n🤖 **Issue agent:** ${line}\n\n| UTC | step |\n| --- | --- |\n${rows.slice(-max).join("\n")}\n`;
 }
 
 export function issueComment({ kind, reason, prUrl, report, where }) {
   const retry = "Remove and re-add the `agent` label to run it again.";
   switch (kind) {
     case "skipped": return `${MARK}\n🤖 **Issue agent: not starting this one** — ${md(reason)}.`;
+    // `agent:approved` refused, and a failed run: their own markers, because neither means a run read
+    // the comments (brief.mjs, briefState).
+    case "refused": return `${REFUSAL_MARK}\n🤖 **Issue agent: not starting this one** — ${md(reason)}.`;
     case "blocked": return `${MARK}\n🤖 **Issue agent: not starting this one.** After reading the code, the spec agent found it isn't actionable yet:\n\n> ${md(reason)}\n\n${retry}`;
-    case "error": return `${MARK}\n🤖 **Issue agent: the run failed before it could open a PR.**${where ? ` Logs: ${where}` : ""}\n\n${retry}`;
+    // `reason`: a failure the pipeline recognised (checks.mjs, publishRefusalHint) — it says what to do.
+    case "error": return `${ERROR_MARK}\n🤖 **Issue agent: the run failed before it could open a PR.**${reason ? ` ${md(reason)}.` : ""}${where ? ` Logs: ${where}` : ""}\n\n${retry}`;
     case "needs-human-nopr": return `${MARK}\n🤖 **Issue agent: no PR** — ${md(reason ?? "the run stopped early")}.${where ? ` Logs and transcripts: ${where}` : ""}\n\n${retry}`;
+    // A brief that turned out to be about a security hole in code people use today (card.mjs, isPrivate):
+    // nothing about it is said here — SECURITY.md says it is reported privately.
+    case "security-stop": return `${MARK}\n🤖 **Issue agent: stopped.** This looks like a security problem in code people use today, so the agents posted nothing about it, and the run kept only its outcome. A maintainer should move it to a private security advisory (the repository's Security tab) and fix it there — see SECURITY.md.`;
+    case "pr-in-review": return `${MARK}\n🤖 **Issue agent:** a PR is up and the agent is now working through the Claude review on it: ${prUrl}\n\nIt will ask for a human review once every review is resolved (or say why it stopped).`;
     default: {
       const ok = kind === "pr";
-      const gates = report.last.gates.every((g) => g.green) ? "green"
-        : report.last.gates.every((g) => g.ok) ? `green except what's already red on main (${report.last.gates.filter((g) => !g.green).map((g) => g.name).join(", ")})` : "red";
+      const partial = report.last.gates.filter((g) => notFullRun(g, report.patchSha256));
+      // A failure is said first; the not-full-run note only qualifies gates that otherwise passed.
+      const note = partial.length ? ` (\`test\`: ${partial.map((g) => notFullRun(g, report.patchSha256)).join("; ")})` : "";
+      const gates = !report.last.gates.every((g) => g.ok) ? `red${note}`
+        : partial.length ? `not all run on this change${note}`
+        : report.last.gates.every((g) => g.green) ? "green"
+        : `green except what's already red on main (${report.last.gates.filter((g) => !g.green).map((g) => g.name).join(", ")})`;
       return `${MARK}\n🤖 **Issue agent:** ${ok ? "a draft PR is ready for review" : "a draft PR is up, but it **needs a human**"}: ${prUrl}\n\n${report.spec.acceptance_criteria.length} acceptance criteria · ${report.rounds.length} round(s) · gates ${gates}${report.manifest.some((e) => e.kind === "video") ? " · screenshots and video in the PR" : ""}`;
     }
   }

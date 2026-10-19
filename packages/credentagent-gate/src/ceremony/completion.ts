@@ -12,11 +12,11 @@ import { reconcileCartPayment } from "./reconciliation.js";
 import { checkDraw, ageProofCovers, type DrawVerifier } from "./mandate.js";
 import type { RevocationStore } from "./revocation.js";
 import { refusal } from "./refusals.js";
-import { KeyedMutex } from "./keyed-mutex.js";
+import { KeyedMutex } from "../keyed-mutex.js";
 import { preserveLineAttributes } from "./order-attributes.js";
 import { RESERVED_CREDENTIAL_IDS } from "../credentials.js";
 import { registeredMinAge } from "../manifest.js";
-import type { ProofEntry } from "./proofs.js";
+import { withoutPresentations, type ProofEntry } from "./proofs.js";
 
 // Per-order in-process serializer for completion (#103). The idempotency read at the top and
 // the settle + record write near the bottom are not atomic, so two CONCURRENT verifies for one
@@ -207,7 +207,9 @@ async function completeOrderLocked(input: CompletionInput, ctx: CompletionContex
   const verification = await ctx.verificationStore.read(input.order.id);
   // The order proof receipt: every proof made for this order, carried onto the completed record
   // (the verification record is cleared below). The payment rail's own proof goes last.
-  const proofs = [...(verification?.proofs ?? []), ...(input.proof ? [input.proof] : [])];
+  // Without the wallet's raw answer (#320): every read of the completed record — the status
+  // routes, get-order-status, the paid checkout page — is public to anyone with the order id.
+  const proofs = withoutPresentations([...(verification?.proofs ?? []), ...(input.proof ? [input.proof] : [])]);
   const proofField = proofs.length ? { proofs } : {};
   // A DELEGATED draw carries its own loyalty claim: the membership the human proved at approval
   // time, sealed into the intent (#172). It is read from the intent — never from a verification

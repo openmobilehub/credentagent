@@ -177,15 +177,19 @@ export interface StorefrontOptions {
    * just run with a per-process key.
    */
   signingKey?: string;
-  /** Allow a per-process ephemeral signing key (default: true unless `signingKey` is set). */
+  /**
+   * Allow a per-process ephemeral signing key (default: true unless `signingKey` is set).
+   * `statelessOrders` is stricter: it needs this set to `true` explicitly when no `signingKey` is given.
+   */
   allowEphemeralKey?: boolean;
   /**
    * Opt-in (default false): carry the created order in a signed Cart Mandate on the
    * checkout link (`?order=<id>&cart=<base64url>`) instead of a `createdOrderStore`
    * write, so a checkout survives an instance split with no shared created-order store
-   * (gate FR-007). Forces a concrete `signingKey` (generated if none) so the mandate the
-   * checkout tool issues is the one the gate rails verify. Verification + completion
-   * state still use their stores.
+   * (gate FR-007). Needs a stable `signingKey`, so the mandate one instance issues verifies
+   * on another: without one it throws, unless `allowEphemeralKey: true` (a per-process key,
+   * for a single-process dev server / tests). Verification + completion state still use
+   * their stores.
    */
   statelessOrders?: boolean;
   /**
@@ -203,7 +207,7 @@ export interface StorefrontOptions {
   /**
    * Optional label for THIS deployment — e.g. `"dev.3f9c2a1"` (where + which commit) — so two
    * deployments of the same package version can be told apart. Reported next to the version by
-   * `GET /version`, and to MCP clients as semver build metadata (`0.5.0+dev.3f9c2a1`).
+   * `GET /version`, and to MCP clients as semver build metadata (`<version>+dev.3f9c2a1`).
    * Characters outside `[0-9A-Za-z.-]` become `-`.
    */
   build?: string;
@@ -270,6 +274,23 @@ export interface CompletedOrderRecord {
   proofs?: ProofEntry[];
 }
 
+/** The completed-order store as every reader gets it (the order-status poll, get-order-status,
+ *  the paid page): proofs without the wallet's raw answer, even on an order stored before the
+ *  gate stopped writing it (#320). Those reads need only the order id.
+ *  Twin of the gate's `withoutPresentations` (credentagent-gate/src/ceremony/proofs.ts), kept
+ *  unexported there: a change to what a receipt may hold changes both. */
+function receiptsOnly(store: OrderStore<CompletedOrderRecord>): OrderStore<CompletedOrderRecord> {
+  return {
+    read: async (id) => {
+      const done = await store.read(id);
+      if (!done?.proofs) return done;
+      return { ...done, proofs: done.proofs.map((p) => { const { presentation: _bytes, ...receipt } = p as ProofEntry & { presentation?: unknown }; return receipt; }) };
+    },
+    write: (id, value) => store.write(id, value),
+    clear: (id) => store.clear(id),
+  };
+}
+
 export interface Storefront {
   app: Express;
   /** The current catalog. Static source: the injected array; dynamic source: last-known-good. */
@@ -282,8 +303,12 @@ export interface Storefront {
 // ── widget bundle (single-file html, built by vite into dist/ui/) ───────────
 
 const SKYBRIDGE_MIME = "text/html+skybridge";
-// Product images are self-contained `data:` URIs (added to the CSP below); picsum
-// stays allowlisted in case a custom catalog uses remote images.
+// Product images are self-contained `data:` URIs. The MCP Apps `_meta.ui.csp` declares no
+// `data:`: its default view CSP already has `img-src 'self' data:`, and scanners that grade
+// the declared policy refuse bare schemes. ChatGPT's default widget CSP is not documented
+// to allow `data:` images, so ChatGPT's own `openai/widgetCSP` keeps declaring `data:`
+// (spec 002, T017) rather than risk blank pictures there. Picsum stays allowlisted in case
+// a custom catalog uses remote images.
 const IMAGE_DOMAINS = ["https://picsum.photos", "https://fastly.picsum.photos"];
 
 function bundleCandidates(): string[] {
@@ -478,7 +503,7 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
     await orderCarts.clear(orderId);
   };
   const orderStore: OrderStore<CompletedOrderRecord> =
-    opts.orderStore ?? opts.storage?.orderStore ?? new MemoryOrderStore<CompletedOrderRecord>();
+    receiptsOnly(opts.orderStore ?? opts.storage?.orderStore ?? new MemoryOrderStore<CompletedOrderRecord>());
   // Created-but-not-completed orders, for the checkout page + place-order. A store
   // (not a process Map) so it can be shared across serverless instances.
   const createdOrderStore: OrderStore<Order> =
@@ -1368,14 +1393,17 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
 
     // ── widget resource — two registrations from one bundle ─────────────────
     // Claude / MCP-Apps hosts read RESOURCE_URI; ChatGPT reads the skybridge URI.
-    // `data:` in the CSP so the widget's inline SVG image placeholder renders (FR-014).
+    // Both declare the same specific-origin `_meta.ui.csp` — no `data:`, because the MCP Apps
+    // default view CSP already allows `data:` images. The skybridge copy also carries
+    // ChatGPT's own `openai/widgetCSP`, which keeps `data:` (see IMAGE_DOMAINS) so the inline
+    // SVG product images and placeholder (spec 002 FR-014) render there too.
     registerAppResource(
       server,
       RESOURCE_URI,
       RESOURCE_URI,
       { mimeType: RESOURCE_MIME_TYPE },
       async (): Promise<ReadResourceResult> => ({
-        contents: [{ uri: RESOURCE_URI, mimeType: RESOURCE_MIME_TYPE, text: await loadBundle(), _meta: { ui: { csp: { resourceDomains: [...IMAGE_DOMAINS, "data:"], connectDomains: cspOrigin(baseUrl) } } } }],
+        contents: [{ uri: RESOURCE_URI, mimeType: RESOURCE_MIME_TYPE, text: await loadBundle(), _meta: { ui: { csp: { resourceDomains: IMAGE_DOMAINS, connectDomains: cspOrigin(baseUrl) } } } }],
       }),
     );
     server.registerResource(
@@ -1383,7 +1411,7 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
       SKYBRIDGE_URI,
       { mimeType: SKYBRIDGE_MIME },
       async (): Promise<ReadResourceResult> => ({
-        contents: [{ uri: SKYBRIDGE_URI, mimeType: SKYBRIDGE_MIME, text: await loadBundle(), _meta: { "openai/widgetCSP": { connect_domains: cspOrigin(baseUrl), resource_domains: [...IMAGE_DOMAINS, "data:"] } } }],
+        contents: [{ uri: SKYBRIDGE_URI, mimeType: SKYBRIDGE_MIME, text: await loadBundle(), _meta: { ui: { csp: { resourceDomains: IMAGE_DOMAINS, connectDomains: cspOrigin(baseUrl) } }, "openai/widgetCSP": { connect_domains: cspOrigin(baseUrl), resource_domains: [...IMAGE_DOMAINS, "data:"] } } }],
       }),
     );
 

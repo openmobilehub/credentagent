@@ -73,7 +73,8 @@ The core stays closed to modification but open to extension. Users add capabilit
 seams, not by editing the library.
 - **Exemplar:** Stripe `metadata` (attach anything) + `expand` (pull related data); Express middleware.
 - **Here:** `defineCredential({ id, request, verify, effect, appliesTo?, ui })` lets a host gate *any*
-  credential without touching the gate; effects (`gate()`/`discount()`/`authorize()`) compose.
+  credential without touching the gate; a custom credential takes `gate()` only today (`discount()`
+  and `authorize()` throw, because neither would be enforced for it yet).
 - **Push further:** when a user has to fork to do X, X wants to become an injected seam or a `defineX`.
 
 ### 6. Depend on ports, not implementations (hexagonal core)

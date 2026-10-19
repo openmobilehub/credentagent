@@ -1,7 +1,7 @@
 // A gate failure reduced to fingerprints, so a run can tell "main was already red here" from "this
-// change broke it": lint "file rule", TypeScript "file TSnnnn", vitest "FAIL file > test". No line or
-// column — an edit above main's own error would make it look new — so they are compared as COUNTS:
-// a change may not add even one more of a kind main already has.
+// change broke it": lint "file rule", TypeScript "file TSnnnn", vitest "FAIL file > test", node --test
+// "✖ test". No line or column — an edit above main's own error would make it look new — so they are
+// compared as COUNTS: a change may not add even one more of a kind main already has.
 
 export const stripAnsi = (s) => s.replace(/\x1b\[[0-9;]*m/g, "");
 
@@ -17,7 +17,11 @@ export function fingerprints(name, out, dir) {
     }
     return fps;
   }
-  if (name === "test") return [...new Set(text.match(/^\s*(FAIL|×)\s+.+$/gm)?.map((s) => s.trim().replace(/\s+\d+ms$/, "")) ?? [])];
+  if (name === "test") {
+    // vitest: "FAIL file > test" / "× test 12ms"; node --test: "✖ test (1.2ms)" (spec) / "not ok 3 - test" (TAP).
+    const lines = text.match(/^\s*(FAIL|×|✖)\s+.+$|^\s*not ok \d+ - .+$/gm) ?? [];
+    return [...new Set(lines.map((s) => s.trim().replace(/^not ok \d+ - /, "✖ ").replace(/\s+\(?\d+(\.\d+)?ms\)?$/, "")))];
+  }
   return [...(text.matchAll(/(\S+)\(\d+,\d+\): error (TS\d+)/g))].map((m) => `${m[1]} ${m[2]}`);
 }
 

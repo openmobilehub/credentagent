@@ -32,7 +32,12 @@ what happened with v0.3.1 (published manually 2026-07-26; the release then fired
 2. **Version bump** — bump both packages together in a PR and merge it; the
    storefront depends on the gate via a **semver range** (`^x.y.z`, never
    `workspace:*`). Keep the two package READMEs in sync with any API surface that
-   changed — they are the published docs.
+   changed — they are the published docs. In the same PR, move the `[Unreleased]`
+   entries in `CHANGELOG.md` under `## [X.Y.Z] - YYYY-MM-DD`, leave an empty
+   `[Unreleased]`, add the `[X.Y.Z]` compare link, and mark anything that needs
+   callers to change their code **BREAKING**. Confirm before tagging:
+   `node scripts/check-changelog.mjs --tag vX.Y.Z` (the entry exists AND the tag
+   equals the package version). `publish.yml` runs the same check on the release.
 
 3. **Tag + GitHub release — this is the publish.** One lightweight tag `vX.Y.Z` on
    the exact merged bump commit (the packages version in lockstep, so one tag marks

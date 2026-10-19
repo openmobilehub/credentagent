@@ -1,35 +1,26 @@
 name: issue-agent
+# In the Actions list: which issue, and what started it (a run for another label shows that label and is skipped).
+run-name: "issue-agent #${{ github.event.issue.number || inputs.issue }} · ${{ github.event_name == 'schedule' && 'checking for unanswered comments on briefs' || github.event_name == 'workflow_dispatch' && format('run by hand ({0})', inputs.trigger) || github.event_name == 'issue_comment' && format('comment · {0}', github.event.issue.title) || format('labelled {0} · {1}', github.event.label.name, github.event.issue.title) }}"
 
 # Label an issue `agent` → agents implement it and a draft PR comes back with the evidence.
-# How it works and what it trusts: ci/issue-agent/README.md.
-#
-# Three jobs, so that code an agent writes never shares a job with a GitHub write token:
-#
-#   snapshot   trusted code (this repo's main). Checks the labeller has write access, runs the
-#              preflight, and freezes the request — only text by people with write access, as of the
-#              label. Comments on the issue when it skips.
-#   implement  the agents and the gates. Read-only repo access and NO GitHub token: the checkout keeps
-#              no credential and none is in the environment. Hands back a run directory (the reviewed
-#              change as a patch, the report, the media).
-#   publish    trusted code again, with write access. Applies the reviewed patch to a clean checkout,
-#              pushes the branch and the evidence, opens the draft PR, comments on the issue. It never
-#              installs or runs anything the agents wrote.
-#
-# The draft is never merged by the agent: branch protection still needs a human approval and every
-# review thread resolved (CLAUDE.md, "Code review").
+# How it works and what it trusts: ci/issue-agent/README.md. The three jobs (snapshot, implement,
+# publish) live in issue-agent-run.yml, which other repos call too (README, "Using it in another repo").
 #
 # Auth: the repo variable CLAUDE_AUTH, as for agent-e2e. Unset → the subscription login
-# (CLAUDE_CODE_OAUTH_TOKEN); "api" → ANTHROPIC_API_KEY. Spend is capped per agent and per run
-# (ISSUE_AGENT_BUDGET_USD, ISSUE_AGENT_RUN_BUDGET_USD).
+# (CLAUDE_CODE_OAUTH_TOKEN); "api" → ANTHROPIC_API_KEY. An AGENT_GH_TOKEN secret lets the PR start CI,
+# the Claude review and the review loop (issue-agent-review.yml) on its own.
 #
-# PRs opened with the default GITHUB_TOKEN don't start other workflows (GitHub's rule), so CI and the
-# Claude review won't start on them until a human marks the draft ready for review. An AGENT_GH_TOKEN
-# secret (fine-grained PAT: contents, pull-requests, issues write) makes them start on their own; it
-# is only ever used by the publish job.
+# Briefs (.github/issue-agent.json `"brief": "pause"`, README "The brief"): the `agent` label gets a
+# brief first; a maintainer's comment while it waits gets an answer or a new version; `agent:approved`
+# starts the build. The hourly schedule catches a comment whose event was lost.
 
 on:
   issues:
     types: [labeled]
+  issue_comment:
+    types: [created, edited]
+  schedule:
+    - cron: "17 * * * *"
   workflow_dispatch:
     inputs:
       issue:
@@ -39,138 +30,70 @@ on:
         description: "Skip the preflight (labels / existing PRs)"
         type: boolean
         default: false
-
-concurrency:
-  group: issue-agent-${{ github.event.issue.number || inputs.issue }}
-  cancel-in-progress: false
+      trigger:
+        description: "dispatch (as if labelled agent) or comment (answer the latest comment on a brief)"
+        type: choice
+        options: [dispatch, comment]
+        default: dispatch
 
 permissions: {}
 
-env:
-  ISSUE: ${{ github.event.issue.number || inputs.issue }}
-
 jobs:
-  snapshot:
-    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'agent'
+  run:
+    # A comment counts only on an issue (not a PR) whose brief waits, from a member or collaborator, and
+    # not the agents' own (every agent comment starts with its marker). The script re-checks all of it.
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || (github.event_name == 'issues' && (github.event.label.name == 'agent' || github.event.label.name == 'agent:approved'))
+      || (github.event_name == 'issue_comment' && !github.event.issue.pull_request
+          && contains(github.event.issue.labels.*.name, 'agent:awaiting-approval')
+          && !startsWith(github.event.comment.body, '<!-- issue-agent')
+          && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
+    # One run per issue at a time. Comments get their own group, and a newer comment replaces a waiting or
+    # running answer — so three quick comments get one answer that covers all three. On the job, not the
+    # workflow: a comment this job skips (an outsider's, or the agents' own) must not cancel anything.
+    concurrency:
+      group: issue-agent-${{ github.event.issue.number || inputs.issue }}${{ (github.event_name == 'issue_comment' || inputs.trigger == 'comment') && '-talk' || '' }}
+      cancel-in-progress: ${{ github.event_name == 'issue_comment' || inputs.trigger == 'comment' }}
+    # This commit's copy: a change to the jobs is tested by this repo's own runs before others pick it up.
+    uses: ./.github/workflows/issue-agent-run.yml
+    # The most any job gets; each narrows it (the agents' job: contents read, no token).
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    with:
+      issue: ${{ format('{0}', github.event.issue.number || inputs.issue) }}
+      sender: ${{ github.event.sender.login || github.actor }}
+      # A comment run reads everything up to when it starts (its wait folds in quick follow-ups).
+      snapshot_at: ${{ github.event_name == 'issues' && github.event.issue.updated_at || '' }}
+      trigger: ${{ github.event_name == 'issues' && format('label:{0}', github.event.label.name) || github.event_name == 'issue_comment' && 'comment' || inputs.trigger }}
+      wait_seconds: ${{ (github.event_name == 'issue_comment' || inputs.trigger == 'comment') && 120 || 0 }}
+      force: ${{ inputs.force == true }}
+      claude_auth: ${{ vars.CLAUDE_AUTH }}
+      max_review_cycles: ${{ vars.ISSUE_AGENT_MAX_REVIEW_CYCLES }}
+      harness_repo: ${{ github.repository }}
+      harness_ref: ${{ github.event.repository.default_branch }}
+    secrets: inherit
+
+  # The safety net: an issue whose brief waits on an unanswered comment gets a run.
+  sweep:
+    if: github.event_name == 'schedule'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
     permissions:
       contents: read
-      issues: write # to say why it skipped
-      pull-requests: read
-    outputs:
-      skip: ${{ steps.snap.outputs.skip }}
+      issues: read
+      actions: write
     steps:
-      - name: Only for maintainers
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SENDER: ${{ github.event.sender.login || github.actor }}
-        run: |
-          perm=$(gh api "repos/${{ github.repository }}/collaborators/$SENDER/permission" --jq .permission)
-          case "$perm" in
-            admin|maintain|write) echo "::notice::$SENDER has $perm access — starting." ;;
-            *) echo "::error::$SENDER has '$perm' access; the issue agent needs write."; exit 1 ;;
-          esac
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - name: Freeze the request
-        id: snap
+      - name: Answer what was missed
         env:
+          # The run it starts is a comment run: it answers only comments by people with write access.
           GH_TOKEN: ${{ github.token }}
-          # The label time: text written or edited after it never reaches the agents.
-          ISSUE_AGENT_SNAPSHOT_AT: ${{ github.event.issue.updated_at }}
-          ISSUE_AGENT_LABELLER: ${{ github.event.sender.login || github.actor }}
-          FORCE: ${{ inputs.force && '--force' || '' }}
-        run: node ci/issue-agent/run.mjs snapshot "$ISSUE" --out issue.json --comment ${FORCE:+"$FORCE"}
-      - uses: actions/upload-artifact@v4
-        with:
-          name: issue-agent-snapshot
-          path: issue.json
-          retention-days: 30
-
-  implement:
-    needs: snapshot
-    if: needs.snapshot.outputs.skip == 'false'
-    runs-on: ubuntu-latest
-    timeout-minutes: 180
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          persist-credentials: false # nothing in .git/config for an agent to find
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-      - name: Install the harness and a browser
-        working-directory: ci/issue-agent
-        run: |
-          npm ci --no-audit --no-fund
-          npx playwright install --with-deps chromium
-      - uses: actions/download-artifact@v4
-        with:
-          name: issue-agent-snapshot
-      - name: Run the agents
-        env:
-          CLAUDE_AUTH: ${{ vars.CLAUDE_AUTH }}
-          API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-        run: |
-          # Export only the chosen Claude credential. No GitHub token exists in this job.
-          if [ "$CLAUDE_AUTH" = "api" ]; then
-            [ -n "$API_KEY" ] || { echo "::error::CLAUDE_AUTH is \"api\" but ANTHROPIC_API_KEY is not set."; exit 1; }
-            export ANTHROPIC_API_KEY="$API_KEY"
-          else
-            [ -n "$OAUTH_TOKEN" ] || { echo "::error::CLAUDE_CODE_OAUTH_TOKEN is not set."; exit 1; }
-            export CLAUDE_CODE_OAUTH_TOKEN="$OAUTH_TOKEN"
-          fi
-          unset API_KEY OAUTH_TOKEN
-          node ci/issue-agent/run.mjs implement issue.json --dir "$RUNNER_TEMP/issue-agent/run"
-      - name: Hand the run to publish (and keep it)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: issue-agent-run
-          path: |
-            ${{ runner.temp }}/issue-agent/run/
-            !${{ runner.temp }}/issue-agent/run/repo/
-            !${{ runner.temp }}/issue-agent/run/before/
-          retention-days: 30
-
-  publish:
-    needs: [snapshot, implement]
-    if: always() && needs.snapshot.outputs.skip == 'false'
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: write
-      pull-requests: write
-      issues: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          persist-credentials: false # pushes go through `gh auth git-credential`
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-      - uses: actions/download-artifact@v4
-        continue-on-error: true # an implement job that died before uploading still gets a comment
-        with:
-          name: issue-agent-run
-          path: ${{ runner.temp }}/issue-agent/run
-      - name: Git identity (commits are DCO signed off)
-        run: |
-          git config --global user.name "credentagent-issue-agent[bot]"
-          git config --global user.email "issue-agent@users.noreply.github.com"
-      - name: Publish the reviewed change
-        env:
-          GH_TOKEN: ${{ secrets.AGENT_GH_TOKEN || github.token }}
-        run: |
-          mkdir -p "$RUNNER_TEMP/issue-agent/run"
-          node ci/issue-agent/run.mjs publish "$RUNNER_TEMP/issue-agent/run" --issue "$ISSUE"
+        run: node ci/issue-agent/run.mjs sweep-briefs

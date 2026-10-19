@@ -29,6 +29,7 @@ import type { IntentBoundsInput } from "./ceremony/intent-sign/bounds.js";
 import type { Branding, ReaderIdentity, TrustLevel } from "./types.js";
 import { AmountError, toMinorUnits } from "./ap2/money.js";
 import { importVerifyKey } from "./ap2/keys.js";
+import { KeyedMutex } from "./keyed-mutex.js";
 
 /** Why a grant operation refused — a TYPED union (never `string`; #95 review). */
 export type GrantDoorCode =
@@ -39,7 +40,7 @@ export type GrantDoorCode =
   | "per-spend-exceeded" // this one purchase is over the per-spend cap (engine: over-cap)
   | "budget-exceeded" // the cumulative budget is spent out (engine: over-total)
   | "wrong-merchant" // outside the granted merchant scope (engine: out-of-scope)
-  | "step-up" // needs a live human — e.g. age-restricted goods are NON-delegable
+  | "step-up" // needs a live human — e.g. an age-restricted item the grant's ageProof doesn't cover
   | "revoked" // the grant was revoked; nothing spends against it again
   | "expired" // the grant's validity window passed (or hasn't started)
   | "agent-held-key" // the agent holds this grant's key — it spends with `DelegatedIntent` at the merchant, not here
@@ -294,23 +295,6 @@ function deepFreeze<T>(value: T): T {
     Object.freeze(value);
   }
   return value;
-}
-
-/** A tiny per-key async mutex: serializes a grant's lifecycle + spend transitions so a
- *  read-check-write can't interleave with another on the SAME grant (the TOCTOU class —
- *  REVIEW.md §1/§2). Ported from the closed PR #106 (issue #104): without it, two concurrent
- *  same-key spends both miss the idempotency cache and reach the engine, and the loser comes
- *  back `consumed` → misreported as `revoked`. In-process only — a multi-instance deploy needs
- *  a shared store + CAS (the known follow-up in the #104 comparison comment). */
-class KeyedMutex {
-  private readonly tails = new Map<string, Promise<unknown>>();
-  run<T>(key: string, fn: () => Promise<T>): Promise<T> {
-    const prev = this.tails.get(key) ?? Promise.resolve();
-    const next = prev.then(fn, fn);
-    // Keep the chain going but don't leak a rejection into the next waiter's scheduling.
-    this.tails.set(key, next.then(() => undefined, () => undefined));
-    return next;
-  }
 }
 
 /** Convert plain dollars to integer cents (issue #104, fix 2). The public API stays plain
@@ -762,6 +746,11 @@ export class Grants {
         // Malformed input refuses BEFORE the key is consulted or consumed (P2 on #112): the engine
         // prices exactly one item, so a multi-item array must not silently drop items past the first.
         if (!Array.isArray(items) || items.length !== 1) return { ok: false, code: "invalid-request" };
+        // A fractional qty would price at a fraction of the item — half a coffee at half price (#286).
+        // The engine (`DelegatedGrant.spend`) refuses it too, as `invalid-amount`; here it refuses before the
+        // key is consumed. A whole zero or negative qty stays `invalid-amount`: it prices at or below 0.
+        const qty0 = items[0]?.qty;
+        if (qty0 !== undefined && !Number.isInteger(qty0)) return { ok: false, code: "invalid-request" };
 
         // Idempotent replay FIRST — a safe retry echoes the original outcome, SUCCESS OR REFUSAL
         // (P2 on #112: replaying only successes let a refused key be repurposed with a cheaper item).

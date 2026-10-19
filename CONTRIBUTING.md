@@ -13,6 +13,9 @@ CredentAgent is part of [Open Mobile Hub](https://openmobilehub.org) under the O
 Linux Foundation, and the contribution rules below reflect that posture — most importantly the
 **DCO sign-off** and the **security-test bar**. Please read this file before opening a PR.
 
+Found a vulnerability? Don't open an issue or PR — report it privately as described in
+[SECURITY.md](./SECURITY.md).
+
 To see the packages in action, run [`examples/quickstart`](./examples/quickstart) here, or look at
 the [Utopia Marketplace MCP server](https://github.com/openwallet-foundation/multipaz-utopia/tree/main/organizations/marketplace/mcp), a separate repo that runs both
 packages end to end. Contribute library changes here.
@@ -152,7 +155,9 @@ thing we don't do here.
 - **Small and safe → fix it** in your PR (a one-line guard, an obvious typo, a mislabeled string).
 - **Bigger, risky, or out of scope → open an issue** (or leave a review comment) that names it. The
   bar for surfacing is deliberately low: a one-sentence "spotted this, out of scope, filed #NN" is
-  enough. The point is that nothing broken goes **unrecorded**.
+  enough in the PR. The point is that nothing broken goes **unrecorded**. The issue itself still
+  needs **steps to reproduce, through the SDK or the UI**: every issue must be reproducible (the
+  forms in `.github/ISSUE_TEMPLATE/` ask for them).
 
 The guardrail is to **keep PRs focused** — don't balloon your change to chase everything you find.
 The issue tracker is the pressure valve: fix the small thing inline, spin the rest into its own issue.
@@ -176,6 +181,7 @@ turns up something off, fix it or flag it.
 - [ ] Every commit is signed off (`git commit -s`); the DCO check will be green.
 - [ ] You pushed a branch to this repo (not a fork) so the automated review can run.
 - [ ] No presence-only gate is presented as a real safety control.
+- [ ] A change someone using the npm packages would notice adds a line under `[Unreleased]` in [`CHANGELOG.md`](CHANGELOG.md) — marked **BREAKING** if their code has to change.
 - [ ] Anything broken you noticed along the way is fixed or filed — never silently ignored.
 
 Apache-2.0 · part of [Open Mobile Hub](https://openmobilehub.org) (Linux Foundation).

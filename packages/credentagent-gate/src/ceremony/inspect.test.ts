@@ -144,6 +144,19 @@ describe("inspectPresentations — dc-payment rail", () => {
     const { dpc, body } = await presentPayment(harness(true));
     expect(body.presentation).toEqual({ format: "mso_mdoc", deviceResponse: dpc, inspectUrl: `${INSPECTOR_URL}#${dpc}` });
   });
+
+  it("ON: the completed order's proofs block links this payment's credential — and no earlier one", async () => {
+    // Once complete, the page shows proofsHtml instead of showInspectLink, so this block is the
+    // only place the payment's Inspect link can come from. The age proof's raw answer stays out:
+    // this browser didn't present it (#320).
+    const app = harness(true);
+    const { dr } = await presentAge(app, true);
+    const { dpc, body } = await presentPayment(app);
+    expect(body.completed).toBe(true);
+    expect(body.proofsHtml).toContain(`${INSPECTOR_URL}#${dpc}`);
+    expect(body.proofsHtml).toContain("Age 21+");
+    expect(body.proofsHtml).not.toContain(dr);
+  });
 });
 
 describe("inspectionResponse — the one door a verify result leaves through", () => {

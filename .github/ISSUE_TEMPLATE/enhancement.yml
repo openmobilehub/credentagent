@@ -1,0 +1,78 @@
+name: Enhancement
+description: Something to add or change. Show today's behavior through the SDK or the UI so the change can be checked against it.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Write this for a **human who did NOT write the code**: plain language first, technical detail at the bottom.
+
+        **Every issue must be reproducible.** For an enhancement, that means steps showing **today's behavior**,
+        either through the **SDK** (the published packages or an `examples/` script) or through the **UI** (the
+        storefront widget, the checkout / wallet pages, or the hosted marketplace). Then whoever builds it, and whoever
+        reviews it, can run the same steps and see the difference.
+
+  - type: textarea
+    id: plain
+    attributes:
+      label: In plain terms
+      description: One or two sentences a non-specialist understands. What should change, and who benefits?
+    validations:
+      required: true
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Reproduce via
+      description: Where can someone see today's behavior?
+      options:
+        - SDK (code against the packages or an examples/ script)
+        - UI (storefront widget, checkout / wallet pages, hosted marketplace)
+        - Both
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce today's behavior
+      description: |
+        Steps someone else can follow from a clean checkout or a fresh browser.
+        **SDK:** a minimal runnable snippet or command. **UI:** the URL, then each click or input, in order.
+      placeholder: |
+        SDK:
+        1. new CredentAgent({ walletOrigin: "https://shop.example" }) with NODE_ENV=production and no mandateSigningKey
+        2. Run credentagent.doctor()
+        3. See: ok=false, error "ephemeral-mandate-key"
+    validations:
+      required: true
+
+  - type: textarea
+    id: today
+    attributes:
+      label: What happens today
+    validations:
+      required: true
+
+  - type: textarea
+    id: wanted
+    attributes:
+      label: What should happen instead
+      description: Following the same steps after the change, what should someone see?
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: The package version, the commit on `main`, or which hosted deploy (marketplace / marketplace-dev).
+      placeholder: "@openmobilehub/credentagent-gate 0.6.0 · main at 54ec604"
+    validations:
+      required: true
+
+  - type: textarea
+    id: details
+    attributes:
+      label: Details
+      description: For reviewers. Design notes, file references, alternatives considered, and related issues and PRs written out in words.

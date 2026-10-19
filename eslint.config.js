@@ -75,7 +75,9 @@ export default [
 
   // Ceremony pages: a value dropped into an inline <script> goes through scriptJson(), never a
   // bare JSON.stringify — which does not escape `</script>`, so a value could end the script
-  // and run markup on the page the buyer approves on (#330; earlier #103, #321). The
+  // and run markup on the page the buyer approves on (#330; earlier #103, #321). The selector
+  // is a descendant match, so a wrapped call (`${JSON.stringify(x).replace(…)}`) is caught too
+  // (#343); a legitimate non-script use takes a justified eslint-disable. The
   // moduleGlobalState selectors are repeated because a later no-restricted-syntax REPLACES
   // the earlier one for the same files.
   {
@@ -87,7 +89,7 @@ export default [
         "error",
         ...moduleGlobalState,
         {
-          selector: "TemplateLiteral > CallExpression[callee.object.name='JSON'][callee.property.name='stringify']",
+          selector: "TemplateLiteral CallExpression[callee.object.name='JSON'][callee.property.name='stringify']",
           message:
             "Interpolating JSON.stringify into a page template can close its <script> — page integrity on the consent pages (SECURITY-INVARIANTS.md #6-adjacent, #330): use scriptJson() from ceremony/script-json.ts.",
         },

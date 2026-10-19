@@ -110,7 +110,7 @@ a localhost `walletOrigin`, or in-memory stores on a deployment.
 
 ### AP2 mandates
 
-> **Not released yet.** This section and the `/.well-known/did.json` route are on `main`
+> **Not released yet.** This section and the `/.well-known/did.json` / `/did.json` routes are on `main`
 > but not in the published `0.5.0` package; following them against `0.5.0` fails with a
 > missing export.
 
@@ -120,17 +120,20 @@ records the older dev-signed mandate.
 
 The gate signs with two keys, each a stable private P-256 JWK from your secret manager:
 `mandateSigningKey` (mandates) and `checkoutSigningKey` (the merchant checkout key carts
-are quoted with — a second, different key, and one per store: two stores on one host that
-share it accept each other's carts, #335). Without them the keys are generated at boot
+are quoted with — a second, different key, and one per store: its key id carries the
+`walletOrigin`, path included, so stores at different paths refuse each other's carts, but
+two deployments sharing one `walletOrigin` and the key accept them, #335). Without them the keys are generated at boot
 and everything signed stops verifying at the next restart; `doctor()` reports a missing
 `mandateSigningKey` as an error and a missing `checkoutSigningKey` as a warning on a
 deployment.
 
-Anyone can check a mandate from the host's `/.well-known/did.json`, which publishes both
-public keys:
+Anyone can check a mandate from the store's DID document, which publishes both public
+keys: `https://shop.example/.well-known/did.json` for a store at the root of its host, or
+`<walletOrigin>/did.json` (say `https://shop.example/store/did.json`) for a store served
+under a path:
 
 ```ts
-const doc = await (await fetch("https://shop.example/.well-known/did.json")).json();
+const doc = await (await fetch("https://shop.example/.well-known/did.json")).json(); // or <walletOrigin>/did.json
 const verdict = await verifyMandate(token, { publicJwk: publicJwkFromDidDocument(doc) });
 ```
 
@@ -145,11 +148,12 @@ Routes are registered by four different calls — call the ones you need. There 
 `llms.txt` discovery document; this file and the manifest that `requirements()`
 returns are the discovery surface.
 
-**`credentagent.mount(app)`** — always, on every path:
+**`credentagent.mount(app)`** — in every form of the call, exactly one of these two (which one depends on `walletOrigin`):
 
 | Route | What it is |
 | --- | --- |
-| `GET /.well-known/did.json` | the gate's two public keys (the mandate key and the merchant checkout key) as a DID document. Taken at the **root** of the host app, not under `/credentagent/*` — a proxy or route allowlist must pass it, or nobody can check the mandates the gate signs |
+| `GET /.well-known/did.json` | the gate's two public keys (the mandate key and the merchant checkout key) as a DID document, for a store at the site root (registered only when `walletOrigin` has no path). Taken at the **root** of the host app, not under `/credentagent/*` — a proxy or route allowlist must pass it. It is the only address a root store's keys are looked up at, so without it nobody can check the mandates the gate signs |
+| `GET /did.json` | the same document, registered instead of the one above when `walletOrigin` carries a path. It is where a store served under a path is looked up (`<walletOrigin>/did.json`); a proxy must pass it |
 
 **`credentagent.mount(app, seams)`** (or a host such as the storefront that supplies the
 seams) — the ceremony rails. On a bare Express app with no seams, `mount(app)` attaches

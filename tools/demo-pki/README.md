@@ -38,9 +38,17 @@ gate presenting the reader **and** the wallet trusting the RICAL.
 already-built `.mpzpass` and the VICAL/RICAL (they were signed by the previous
 keys), changes the reader key/cert the gate presents, and invalidates anything
 already imported on a phone. So treat step 1 as **generate-once**. If you *do*
-re-run it (e.g. to change the reader SAN, below), you must re-run **every** later
-step: re-mint → rebuild trust lists → redeploy → **re-copy the reader key/cert to
-the gate** → re-import on the phone.
+re-run it in full, you must re-run **every** later step: re-mint → rebuild trust
+lists → redeploy → **re-copy the reader key/cert to the gate** → re-import on the
+phone.
+
+**Changing only the verifier side? Use `./gen-pki.sh --reader-only`.** It
+regenerates the reader root, reader leaf and trust-list signer, and keeps the IACA
+and Document Signer, so the shipped `.mpzpass` credentials stay valid. Use it to
+change `READER_DNS` or to replace a lost reader key. Then rebuild the trust lists
+(step 3, no re-mint), redeploy the download site (step 4), give the gate the new
+key and cert (step 5), and re-import both lists on the phone. It runs the same steps that
+made the shipped reader identity.
 
 ---
 
@@ -78,20 +86,22 @@ the gate actually runs. `READER_DNS` is a **space- or comma-separated list**;
 multiple origins.
 
 ```bash
-# default — covers local testing + the placeholder host:
-./gen-pki.sh                                   # READER_DNS="localhost credentagent-demo.example"
+# default — local testing + the hosted CredentAgent demos (the shipped cert's hosts):
+./gen-pki.sh --reader-only   # READER_DNS="localhost credentagent.ai credentagent-demo.vercel.app credentagent-demo-dev.vercel.app"
 
-# add your hosted gate's STABLE host (custom domain preferred over a Vercel auto-alias):
-READER_DNS="localhost gate.credentagent.dev" ./gen-pki.sh
+# your own gate: set YOUR hosts (custom domain preferred over a Vercel auto-alias):
+READER_DNS="localhost gate.example.com" ./gen-pki.sh --reader-only
 ```
 
 - **`localhost` unblocks local testing today** — the gate at `localhost:3007`
   reached from the phone via `adb reverse` (localhost is a secure context, so the
   Digital Credentials API works over plain http). You do **not** need a hosted
   hostname to start.
-- **You only need a hosted host in advance to avoid a re-mint.** Adding a host
-  later means regenerate → re-mint → rebuild lists → re-import (the ordering
-  warning above). So if you already know the gate's stable domain, list it now.
+- **Adding a host later needs no re-mint.** Run `--reader-only` with the new
+  `READER_DNS`, then rebuild the lists → redeploy the site → re-copy the reader
+  key/cert to the gate → re-import both lists. Running *your own* gate? Set
+  `READER_DNS` to your hosts; the default names the CredentAgent demos, which you
+  don't serve.
 - This is the **gate's** host — *not* the credential-download site's host. Don't
   put the download-site URL in the reader SAN.
 
@@ -191,18 +201,21 @@ previously imported RICAL first.
 > which is why the RICAL and the reader key must be built and distributed together.
 
 The gate's serving origin must match a name in the reader cert's SAN (`READER_DNS`,
-step 1). Change it and you must rebuild the RICAL (step 3) and re-import it. On Vercel the
-gate's `walletOrigin` is `https://${VERCEL_PROJECT_PRODUCTION_URL}`, and this repo's
-shipped cert covers only `credentagent-demo.vercel.app` + `localhost`. Deploy under a
-**custom production domain** and that host isn't on the SAN, so the "unknown verifier"
+step 1). Change it with `./gen-pki.sh --reader-only`, then rebuild both lists (step 3), redeploy
+the site (step 4), re-copy the reader key/cert to the gate (step 5) and re-import both lists. On Vercel the
+gate's `walletOrigin` is `PUBLIC_URL` when set (the dev demo: `https://credentagent.ai/marketplace-dev`),
+else `https://${VERCEL_PROJECT_PRODUCTION_URL}`. This repo's shipped cert covers `localhost`,
+`credentagent.ai`, `credentagent-demo.vercel.app` and `credentagent-demo-dev.vercel.app`. Deploy
+under any other host and it isn't on the SAN, so the "unknown verifier"
 warning never clears — yet a SAN mismatch only logs a `console.warn` at boot (it does
 **not** fail the gate), so check the startup log if a deploy you expected to fix it
 doesn't. **Preview** URLs are a separate trap: `VERCEL_PROJECT_PRODUCTION_URL` stays the
 *production* host, so a ceremony opened on a preview deployment is bound to the wrong
 origin and won't clear either — and this one logs nothing.
 
-**Check it without a phone** — first `./gen-pki.sh` (mints the reader **private** key,
-which is gitignored) and build the gate (`cd packages/credentagent-gate && npm run build`,
+**Check it without a phone** — first `./gen-pki.sh --reader-only` (mints the reader
+**private** key, which is gitignored) and rebuild the trust lists (step 3, so the RICAL
+names the new cert), then build the gate (`cd packages/credentagent-gate && npm run build`,
 which produces the un-committed `dist/`), then run
 `node tools/demo-pki/verify-reader-trust.mjs`. It proves the cert rides in `x5c`, the
 signature verifies under it, the origin matches, and the RICAL names that cert. A bare
