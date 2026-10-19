@@ -129,9 +129,10 @@ the `pr-scope` check unless it delivers **one ticket of a plan**. Before writing
    enough to keep beside the code can instead live in `specs/NNN-name/` with a `tasks.md`.
 2. **Break it into tickets** with the `to-tickets` skill: thin slices that each work and are checked
    on their own, prefactoring first, each saying what blocks it. Open them as sub-issues of the
-   epic, or list them as T1, T2, … in `tasks.md`.
+   epic, or list them as T001, T002, … in `tasks.md`.
 3. **One pull request per ticket.** Say which in the description — `Fixes #123` for a sub-issue, or
-   `specs/016-name/tasks.md T2` — and stay inside it.
+   `specs/016-name/tasks.md T002` — and stay inside it. The check reads `tasks.md` from `main`, so
+   land the spec before the tickets that cite it.
 
 If a change truly can't be split (a mechanical rename across the codebase, say), explain why in a
 comment and a maintainer can add `scope:approved`. The automated review checks the same thing

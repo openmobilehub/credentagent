@@ -54,7 +54,7 @@ import {
 } from "./checks.mjs";
 import { reportHtml, prBody, issueComment, md, statusBody, STATUS_MARK } from "./report.mjs";
 import { briefBody, replyBody, challengeBody, briefState, briefOutcome, briefFailure, planRun, specFromBrief, splitConversation, clampBrief, sweepWanted, approvalRefusal, LABEL_AWAITING, LABEL_APPROVED, BRIEF_MARK } from "./brief.mjs";
-import { frontier, isSplit, parseTicket, scopeProblems, ticketAsBrief, ticketBody, ticketOrder, ticketSpec } from "./scope.mjs";
+import { frontier, isDone, isSplit, parseTicket, pastLimits, scopeProblems, ticketAsBrief, ticketBody, ticketOrder, ticketSpec, STOPPED_LABEL } from "./scope.mjs";
 import { cardProblems } from "./card.mjs";
 import { validateExample, runExample, exampleHtml } from "./example.mjs";
 import { loadConfig, testLabel } from "./config.mjs";
@@ -84,13 +84,14 @@ const MAX_FIXES = Number(process.env.ISSUE_AGENT_MAX_FIXES ?? 3);
 const AGENT_BUDGET_USD = Number(process.env.ISSUE_AGENT_BUDGET_USD ?? 25);
 const RUN_BUDGET_USD = Number(process.env.ISSUE_AGENT_RUN_BUDGET_USD ?? 100);
 const TRIGGER_LABEL = process.env.ISSUE_AGENT_LABEL ?? "agent";
-const BLOCKING_LABELS = ["needs-decision", "epic", "wontfix", "duplicate", "question"];
+const SCOPE_WAIVER = "scope:approved"; // ci/pr-scope/check.mjs, OVERRIDE_LABEL
+const BLOCKING_LABELS =["needs-decision", "epic", "wontfix", "duplicate", "question"];
 const EVIDENCE_BRANCH = "agent-evidence";
 // The review loop (README, "The review loop") — on when the workflow has a token whose pushes start
 // other workflows (AGENT_GH_TOKEN); with GITHUB_TOKEN a pushed fix would never be reviewed again.
 const REVIEW_LOOP = process.env.ISSUE_AGENT_REVIEW_LOOP === "on";
 const MAX_REVIEW_CYCLES = cycleCap(process.env.ISSUE_AGENT_MAX_REVIEW_CYCLES); // unset ("") or not a whole number ≥ 1 → 3
-const LABELS = { working: "agent:working", inReview: "agent:in-review", ready: "agent:ready-for-human", needsHuman: "agent:needs-human", awaiting: LABEL_AWAITING, approved: LABEL_APPROVED };
+const LABELS = { working: "agent:working", inReview: "agent:in-review", ready: "agent:ready-for-human", needsHuman: STOPPED_LABEL, awaiting: LABEL_AWAITING, approved: LABEL_APPROVED };
 // Briefs first (config `brief: "pause"`): what started this run — the `agent` label, `agent:approved`,
 // a comment while a brief waits, or a run by hand (README.md, "The brief").
 const PAUSE = CONFIG.brief === "pause";
@@ -201,7 +202,7 @@ function permissionOf(login) {
   return permissionCache.get(login);
 }
 const trusted = (login) => TRUSTED_PERMISSIONS.includes(permissionOf(login));
-const issueState = (n) => ghJson(["issue", "view", String(n), "-R", REPO, "--json", "state"]).state;
+const issueDone = (n) => isDone(ghJson(["issue", "view", String(n), "-R", REPO, "--json", "state,stateReason"]));
 
 function snapshotIssue(n, snapshotAt = new Date().toISOString()) {
   const q = `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issue(number:$n){
@@ -235,8 +236,9 @@ function snapshotIssue(n, snapshotAt = new Date().toISOString()) {
   const state = briefState(nodes, trusted);
   const plan = planRun({ trigger: TRIGGER, pause: PAUSE, labels: issue.labels, state, issueEditedAt: i.lastEditedAt, ticket: ticket && ticketAsBrief(ticket) });
   if (ticket && plan.phase === "implement") {
-    const open = (ticket.blockedBy ?? []).filter((b) => issueState(b) !== "CLOSED");
-    if (open.length) return { issue, skip: `this ticket is blocked by ${open.map((b) => `#${b}`).join(", ")} — it starts on its own when ${open.length > 1 ? "they close" : "that closes"}` };
+    // Done means closed as completed: a blocker dropped as not planned never delivered what this needs.
+    const open = (ticket.blockedBy ?? []).filter((b) => !issueDone(b));
+    if (open.length) return { issue, skip: `this ticket is blocked by ${open.map((b) => `#${b}`).join(", ")} — it starts on its own when ${open.length > 1 ? "they are" : "that is"} closed as completed` };
   }
   if (plan.skip) return { issue, skip: plan.skip, quiet: plan.quiet };
   if (PAUSE && state.firstAt && !STARTS_OVER) {
@@ -788,11 +790,12 @@ function publishRun(dir) {
     if (!Number.isInteger(v) || v < 1) throw new Error(`not a brief version: ${outcome.brief}`);
     const challenge = { v, criterion: String(outcome.challenge?.criterion ?? "").slice(0, 200), why: String(outcome.challenge?.why ?? "").slice(0, 2000), asOf: readAt() };
     if (outcome.ticket) {
-      // A ticket has no brief of its own to revise: the plan changes where it was approved, or the
-      // ticket is edited — which makes it an ordinary issue that gets its own brief.
+      // A ticket has no brief of its own to revise: the ticket is edited — which makes it an ordinary
+      // issue that gets its own brief — or the plan is replaced on the parent. Until then it is marked
+      // stopped, so a sibling closing never restarts it (scope.mjs, frontier).
       const parent = Number(outcome.ticket.parent);
-      gh(["issue", "comment", String(n), "-R", REPO, "--body", `${challengeBody(challenge).split("\n\nReply to settle it")[0]}\n\nThis is a ticket of the plan approved on #${parent}. To settle it, edit this issue (it then gets a brief of its own) and re-add \`${TRIGGER_LABEL}\`, or reply on #${parent} to revise the plan.`]);
-      relabel(n, { remove: [TRIGGER_LABEL] });
+      gh(["issue", "comment", String(n), "-R", REPO, "--body", `${challengeBody(challenge).split("\n\nReply to settle it")[0]}\n\nThis is a ticket of the plan approved on #${parent}, so there is no brief here to reply to. To settle it:\n\n- **Change this ticket:** edit this issue (it then gets a brief of its own) and re-add \`${TRIGGER_LABEL}\`.\n- **Build it as approved anyway:** remove \`${LABELS.needsHuman}\` and re-add \`${TRIGGER_LABEL}\`.\n- **Change the whole plan:** close the plan's open tickets as *not planned*, remove \`epic\` from #${parent} and re-add \`${TRIGGER_LABEL}\` there — it gets a new brief, and approving it opens a new set of tickets.`]);
+      relabel(n, { add: [LABELS.needsHuman], remove: [TRIGGER_LABEL] });
     } else {
       gh(["issue", "comment", String(n), "-R", REPO, "--body", challengeBody(challenge)]);
       relabel(n, { add: [LABELS.awaiting], remove: [LABELS.approved] });
@@ -888,8 +891,14 @@ function publishRun(dir) {
     const bodyFile = join(dir, "pr-body.md");
     const banner = loop ? `> [!NOTE]\n> **The agent is still working on this with the Claude reviewer** — it fixes each review, replies to and resolves the threads, and asks for a human review only once the review is ✅/💬 with nothing left open (at most ${MAX_REVIEW_CYCLES} cycles). No need to review it yet.\n\n` : "";
     writeFileSync(bodyFile, banner + prBody(report, { mediaBase, repo: REPO, harnessRepo: HARNESS_REPO ?? REPO, commands: PR_COMMANDS }) + (labeller ? `\n<!-- issue-agent labeller=${labeller} -->\n` : ""));
+    // A single brief past SCOPE_LIMITS passed only by saying why it can't be split; approving it is the
+    // size waiver the scope check asks a maintainer for (ci/pr-scope/check.mjs). Read from the issue's
+    // own comments, never the run's report.
+    const briefs = PAUSE ? briefState(issueComments(n), trusted) : undefined;
+    const waived = briefs && !approvalRefusal(briefs) && !isSplit(briefs.latest?.brief) && pastLimits(briefs.latest?.brief);
+    if (waived) sh("gh", ["label", "create", SCOPE_WAIVER, "-R", REPO, "--color", "BFD4F2", "--description", "Too big for one review, and a maintainer approved it anyway (pr-scope)"], { allowFail: true });
     const created = sh("gh", ["pr", "create", "-R", REPO, ...(loop ? [] : ["--draft"]), "--base", "main", "--head", branch,
-      "--title", done ? issue.title : `[needs human] ${issue.title}`, "--body-file", bodyFile], { allowFail: true });
+      "--title", done ? issue.title : `[needs human] ${issue.title}`, "--body-file", bodyFile, ...(waived ? ["--label", SCOPE_WAIVER] : [])], { allowFail: true });
     if (created.code !== 0) throw Object.assign(new Error(`gh pr create failed:\n${created.out.slice(-2000)}`), { hint: publishRefusalHint(created.out, branch, { harnessRepo: HARNESS_REPO ?? REPO, done }) });
     prUrl = created.out.trim();
     if (loop) { ensureLabels(); gh(["pr", "edit", prUrl, "-R", REPO, "--add-label", LABELS.inReview]); }
@@ -1039,7 +1048,7 @@ function sweepBriefs() {
 // approval, the brief's seal, the plan's shape — never taken from a run. A retry finds the tickets it
 // already opened (by their markers) and opens only the rest.
 const subIssues = (n) => {
-  const q = `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issue(number:$n){subIssues(first:50){nodes{id number state body author{login __typename} labels(first:30){nodes{name}}}}}}}`;
+  const q = `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issue(number:$n){subIssues(first:50){nodes{id number state stateReason body author{login __typename} labels(first:30){nodes{name}}}}}}}`;
   return ghJson(["api", "graphql", "-f", `query=${q}`, "-f", `o=${OWNER}`, "-f", `r=${NAME}`, "-F", `n=${n}`]).data.repository.issue.subIssues.nodes
     .map((i) => ({ ...i, labels: i.labels.nodes.map((l) => l.name), ticket: isLoopAuthor(i.author, trusted) ? parseTicket(i.body) : undefined }));
 };
@@ -1080,7 +1089,14 @@ function publishSplit(n, dir) {
     const number = Number(url.match(/\/issues\/(\d+)$/)?.[1]);
     if (!number) throw new Error(`gh issue create gave no issue number: ${url}`);
     const id = ghJson(["api", `repos/${REPO}/issues/${number}`]).id;
-    sh("gh", ["api", "-X", "POST", `repos/${REPO}/issues/${n}/sub_issues`, "-F", `sub_issue_id=${id}`], { allowFail: true });
+    // The plan's tickets are found only as sub-issues (a retry, unblock, pr-scope): an unlinked one would
+    // be opened again on retry and never unblock what waits on it. So the link must hold, or the ticket goes.
+    let link;
+    for (let i = 0; i < 3 && link?.code !== 0; i++) link = sh("gh", ["api", "-X", "POST", `repos/${REPO}/issues/${n}/sub_issues`, "-F", `sub_issue_id=${id}`], { allowFail: true });
+    if (link.code !== 0) {
+      sh("gh", ["issue", "close", String(number), "-R", REPO, "--reason", "not planned", "--comment", `Could not link this ticket to #${n}; closed so a retry opens it cleanly.`], { allowFail: true });
+      throw new Error(`could not link ticket ${t.id} (#${number}) to #${n} as a sub-issue — closed it; re-run publish-split to retry:\n${link.out.slice(-1000)}`);
+    }
     numbers.set(t.id, number);
     RUN.log(`  ticket ${t.id} → #${number}`);
   }
@@ -1106,13 +1122,14 @@ function unblock(n, dir) {
   if (!ticket) return { n, status: "skipped", reason: "not a ticket of an approved plan" };
   const parent = ticket.parent;
   const siblings = subIssues(parent).filter((i) => i.ticket?.parent === parent && i.ticket.v === ticket.v)
-    .map((i) => ({ number: i.number, state: i.state, labels: i.labels, ticket: i.ticket }));
+    .map((i) => ({ number: i.number, state: i.state, stateReason: i.stateReason, labels: i.labels, ticket: i.ticket }));
   const next = frontier(siblings, TRIGGER_LABEL);
   if (!DRY()) for (const t of next) sh("gh", ["issue", "edit", String(t.number), "-R", REPO, "--add-label", TRIGGER_LABEL], { allowFail: true });
   const left = siblings.filter((t) => t.state === "OPEN");
   if (!left.length) {
     mkdirSync(dir, { recursive: true });
-    postComment(parent, `${"<!-- issue-agent -->"}\n🤖 **Every ticket of the approved plan is closed** (${siblings.map((t) => `#${t.number}`).join(", ")}). Check the plan's after-merge criteria, then close this issue.`, dir);
+    const dropped = siblings.filter((t) => !isDone(t));
+    postComment(parent, `${"<!-- issue-agent -->"}\n🤖 **Every ticket of the approved plan is closed** (${siblings.map((t) => `#${t.number}`).join(", ")}).${dropped.length ? ` ${dropped.map((t) => `#${t.number}`).join(", ")} ${dropped.length > 1 ? "were" : "was"} closed without being completed, so the plan isn't fully delivered.` : ""} Check the plan's after-merge criteria, then close this issue.`, dir);
   }
   return { n, status: "unblocked", started: next.map((t) => t.number), open: left.length };
 }

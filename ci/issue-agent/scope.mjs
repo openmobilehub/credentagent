@@ -16,6 +16,10 @@ const MARKER = /^<!-- issue-agent-ticket parent=(\d+) v=(\d+) id=(T\d+) sha=([0-
 
 // Past these, one pull request is too much to review: the brief must split it, or say why it can't.
 export const SCOPE_LIMITS = { criteria: 8, files: 12 };
+/** A brief past SCOPE_LIMITS: too big for one reviewer, unless it says why it can't be split. */
+export const pastLimits = (brief) => (brief?.acceptance_criteria ?? []).length > SCOPE_LIMITS.criteria || (brief?.files_likely ?? []).length > SCOPE_LIMITS.files;
+// The label on a ticket whose build the agents stopped (a challenge): nothing restarts it on its own.
+export const STOPPED_LABEL = "agent:needs-human";
 
 const encode = (data) => Buffer.from(JSON.stringify(data), "utf8").toString("base64");
 const seal = (encoded, visible) => createHash("sha256").update(`ticket\n${encoded}\n${visible}`).digest("hex");
@@ -70,8 +74,7 @@ export function scopeProblems(brief) {
   const out = [];
   const criteria = (brief.acceptance_criteria ?? []).map((c) => c.id);
   if (scope.verdict === "single") {
-    const big = criteria.length > SCOPE_LIMITS.criteria || (brief.files_likely ?? []).length > SCOPE_LIMITS.files;
-    if (big && String(scope.why ?? "").trim().length < 40) {
+    if (pastLimits(brief) &&String(scope.why ?? "").trim().length < 40) {
       out.push(`scope: ${criteria.length} criteria and ${(brief.files_likely ?? []).length} likely files is more than one pull request should carry (at most ${SCOPE_LIMITS.criteria} and ${SCOPE_LIMITS.files}) — split it into tickets, or say in "why" what makes it one indivisible change`);
     }
     return out;
@@ -83,6 +86,7 @@ export function scopeProblems(brief) {
   const dupes = ids.filter((id, i) => ids.indexOf(id) !== i);
   if (dupes.length) out.push(`scope: ticket ids repeat (${[...new Set(dupes)].join(", ")})`);
   for (const t of tickets) {
+    if (!/^T\d{1,2}$/.test(String(t.id ?? ""))) out.push(`scope: ticket id ${t.id} must be T1, T2, … (T and a number)`);
     if (!String(t.title ?? "").trim() || !String(t.delivers ?? "").trim()) out.push(`scope: ticket ${t.id} needs a title and what it delivers`);
     if (!(t.criteria ?? []).length) out.push(`scope: ticket ${t.id} delivers no acceptance criterion — every ticket must be checkable on its own`);
     for (const c of t.criteria ?? []) if (!criteria.includes(c)) out.push(`scope: ticket ${t.id} names ${c}, which is not one of the acceptance criteria`);
@@ -162,7 +166,7 @@ ${md(spec.delivers)}
 
 ## Acceptance criteria
 
-${spec.acceptance_criteria.map((c) => `- [ ] **${oneLine(c.id)}** ${oneLine(c.text)} _(checked by ${TAG[c.verified_by] ?? "?"})_`).join("\n")}
+${spec.acceptance_criteria.map((c) => `- **${oneLine(c.id)}** ${oneLine(c.text)} _(checked by ${TAG[c.verified_by] ?? "?"})_`).join("\n")}
 
 ## Blocked by
 
@@ -214,11 +218,18 @@ export const ticketAsBrief = (t) => ({
 });
 
 /**
- * The tickets to start now: open, not already labelled, and with every blocker closed. `tickets`:
- * [{ number, state, labels, ticket }], `label` the trigger label.
+ * A blocker is done only when it was closed as completed: a ticket closed as not planned or a
+ * duplicate was dropped, and what it was meant to deliver isn't on main. (GitHub's stateReason.)
+ */
+export const isDone = (t) => t.state === "CLOSED" && String(t.stateReason ?? "").toUpperCase() === "COMPLETED";
+
+/**
+ * The tickets to start now: open, not already labelled, not stopped by a challenge nobody has settled,
+ * and with every blocker done. `tickets`: [{ number, state, stateReason, labels, ticket }], `label`
+ * the trigger label.
  */
 export function frontier(tickets, label = "agent") {
-  const closed = new Set(tickets.filter((t) => t.state === "CLOSED").map((t) => t.number));
-  return tickets.filter((t) => t.state === "OPEN" && !t.labels.includes(label)
-    && (t.ticket.blockedBy ?? []).every((n) => closed.has(n)));
+  const done = new Set(tickets.filter(isDone).map((t) => t.number));
+  return tickets.filter((t) => t.state === "OPEN" && !t.labels.includes(label) && !t.labels.includes(STOPPED_LABEL)
+    && (t.ticket.blockedBy ?? []).every((n) => done.has(n)));
 }

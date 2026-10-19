@@ -5,7 +5,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { briefBody, parseBrief, clampBrief, briefState, planRun, specFromBrief, LABEL_APPROVED } from "./brief.mjs";
-import { scopeProblems, ticketOrder, ticketBody, parseTicket, ticketSpec, ticketAsBrief, frontier, planSection, SCOPE_LIMITS } from "./scope.mjs";
+import { scopeProblems, ticketOrder, ticketBody, parseTicket, ticketSpec, ticketAsBrief, frontier, isDone, pastLimits, planSection, SCOPE_LIMITS, STOPPED_LABEL } from "./scope.mjs";
 import { BRIEF_SCHEMA, briefPrompt } from "./roles.mjs";
 
 // Issue 406, as a split brief: the activity list, then refusals, then a passkey, then Revoke.
@@ -57,6 +57,12 @@ describe("the plan's check", () => {
     const stuck = tickets().map((x) => ({ ...x, blocked_by: x.id === "T1" ? ["T4"] : x.id === "T3" ? ["T2"] : x.blocked_by }));
     expect(scopeProblems(withScope({ tickets: stuck })).join(" ")).toMatch(/at least one must be able to start now/);
   });
+  it("refuses a ticket id the ticket marker can't carry", () => {
+    for (const id of ["T-1", "t1", "1", "T123"]) {
+      const bad = tickets(); bad[0].id = id; bad[1].blocked_by = [id]; bad[3].blocked_by = ["T3", id];
+      expect(scopeProblems(withScope({ tickets: bad })).join(" ")).toMatch(new RegExp(`ticket id ${id} must be T1, T2`));
+    }
+  });
   it("refuses a one-ticket split", () => {
     const one = [{ ...tickets()[0], criteria: ["AC1", "AC2", "AC3", "AC4"] }];
     expect(scopeProblems(withScope({ tickets: one })).join(" ")).toMatch(/at least two tickets/);
@@ -80,7 +86,7 @@ describe("the plan's check", () => {
 });
 
 describe("the brief agent is told to plan with the skills", () => {
-  it("reads the vendored to-tickets, codebase-design and to-spec skills — they don't load on their own", () => {
+  it("reads the vendored to-tickets, codebase-design and to-spec skills — to-tickets and to-spec don't load on their own", () => {
     const p = briefPrompt({ number: 406, url: "u", title: "t", body: "b", comments: [] });
     for (const s of ["to-tickets", "codebase-design", "to-spec"]) {
       expect(p).toContain(`.claude/skills/${s}/SKILL.md`);
@@ -123,6 +129,8 @@ describe("a ticket", () => {
     expect(body).not.toMatch(/\*\*AC1\*\*/);
     expect(body).toMatch(/- #410\n- #407/);
     expect(body).toMatch(/Purchases on the grant page — that is ticket T1/);
+    // Plain bullets: a checkbox someone ticks edits the body, which breaks the seal.
+    expect(body).not.toMatch(/- \[ \]/);
   });
   it("reads back as what was approved, and stops being a ticket once edited", () => {
     const t = parseTicket(body);
@@ -147,10 +155,55 @@ describe("a ticket", () => {
 });
 
 describe("which tickets start", () => {
-  const t = (number, state, blockedBy, labels = []) => ({ number, state, labels, ticket: { blockedBy } });
+  const t = (number, state, blockedBy, labels = [], stateReason = state === "CLOSED" ? "COMPLETED" : null) => ({ number, state, stateReason, labels, ticket: { blockedBy } });
   it("only open ones whose blockers are all closed, and not twice", () => {
     const all = [t(407, "CLOSED", []), t(408, "OPEN", [407]), t(409, "OPEN", [407, 410]), t(410, "OPEN", []), t(411, "OPEN", [], ["agent"])];
     expect(frontier(all).map((x) => x.number)).toEqual([408, 410]);
+  });
+  it("not after a blocker that was dropped — closed as not planned or a duplicate is not done", () => {
+    for (const reason of ["NOT_PLANNED", "DUPLICATE", null]) {
+      expect(frontier([t(407, "CLOSED", [], [], reason), t(408, "OPEN", [407])]).map((x) => x.number)).toEqual([]);
+    }
+    expect(isDone(t(407, "CLOSED", []))).toBe(true);
+  });
+  it("never a ticket the agents stopped with a challenge, until a person clears it", () => {
+    const all = [t(407, "CLOSED", []), t(408, "OPEN", [407], [STOPPED_LABEL]), t(409, "OPEN", [407])];
+    expect(frontier(all).map((x) => x.number)).toEqual([409]);
+    const src = readFileSync(new URL("./run.mjs", import.meta.url), "utf8");
+    expect(src).toMatch(/relabel\(n, \{ add: \[LABELS\.needsHuman\], remove: \[TRIGGER_LABEL\] \}\)/);
+    expect(src).toMatch(/needsHuman: STOPPED_LABEL/);
+    expect(src).not.toMatch(/reply on #\$\{parent\} to revise the plan/);
+  });
+  it("blockers are checked the same way when a ticket's own run starts", () => {
+    const src = readFileSync(new URL("./run.mjs", import.meta.url), "utf8");
+    expect(src).toMatch(/\.filter\(\(b\) => !issueDone\(b\)\)/);
+    expect(src).toMatch(/--json", "state,stateReason"/);
+    expect(src).toMatch(/subIssues\(first:50\)\{nodes\{id number state stateReason/);
+  });
+});
+
+describe("a ticket that can't be linked to its plan", () => {
+  it("is closed and the split fails, rather than becoming a ticket nothing can find", () => {
+    const src = readFileSync(new URL("./run.mjs", import.meta.url), "utf8");
+    const fn = src.slice(src.indexOf("function publishSplit("), src.indexOf("function unblock("));
+    expect(fn).not.toMatch(/sub_issues`, "-F", `sub_issue_id=\$\{id\}`\], \{ allowFail: true \}\);\n\s*numbers\.set/);
+    expect(fn).toMatch(/if \(link\.code !== 0\) \{[\s\S]*?"issue", "close"[\s\S]*?throw new Error/);
+  });
+});
+
+describe("a single brief approved past the limits", () => {
+  it("is past the limits by criteria or by files", () => {
+    const many = Array.from({ length: SCOPE_LIMITS.criteria + 1 }, (_, i) => ({ id: `AC${i + 1}` }));
+    expect(pastLimits({ acceptance_criteria: many })).toBe(true);
+    expect(pastLimits({ files_likely: Array.from({ length: SCOPE_LIMITS.files + 1 }, (_, i) => `f${i}`) })).toBe(true);
+    expect(pastLimits(split())).toBe(false);
+  });
+  it("opens its PR with the scope waiver, read from the approved brief on the issue", () => {
+    const src = readFileSync(new URL("./run.mjs", import.meta.url), "utf8");
+    expect(src).toMatch(/const briefs = PAUSE \? briefState\(issueComments\(n\), trusted\) : undefined;/);
+    expect(src).toMatch(/!approvalRefusal\(briefs\) && !isSplit\(briefs\.latest\?\.brief\) && pastLimits\(briefs\.latest\?\.brief\)/);
+    expect(src).toMatch(/\.\.\.\(waived \? \["--label", SCOPE_WAIVER\] : \[\]\)/);
+    expect(src).toMatch(/const SCOPE_WAIVER = "scope:approved"/);
   });
 });
 

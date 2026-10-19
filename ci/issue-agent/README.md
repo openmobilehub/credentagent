@@ -227,14 +227,27 @@ with the reason.
 build, Acceptance criteria, Blocked by) plus its slice of the approved brief, sealed with a hash like a
 brief. Labelled `agent`, a sealed ticket goes straight to the build — you approved the plan once, on
 the parent — with only its own criteria as the contract and the other tickets listed as out of scope.
-A ticket still blocked by an open one is skipped with a notice. Edit a ticket and the seal breaks: it
-becomes an ordinary issue that gets a brief of its own. If the builder challenges a ticket's criterion,
-it says so on the ticket and stops; edit the ticket or revise the plan on the parent.
+A ticket whose blockers aren't all closed *as completed* is skipped with a notice. Edit a ticket and the
+seal breaks: it becomes an ordinary issue that gets a brief of its own. If the builder challenges a
+ticket's criterion, it says so on the ticket, removes `agent` and adds `agent:needs-human`, and nothing
+restarts it until you act. There is no brief on a ticket to reply to; instead:
+
+- **change the ticket:** edit it (it gets a brief of its own) and re-add `agent`;
+- **build it as approved anyway:** remove `agent:needs-human` and re-add `agent`;
+- **change the whole plan:** close the plan's open tickets as *not planned*, remove `epic` from the
+  parent and re-add `agent` there. It gets a new brief; approving that opens a new set of tickets (the
+  old ones belong to the old version and are never picked up again).
 
 **Starting the next one.** When a ticket closes, the `unblock` job labels `agent` on the tickets whose
-blockers are now all closed, and comments on the parent once the last one is done (the parent is left
-open for you to check its after-merge criteria). Labels added with the default `GITHUB_TOKEN` start no
-workflow, so this needs `AGENT_GH_TOKEN`; without it, add `agent` to the next ticket by hand.
+blockers are now all **closed as completed**. A ticket closed as *not planned* or a duplicate was
+dropped, not delivered, so what it blocks waits for you. A ticket marked `agent:needs-human` is never
+picked. Once the last ticket closes, it comments on the parent, naming any that were dropped (the parent
+is left open for you to check its after-merge criteria). Labels added with the default `GITHUB_TOKEN`
+start no workflow, so this needs `AGENT_GH_TOKEN`; without it, add `agent` to the next ticket by hand.
+
+**A single brief past the limits.** When you approve a brief that stays one PR past `SCOPE_LIMITS`
+(it had to say why it can't be split), its PR is opened with `scope:approved`: your approval is the
+size waiver, so the scope check below doesn't refuse it.
 
 **Pull requests from people.** The same bar applies to a PR nobody briefed: `ci/pr-scope/check.mjs`
 (the `pr-scope` workflow, and REVIEW.md §8) fails a PR past 400 changed lines or 15 files (docs, specs
