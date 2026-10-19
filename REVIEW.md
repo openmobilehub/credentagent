@@ -148,6 +148,24 @@ approvals are the failure mode this section exists to prevent.
   full, and the dimensions checked. An approval without stated coverage is not an
   approval.
 
+## 8. Size: one ticket per pull request (blocking)
+
+A pull request past **400 changed lines or 15 files** (docs, `specs/` and lockfiles not counted) is
+too big to review in one sitting unless the work was broken down first. The `pr-scope` check
+(`ci/pr-scope/check.mjs`) enforces the size mechanically; the review checks that the breakdown is real:
+
+- The PR delivers **one** ticket of a plan: a sub-issue of an `epic` issue that has several (the
+  `to-tickets` skill's output, or the issue agent's split brief), or one task of a `specs/NNN-name/tasks.md`.
+- The plan carries a design — what is stored and where, the interfaces between the tickets, each
+  security control and its bypass test (the `to-spec` and `codebase-design` skills) — and the PR
+  follows it. A decision the plan doesn't make, taken silently inside the PR, is a finding.
+- The PR stays inside its ticket: work belonging to another ticket of the same plan is scope creep.
+
+A big PR with no plan, or one that bundles several tickets, is **⛔ Needs changes**: ask the author to
+write the plan, split it, and resubmit one ticket per PR (CONTRIBUTING.md, "Big changes"). The
+`scope:approved` label is a maintainer's call that it truly can't be split; don't flag size on a PR
+that carries it, but do still flag a missing design.
+
 ## Output contract (automated review)
 
 Rigor and readability are separate jobs: be as thorough as §7 asks, then write
@@ -173,5 +191,5 @@ passed.
 `file:line`, the invariant or principle it maps to, CONFIRMED or PLAUSIBLE, and the
 evidence; then the coverage line from §7.
 
-Findings that map to §1–§4 (or a release claim the code does not back, §6) are
-⛔ Needs changes. §5 findings are 💬 notes unless they compound.
+Findings that map to §1–§4 or §8 (or a release claim the code does not back, §6)
+are ⛔ Needs changes. §5 findings are 💬 notes unless they compound.

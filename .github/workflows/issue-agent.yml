@@ -1,6 +1,6 @@
 name: issue-agent
 # In the Actions list: which issue, and what started it (a run for another label shows that label and is skipped).
-run-name: "issue-agent #${{ github.event.issue.number || inputs.issue }} · ${{ github.event_name == 'schedule' && 'checking for unanswered comments on briefs' || github.event_name == 'workflow_dispatch' && format('run by hand ({0})', inputs.trigger) || github.event_name == 'issue_comment' && format('comment · {0}', github.event.issue.title) || format('labelled {0} · {1}', github.event.label.name, github.event.issue.title) }}"
+run-name: "issue-agent #${{ github.event.issue.number || inputs.issue }} · ${{ github.event_name == 'schedule' && 'checking for unanswered comments on briefs' || github.event_name == 'workflow_dispatch' && format('run by hand ({0})', inputs.trigger) || github.event_name == 'issue_comment' && format('comment · {0}', github.event.issue.title) || github.event.action == 'closed' && format('closed · {0}', github.event.issue.title) || format('labelled {0} · {1}', github.event.label.name, github.event.issue.title) }}"
 
 # Label an issue `agent` → agents implement it and a draft PR comes back with the evidence.
 # How it works and what it trusts: ci/issue-agent/README.md. The three jobs (snapshot, implement,
@@ -13,10 +13,14 @@ run-name: "issue-agent #${{ github.event.issue.number || inputs.issue }} · ${{ 
 # Briefs (.github/issue-agent.json `"brief": "pause"`, README "The brief"): the `agent` label gets a
 # brief first; a maintainer's comment while it waits gets an answer or a new version; `agent:approved`
 # starts the build. The hourly schedule catches a comment whose event was lost.
+#
+# Splitting (README "Splitting a big issue"): approving a brief that splits the issue opens its
+# tickets as sub-issues and labels the ones nothing blocks `agent`; when a ticket closes, `unblock`
+# labels the tickets that were waiting on it. Labelling needs AGENT_GH_TOKEN to start their runs.
 
 on:
   issues:
-    types: [labeled]
+    types: [labeled, closed]
   issue_comment:
     types: [created, edited]
   schedule:
@@ -44,7 +48,7 @@ jobs:
     # not the agents' own (every agent comment starts with its marker). The script re-checks all of it.
     if: >-
       github.event_name == 'workflow_dispatch'
-      || (github.event_name == 'issues' && (github.event.label.name == 'agent' || github.event.label.name == 'agent:approved'))
+      || (github.event_name == 'issues' && github.event.action == 'labeled' && (github.event.label.name == 'agent' || github.event.label.name == 'agent:approved'))
       || (github.event_name == 'issue_comment' && !github.event.issue.pull_request
           && contains(github.event.issue.labels.*.name, 'agent:awaiting-approval')
           && !startsWith(github.event.comment.body, '<!-- issue-agent')
@@ -75,6 +79,30 @@ jobs:
       harness_repo: ${{ github.repository }}
       harness_ref: ${{ github.event.repository.default_branch }}
     secrets: inherit
+
+  # A ticket of an approved plan closed: start the tickets that were waiting on it. Trusted code from
+  # main; it only reads issues and adds the `agent` label (run.mjs, unblock). A label added with
+  # GITHUB_TOKEN starts no workflow, so without AGENT_GH_TOKEN the next ticket waits for a person.
+  unblock:
+    if: github.event_name == 'issues' && github.event.action == 'closed' && contains(github.event.issue.body, '<!-- issue-agent-ticket')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Start the next tickets
+        env:
+          GH_TOKEN: ${{ secrets.AGENT_GH_TOKEN || github.token }}
+          ISSUE: ${{ github.event.issue.number }}
+        run: node ci/issue-agent/run.mjs unblock "$ISSUE" --dir "$RUNNER_TEMP/unblock"
 
   # The safety net: an issue whose brief waits on an unanswered comment gets a run.
   sweep:

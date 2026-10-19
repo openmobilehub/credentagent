@@ -115,7 +115,29 @@ your diff will be held against.
   bot threads included. Fix the finding, or reply with why you won't, then resolve the thread.
 - Keep PRs small and well-scoped — one clear purpose per PR. Prefer a new, well-bounded module over
   growing a file past its single responsibility, and match the style, naming, and comment density of
-  the surrounding code.
+  the surrounding code. A big change is planned and split first: see *Big changes*.
+
+### Big changes
+
+A pull request past **400 changed lines or 15 files** (docs, `specs/` and lockfiles don't count) fails
+the `pr-scope` check unless it delivers **one ticket of a plan**. Before writing the code:
+
+1. **Write the plan down.** An issue labelled `epic` whose body is the spec — the problem, the
+   solution, and the decisions a builder must not make alone: what is stored and where, the
+   interfaces between the pieces, each security control and the test that fails without it. The
+   `to-spec` and `codebase-design` skills in `.claude/skills/` walk you through it. A feature big
+   enough to keep beside the code can instead live in `specs/NNN-name/` with a `tasks.md`.
+2. **Break it into tickets** with the `to-tickets` skill: thin slices that each work and are checked
+   on their own, prefactoring first, each saying what blocks it. Open them as sub-issues of the
+   epic, or list them as T001, T002, … in `tasks.md`.
+3. **One pull request per ticket.** Say which in the description — `Fixes #123` for a sub-issue, or
+   `specs/016-name/tasks.md T002` — and stay inside it. The check reads `tasks.md` from `main`, so
+   land the spec before the tickets that cite it.
+
+If a change truly can't be split (a mechanical rename across the codebase, say), explain why in a
+comment and a maintainer can add `scope:approved`. The automated review checks the same thing
+(REVIEW.md §8). For an issue the agents build, the brief does this for you (`ci/issue-agent/README.md`,
+"Splitting a big issue").
 
 ## Tests must exercise the bypass paths
 
@@ -183,5 +205,42 @@ turns up something off, fix it or flag it.
 - [ ] No presence-only gate is presented as a real safety control.
 - [ ] A change someone using the npm packages would notice adds a line under `[Unreleased]` in [`CHANGELOG.md`](CHANGELOG.md) — marked **BREAKING** if their code has to change.
 - [ ] Anything broken you noticed along the way is fixed or filed — never silently ignored.
+
+## After a release — the catch-up PRs
+
+Publishing to npm changes nothing people see. Until two catch-up PRs merge, both still show the
+previous version:
+
+- **The hosted demo** (https://credentagent.ai/marketplace) runs the *published* packages that
+  [`examples/quickstart/package.json`](examples/quickstart/package.json) pins. Below 1.0 a caret
+  (`^0.5.0`) never reaches the next minor, so the pin has to move with every release.
+- **The site** (https://credentagent.ai, repo
+  [credentagent-website](https://github.com/openmobilehub/credentagent-website)) writes the version
+  into its pages: the nav pill, the NEW strip, the storefront `npm i` line and the JSON-LD in
+  `index.html`, plus `index.md`, `llms.txt` and its CLAUDE.md.
+
+`publish.yml`'s **catch-up** job opens both PRs once npm serves the release. It skips, on purpose,
+a pre-release and a backport (a release older than what the demo already runs, such as 0.5.3
+after 0.6.0), which would move the demo and the site backwards. It needs the
+`AGENT_GH_TOKEN` secret with write access to both repos; without it the job only warns, and you
+open them by hand (commit with `-s`):
+
+```bash
+# The demo — the lockfile must match, or `npm ci` in quickstart-smoke and deploy-prod refuses it
+node scripts/post-release-bump.mjs quickstart X.Y.Z
+(cd examples/quickstart && npm install --package-lock-only --ignore-scripts)
+# The site, in a credentagent-website checkout
+node scripts/post-release-bump.mjs website ../credentagent-website X.Y.Z "vX.Y.Z — the release title" YYYY-MM-DD
+```
+
+A release isn't done until:
+
+- [ ] You've read the release's **BREAKING** and **Migration** notes. One that changes the merchant
+      id (`ap2.merchant.id`) or the grant format means grants signed on the prod demo before the
+      deploy are refused: merge the quickstart PR after any upcoming demo.
+- [ ] The quickstart PR is merged, `deploy-prod` passed, and
+      `curl https://credentagent.ai/marketplace/version` reports the new version.
+- [ ] The site PR is merged, after checking what no script bumps: the site's trust table and its
+      CLAUDE.md "Trust levels" note, and any code sample an API change affects.
 
 Apache-2.0 · part of [Open Mobile Hub](https://openmobilehub.org) (Linux Foundation).

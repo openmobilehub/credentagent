@@ -71,9 +71,9 @@ export function renderDelegatedPage(opts: DelegatedPageOptions): string {
         lede: `Continue to your wallet to present the credential this action requires. Verification
       is handled by an <strong>external verifier</strong> — this site re-checks the verifier's
       result before releasing the action, so it never accepts an approval from this page.`,
-        complete: "✓ Verified · trust: ",
+        complete: "✓ Credential checked · trust: ",
         banner: {
-          headline: "✓ Verified",
+          headline: "✓ Check complete",
           sub: "Your agent can pick up from here. You can close this window and continue in your agent.",
           returnLabel: "Staying in the browser? Continue ›",
         },

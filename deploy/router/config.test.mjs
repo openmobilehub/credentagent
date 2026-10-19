@@ -103,6 +103,47 @@ describe('router: other routes are unaffected by Accept: text/markdown', () => {
   }
 });
 
+// Each demo mints its checkout and consent links from the PUBLIC_URL its deploy workflow sets (#226).
+// That address must be one this router forwards back to the same demo, or every link a buyer gets
+// 404s (or lands on the other demo). SMOKE_URL is the workflow's own name for the demo's vercel.app host.
+describe('router: each demo\'s PUBLIC_URL is a path this router serves from that demo', () => {
+  for (const [workflow, want] of [
+    ['deploy-prod.yml', 'https://credentagent.ai/marketplace'],
+    ['deploy-dev.yml', 'https://credentagent.ai/marketplace-dev'],
+  ]) {
+    it(workflow, () => {
+      const yml = readFileSync(new URL(`../../.github/workflows/${workflow}`, import.meta.url), 'utf8');
+      const publicUrl = yml.match(/--env PUBLIC_URL=(\S+)/)?.[1];
+      const smokeUrl = yml.match(/SMOKE_URL:\s*(\S+)/)?.[1];
+      expect(publicUrl).toBe(want);
+      expect(smokeUrl).toMatch(/^https:\/\/credentagent-demo(-dev)?\.vercel\.app$/);
+      const { pathname } = new URL(publicUrl);
+      expect(resolve(`${pathname}/checkout`).destination).toBe(`${smokeUrl}/checkout`);
+      expect(resolve(`${pathname}/credentagent/passkey/request`).destination).toBe(
+        `${smokeUrl}/credentagent/passkey/request`,
+      );
+    });
+  }
+
+  // The prod demo deploys examples/quickstart with the PUBLISHED packages. Before 0.6.0 (#228) their
+  // pages fetch root paths, so under /marketplace every consent-page call would miss the store. A
+  // caret on 0.x never crosses a minor, so `^0.5.0` stays on 0.5.x: pin both the range and the lock.
+  it('the prod demo installs packages that support a path prefix (>= 0.6.0)', () => {
+    const atLeast060 = (v) => {
+      const [major, minor] = v.replace(/^[\^~]/, '').split('.').map(Number);
+      return major > 0 || minor >= 6;
+    };
+    const quickstart = (f) => JSON.parse(readFileSync(new URL(`../../examples/quickstart/${f}`, import.meta.url), 'utf8'));
+    const pkg = quickstart('package.json');
+    const lock = quickstart('package-lock.json');
+    for (const name of ['@openmobilehub/credentagent-gate', '@openmobilehub/credentagent-storefront']) {
+      expect(atLeast060(pkg.dependencies[name]), `${name} range ${pkg.dependencies[name]}`).toBe(true);
+      const locked = lock.packages[`node_modules/${name}`].version;
+      expect(atLeast060(locked), `${name} locked at ${locked}`).toBe(true);
+    }
+  });
+});
+
 describe('router: domain.md, the domain\'s Markdown copy', () => {
   const file = new URL('./domain.md', import.meta.url);
 

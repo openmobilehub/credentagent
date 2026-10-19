@@ -685,6 +685,16 @@ describe("delegated rail — an identity-only gate is not dressed as a payment",
     expect(html).toMatch(/<tr class="total">/);
     expect(html).toContain("Order ORD-1");
   });
+
+  // Honesty fencing (REVIEW.md §4, GLOSSARY "Avoid"): the outcome text is fixed while the
+  // verifier's trust_level varies — the identity example's stand-in reports presence-only-demo —
+  // so the page reports that a check ran, next to the reported trust, and never vouches for it.
+  it("REFUSES to call a check \"Verified\" — it says a check ran and shows the reported trust", () => {
+    const html = visible(identity());
+    expect(html).not.toMatch(/\bVerified\b/);
+    expect(html).toContain("✓ Credential checked · trust: ");
+    expect(html).toContain("✓ Check complete");
+  });
 });
 
 describe("delegated rail — the approve page honors the host's seams", () => {

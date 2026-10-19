@@ -26,13 +26,63 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
 
 ## [Unreleased]
 
+### Changed
+
+- An `age.over(n)` in the policy now sets the age the order must prove, together with any
+  `minimumAge` on its items; the stricter wins (#354). What this changes for you:
+  - With the documented quickstart policy (`age.over(21)` when any line has a `minimumAge`), an
+    item tagged 18+ now asks for 21+.
+  - A policy stricter than the tags (25+ on wine tagged 21) now asks for 25+.
+  - An 18+ policy on untagged items asks for 18+, not the old default of 21.
+- **BREAKING:** `age.over()` throws unless the age is a whole number above 0. In 0.6.0 and earlier
+  a policy's age decided nothing at completion, so a bad value went unnoticed. Now that it is
+  enforced, a value it can't check would switch the check off, so it is refused when the policy is
+  built: at startup for a policy built once, at the first checkout for one built per order (as in
+  the quickstart). What breaks on upgrade: a string, such as `age.over(process.env.MIN_AGE)` with
+  `MIN_AGE=21` (it worked in 0.6.0; wrap it in `Number()`), and a fraction, 0, a negative number or
+  NaN (#354).
+- `VerificationRecord` gains `ageVerifiedOver`, the age a proof was made at. Completion refuses a
+  proof made below the order's age, so a 21+ proof can't complete a 25+ order. A record written
+  before this counts as proven at the item's age, or 21 (#354).
+
+### Fixed
+
+- An age gate asks the wallet for the order's own age (`age_over_25` for 25+, `age_over_16` for
+  16+). Before, the iPhone request (ISO mdoc) asked only for 18 or 21, and every request asked an
+  age under 18 for 18 alone, so those ages could never be proven. A wallet now proves them when
+  its credential holds that claim (#354).
+- The checkout pages' progress bar shows the Age step for an age that only the policy asks for
+  (an item with no `minimumAge`), and ticks it only when the proof on record is old enough for the
+  order. Before, such an order showed only Pay, then was refused for age (#414).
+
+### Security
+
+- An age check written only in the policy is enforced. Before, `age.over(21)` on an item with no
+  `minimumAge` (a health record, an access grant) completed with no age proof at all (#354).
+
+### Known issues
+
+- A server keeps one registered `age`, the last one resolved:
+  - An order the server no longer remembers (after 10,000 newer orders, a restart, or on another
+    instance) is held to that age. Where the server's age rules differ in age or in `.when()`,
+    that can be lower than the order's own policy, or no age check at all; with no `age`
+    registered, none at all. Tag age-restricted items with `minimumAge` at the policy's age (a
+    tag always holds, but only at its own age), or use `orders.serve` with a shared store (#411).
+  - The outside verifier's page asks the wallet for that age. For an order the server remembers,
+    completion still refuses a proof below the order's own age, so a person can be stuck, not let
+    through (#359).
+
+## [0.6.0] - 2026-10-19
+
 ### Added
 
 - AP2 delegation end to end: an agent spends a phone-signed spending permission with its own
   key, and a merchant can verify it (#195, #235). The phone now signs the Agent Payments
   Protocol's own Mandate Content rather than a format this project invented, and the optional
   `grant.mandate.mandates` holds what it signed (#189).
-- `@openmobilehub/credentagent-gate/cards` — the grant card gallery as its own export (#258).
+- `@openmobilehub/credentagent-gate/cards` — the grant card's data contract (`GRANT_VIEW_KIND`,
+  `GrantViewData`, `GrantViewProduct`), the first slice of the card kit. The card components
+  themselves are not exported yet (#258).
 - `inspectPresentations` — links each wallet answer to Multipaz Tools so you can inspect it (#223),
   and an order proof receipt that keeps each proof with its order (#224, #225).
 - The store's checkout and consent pages can be served under a path prefix (#228).
@@ -54,22 +104,24 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
   before this change are refused there. Create a new grant and have the person sign it (an
   authorized grant can't be re-signed). A store at the root of the same host keeps accepting the old
   ones until they expire. Each deployment needs its own `walletOrigin`.
+- **BREAKING:** `buildIntentSignRequest` and `verifyIntentPresentation` also require `delegate`,
+  `mandateExp` and `allowedSkus` (#189, #195).
+- **BREAKING:** a custom `IntentVerifyBackend` receives `{ sdjwt, audience, nonce }` instead of
+  `{ deviceResponseB64url, sessionTranscript }`, and must return `delegatePayload` (the key-binding
+  JWT's `delegate_payload`, verbatim). The type marks it optional, but without it every verify fails
+  with "mandate mismatch". In its result, `IntentVerifyResult.credentialDoctype` and
+  `IntentTrustVerdict.docType` are now `credentialType`, and `SimulateOptions.overrideDocType` is
+  now `overrideVct` (#189, #195).
+- **BREAKING:** phone signing (`signing: "device"`, the default for grants) now asks the wallet for
+  an **SD-JWT** payment credential (`vct` `urn:emvco:dpc:card:1` or `com.emvco.dpc`) instead of the
+  mdoc `org.multipaz.payment.sca.1`. A wallet set up for 0.5.0 can't sign a grant until it holds one
+  (`tools/demo-pki/mint/mint-dpc-sdjwt.mjs --mpzpass` mints a demo one). No released wallet supports
+  AP2's `delegate` request yet; test with `devSimulateWalletSignature` (#189, #195).
+- **BREAKING (boot check):** on a deployment, `doctor()` reports a missing `mandateSigningKey` as an
+  **error** (`ephemeral-mandate-key`), so a host that exits when `doctor()` isn't ok won't start until
+  it passes one, even if it never mints a mandate. Whether this should be a warning is open (#361).
+  A missing `checkoutSigningKey` is a warning (#195, #235).
 - The package READMEs were brought in line with what the next release ships (#329, #310).
-- An `age.over(n)` in the policy now sets the age the order must prove, together with any
-  `minimumAge` on its items; the stricter wins (#354). What this changes for you:
-  - With the documented quickstart policy (`age.over(21)` when any line has a `minimumAge`), an
-    item tagged 18+ now asks for 21+.
-  - A policy stricter than the tags (25+ on wine tagged 21) now asks for 25+.
-  - An 18+ policy on untagged items asks for 18+, not the old default of 21.
-- **BREAKING:** `age.over()` throws unless the age is a whole number above 0. In 0.5.0 a policy's
-  age decided nothing at completion, so a bad value went unnoticed. Now that it is enforced, a
-  value it can't check would switch the check off, so it is refused when the policy is built: at
-  startup for a policy built once, at the first checkout for one built per order (as in the
-  quickstart). What breaks on upgrade: a string, such as `age.over(process.env.MIN_AGE)` with `MIN_AGE=21` (it worked in 0.5.0;
-  wrap it in `Number()`), and a fraction, 0, a negative number or NaN (#354).
-- `VerificationRecord` gains `ageVerifiedOver`, the age a proof was made at. Completion refuses a
-  proof made below the order's age, so a 21+ proof can't complete a 25+ order. A record written
-  before this counts as proven at the item's age, or 21 (#354).
 
 ### Removed
 
@@ -81,40 +133,34 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
 ### Fixed
 
 - A store served under a path publishes its signing key where clients look for it (#347).
-- The checkout pages' progress bar shows the Age step for an age that only the policy asks for
-  (an item with no `minimumAge`), and ticks it only when the proof on record is old enough for the
-  order. Before, such an order showed only Pay, then was refused for age (#414).
-- An age gate asks the wallet for the order's own age (`age_over_25` for 25+, `age_over_16` for
-  16+). Before, the iPhone request (ISO mdoc) asked only for 18 or 21, and every request asked an
-  age under 18 for 18 alone, so those ages could never be proven. A wallet now proves them when
-  its credential holds that claim (#354).
+- The product-picker widget's MCP Apps policy (`_meta.ui.csp`) no longer lists the bare `data:`
+  scheme, and the ChatGPT copy now declares that policy too, so MCP Apps hosts get the same one.
+  ChatGPT's own `openai/widgetCSP` still lists `data:`, so product images keep rendering there (#385).
 - The storefront empties the cart when the order completes on another instance (#227), keeps the
   picker on one cart (#211), and refuses MCP listen streams that only burn serverless time (#215).
 
 ### Security
 
 - An agent can no longer lower an order total by adding a line with a negative quantity (#346).
+  The same fix refuses a fractional quantity (half a coffee at half price) in `grant.spend`, which
+  0.3.0 to 0.5.0 accept if your code passes the agent's quantity through unchecked.
 - Consent pages no longer run script taken from a crafted checkout link (#332). **This affects
   every published version from 0.2.0 to 0.5.0 (storefront 0.2.1 too): upgrade.** It came in with
   stateless carts (#32). Below 1.0 a caret range (`^0.5.0`) never moves you to the next minor
   version on its own.
-- A completed order's status no longer returns the shopper's raw wallet answer (#327).
-- An age check written only in the policy is enforced. Before, `age.over(21)` on an item with no
-  `minimumAge` (a health record, an access grant) completed with no age proof at all (#354).
+- A completed order's status no longer returns the shopper's raw wallet answer (#327). The
+  option that kept it (`inspectPresentations`) is new since 0.5.0, so no published version has this.
 
 ### Known issues
 
-- Two stores on one host that share a checkout signing key can accept each other's price quotes.
-  Give each store its own `checkoutSigningKey` (#335).
-- A server keeps one registered `age`, the last one resolved:
-  - An order the server no longer remembers (after 10,000 newer orders, a restart, or on another
-    instance) is held to that age. Where the server's age rules differ in age or in `.when()`,
-    that can be lower than the order's own policy, or no age check at all; with no `age`
-    registered, none at all. Tag age-restricted items with `minimumAge` at the policy's age (a
-    tag always holds, but only at its own age), or use `orders.serve` with a shared store (#411).
-  - The outside verifier's page asks the wallet for that age. For an order the server remembers,
-    completion still refuses a proof below the order's own age, so a person can be stuck, not let
-    through (#359).
+- Two deployments that share one `walletOrigin` and one checkout signing key accept each other's
+  price quotes. Give each store its own `checkoutSigningKey` (#335).
+- A store's price quote never expires, so an agent can keep an old quote and spend it later; a
+  changed price is still refused (#249).
+- The gate's built-in pages accept a typed-in claim such as "over 21" with no wallet, and there's no
+  switch to turn this off, even on a server that uses an outside verifier (#352). Also in 0.5.0.
+- The full list of open bugs that ship in 0.6.0 is in the
+  [v0.6.0 release notes](https://github.com/openmobilehub/credentagent/releases/tag/v0.6.0).
 
 ## [0.5.0] - 2026-09-26
 
@@ -263,7 +309,8 @@ First release, under the name `@openmobilehub/attesto-*` (renamed to `attestomcp
 - The storefront: `createStorefront()`, a runnable catalog-injected MCP shopping server, and the
   pure pricing / order model.
 
-[Unreleased]: https://github.com/openmobilehub/credentagent/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/openmobilehub/credentagent/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/openmobilehub/credentagent/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/openmobilehub/credentagent/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/openmobilehub/credentagent/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/openmobilehub/credentagent/compare/v0.3.0...v0.3.1
