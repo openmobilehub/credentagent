@@ -7,7 +7,7 @@
 import { describe, it, expect } from "vitest";
 import { CredentAgent } from "../client.js";
 import { MemoryVerificationStore } from "../store.js";
-import { required, defineCredential, dcql, gate } from "../credentials.js";
+import { required, optional, membership, defineCredential, dcql, gate } from "../credentials.js";
 import type { Credential } from "../types.js";
 import { professionalLicense } from "./credential-gate/__fixtures__/customCredential.js";
 import { mountCeremony, resolveOrder, type CeremonyApp, type CeremonyContext, type CeremonySeams } from "./mount.js";
@@ -118,6 +118,28 @@ describe("CredentAgent.mount — back-compat + ceremony delegation (T008)", () =
     const a = new CredentAgent();
     const app = { locals: {} as Record<string, unknown> };
     expect(() => a.mount(app, { orderStore: { read: async () => null }, catalog, completion: async () => ({ completed: true }) })).toThrow(/signingKey/);
+  });
+
+  // #360 review — on the mount() paths the HOST's catalog prices the member discount (the
+  // storefront's priceCart always takes 10%), so the rails must keep checking their default
+  // rather than the policy's percent: holding a storefront order priced at 10% to a policy's 15%
+  // refused every member payment. Only orders.serve, which prices at the policy percent itself,
+  // hands the rails a per-order percent.
+  it("no mount path hands the rails a per-order percent — the host's catalog prices the discount there", () => {
+    const order = { id: "ORD-15", total: 20, currency: "USD", lines: [{ id: "drill", quantity: 1, unitPrice: 20 }] };
+    const percentFor = (app: { locals: Record<string, unknown> }) =>
+      (app.locals.credentagent as Pick<CeremonyContext, "discountPercentFor">).discountPercentFor;
+    const explicit = new CredentAgent({ walletOrigin: "https://shop.example" });
+    const a = { locals: {} as Record<string, unknown> };
+    explicit.mount(a, { orderStore: { read: async () => null }, catalog, completion: async () => ({ completed: true }), signingKey: "k" });
+    explicit.requirements(order, [optional(membership.discount(15))]);
+    expect(percentFor(a)).toBeUndefined();
+
+    const composed = new CredentAgent({ walletOrigin: "https://shop.example" });
+    const b = { locals: { credentagent: { orderStore: { read: async () => null }, catalog, completion: async () => ({ completed: true }), signingKey: "k" } } as Record<string, unknown> };
+    composed.mount(b);
+    composed.requirements(order, [optional(membership.discount(15))]);
+    expect(percentFor(b)).toBeUndefined();
   });
 });
 

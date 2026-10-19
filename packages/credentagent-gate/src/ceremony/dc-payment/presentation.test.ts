@@ -17,6 +17,11 @@ import * as jose from "jose";
 import { Encoder, Tag } from "cbor-x";
 import { buildDcPaymentRequest } from "./request.js";
 import { verifyDcPresentation } from "./verify.js";
+import express from "express";
+import request from "supertest";
+import { mountCeremony } from "../mount.js";
+import { completeOrder, type CompletedRecord } from "../completion.js";
+import { MemoryVerificationStore } from "../../store.js";
 import type { CeremonyCatalog, CeremonyOrder } from "../types.js";
 import type { Origin } from "../origin.js";
 
@@ -227,5 +232,42 @@ describe("dc-payment REAL OpenID4VP presentation", () => {
     const amountGate = out.gates.find((g) => g.gate === "Amount binding");
     expect(amountGate?.pass).toBe(false);
     expect(amountGate?.detail).toContain("unsupported hash algorithm");
+  });
+
+  // Invariant 3 / #360 — the REAL wallet branch of POST /dc-payment/verify must check a member's
+  // discount at the percent the order's policy declares (here 15%, not the rails' default 10%),
+  // exactly as the instant-demo branch does. Drop the percent on that branch and this is refused.
+  it("a 15% member discount completes over the real-wallet branch of the /verify route ($199 → $169.15)", async () => {
+    const verificationStore = new MemoryVerificationStore();
+    const records = new Map<string, CompletedRecord>();
+    const catalog15: CeremonyCatalog = {
+      createOrder(items, orderId, opts) {
+        const priced = catalog.createOrder(items, orderId);
+        const discount = opts?.loyaltyApplied ? round2(priced.subtotal * 0.15) : 0;
+        return { ...priced, discount, total: round2(priced.subtotal - discount) };
+      },
+    };
+    const stored = catalog15.createOrder([{ productId: "aurora-headphones", quantity: 1 }], "ORD-15");
+    const app = express();
+    mountCeremony(app as never, {
+      verificationStore,
+      orderStore: { read: async (id) => (id === "ORD-15" ? stored : null) },
+      catalog: catalog15,
+      completion: (input) => completeOrder(input, {
+        catalog: catalog15, verificationStore, cart: { clear: async () => {} },
+        records: { read: async (id) => records.get(id), write: async (rec) => void records.set(rec.orderId, rec) },
+      }),
+      signingKey: SECRET,
+      discountPercentFor: (id) => (id === "ORD-15" ? 15 : undefined),
+    });
+    await verificationStore.write("ORD-15", { loyalty: { applied: true, membershipNumber: "M-1" } });
+    const host = "127.0.0.1";
+    const req = (await request(app).get("/credentagent/dc-payment/request").query({ order: "ORD-15" }).set("Host", host)).body as { request: string; transaction_data: string[]; readerContextToken: string };
+    const response = await walletEncrypt(encJwkOf(req.request), paymentDeviceResponseB64(txHashHex(req.transaction_data[0])));
+    const res = await request(app).post("/credentagent/dc-payment/verify").set("Host", host)
+      .send({ order: "ORD-15", readerContextToken: req.readerContextToken, result: { protocol: "openid4vp-v1-signed", data: { response } } });
+    expect(res.body.gates.find((g: { gate: string }) => g.gate === "Amount binding")?.pass).toBe(true);
+    expect(res.body.completed).toBe(true);
+    expect(records.get("ORD-15")?.amount).toBe(169.15);
   });
 });
