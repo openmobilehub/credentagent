@@ -19,8 +19,8 @@ const kv = { url: process.env.KV_REST_API_URL ?? process.env.UPSTASH_REDIS_REST_
 // completed order never reaches order-status — a coin flip that reads as a hang, not an error.
 // Refuse at boot instead. Never inferred: ONE process running deployed-mode semantics (what
 // `npm run smoke` does) opts out with ALLOW_MEMORY_STORAGE=1 — never right on real Vercel.
-// (`redisStorage.fromEnv({ required })` folds this into the library, but it landed after 0.4.0
-// and this example installs the PUBLISHED packages — switch once it ships.)
+// (`redisStorage.fromEnv({ required })`, published since 0.5.0, folds this check into the
+// library; moving this example onto it is a separate change.)
 if (deployed && !(kv.url && kv.token) && process.env.ALLOW_MEMORY_STORAGE !== "1")
   throw new Error(
     "Shared storage is required on a deployment — set KV_REST_API_URL + KV_REST_API_TOKEN (Upstash / Vercel KV). " +
@@ -81,7 +81,8 @@ const store = createStorefront({
   baseUrl: deployedOrigin, // local stays unset → checkout links derive from each request's origin
   // Grant records + the delegated ledger live in THIS process's memory: on a multi-instance
   // deploy a grant made on one instance is invisible to its siblings. Fine for this demo;
-  // the durable, cross-instance grant store is issue #152.
+  // the durable, cross-instance grant store is issue #152. Approving a grant on a phone needs an
+  // SD-JWT payment credential that no released wallet signs yet (0.6.0; README "Honest status").
   grants: credentagent.grants, // human-NOT-present: adds create/get/spend/revoke grant tools
   merchant: "Utopia", // the merchant a created grant is sealed + audited as
 });

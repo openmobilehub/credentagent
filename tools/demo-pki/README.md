@@ -203,7 +203,8 @@ previously imported RICAL first.
 The gate's serving origin must match a name in the reader cert's SAN (`READER_DNS`,
 step 1). Change it with `./gen-pki.sh --reader-only`, then rebuild both lists (step 3), redeploy
 the site (step 4), re-copy the reader key/cert to the gate (step 5) and re-import both lists. On Vercel the
-gate's `walletOrigin` is `PUBLIC_URL` when set (the dev demo: `https://credentagent.ai/marketplace-dev`),
+gate's `walletOrigin` is `PUBLIC_URL` when set (the prod demo: `https://credentagent.ai/marketplace`; the dev
+demo: `https://credentagent.ai/marketplace-dev`),
 else `https://${VERCEL_PROJECT_PRODUCTION_URL}`. This repo's shipped cert covers `localhost`,
 `credentagent.ai`, `credentagent-demo.vercel.app` and `credentagent-demo-dev.vercel.app`. Deploy
 under any other host and it isn't on the SAN, so the "unknown verifier"
