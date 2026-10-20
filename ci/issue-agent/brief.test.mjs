@@ -372,6 +372,11 @@ describe("a second symptom of one root cause", () => {
     expect(p).not.toMatch(/<open_work/);
     expect(p).toMatch(/a ticket of the plan in #419[\s\S]*skip this step and leave "related" empty/);
   });
+  it("is told a ticket's plan by the snapshot, which fetches open work only for an issue that isn't a ticket", () => {
+    const src = readFileSync(new URL("./run.mjs", import.meta.url), "utf8");
+    const snap = src.slice(src.indexOf("function snapshotIssue("), src.indexOf("\n}\n", src.indexOf("function snapshotIssue(")));
+    expect(snap).toMatch(/if \(!skip && plan\.phase === "brief"\) \{\s*if \(editedTicket\) issue\.ticketOf = ticketHeader\(i\.body\)\.parent;\s*else issue\.openWork = openWork\(n\);/);
+  });
   it("asks for a decision when the brief splits because of an issue the snapshot listed", () => {
     expect(briefLabels(split(), { listed: [354, 415] })).toEqual({ add: ["needs-decision"], remove: [] });
   });
