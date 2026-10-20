@@ -66,6 +66,12 @@ built: a spec with the design (`to-spec`, `codebase-design` skills), then tracer
 REVIEW.md §8 refuse a big PR that isn't one ticket of a plan (CONTRIBUTING.md, "Big changes"); the
 issue agent's brief splits a big issue the same way (`ci/issue-agent/README.md`, "Splitting a big issue").
 
+**A second symptom of one root cause gets a design note before another fix** — at any size, for people
+and agents alike. Before fixing, search open issues and PRs for the same symptom or code; if another fix
+for that cause is open, write the design (an `epic` and its tickets), label the issue `needs-decision`,
+and don't patch again. REVIEW.md §8 makes a second patch with no design behind either one ⛔; the issue
+agent's brief does the search itself (`ci/issue-agent/README.md`, "The brief").
+
 ## Architecture (where things live)
 
 The gate is the security surface; the storefront is a reference consumer.

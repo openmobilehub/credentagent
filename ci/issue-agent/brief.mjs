@@ -55,8 +55,22 @@ export function clampBrief(b, scale = 1) {
     reply: b.reply === undefined ? undefined : cap(b.reply, CAPS.reply),
     changes_since_previous: b.changes_since_previous === undefined ? undefined : cap(b.changes_since_previous, CAPS.item),
     ...(b.scope ? { scope: clampScope(b.scope, CAPS) } : {}),
+    ...(Array.isArray(b.related) ? { related: list(b.related, 10).map((r) => ({ number: r?.number, why: cap(r?.why, CAPS.item) })) } : {}),
   };
 }
+
+export const LABEL_DECISION = "needs-decision";
+
+/**
+ * The open issues and pull requests the brief says share its root cause, kept only when the trusted job
+ * listed them (its own fetch of the open work): the run's output is untrusted, so a number it made up
+ * names nothing and labels nothing.
+ */
+export const relatedOf = (brief, { listed }) =>
+  (Array.isArray(brief.related) ? brief.related : []).filter((r) => Number.isInteger(r?.number) && listed.includes(r.number));
+
+/** The labels a posted brief adds: `needs-decision` when it proposes a design because of listed related work. */
+export const briefLabels = (brief, { listed }) => (isSplit(brief) && relatedOf(brief, { listed }).length ? [LABEL_DECISION] : []);
 const oneLine = (s) => md(String(s ?? "").replace(/[\r\n]+/g, " ").trim());
 
 /** The card alone, as plain text: what the agents show the maintainer, and what they quote back to themselves. */
@@ -93,6 +107,15 @@ export function briefBody(data) {
   }
 }
 
+// The related work, as links (publishBrief has already kept only the listed numbers).
+const relatedSection = (brief, repo) => {
+  const related = (brief.related ?? []).filter((r) => Number.isInteger(r.number));
+  if (!related.length) return "";
+  const link = (k) => (repo ? `[#${k}](https://github.com/${repo}/issues/${k})` : `#${k}`); // GitHub sends /issues/N on to a pull request
+  return `\n**Same root cause as:**\n${related.map((r) => `- ${link(r.number)} — ${oneLine(r.why)}`).join("\n")}\n\n${
+    isSplit(brief) ? `So this brief proposes one design instead of another fix, and the issue is labelled \`${LABEL_DECISION}\`.` : "The agents still found this one fix enough."}\n`;
+};
+
 function briefText(data) {
   const { v, brief, base, lintProblems = [], discussUrl } = data;
   const levelWord = LEVELS[brief.card?.how_bad?.level] ?? "?";
@@ -107,7 +130,7 @@ function briefText(data) {
   v > 1 && brief.changes_since_previous ? `\n\n**Changed since v${v - 1}:** ${oneLine(brief.changes_since_previous)}` : ""}
 
 ${cardText(brief)}
-${split ? `\n${planSection(brief)}` : ""}${lintProblems.length ? `\n> [!WARNING]\n> The plain-language check still flags: ${lintProblems.map(oneLine).join("; ")}. Say what's unclear and the next version fixes it.\n` : ""}
+${relatedSection(brief, data.repo)}${split ? `\n${planSection(brief)}` : ""}${lintProblems.length ? `\n> [!WARNING]\n> The plain-language check still flags: ${lintProblems.map(oneLine).join("; ")}. Say what's unclear and the next version fixes it.\n` : ""}
 **Your move:** add the \`${LABEL_APPROVED}\` label to approve **this version**${pick}.${after} Something off, or a question? Reply here in your own words — the agents answer, and post a new version if anything changes.${discussUrl ? ` Or [talk it through live](${discussUrl}).` : ""}
 
 ---

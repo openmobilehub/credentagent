@@ -99,6 +99,29 @@ export function requestComments(comments, { isTrusted, snapshotAt }) {
   return { comments: kept, dropped };
 }
 
+/** The labels that stop a run. With briefs on, `needs-decision` doesn't: approving the brief is the decision. */
+export const BLOCKING_LABELS = ["needs-decision", "epic", "wontfix", "duplicate", "question"];
+export const blockingLabels = (labels, { pause }) => labels.filter((l) => BLOCKING_LABELS.includes(l) && !(pause && l === "needs-decision"));
+
+/**
+ * The open issues and pull requests the brief agent compares its issue with (README.md, "The brief"),
+ * leaving out the issue itself. `items`: { number, kind: "issue" | "pr", title, author: { login,
+ * __typename }, renames: [{ actor }], files? }. A number, kind and file path are facts; a title is
+ * someone's words, kept only when whoever wrote it last has write access (or is the pipeline). Each
+ * entry stays on one line, so nothing in it can close the list it is rendered in.
+ */
+export function openWorkList(items, { self, isTrusted }) {
+  const line = (s, n) => String(s ?? "").replace(/[\r\n<>]+/g, " ").trim().slice(0, n);
+  return items.filter((w) => w.number !== self).map((w) => {
+    const titleOk = w.renames?.length ? isTrusted(titleAuthor(w.author?.login, w.renames)) : isLoopAuthor(w.author, isTrusted);
+    return {
+      number: w.number, kind: w.kind,
+      ...(titleOk && w.title ? { title: line(w.title, 200) } : {}),
+      ...(w.kind === "pr" ? { files: (w.files ?? []).slice(0, 30).map((f) => line(f, 200)) } : {}),
+    };
+  });
+}
+
 // ── the review loop ──────────────────────────────────────────────────────────────────────────────
 
 /** The Claude review's GitHub App account: a Bot, never a user who happens to be called "claude". */

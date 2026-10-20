@@ -160,6 +160,11 @@ too big to review in one sitting unless the work was broken down first. The `pr-
   security control and its bypass test (the `to-spec` and `codebase-design` skills) — and the PR
   follows it. A decision the plan doesn't make, taken silently inside the PR, is a finding.
 - The PR stays inside its ticket: work belonging to another ticket of the same plan is scope creep.
+- **A second patch on one root cause needs a design first, at any size.** A fix PR that patches the
+  same root cause as another open fix PR — the same missing piece behind a different symptom — with
+  no design note or `epic` behind either, is **⛔ Needs changes**: ask for one design that covers both
+  symptoms (an `epic` with its tickets, or a design note in `specs/`), then one PR per ticket.
+  Name the other PR in the finding.
 
 A big PR with no plan, or one that bundles several tickets, is **⛔ Needs changes**: ask the author to
 write the plan, split it, and resubmit one ticket per PR (CONTRIBUTING.md, "Big changes"). The
