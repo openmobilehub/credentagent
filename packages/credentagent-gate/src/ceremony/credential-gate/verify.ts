@@ -108,8 +108,10 @@ export async function requiredAgeFor(
 /** `requiredAgeFor`'s threshold, plus `malformed`: a value the pages never tick Age for. Payment
  *  refuses the order for NaN or +Infinity (a policy age or a line `minimumAge`) and throws on a
  *  BigInt. It reads a `true` as 1, a `false` as 0, and an object that reads as a number (`[25]`)
- *  as that number, so for those the page is the stricter: payment may complete, the page never
- *  ticks. -Infinity and numeric text aren't malformed: both sides ignore / convert them. */
+ *  as that number, while the page drops such a value. So on a tagged item payment may complete
+ *  and the page never ticks; on an untagged one the page shows no Age step while payment still
+ *  asks 1 (`true`) or 25 (`[25]`). Only a lookup that breaks `PolicyAgeLookup`'s number type
+ *  returns these. -Infinity and numeric text aren't malformed: both sides ignore / convert them. */
 async function ageDemandFor(
   ctx: Pick<CeremonyContext, "policyAge" | "credentialRegistry" | "orderPolicies">,
   order: CeremonyOrder,
