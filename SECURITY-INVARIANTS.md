@@ -79,7 +79,8 @@ if (ageRestricted && !recordedAgeCovers(verification, requiredAge, lineAge)) {
 requires `ageVerified === true` and a proven age at or above `requiredAge`. The proven age is the
 age the proof was made at (`VerificationRecord.ageVerifiedOver`, see invariant 5). The rails'
 pages tick their Age step by the same function, and never for an order whose age is malformed
-(NaN or +Infinity), so they can't tick an age completion refuses (#414).
+(NaN or +Infinity, or a policy age that is neither a number nor numeric text), so they can't tick
+an age completion refuses (#414).
 
 **Open gap: an order the server has forgotten** (#411). The policy age is remembered per order in
 memory, for the last 10,000 orders. An order evicted from that, or completed after a restart or on
