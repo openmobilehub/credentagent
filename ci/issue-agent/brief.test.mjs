@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs";
 import { cardProblems, textProblems, isPrivate, howBadLine } from "./card.mjs";
 import {
   briefBody, parseBrief, clampBrief, replyBody, challengeBody, briefState, approvalRefusal, planRun, splitConversation, specFromBrief,
-  sweepWanted, briefOutcome, briefFailure, relatedOf, briefLabels,
+  sweepWanted, briefOutcome, briefFailure, relatedOf, briefLabels, decisionLabel,
   BRIEF_MARK, LABEL_AWAITING, LABEL_APPROVED, MAX_BRIEFS,
 } from "./brief.mjs";
 import { isAgentComment, parseCriteria } from "./checks.mjs";
@@ -361,19 +361,40 @@ describe("a second symptom of one root cause", () => {
     expect(BRIEF_SCHEMA.required).toContain("related");
     expect(BRIEF_SCHEMA.properties.related.items.required).toEqual(["number", "why"]);
   });
-  it("has no list when the snapshot found nothing open", () => {
-    expect(briefPrompt(issue)).not.toMatch(/<open_work/);
+  it("has no list when the snapshot found nothing open, and says so when it couldn't read it", () => {
     expect(briefPrompt({ ...issue, openWork: [] })).not.toMatch(/<open_work/);
+    expect(briefPrompt({ ...issue, openWork: [] })).toMatch(/No other issue or pull request is open/);
+    expect(briefPrompt(issue)).not.toMatch(/<open_work/);
+    expect(briefPrompt(issue)).toMatch(/could not be read this time/);
+  });
+  it("doesn't compare a ticket with its own plan: its epic and sibling tickets share the design", () => {
+    const p = briefPrompt({ ...issue, ticketOf: 419, openWork });
+    expect(p).not.toMatch(/<open_work/);
+    expect(p).toMatch(/a ticket of the plan in #419[\s\S]*skip this step and leave "related" empty/);
   });
   it("asks for a decision when the brief splits because of an issue the snapshot listed", () => {
-    expect(briefLabels(split(), { listed: [354, 415] })).toEqual(["needs-decision"]);
+    expect(briefLabels(split(), { listed: [354, 415] })).toEqual({ add: ["needs-decision"], remove: [] });
   });
   it.each([
     ["nothing related", split({ related: [] })],
     ["a single pull request", brief({ related })],
     ["only numbers the trusted job never listed", split({ related: [{ number: 9999, why: "made up by the run" }] })],
   ])("asks for nothing on %s", (_what, b) => {
-    expect(briefLabels(b, { listed: [354, 415] })).toEqual([]);
+    expect(briefLabels(b, { listed: [354, 415] })).toEqual({ add: [], remove: [] });
+  });
+  it("takes the label off when a later version drops the design it was added for — and only then", () => {
+    expect(briefLabels(brief({ related }), { listed: [354], previous: split() })).toEqual({ add: [], remove: ["needs-decision"] });
+    expect(briefLabels(split(), { listed: [354], previous: split() })).toEqual({ add: ["needs-decision"], remove: [] });
+    // A label a person added, with no brief of ours behind it, is theirs to remove.
+    expect(briefLabels(brief(), { listed: [354], previous: brief() })).toEqual({ add: [], remove: [] });
+    expect(briefLabels(brief(), { listed: [354] })).toEqual({ add: [], remove: [] });
+  });
+  it("opening the approved design's tickets is the decision: the label comes off then", () => {
+    expect(decisionLabel(split())).toEqual(["needs-decision"]);
+    expect(decisionLabel(split({ related: [] }))).toEqual([]);
+    const src = readFileSync(new URL("./run.mjs", import.meta.url), "utf8");
+    const splitter = src.slice(src.indexOf("function publishSplit("), src.indexOf("\n}\n", src.indexOf("function publishSplit(")));
+    expect(splitter).toMatch(/relabel\(n, \{ remove: \[[^\]]*\.\.\.decisionLabel\(brief\)\] \}\);/);
   });
   it("keeps only listed numbers, and the posted brief links them", () => {
     const kept = relatedOf(split({ related: [...related, { number: 9999, why: "unlisted" }, { number: "354; rm -rf", why: "x" }] }), { listed: [354, 415] });
@@ -387,10 +408,11 @@ describe("a second symptom of one root cause", () => {
   it("publishing filters against a list it fetched itself, and labels when the brief goes up", () => {
     const src = readFileSync(new URL("./run.mjs", import.meta.url), "utf8");
     const publisher = src.slice(src.indexOf("async function publishBrief("), src.indexOf("\n}\n", src.indexOf("async function publishBrief(")));
-    expect(publisher).toMatch(/const listed = openWork\(n\)\.map\(\(w\) => w\.number\);/);
+    expect(publisher).toMatch(/const listed = \(openWork\(n\) \?\? \[\]\)\.map\(\(w\) => w\.number\);/);
     expect(publisher).toMatch(/const shown = \{ \.\.\.brief, related: relatedOf\(brief, \{ listed \}\) \};/);
     expect(publisher).toMatch(/briefBody\(\{ v, start, asOf, brief: shown, /);
-    expect(publisher).toMatch(/relabel\(n, \{ add: \[LABELS\.awaiting, \.\.\.briefLabels\(shown, \{ listed \}\)\]/);
+    expect(publisher).toMatch(/const decision = briefLabels\(shown, \{ listed, previous: state\.latest\?\.brief \}\);/);
+    expect(publisher).toMatch(/relabel\(n, \{ add: \[LABELS\.awaiting, \.\.\.decision\.add\], remove: \[LABELS\.working, LABELS\.approved, \.\.\.decision\.remove\] \}\);/);
   });
 });
 

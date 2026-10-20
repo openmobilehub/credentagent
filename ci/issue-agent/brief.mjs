@@ -69,8 +69,18 @@ export const LABEL_DECISION = "needs-decision";
 export const relatedOf = (brief, { listed }) =>
   (Array.isArray(brief.related) ? brief.related : []).filter((r) => Number.isInteger(r?.number) && listed.includes(r.number));
 
-/** The labels a posted brief adds: `needs-decision` when it proposes a design because of listed related work. */
-export const briefLabels = (brief, { listed }) => (isSplit(brief) && relatedOf(brief, { listed }).length ? [LABEL_DECISION] : []);
+/** `needs-decision` when a posted brief (its related work already filtered) proposes a design because of it. */
+export const decisionLabel = (brief) =>
+  (isSplit(brief) && (Array.isArray(brief?.related) ? brief.related : []).some((r) => Number.isInteger(r?.number)) ? [LABEL_DECISION] : []);
+
+/**
+ * How a newly posted brief changes the labels: `needs-decision` goes on when it proposes a design because
+ * of listed related work, and comes off when the version before it put it on and this one doesn't.
+ */
+export const briefLabels = (brief, { listed, previous }) => {
+  const add = decisionLabel({ ...brief, related: relatedOf(brief, { listed }) });
+  return { add, remove: !add.length && previous ? decisionLabel(previous) : [] };
+};
 const oneLine = (s) => md(String(s ?? "").replace(/[\r\n]+/g, " ").trim());
 
 /** The card alone, as plain text: what the agents show the maintainer, and what they quote back to themselves. */

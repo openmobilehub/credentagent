@@ -67,10 +67,11 @@ REVIEW.md §8 refuse a big PR that isn't one ticket of a plan (CONTRIBUTING.md, 
 issue agent's brief splits a big issue the same way (`ci/issue-agent/README.md`, "Splitting a big issue").
 
 **A second symptom of one root cause gets a design note before another fix** — at any size, for people
-and agents alike. Before fixing, search open issues and PRs for the same symptom or code; if another fix
-for that cause is open, write the design (an `epic` and its tickets), label the issue `needs-decision`,
-and don't patch again. REVIEW.md §8 makes a second patch with no design behind either one ⛔; the issue
-agent's brief does the search itself (`ci/issue-agent/README.md`, "The brief").
+and agents alike. Before fixing, search open issues and PRs for the same symptom or code; if another
+issue or fix for that cause is open, write the design (an `epic` and its tickets, or a design note in
+`specs/` with a `tasks.md`), label the issue `needs-decision`, and don't patch again. REVIEW.md §8 makes
+a second fix PR with no design behind either one ⛔ (`scope:approved` doesn't waive it); the issue
+agent's brief does a best-effort search of recent open work itself (`ci/issue-agent/README.md`, "The brief").
 
 ## Architecture (where things live)
 

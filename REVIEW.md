@@ -164,7 +164,7 @@ too big to review in one sitting unless the work was broken down first. The `pr-
   same root cause as another open fix PR — the same missing piece behind a different symptom — with
   no design note or `epic` behind either, is **⛔ Needs changes**: ask for one design that covers both
   symptoms (an `epic` with its tickets, or a design note in `specs/`), then one PR per ticket.
-  Name the other PR in the finding.
+  Name the other PR in the finding. The `scope:approved` label doesn't waive this.
 
 A big PR with no plan, or one that bundles several tickets, is **⛔ Needs changes**: ask the author to
 write the plan, split it, and resubmit one ticket per PR (CONTRIBUTING.md, "Big changes"). The
