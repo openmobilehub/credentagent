@@ -197,13 +197,14 @@ const threadLinks = (threads, url) => threads.map((t) => {
 
 /**
  * The hand-over comment. `threads`: open threads people with write access started (still open only
- * at the cycle cap); `notes`: the review bot's open threads — optional, listed as no action needed.
+ * at the cycle cap); `notes`: the review bot's open threads. On a ready hand-over they are optional,
+ * listed as no action needed; on a stop they may be what blocks, so they are listed plainly.
  */
 export function handOverComment({ kind, who = "", reason, cycle, threads = [], notes = [], url }) {
   reason = String(reason).charAt(0).toUpperCase() + String(reason).slice(1); // it follows a full stop
   const open = threadLinks(threads, url);
+  if (kind !== "ready") return `${REVIEW_MARK} stopped -->\n⚠️ **The agent stopped iterating — ${who}this needs a human.** ${md(reason)}.${open ? `\n\nStill open:\n${open}` : ""}${notes.length ? `\n\nThe reviewer's inline notes, still open:\n${threadLinks(notes, url)}` : ""}`;
   const optional = notes.length ? `\n\nThe reviewer's optional notes, still open — no action needed before merging:\n${threadLinks(notes, url)}` : "";
-  if (kind !== "ready") return `${REVIEW_MARK} stopped -->\n⚠️ **The agent stopped iterating — ${who}this needs a human.** ${md(reason)}.${open ? `\n\nStill open:\n${open}` : ""}${optional}`;
   return threads.length
     ? `${REVIEW_MARK} done -->\n✅ **${who}this is ready for your review — with ${threads.length} thread(s) left open.** ${md(reason)}. The agent stopped at the cycle cap rather than answer them again:\n\n${open}${optional}`
     : `${REVIEW_MARK} done -->\n✅ **The review says ready — ${who}this is ready for your review.** ${md(reason)} after ${cycle} fix cycle(s).${optional}`;

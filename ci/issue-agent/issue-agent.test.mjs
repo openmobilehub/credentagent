@@ -13,7 +13,7 @@ import {
   isAgentComment, requestComments, leftLoop, labelledBy, requestBody, protectedHead, updateSection, noComments,
   roleModel, testGateCommand, rootTestRefusal, publishVerdict, isMutableSource, sameLockfile, publishRefusalHint,
   parseCriteria, tickCriteria, verifiedFor, afterVerification, acceptVerified, conflictMidCycle,
-  reviewFixCriteria, threadReplies, reReviewCalls,
+  reviewFixCriteria, threadReplies, reReviewCalls, cycleMark, changesFixesDone, stillOpen,
 } from "./checks.mjs";
 import { reviewPrompt, reviewFixPrompt } from "./roles.mjs";
 import { startMerge, buildResolvedMerge, replayResolution, rebuildForPush, treeOf } from "./merges.mjs";
@@ -398,16 +398,28 @@ describe("the review loop", () => {
 
   it("answers maintainers' threads, keeps the bot's as notes, and drops outsiders' replies", () => {
     const { answer, notes, ignored } = threadsToAnswer([
-      thread("T1", bot, outsider, maintainer),
+      thread("T1", bot, outsider),
       thread("T2", outsider),
       { ...thread("T3", bot), isResolved: true },
       thread("T4", maintainer, outsider, bot),
     ], isTrusted);
-    expect(answer.map((t) => t.id)).toEqual(["T4"]); // a bot thread is never one the agent must answer
+    expect(answer.map((t) => t.id)).toEqual(["T4"]); // a bot thread alone is never one the agent must answer
     expect(answer[0].comments.map((c) => c.author)).toEqual(["dzuluaga", "claude"]);
     expect(notes.map((t) => t.id)).toEqual(["T1"]);
-    expect(notes[0].comments.map((c) => c.author)).toEqual(["claude", "dzuluaga"]);
+    expect(notes[0].comments.map((c) => c.author)).toEqual(["claude"]); // the outsider's reply dropped
     expect(ignored).toEqual(["a thread started by mallory (no write access)"]);
+  });
+
+  it("answers a bot thread a maintainer replied on — but not one only the agent itself replied on", () => {
+    const own = { databaseId: 1, author: maintainer, body: "Not addressed in review cycle 1 — the agent gave no answer for this thread. (issue agent)" };
+    const { answer, notes } = threadsToAnswer([
+      thread("B1", bot, outsider, maintainer), // a maintainer's "please fix" on a bot note
+      { ...thread("B2", bot), comments: [{ databaseId: 0, author: bot, body: "nit" }, own] },
+      thread("B3", bot, outsider), // an outsider's reply asks for nothing
+    ], isTrusted);
+    expect(answer.map((t) => t.id)).toEqual(["B1"]);
+    expect(answer[0].comments.map((c) => c.author)).toEqual(["claude", "dzuluaga"]);
+    expect(notes.map((t) => t.id)).toEqual(["B2", "B3"]);
   });
 
   it("makes a fix cycle's criteria from ⛔'s must-fix list and maintainers' threads — never from a bot note", () => {
@@ -437,6 +449,17 @@ describe("the review loop", () => {
     expect(replies.find((r) => r.thread === "M1")).toMatchObject({ resolve: true, body: expect.stringMatching(/declined/) });
     expect(replies.find((r) => r.thread === "M2")).toMatchObject({ resolve: false, body: expect.stringMatching(/Not addressed/) });
     expect(threadReplies({ threads: answer, notes, cycle: 1, sha: "abc", responses: [], conflict: true })).toEqual([]);
+    // the agent's text is escaped (run.mjs passes md): it can't open a comment or ping anyone
+    const escaped = threadReplies({ threads: answer, notes, cycle: 1, sha: "abc", escape: md, responses: [{ thread_id: "M1", action: "fixed", reply: "<!-- x --> @everyone" }] });
+    expect(escaped[0].body).not.toContain("<!--");
+    expect(escaped[0].body).not.toContain("@everyone");
+  });
+
+  it("after a cycle, leaves open only the threads it didn't answer and the notes it didn't fix", () => {
+    const { answer, notes } = threadsToAnswer([thread("B1", bot), thread("B2", bot), thread("M1", maintainer), thread("M2", maintainer)], isTrusted);
+    const left = stillOpen({ threads: answer, notes, responses: [{ thread_id: "B1", action: "fixed", reply: "x" }, { thread_id: "B2", action: "declined", reply: "y" }, { thread_id: "M1", action: "declined", reply: "z" }] });
+    expect(left.threads.map((t) => t.id)).toEqual(["M2"]);
+    expect(left.notes.map((t) => t.id)).toEqual(["B2"]); // B1 was fixed and resolved: not "still open"
   });
 
   it("gives the fixer the bot's notes as context, never as threads to answer", () => {
@@ -454,6 +477,10 @@ describe("the review loop", () => {
     const adds = calls.filter((c) => c.includes("--add-label"));
     expect(adds).toEqual([["pr", "edit", "https://github.com/o/r/pull/7", "-R", "o/r", "--add-label", "review:again"]]);
     expect(calls[0].slice(0, 3)).toEqual(["label", "create", "review:again"]); // made if missing, first
+    // taken off before it is added, so a second cycle's add is a new `labeled` event
+    const removeAt = calls.findIndex((c) => c.includes("--remove-label") && c.includes("review:again"));
+    expect(removeAt).toBeGreaterThan(0);
+    expect(removeAt).toBeLessThan(calls.findIndex((c) => c.includes("--add-label")));
     expect(calls.flat()).not.toContain("agent:in-review"); // never the label that starts a loop run
     expect(reReviewCalls({ sha: undefined, url: "https://github.com/o/r/pull/7", repo: "o/r" })).toEqual([]);
   });
@@ -465,7 +492,27 @@ describe("the review loop", () => {
     expect(text).toContain("[a.ts:1](https://github.com/o/r/pull/7#discussion_r0) — claude says");
     expect(text).toMatch(/^<!-- issue-agent-review done -->/);
     expect(handOverComment({ kind: "ready", reason: "ok", cycle: 1, threads: [], notes: [], url: "u" })).not.toMatch(/no action needed/);
-    expect(handOverComment({ kind: "needs-human", reason: "stuck", cycle: 1, threads: [], notes, url: "u" })).toMatch(/^<!-- issue-agent-review stopped -->/);
+    const stopped = handOverComment({ kind: "needs-human", reason: "stuck", cycle: 1, threads: [], notes, url: "u" });
+    expect(stopped).toMatch(/^<!-- issue-agent-review stopped -->/);
+    // on a stop the bot's notes may be the blockers: listed, never as "no action needed"
+    expect(stopped).toContain("claude says");
+    expect(stopped).not.toMatch(/no action needed|optional/);
+    // a note's text is escaped: it can't open a comment or ping anyone
+    const evil = [{ ...notes[0], comments: [{ ...notes[0].comments[0], body: "<!-- x --> @everyone" }] }];
+    expect(handOverComment({ kind: "ready", reason: "ok", cycle: 0, threads: [], notes: evil, url: "u" })).not.toMatch(/<!-- x|@everyone/);
+  });
+
+  it("marks a cycle that answered a ⛔, and counts only those as ⛔ fixes", () => {
+    const c = (author, body) => ({ author, body });
+    expect(cycleMark({ cycle: 2, sha: "abc", answeredChanges: true })).toBe("<!-- issue-agent-review cycle=2 sha=abc answered=changes -->");
+    expect(cycleMark({ cycle: 1, sha: undefined })).toBe("<!-- issue-agent-review cycle=1 sha=none -->");
+    const comments = [
+      c(maintainer, `${cycleMark({ cycle: 1, sha: "abc" })}\n🔁`), // a conflict or criteria cycle
+      c(outsider, `${cycleMark({ cycle: 2, sha: "x", answeredChanges: true })}`), // not the loop's
+    ];
+    expect(cyclesDone(comments, isTrusted)).toBe(1);
+    expect(changesFixesDone(comments, isTrusted)).toBe(0);
+    expect(changesFixesDone([...comments, c(maintainer, cycleMark({ cycle: 2, sha: "def", answeredChanges: true }))], isTrusted)).toBe(1);
   });
 
   it("counts pushed cycles — not hand-overs, outsiders' copies, or another bot's", () => {
@@ -573,7 +620,7 @@ describe("the review loop", () => {
     expect(reviewDecision({ loopOn: true, verdict: "ready", open: 2, cycle: 2, maxCycles: 2 })).toMatchObject({ action: "verify", then: { action: "done", open: 2 } });
     // "fix" and "give-up" are never held back for verification
     expect(reviewDecision({ loopOn: true, verdict: "changes", open: 2, cycle: 0, maxCycles: 2 }).action).toBe("fix");
-    expect(reviewDecision({ loopOn: true, verdict: "changes", open: 0, cycle: 1, maxCycles: 2 }).action).toBe("give-up");
+    expect(reviewDecision({ loopOn: true, verdict: "changes", open: 0, cycle: 1, maxCycles: 2, changesFixed: 1 }).action).toBe("give-up");
   });
 
   it("resolves a conflict with main instead of waiting for a review that can't come — or hands over at the cap", () => {
@@ -632,8 +679,14 @@ describe("the review loop", () => {
   });
 
   it("hands a second ⛔ to a human, whatever cycles are left", () => {
-    expect(rd({ verdict: "changes", open: 0, cycle: 1, maxCycles: 2 })).toMatchObject({ action: "give-up", reason: expect.stringMatching(/⛔ Needs changes/) });
-    expect(rd({ verdict: "changes", open: 3, cycle: 1, maxCycles: 5 }).action).toBe("give-up");
+    expect(rd({ verdict: "changes", open: 0, cycle: 1, maxCycles: 2, changesFixed: 1 })).toMatchObject({ action: "give-up", reason: expect.stringMatching(/⛔ Needs changes/) });
+    expect(rd({ verdict: "changes", open: 3, cycle: 1, maxCycles: 5, changesFixed: 1 }).action).toBe("give-up");
+  });
+
+  it("fixes a first ⛔ that follows a conflict or criteria cycle — those didn't answer a ⛔", () => {
+    expect(rd({ verdict: "changes", open: 0, cycle: 1, maxCycles: 2, changesFixed: 0 }).action).toBe("fix");
+    // …but never a cycle past the cap
+    expect(rd({ verdict: "changes", open: 0, cycle: 2, maxCycles: 2, changesFixed: 0 })).toMatchObject({ action: "give-up", reason: expect.stringMatching(/2 review cycles/) });
   });
 
   it("finds the verdict for the head — reusing the last one only when the head just merges main in", () => {

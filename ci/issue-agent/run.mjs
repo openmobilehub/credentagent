@@ -49,11 +49,11 @@ import {
   TRUSTED_PERMISSIONS, titleAuthor, forbiddenPaths, applyAndCheck, changedSince, isRunId, isCommitId, publishIssueNumber,
   isReviewBot, parseVerdict, agentBranch, threadsToAnswer, reviewDecision, sharedChanges, filesBetween, cyclesDone, loopRefusal, latestVerdict, cycleCap,
   parseCriteria, tickCriteria, verifiedFor, afterVerification, acceptVerified, conflictMidCycle,
-  reviewFixCriteria, threadReplies, reReviewCalls,
+  reviewFixCriteria, threadReplies, reReviewCalls, cycleMark, changesFixesDone, stillOpen,
   isAgentComment, requestComments, leftLoop, isLoopAuthor, labelledBy, requestBody, updateSection,
   roleModel, testGateCommand, rootTestRefusal, publishVerdict, isMutableSource, sameLockfile, publishRefusalHint,
 } from "./checks.mjs";
-import { reportHtml, prBody, issueComment, md, statusBody, STATUS_MARK, REVIEW_MARK, handOverComment } from "./report.mjs";
+import { reportHtml, prBody, issueComment, md, statusBody, STATUS_MARK, handOverComment } from "./report.mjs";
 import { briefBody, replyBody, challengeBody, briefState, briefOutcome, briefFailure, planRun, specFromBrief, splitConversation, clampBrief, sweepWanted, approvalRefusal, LABEL_AWAITING, LABEL_APPROVED, BRIEF_MARK } from "./brief.mjs";
 import { blockersLeft, isSplit, parseTicket, pastLimits, planProgress, scopeProblems, ticketAsBrief, ticketBody, ticketHeader, ticketOrder, ticketSpec, STOPPED_LABEL } from "./scope.mjs";
 import { cardProblems } from "./card.mjs";
@@ -1273,6 +1273,7 @@ function assessReview(prNumber) {
   const decision = reviewDecision({
     verdict, open: answer.length, cycle, maxCycles: MAX_REVIEW_CYCLES, conclusion, loopOn: REVIEW_LOOP,
     conflicting: pr.mergeable === "CONFLICTING", verified: verifiedFor(pr.comments.nodes, pr.headRefOid, trusted),
+    changesFixed: changesFixesDone(pr.comments.nodes, trusted), // only a cycle that answered a ⛔ makes the next ⛔ a second one
   });
   const issue = !branch ? prRequest(pr)
     : snapshotIssue(branch.issue).issue ?? { number: branch.issue, title: `Issue #${branch.issue}`, body: "", comments: [], dropped: [] };
@@ -1519,7 +1520,6 @@ function pushReview(dir, review) {
 
   // Reply to each trusted person's thread with the agent's answer, and to each bot note it fixed;
   // resolve the answered ones. A bot note it declined gets nothing (tested in checks.mjs).
-  const byId = new Map(fix.responses.map((r) => [r.thread_id, r]));
   let answered = 0;
   for (const r of threadReplies({ threads: review.threads, notes: review.notes ?? [], responses: fix.responses, sha, cycle: k, conflict: fix.mode === "conflict", escape: md })) {
     sh("gh", ["api", `repos/${REPO}/pulls/${review.pr}/comments/${r.root}/replies`, "-f", `body=${r.body}`], { allowFail: true });
@@ -1541,9 +1541,9 @@ function pushReview(dir, review) {
   const declined = fix.responses.filter((r) => r.action === "declined" && review.threads.some((t) => t.id === r.thread_id)).length;
   fix.summary_items = fix.summary_items?.length ? fix.summary_items : fix.last?.impl?.summary_items ?? [];
   gh(["pr", "comment", review.url, "-R", REPO, "--body",
-    `${REVIEW_MARK} cycle=${k} sha=${sha ?? "none"} -->\n🔁 **Review cycle ${k}/${review.maxCycles}:** ${sha ? `pushed ${sha.slice(0, 7)}` : "no code change"}${outcome.mergedMain ? ` (with main ${outcome.mergedMain.slice(0, 7)} merged in${resolved.length ? `, conflicts in ${resolved.length} file(s) resolved by the agent` : ""})` : ""}${fix.mode === "verify" ? ` · made ${md(verdicts.filter((v) => !v.met).map((v) => v.id).join(", "))} true (acceptance criteria that weren't met yet)` : ""}${fix.mode === "conflict" ? " · review threads are left for the next cycle" : ` · ${answered} thread(s) answered and resolved`}${declined ? ` (${declined} declined with a reason)` : ""}${(fix.summary_items ?? []).length ? ` · summary items: ${md(fix.summary_items.join("; "))}` : ""}.${sha ? ` Asked for one re-review (\`review:again\`).` : ""}`]);
+    `${cycleMark({ cycle: k, sha, answeredChanges: fix.mode === "review" && review.verdict === "changes" })}\n🔁 **Review cycle ${k}/${review.maxCycles}:** ${sha ? `pushed ${sha.slice(0, 7)}` : "no code change"}${outcome.mergedMain ? ` (with main ${outcome.mergedMain.slice(0, 7)} merged in${resolved.length ? `, conflicts in ${resolved.length} file(s) resolved by the agent` : ""})` : ""}${fix.mode === "verify" ? ` · made ${md(verdicts.filter((v) => !v.met).map((v) => v.id).join(", "))} true (acceptance criteria that weren't met yet)` : ""}${fix.mode === "conflict" ? " · review threads are left for the next cycle" : ` · ${answered} thread(s) answered and resolved`}${declined ? ` (${declined} declined with a reason)` : ""}${(fix.summary_items ?? []).length ? ` · summary items: ${md(fix.summary_items.join("; "))}` : ""}.${sha ? ` Asked for one re-review (\`review:again\`).` : ""}`]);
   // No push means no new review would ever come: hand over now rather than wait forever.
-  if (!sha) return handOver({ ...review, cycle: k, threads: review.threads.filter((t) => !byId.has(t.id)) }, "needs-human", "the agent answered the review without changing code, so no new review will run");
+  if (!sha) return handOver({ ...review, cycle: k, ...stillOpen({ threads: review.threads, notes: review.notes, responses: fix.responses }) }, "needs-human", "the agent answered the review without changing code, so no new review will run");
   setStatus(review.issueNumber, `review cycle ${k}/${review.maxCycles}: pushed ${sha.slice(0, 7)} to ${review.url} — waiting for the next Claude review`, { working: true });
   return { pr: review.pr, status: "pushed", sha };
 }

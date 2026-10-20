@@ -340,7 +340,11 @@ Claude review finishes on an agent:in-review PR, or the label is added   (or: ma
   them cost a cycle each and found a new, smaller note every time — on pull request #347 (issue
   #322's fix) the reviews went ⛔ → 💬 → 💬 → ⛔ → 💬, and on pull request #415 a cycle pushed a
   commit that only reworded comments. ⛔ gets one fix cycle; **a second ⛔ goes to you as
-  `agent:needs-human`**. The loop reads two verdicts, ✅ and ⛔; a 💬 Ready — small notes (which the
+  `agent:needs-human`**. Only a cycle that answered a ⛔ counts here (its cycle comment is marked
+  `answered=changes`): a cycle that merged main in or made acceptance criteria true doesn't, so a
+  first ⛔ after one is still fixed. A bot note a person with write access replied on is answered like
+  their own thread. On a stop, the bot's open notes are listed plainly, not as "no action needed" —
+  on a ⛔ they may be what blocks. The loop reads two verdicts, ✅ and ⛔; a 💬 Ready — small notes (which the
   review is dropping) reads as ✅, for one release.
 - **One re-review, asked for by label.** After a fix push the push job adds **`review:again`**
   (with `AGENT_GH_TOKEN`, once per cycle; it makes the label if it's missing). Until the Claude
@@ -396,7 +400,8 @@ Claude review finishes on an agent:in-review PR, or the label is added   (or: ma
   locally: `run.mjs assess-review <pr> --dry-run`, `run.mjs fix-review review.json`,
   `run.mjs push-review <fix-dir> --review review.json --pr <pr> --dry-run`. A PR that was already
   handed over goes back into the loop by putting its `agent:in-review` label back (swap it for
-  `agent:needs-human` or `agent:ready-for-human`), which starts a run by itself; to give it more cycles than the cap, raise the cap — the repo variable
+  `agent:needs-human` or `agent:ready-for-human`), which starts a run by itself. That gets a PR
+  stopped on a second ⛔ nowhere — it stops again at once, whatever the cap; fix that one by hand. To give a PR stopped at the cap more cycles, raise the cap — the repo variable
   `ISSUE_AGENT_MAX_REVIEW_CYCLES` (`gh variable set ISSUE_AGENT_MAX_REVIEW_CYCLES --body 4`) for
   Actions runs, or the same environment variable locally. A review cancelled by hand without a new
   push starts nothing: run the loop by hand to resume it.
