@@ -429,6 +429,14 @@ describe("#414 — the pay pages show the Age step the order's policy asks for",
     expect(await ageStepFor({ policyAge: () => 21 }, tagged, proof)).toEqual({ requiredAge: 21, ageVerified: true });
   });
 
+  // A record from before rails stored the proven age counts as proven at the line age, here
+  // Infinity — so only the malformed check stops a tick that payment (`Math.max` not finite) refuses.
+  it("a +Infinity line minimumAge never ticks Age, even for a record without a proven age", async () => {
+    const order = { ...catalog.createOrder([{ productId: "gift-card", quantity: 1 }], "ORD-1") };
+    order.lines = order.lines.map((l) => ({ ...l, minimumAge: Infinity }));
+    expect((await ageStepFor({ policyAge: () => 0 }, order, { ageVerified: true })).ageVerified).toBe(false);
+  });
+
   it("a NaN line minimumAge never ticks Age", async () => {
     const order = { ...catalog.createOrder([{ productId: "gift-card", quantity: 1 }], "ORD-1") };
     order.lines = [...order.lines, { ...order.lines[0], minimumAge: NaN }];

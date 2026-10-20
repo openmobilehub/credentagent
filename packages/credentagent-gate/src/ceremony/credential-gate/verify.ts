@@ -88,11 +88,13 @@ export function requiredAgeForOrder(order: CeremonyOrder): number | null {
  * evaluates an age proof at this threshold. `completeOrder` does not call this: it re-derives
  * the threshold inline from the same sources and enforces it. They differ in two cases. The
  * first is a malformed age. A line `minimumAge` of NaN, or a policy age that isn't a usable number
- * (NaN, +Infinity, a `true` or a BigInt from the host's `policyAge` lookup; numeric text such as
+ * (NaN, ±Infinity, a `true` or a BigInt from the host's `policyAge` lookup; numeric text such as
  * "25" is read as that number), is dropped here — only that value, the other source still counts.
- * Completion reads the same values differently: it refuses NaN and +Infinity, throws on a BigInt,
- * ignores -Infinity, and reads `true` as 1, so any age proof passes there. `ageStepFor` ticks none
- * of the malformed ones, so a page never shows Age ✓ for an order completion refuses. The second:
+ * Completion reads the same values its own way: NaN and +Infinity make it refuse the order, a
+ * BigInt makes it throw, -Infinity is ignored (as here), and `true` counts as 1, so the policy's
+ * own age is lost while an item's tag still applies. `ageStepFor` never ticks Age for NaN,
+ * +Infinity, `true` or a BigInt, so a page never shows Age ✓ for an order completion refuses
+ * or throws on. The second:
  * a host completion built without `credentialRegistry` has no registered `age` to fall back to, so
  * for an order the server forgot it asks none while this asks the mount's (#411).
  */
@@ -103,9 +105,10 @@ export async function requiredAgeFor(
   return (await ageDemandFor(ctx, order)).age;
 }
 
-/** `requiredAgeFor`'s threshold, plus `malformed`: an age value the pages must never tick Age
- *  for. Completion refuses the order for most of them (NaN, +Infinity), whatever proof is on
- *  record; it reads a `true` as 1 and throws on a BigInt, so for those the page is the stricter. */
+/** `requiredAgeFor`'s threshold, plus `malformed`: a value the pages never tick Age for. Payment
+ *  refuses the order for NaN or +Infinity (a policy age or a line `minimumAge`) and throws on a
+ *  BigInt; it reads a `true` as 1, dropping the policy's own age, so only there is the page the
+ *  stricter. -Infinity and numeric text aren't malformed: both sides ignore / convert them. */
 async function ageDemandFor(
   ctx: Pick<CeremonyContext, "policyAge" | "credentialRegistry" | "orderPolicies">,
   order: CeremonyOrder,
@@ -136,7 +139,8 @@ async function ageDemandFor(
  * the proof on record covers it (`recordedAgeCovers`, completion's own rule). Pass it to
  * `checkoutRail` so the progress rail shows an Age step for an age only the policy asks for, and
  * never ticks a proof made below the order's age. A malformed age (NaN or +Infinity, or a policy
- * age that isn't a number) never ticks; completion refuses NaN and +Infinity whatever the proof.
+ * age that is neither a number nor numeric text) never ticks; completion refuses NaN and +Infinity
+ * whatever the proof.
  *
  * Out of scope here, deliberately: the checkout page itself (`checkout-page.ts`) still ticks Age
  * for any `ageVerified`. It renders from the policy manifest and the exported `RenderVerification`
