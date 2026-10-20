@@ -104,10 +104,13 @@ export function requestComments(comments, { isTrusted, snapshotAt }) {
 /** The Claude review's GitHub App account: a Bot, never a user who happens to be called "claude". */
 export const isReviewBot = (author) => author?.__typename === "Bot" && author?.login === "claude";
 
-/** "ready" (✅ Ready to merge), "notes" (💬 Ready — small notes), "changes" (⛔ Needs changes), or undefined. */
+/**
+ * "ready" (✅ Ready to merge), "changes" (⛔ Needs changes), or undefined. The review is dropping
+ * 💬 Ready — small notes; for one release a 💬 still reads as ✅.
+ */
 export function parseVerdict(body) {
   const m = String(body ?? "").match(/\*\*Verdict:\s*(✅|💬|⛔)/u);
-  return m ? { "✅": "ready", "💬": "notes", "⛔": "changes" }[m[1]] : undefined;
+  return m ? { "✅": "ready", "💬": "ready", "⛔": "changes" }[m[1]] : undefined;
 }
 
 /** An agent PR's branch → its issue number and run id; anything else is not the agent's to touch. */
@@ -117,20 +120,69 @@ export function agentBranch(ref) {
 }
 
 /**
- * The open review threads the agent must answer: started by the review bot or by someone trusted,
- * with only trusted (or bot) replies kept. Everything else is listed as ignored.
+ * The open review threads, sorted. `answer`: started by someone trusted, so the agent must answer
+ * them. `notes`: started by the review bot. They are context for a ⛔ fix and are listed at
+ * hand-over, but they are never criteria, because what blocks is in the summary's "Fix before
+ * merging". Only trusted (or bot) replies are kept. Everything else is listed as ignored.
  */
 export function threadsToAnswer(threads, isTrusted) {
   const ok = (a) => isReviewBot(a) || isTrusted(a?.login);
-  const answer = [], ignored = [];
+  const answer = [], notes = [], ignored = [];
   for (const t of threads) {
     if (t.isResolved) continue;
     const [root, ...rest] = t.comments;
     if (!root || !ok(root.author)) { ignored.push(`a thread started by ${root?.author?.login ?? "a deleted user"} (no write access)`); continue; }
-    answer.push({ id: t.id, path: t.path, line: t.line, comments: [root, ...rest.filter((c) => ok(c.author))].map((c) => ({ author: c.author?.login, body: c.body, databaseId: c.databaseId })) });
+    (isReviewBot(root.author) ? notes : answer).push({ id: t.id, path: t.path, line: t.line, comments: [root, ...rest.filter((c) => ok(c.author))].map((c) => ({ author: c.author?.login, body: c.body, databaseId: c.databaseId })) });
   }
-  return { answer, ignored };
+  return { answer, notes, ignored };
 }
+
+const firstLine = (s, n = 200) => String(s).replace(/[*_`#>]/g, "").split("\n").map((l) => l.trim()).find(Boolean)?.slice(0, n) ?? "";
+
+/**
+ * A review cycle's criteria: on ⛔, every "Fix before merging" item in the summary; and each open
+ * thread a trusted person started (`threads`, threadsToAnswer's `answer`). A bot note is never one.
+ */
+export function reviewFixCriteria({ verdict, threads, conflict = false }) {
+  const criteria = threads.map((t, i) => ({ id: `T${i + 1}`, text: `Review thread ${t.id} (${t.path ?? "general"}${t.line ? `:${t.line}` : ""}) is fixed, or declined with a concrete reason a reviewer would accept — "${firstLine(t.comments[0].body)}"`, verified_by: "review" }));
+  if (conflict) return criteria.length ? criteria : [{ id: "S1", text: "main is merged in cleanly and every gate still passes", verified_by: "review" }];
+  if (verdict === "changes" || !criteria.length) criteria.unshift({ id: "S1", text: "Every item under 'Fix before merging' in the review summary is fixed, or declined with a concrete reason", verified_by: "review" });
+  return criteria;
+}
+
+/**
+ * The replies the push job posts after a fix: one to each trusted person's thread (resolved when the
+ * agent answered it), and one to each bot note the agent fixed (resolved). A bot note it declined or
+ * left alone gets nothing: optional notes stay open for the human at hand-over. A conflict cycle
+ * wasn't asked about the threads, so it replies to none.
+ */
+export function threadReplies({ threads, notes = [], responses, sha, cycle, conflict = false, escape = (s) => s }) {
+  if (conflict) return [];
+  const byId = new Map(responses.map((r) => [r.thread_id, r]));
+  const reply = (t, r) => ({
+    thread: t.id, root: t.comments[0].databaseId, resolve: Boolean(r),
+    body: r
+      ? `${escape(r.reply)}\n\n— ${r.action === "fixed" ? (sha ? `fixed in ${sha.slice(0, 7)}` : "fixed") : "declined"} (issue agent, review cycle ${cycle})`
+      : `Not addressed in review cycle ${cycle} — the agent gave no answer for this thread. (issue agent)`,
+  });
+  return [
+    ...threads.map((t) => reply(t, byId.get(t.id))),
+    ...notes.filter((t) => byId.get(t.id)?.action === "fixed").map((t) => reply(t, byId.get(t.id))),
+  ];
+}
+
+/** The label that asks the Claude review for one more review of the PR. */
+export const REVIEW_AGAIN_LABEL = "review:again";
+
+/**
+ * The gh calls that ask for one re-review after a fix cycle pushed a commit: make the label if it is
+ * missing, then add it, once. Nothing when the cycle pushed nothing. Not agent:in-review, so adding
+ * it starts no review-loop run.
+ */
+export const reReviewCalls = ({ sha, url, repo }) => (!sha ? [] : [
+  ["label", "create", REVIEW_AGAIN_LABEL, "-R", repo, "--color", "5319E7", "--description", "Asks the Claude review to review this PR once more", "--force"],
+  ["pr", "edit", url, "-R", repo, "--add-label", REVIEW_AGAIN_LABEL],
+]);
 
 /**
  * The review verdict that applies to the PR's head. `summaries` are the review bot's summary
@@ -147,10 +199,10 @@ export function latestVerdict({ summaries, headAt, headIsMerge, conclusion }) {
 }
 
 /**
- * What the loop does after a review. It keeps fixing until the reviewer is satisfied (✅, or 💬
- * with nothing left open). At the cycle cap, 💬 counts as ready — the reviewer calls it safe to
- * merge, and each review of a fix tends to find a new, smaller note — so the PR goes to a human
- * with the open notes listed. ⛔ at the cap is never "ready": the loop stops and says why.
+ * What the loop does after a review. `open` counts only the threads a trusted person started (bot
+ * notes never block). ✅ with none open goes to a human at once, the bot's notes listed as needing
+ * no action. ⛔ gets one fix cycle; a ⛔ after a fix cycle goes to a human as stuck. A trusted
+ * person's open thread is answered, up to the cycle cap; at the cap a ✅ goes over with it listed.
  */
 export function reviewDecision({ verdict, open, cycle, maxCycles, conclusion, loopOn, conflicting = false, verified = false }) {
   // Without a token whose pushes start workflows a fix could never be reviewed: spend no fix
@@ -176,12 +228,13 @@ function decideOnVerdict({ verdict, open, cycle, maxCycles, conclusion }) {
     if (!conclusion) return { action: "wait", reason: "there is no Claude review verdict for the PR's latest commit yet" };
     return { action: "give-up", reason: conclusion === "success" ? "the Claude review finished without a verdict for the latest commit (it may be paused)" : `the Claude review ${conclusion === "failure" ? "failed" : `ended as ${conclusion}`} on the latest commit` };
   }
-  if ((verdict === "ready" || verdict === "notes") && open === 0) return { action: "done", reason: verdict === "ready" ? "the review says ✅ Ready to merge and every thread is resolved" : "the review says 💬 Ready — small notes, and every thread is resolved" };
-  if (cycle >= maxCycles) {
-    if (verdict === "ready" || verdict === "notes") return { action: "done", notes: open, reason: `after ${maxCycles} review cycles the review says ${verdict === "ready" ? "✅ Ready to merge" : "💬 Ready — small notes"}, with ${open} small note(s) still open (listed below)` };
-    return { action: "give-up", reason: `${maxCycles} review cycles done and the review still says ⛔ Needs changes` };
+  if (verdict === "changes") {
+    if (cycle >= 1) return { action: "give-up", reason: `the review still says ⛔ Needs changes after ${cycle} fix cycle(s)` };
+    return { action: "fix", reason: "the review says ⛔ Needs changes" };
   }
-  return { action: "fix", reason: verdict === "changes" ? "the review says ⛔ Needs changes" : `${open} review thread(s) still open` };
+  if (open === 0) return { action: "done", reason: "the review says ✅ Ready to merge" };
+  if (cycle >= maxCycles) return { action: "done", open, reason: `after ${maxCycles} review cycles the review says ✅ Ready to merge, with ${open} thread(s) from people with write access still open (listed below)` };
+  return { action: "fix", reason: `${open} thread(s) from people with write access still open` };
 }
 
 // ── the acceptance-criteria checklist in an agent PR's description ──────────────────────────────
@@ -320,7 +373,7 @@ export function requestBody(body) {
 export const sharedChanges = (mainChanged, prChanged) => [...new Set(prChanged)].filter((f) => mainChanged.includes(f)).sort();
 
 /** The review-cycle cap from a setting: a whole number ≥ 1, else the default — never NaN (no cap). */
-export function cycleCap(value, fallback = 3) {
+export function cycleCap(value, fallback = 2) {
   const n = Number(value);
   return Number.isInteger(n) && n >= 1 ? n : fallback;
 }

@@ -13,11 +13,12 @@ import {
   isAgentComment, requestComments, leftLoop, labelledBy, requestBody, protectedHead, updateSection, noComments,
   roleModel, testGateCommand, rootTestRefusal, publishVerdict, isMutableSource, sameLockfile, publishRefusalHint,
   parseCriteria, tickCriteria, verifiedFor, afterVerification, acceptVerified, conflictMidCycle,
+  reviewFixCriteria, threadReplies, reReviewCalls,
 } from "./checks.mjs";
-import { reviewPrompt } from "./roles.mjs";
+import { reviewPrompt, reviewFixPrompt } from "./roles.mjs";
 import { startMerge, buildResolvedMerge, replayResolution, rebuildForPush, treeOf } from "./merges.mjs";
 import { fingerprints, withinBaseline } from "./fingerprints.mjs";
-import { prBody, proofHtml, issueComment, statusBody, STATUS_MARK, md } from "./report.mjs";
+import { prBody, proofHtml, issueComment, statusBody, STATUS_MARK, md, handOverComment } from "./report.mjs";
 
 // Pinned so a contributor's own git config (quotePath off, signed commits) can't change the outcome.
 const git = (cwd, ...args) => {
@@ -376,7 +377,8 @@ describe("the review loop", () => {
 
   it("reads the review's verdict", () => {
     expect(parseVerdict("## Claude review\n**Verdict: ✅ Ready to merge**")).toBe("ready");
-    expect(parseVerdict("**Verdict: 💬 Ready — small notes**")).toBe("notes");
+    // 💬 is no longer a verdict of its own: for one release a stray one reads as ✅
+    expect(parseVerdict("**Verdict: 💬 Ready — small notes**")).toBe("ready");
     expect(parseVerdict("**Verdict: ⛔ Needs changes**")).toBe("changes");
     expect(parseVerdict("no verdict here")).toBeUndefined();
   });
@@ -392,17 +394,78 @@ describe("the review loop", () => {
     expect(isReviewBot({ __typename: "User", login: "claude" })).toBe(false);
   });
 
-  it("answers threads from the bot and maintainers only, and drops outsiders' replies", () => {
-    const thread = (id, root, ...replies) => ({ id, isResolved: false, path: "a.ts", line: 1, comments: [root, ...replies].map((author, i) => ({ databaseId: i, author, body: `${author.login} says` })) });
-    const { answer, ignored } = threadsToAnswer([
+  const thread = (id, root, ...replies) => ({ id, isResolved: false, path: "a.ts", line: 1, comments: [root, ...replies].map((author, i) => ({ databaseId: i, author, body: `${author.login} says` })) });
+
+  it("answers maintainers' threads, keeps the bot's as notes, and drops outsiders' replies", () => {
+    const { answer, notes, ignored } = threadsToAnswer([
       thread("T1", bot, outsider, maintainer),
       thread("T2", outsider),
       { ...thread("T3", bot), isResolved: true },
-      thread("T4", maintainer),
+      thread("T4", maintainer, outsider, bot),
     ], isTrusted);
-    expect(answer.map((t) => t.id)).toEqual(["T1", "T4"]);
-    expect(answer[0].comments.map((c) => c.author)).toEqual(["claude", "dzuluaga"]);
+    expect(answer.map((t) => t.id)).toEqual(["T4"]); // a bot thread is never one the agent must answer
+    expect(answer[0].comments.map((c) => c.author)).toEqual(["dzuluaga", "claude"]);
+    expect(notes.map((t) => t.id)).toEqual(["T1"]);
+    expect(notes[0].comments.map((c) => c.author)).toEqual(["claude", "dzuluaga"]);
     expect(ignored).toEqual(["a thread started by mallory (no write access)"]);
+  });
+
+  it("makes a fix cycle's criteria from ⛔'s must-fix list and maintainers' threads — never from a bot note", () => {
+    const { answer } = threadsToAnswer([thread("B1", bot), thread("M1", maintainer)], isTrusted);
+    const ids = (o) => reviewFixCriteria(o).map((c) => c.id);
+    expect(ids({ verdict: "changes", threads: answer })).toEqual(["S1", "T1"]);
+    expect(reviewFixCriteria({ verdict: "changes", threads: answer }).map((c) => c.text).join("\n")).not.toContain("B1");
+    expect(reviewFixCriteria({ verdict: "changes", threads: answer })[0].text).toMatch(/Fix before merging/);
+    expect(ids({ verdict: "ready", threads: answer })).toEqual(["T1"]); // ✅: only the maintainer's thread
+    expect(ids({ verdict: "changes", threads: [] })).toEqual(["S1"]);
+    expect(ids({ verdict: "ready", threads: [], conflict: true })).toEqual(["S1"]);
+    expect(reviewFixCriteria({ verdict: "ready", threads: [], conflict: true })[0].text).toMatch(/main is merged in/);
+  });
+
+  it("replies to maintainers' threads and to bot notes the agent fixed — and leaves a declined bot note alone", () => {
+    const { answer, notes } = threadsToAnswer([thread("B1", bot), thread("B2", bot), thread("B3", bot), thread("M1", maintainer), thread("M2", maintainer)], isTrusted);
+    const replies = threadReplies({
+      threads: answer, notes, cycle: 1, sha: "abcdef0123",
+      responses: [
+        { thread_id: "B1", action: "fixed", reply: "done" },
+        { thread_id: "B2", action: "declined", reply: "out of scope" },
+        { thread_id: "M1", action: "declined", reply: "not in this issue" },
+      ],
+    });
+    expect(replies.map((r) => r.thread)).toEqual(["M1", "M2", "B1"]); // B2 declined, B3 unanswered: no reply
+    expect(replies.find((r) => r.thread === "B1")).toMatchObject({ resolve: true, body: expect.stringMatching(/fixed in abcdef0/) });
+    expect(replies.find((r) => r.thread === "M1")).toMatchObject({ resolve: true, body: expect.stringMatching(/declined/) });
+    expect(replies.find((r) => r.thread === "M2")).toMatchObject({ resolve: false, body: expect.stringMatching(/Not addressed/) });
+    expect(threadReplies({ threads: answer, notes, cycle: 1, sha: "abc", responses: [], conflict: true })).toEqual([]);
+  });
+
+  it("gives the fixer the bot's notes as context, never as threads to answer", () => {
+    const { answer, notes } = threadsToAnswer([thread("B1", bot), thread("M1", maintainer)], isTrusted);
+    const p = (verdict) => reviewFixPrompt({ number: 1, title: "t", body: "b", comments: [] }, { verdict, cycle: 0, maxCycles: 2, summary: "s", threads: answer, notes });
+    expect(p("changes")).toContain('<note id="B1"');
+    expect(p("changes")).not.toContain('<thread id="B1"');
+    expect(p("changes")).toContain('<thread id="M1"');
+    expect(p("changes")).toMatch(/Fix every item under "Fix before merging"/);
+    expect(p("ready")).not.toMatch(/Fix every item under "Fix before merging"/);
+  });
+
+  it("asks for one re-review with review:again after a pushed fix — and not when nothing was pushed", () => {
+    const calls = reReviewCalls({ sha: "abcdef0123", url: "https://github.com/o/r/pull/7", repo: "o/r" });
+    const adds = calls.filter((c) => c.includes("--add-label"));
+    expect(adds).toEqual([["pr", "edit", "https://github.com/o/r/pull/7", "-R", "o/r", "--add-label", "review:again"]]);
+    expect(calls[0].slice(0, 3)).toEqual(["label", "create", "review:again"]); // made if missing, first
+    expect(calls.flat()).not.toContain("agent:in-review"); // never the label that starts a loop run
+    expect(reReviewCalls({ sha: undefined, url: "https://github.com/o/r/pull/7", repo: "o/r" })).toEqual([]);
+  });
+
+  it("lists a ✅ review's open bot notes as needing no action in the hand-over", () => {
+    const { notes } = threadsToAnswer([thread("B1", bot)], isTrusted);
+    const text = handOverComment({ kind: "ready", reason: "the review says ✅ Ready to merge", cycle: 0, threads: [], notes, url: "https://github.com/o/r/pull/7", who: "@ann " });
+    expect(text).toMatch(/no action needed/);
+    expect(text).toContain("[a.ts:1](https://github.com/o/r/pull/7#discussion_r0) — claude says");
+    expect(text).toMatch(/^<!-- issue-agent-review done -->/);
+    expect(handOverComment({ kind: "ready", reason: "ok", cycle: 1, threads: [], notes: [], url: "u" })).not.toMatch(/no action needed/);
+    expect(handOverComment({ kind: "needs-human", reason: "stuck", cycle: 1, threads: [], notes, url: "u" })).toMatch(/^<!-- issue-agent-review stopped -->/);
   });
 
   it("counts pushed cycles — not hand-overs, outsiders' copies, or another bot's", () => {
@@ -503,13 +566,14 @@ describe("the review loop", () => {
   const rd = (o) => reviewDecision({ loopOn: true, verified: true, ...o });
 
   it("checks the issue's acceptance criteria before handing over — once per head", () => {
-    const d = reviewDecision({ loopOn: true, verdict: "ready", open: 0, cycle: 1, maxCycles: 3 });
+    const d = reviewDecision({ loopOn: true, verdict: "ready", open: 0, cycle: 1, maxCycles: 2 });
     expect(d).toMatchObject({ action: "verify", then: { action: "done" } });
-    expect(reviewDecision({ loopOn: true, verified: true, verdict: "ready", open: 0, cycle: 1, maxCycles: 3 }).action).toBe("done");
-    // at the cap, a 💬 with notes is "done" too — and is verified first as well
-    expect(reviewDecision({ loopOn: true, verdict: "notes", open: 2, cycle: 3, maxCycles: 3 })).toMatchObject({ action: "verify", then: { action: "done", notes: 2 } });
+    expect(reviewDecision({ loopOn: true, verified: true, verdict: "ready", open: 0, cycle: 1, maxCycles: 2 }).action).toBe("done");
+    // at the cap, a ✅ with a maintainer's thread still open is "done" too — and is verified first as well
+    expect(reviewDecision({ loopOn: true, verdict: "ready", open: 2, cycle: 2, maxCycles: 2 })).toMatchObject({ action: "verify", then: { action: "done", open: 2 } });
     // "fix" and "give-up" are never held back for verification
-    expect(reviewDecision({ loopOn: true, verdict: "changes", open: 2, cycle: 0, maxCycles: 3 }).action).toBe("fix");
+    expect(reviewDecision({ loopOn: true, verdict: "changes", open: 2, cycle: 0, maxCycles: 2 }).action).toBe("fix");
+    expect(reviewDecision({ loopOn: true, verdict: "changes", open: 0, cycle: 1, maxCycles: 2 }).action).toBe("give-up");
   });
 
   it("resolves a conflict with main instead of waiting for a review that can't come — or hands over at the cap", () => {
@@ -556,26 +620,32 @@ describe("the review loop", () => {
     expect(verifiedFor([c(outsider, "<!-- issue-agent-verified sha=abc123 -->")], "abc123", isTrusted)).toBe(false);
   });
 
-  it("hands over only when the review is satisfied and nothing is open", () => {
-    const d = (verdict, open, cycle = 0) => rd({ verdict, open, cycle, maxCycles: 3 }).action;
-    expect(d("ready", 0)).toBe("done");
-    expect(d("notes", 0)).toBe("done");
-    expect(d("notes", 2)).toBe("fix"); // small notes still get fixed before a human is asked
-    expect(d("ready", 1)).toBe("fix");
+  it("hands a ✅ over at once — bot notes or not — and fixes only ⛔ or a maintainer's open thread", () => {
+    // `open`: threads opened by people with write access (a bot note never counts — threadsToAnswer)
+    const d = (verdict, open, cycle = 0) => rd({ verdict, open, cycle, maxCycles: 2 }).action;
+    expect(d("ready", 0)).toBe("done"); // whatever bot notes are open: they are listed, not fixed
+    expect(d(parseVerdict("**Verdict: 💬 Ready — small notes**"), 0)).toBe("done"); // a stray 💬 is a ✅
+    expect(rd({ verdict: "ready", open: 0, cycle: 0, maxCycles: 2, verified: false }).action).toBe("verify");
+    expect(d("ready", 1)).toBe("fix"); // a maintainer's thread is answered
     expect(d("changes", 0)).toBe("fix");
     expect(d(undefined, 0)).toBe("wait");
+  });
+
+  it("hands a second ⛔ to a human, whatever cycles are left", () => {
+    expect(rd({ verdict: "changes", open: 0, cycle: 1, maxCycles: 2 })).toMatchObject({ action: "give-up", reason: expect.stringMatching(/⛔ Needs changes/) });
+    expect(rd({ verdict: "changes", open: 3, cycle: 1, maxCycles: 5 }).action).toBe("give-up");
   });
 
   it("finds the verdict for the head — reusing the last one only when the head just merges main in", () => {
     const s = (createdAt, v) => ({ createdAt, body: `## Claude review\n**Verdict: ${v}**` });
     const summaries = [s("2026-10-16T10:00:00Z", "⛔ Needs changes"), s("2026-10-16T12:00:00Z", "💬 Ready — small notes")];
-    expect(latestVerdict({ summaries, headAt: "2026-10-16T11:00:00Z", headIsMerge: false, conclusion: "success" }).verdict).toBe("notes");
+    expect(latestVerdict({ summaries, headAt: "2026-10-16T11:00:00Z", headIsMerge: false, conclusion: "success" }).verdict).toBe("ready");
     // a commit time in the committer's zone: 13:30+02:00 is 11:30Z — still before the 12:00Z summary
-    expect(latestVerdict({ summaries, headAt: "2026-10-16T13:30:00+02:00", headIsMerge: false, conclusion: "success" }).verdict).toBe("notes");
+    expect(latestVerdict({ summaries, headAt: "2026-10-16T13:30:00+02:00", headIsMerge: false, conclusion: "success" }).verdict).toBe("ready");
     // a newer fix commit with no review of it yet: no verdict
     expect(latestVerdict({ summaries, headAt: "2026-10-16T13:00:00Z", headIsMerge: false, conclusion: "success" }).verdict).toBeUndefined();
     // "Update branch" (a merge of main, which the review skips): the last verdict still applies
-    expect(latestVerdict({ summaries, headAt: "2026-10-16T13:00:00Z", headIsMerge: true, conclusion: "success" })).toMatchObject({ verdict: "notes", reused: true });
+    expect(latestVerdict({ summaries, headAt: "2026-10-16T13:00:00Z", headIsMerge: true, conclusion: "success" })).toMatchObject({ verdict: "ready", reused: true });
     // …but not when the review failed
     expect(latestVerdict({ summaries, headAt: "2026-10-16T13:00:00Z", headIsMerge: true, conclusion: "failure" }).verdict).toBeUndefined();
   });
@@ -588,11 +658,11 @@ describe("the review loop", () => {
 
   it("reads the cycle cap as a whole number ≥ 1, never as no cap", () => {
     expect(cycleCap("4")).toBe(4);
-    expect(cycleCap("")).toBe(3);
-    expect(cycleCap(undefined)).toBe(3);
-    expect(cycleCap("four")).toBe(3);
-    expect(cycleCap("2.5")).toBe(3);
-    expect(cycleCap("0")).toBe(3);
+    expect(cycleCap("")).toBe(2);
+    expect(cycleCap(undefined)).toBe(2);
+    expect(cycleCap("four")).toBe(2);
+    expect(cycleCap("2.5")).toBe(2);
+    expect(cycleCap("0")).toBe(2);
   });
 
   it("hands a PR over when the review failed or gave no verdict, instead of waiting forever", () => {
@@ -601,14 +671,13 @@ describe("the review loop", () => {
     expect(rd({ verdict: undefined, open: 0, cycle: 0, maxCycles: 3 }).action).toBe("wait"); // started by hand, no review finished
   });
 
-  it("at the cycle cap, counts 💬 as ready (notes listed) but never ⛔", () => {
-    const at = (verdict, open) => rd({ verdict, open, cycle: 3, maxCycles: 3 });
-    expect(at("notes", 2)).toMatchObject({ action: "done", notes: 2 });
-    expect(at("ready", 1)).toMatchObject({ action: "done", notes: 1 });
+  it("at the cycle cap, hands a ✅ over with maintainers' open threads listed, but never a ⛔ as ready", () => {
+    const at = (verdict, open) => rd({ verdict, open, cycle: 2, maxCycles: 2 });
+    expect(at("ready", 1)).toMatchObject({ action: "done", open: 1 });
     expect(at("changes", 0).action).toBe("give-up");
     expect(at("changes", 4).action).toBe("give-up");
-    // before the cap, open notes are still fixed
-    expect(rd({ verdict: "notes", open: 2, cycle: 2, maxCycles: 3 }).action).toBe("fix");
+    // before the cap, a maintainer's open thread is still answered
+    expect(rd({ verdict: "ready", open: 2, cycle: 1, maxCycles: 2 }).action).toBe("fix");
   });
 });
 

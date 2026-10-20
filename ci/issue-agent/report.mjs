@@ -186,6 +186,29 @@ export function statusBody(previous, state, { at = new Date(), link, max = 25 } 
   return `${STATUS_MARK}\n🤖 **Issue agent:** ${line}\n\n| UTC | step |\n| --- | --- |\n${rows.slice(-max).join("\n")}\n`;
 }
 
+// The review loop's comments on a PR (run.mjs, "the review loop").
+export const REVIEW_MARK = "<!-- issue-agent-review";
+
+// Open review threads, each as a link a reviewer can click: the file and the note's first line.
+const threadLinks = (threads, url) => threads.map((t) => {
+  const first = String(t.comments[0].body).replace(/[*_`#>]/g, "").split("\n").map((l) => l.trim()).find(Boolean)?.slice(0, 160) ?? "";
+  return `- [${md(t.path ?? "general")}${t.line ? `:${t.line}` : ""}](${url}#discussion_r${t.comments[0].databaseId}) — ${md(first)}`;
+}).join("\n");
+
+/**
+ * The hand-over comment. `threads`: open threads people with write access started (still open only
+ * at the cycle cap); `notes`: the review bot's open threads — optional, listed as no action needed.
+ */
+export function handOverComment({ kind, who = "", reason, cycle, threads = [], notes = [], url }) {
+  reason = String(reason).charAt(0).toUpperCase() + String(reason).slice(1); // it follows a full stop
+  const open = threadLinks(threads, url);
+  const optional = notes.length ? `\n\nThe reviewer's optional notes, still open — no action needed before merging:\n${threadLinks(notes, url)}` : "";
+  if (kind !== "ready") return `${REVIEW_MARK} stopped -->\n⚠️ **The agent stopped iterating — ${who}this needs a human.** ${md(reason)}.${open ? `\n\nStill open:\n${open}` : ""}${optional}`;
+  return threads.length
+    ? `${REVIEW_MARK} done -->\n✅ **${who}this is ready for your review — with ${threads.length} thread(s) left open.** ${md(reason)}. The agent stopped at the cycle cap rather than answer them again:\n\n${open}${optional}`
+    : `${REVIEW_MARK} done -->\n✅ **The review says ready — ${who}this is ready for your review.** ${md(reason)} after ${cycle} fix cycle(s).${optional}`;
+}
+
 export function issueComment({ kind, reason, prUrl, report, where }) {
   const retry = "Remove and re-add the `agent` label to run it again.";
   switch (kind) {
