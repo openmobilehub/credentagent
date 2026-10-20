@@ -49,7 +49,7 @@ import {
   TRUSTED_PERMISSIONS, titleAuthor, forbiddenPaths, applyAndCheck, changedSince, isRunId, isCommitId, publishIssueNumber,
   isReviewBot, parseVerdict, agentBranch, threadsToAnswer, reviewDecision, sharedChanges, filesBetween, cyclesDone, loopRefusal, latestVerdict, cycleCap,
   parseCriteria, tickCriteria, verifiedFor, afterVerification, acceptVerified, conflictMidCycle,
-  reviewFixCriteria, threadReplies, reReviewCalls, cycleMark, changesFixesDone, stillOpen,
+  reviewFixCriteria, threadReplies, reReviewCalls, cycleMark, changesFixesDone, stillOpen, pushedCycle,
   isAgentComment, requestComments, leftLoop, isLoopAuthor, labelledBy, requestBody, updateSection,
   roleModel, testGateCommand, rootTestRefusal, publishVerdict, isMutableSource, sameLockfile, publishRefusalHint,
 } from "./checks.mjs";
@@ -1478,6 +1478,8 @@ function pushReview(dir, review) {
   const untested = rootTestRefusal(fix.last, outcome.testedPatchSha256 ?? outcome.patchSha256, TEST);
   if (untested) return handOver(review, "needs-human", untested);
   const resolved = outcome.resolved ?? [];
+  // What this cycle was, from trusted values only (tested in checks.mjs); the rebuild checks `resolved`.
+  const pushed = pushedCycle({ decision: review.decision, verdict: review.verdict, resolved: outcome.mergedMain ? resolved : [] });
 
   let sha;
   if (patch.trim() || outcome.mergedMain) {
@@ -1521,7 +1523,7 @@ function pushReview(dir, review) {
   // Reply to each trusted person's thread with the agent's answer, and to each bot note it fixed;
   // resolve the answered ones. A bot note it declined gets nothing (tested in checks.mjs).
   let answered = 0;
-  for (const r of threadReplies({ threads: review.threads, notes: review.notes ?? [], responses: fix.responses, sha, cycle: k, conflict: fix.mode === "conflict", escape: md })) {
+  for (const r of threadReplies({ threads: review.threads, notes: review.notes ?? [], responses: fix.responses, sha, cycle: k, conflict: pushed.mode === "conflict", escape: md })) {
     sh("gh", ["api", `repos/${REPO}/pulls/${review.pr}/comments/${r.root}/replies`, "-f", `body=${r.body}`], { allowFail: true });
     if (r.resolve) { gh(["api", "graphql", "-f", `query=mutation{resolveReviewThread(input:{threadId:"${r.thread}"}){thread{isResolved}}}`]); answered++; }
   }
@@ -1541,7 +1543,7 @@ function pushReview(dir, review) {
   const declined = fix.responses.filter((r) => r.action === "declined" && review.threads.some((t) => t.id === r.thread_id)).length;
   fix.summary_items = fix.summary_items?.length ? fix.summary_items : fix.last?.impl?.summary_items ?? [];
   gh(["pr", "comment", review.url, "-R", REPO, "--body",
-    `${cycleMark({ cycle: k, sha, answeredChanges: fix.mode === "review" && review.verdict === "changes" })}\n🔁 **Review cycle ${k}/${review.maxCycles}:** ${sha ? `pushed ${sha.slice(0, 7)}` : "no code change"}${outcome.mergedMain ? ` (with main ${outcome.mergedMain.slice(0, 7)} merged in${resolved.length ? `, conflicts in ${resolved.length} file(s) resolved by the agent` : ""})` : ""}${fix.mode === "verify" ? ` · made ${md(verdicts.filter((v) => !v.met).map((v) => v.id).join(", "))} true (acceptance criteria that weren't met yet)` : ""}${fix.mode === "conflict" ? " · review threads are left for the next cycle" : ` · ${answered} thread(s) answered and resolved`}${declined ? ` (${declined} declined with a reason)` : ""}${(fix.summary_items ?? []).length ? ` · summary items: ${md(fix.summary_items.join("; "))}` : ""}.${sha ? ` Asked for one re-review (\`review:again\`).` : ""}`]);
+    `${cycleMark({ cycle: k, sha, answeredChanges: pushed.answeredChanges })}\n🔁 **Review cycle ${k}/${review.maxCycles}:** ${sha ? `pushed ${sha.slice(0, 7)}` : "no code change"}${outcome.mergedMain ? ` (with main ${outcome.mergedMain.slice(0, 7)} merged in${resolved.length ? `, conflicts in ${resolved.length} file(s) resolved by the agent` : ""})` : ""}${pushed.mode === "verify" ? ` · made ${md(verdicts.filter((v) => !v.met).map((v) => v.id).join(", "))} true (acceptance criteria that weren't met yet)` : ""}${pushed.mode === "conflict" ? " · review threads are left for the next cycle" : ` · ${answered} thread(s) answered and resolved`}${declined ? ` (${declined} declined with a reason)` : ""}${(fix.summary_items ?? []).length ? ` · summary items: ${md(fix.summary_items.join("; "))}` : ""}.${sha ? ` Asked for one re-review (\`review:again\`).` : ""}`]);
   // No push means no new review would ever come: hand over now rather than wait forever.
   if (!sha) return handOver({ ...review, cycle: k, ...stillOpen({ threads: review.threads, notes: review.notes, responses: fix.responses }) }, "needs-human", "the agent answered the review without changing code, so no new review will run");
   setStatus(review.issueNumber, `review cycle ${k}/${review.maxCycles}: pushed ${sha.slice(0, 7)} to ${review.url} — waiting for the next Claude review`, { working: true });

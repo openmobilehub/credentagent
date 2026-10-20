@@ -13,7 +13,7 @@ import {
   isAgentComment, requestComments, leftLoop, labelledBy, requestBody, protectedHead, updateSection, noComments,
   roleModel, testGateCommand, rootTestRefusal, publishVerdict, isMutableSource, sameLockfile, publishRefusalHint,
   parseCriteria, tickCriteria, verifiedFor, afterVerification, acceptVerified, conflictMidCycle,
-  reviewFixCriteria, threadReplies, reReviewCalls, cycleMark, changesFixesDone, stillOpen,
+  reviewFixCriteria, threadReplies, reReviewCalls, cycleMark, changesFixesDone, stillOpen, pushedCycle,
 } from "./checks.mjs";
 import { reviewPrompt, reviewFixPrompt } from "./roles.mjs";
 import { startMerge, buildResolvedMerge, replayResolution, rebuildForPush, treeOf } from "./merges.mjs";
@@ -420,6 +420,12 @@ describe("the review loop", () => {
     expect(answer.map((t) => t.id)).toEqual(["B1"]);
     expect(answer[0].comments.map((c) => c.author)).toEqual(["claude", "dzuluaga"]);
     expect(notes.map((t) => t.id)).toEqual(["B2", "B3"]);
+    // the maintainer's reply is the request: the criterion quotes it, not the bot's note
+    const [b1] = reviewFixCriteria({ verdict: "ready", threads: answer });
+    expect(b1.text).toContain("dzuluaga says");
+    expect(b1.text).not.toContain("claude says");
+    const [m1] = reviewFixCriteria({ verdict: "ready", threads: threadsToAnswer([thread("M1", maintainer, bot)], isTrusted).answer });
+    expect(m1.text).toContain("dzuluaga says"); // a maintainer's own thread: their opening comment
   });
 
   it("makes a fix cycle's criteria from ⛔'s must-fix list and maintainers' threads — never from a bot note", () => {
@@ -470,6 +476,7 @@ describe("the review loop", () => {
     expect(p("changes")).toContain('<thread id="M1"');
     expect(p("changes")).toMatch(/Fix every item under "Fix before merging"/);
     expect(p("ready")).not.toMatch(/Fix every item under "Fix before merging"/);
+    expect(p("ready")).toMatch(/replied on the reviewer's note — then their reply is the request/);
   });
 
   it("asks for one re-review with review:again after a pushed fix — and not when nothing was pushed", () => {
@@ -513,6 +520,16 @@ describe("the review loop", () => {
     expect(cyclesDone(comments, isTrusted)).toBe(1);
     expect(changesFixesDone(comments, isTrusted)).toBe(0);
     expect(changesFixesDone([...comments, c(maintainer, cycleMark({ cycle: 2, sha: "def", answeredChanges: true }))], isTrusted)).toBe(1);
+  });
+
+  it("knows a pushed cycle answered a ⛔ only from trusted values — a fix cycle on ⛔ that met no conflict", () => {
+    const fix = { action: "fix", reason: "⛔" };
+    expect(pushedCycle({ decision: fix, verdict: "changes" })).toEqual({ mode: "review", answeredChanges: true });
+    expect(pushedCycle({ decision: fix, verdict: "ready" })).toEqual({ mode: "review", answeredChanges: false }); // a maintainer's thread on ✅
+    expect(pushedCycle({ decision: { ...fix, conflict: true }, verdict: "changes" })).toEqual({ mode: "conflict", answeredChanges: false });
+    expect(pushedCycle({ decision: fix, verdict: "changes", resolved: ["a.ts"] })).toEqual({ mode: "conflict", answeredChanges: false }); // became a conflict cycle
+    expect(pushedCycle({ decision: { action: "verify" }, verdict: "changes" })).toEqual({ mode: "verify", answeredChanges: false });
+    expect(pushedCycle({ decision: { action: "verify" }, verdict: "ready", resolved: ["a.ts"] }).mode).toBe("conflict");
   });
 
   it("counts pushed cycles — not hand-overs, outsiders' copies, or another bot's", () => {

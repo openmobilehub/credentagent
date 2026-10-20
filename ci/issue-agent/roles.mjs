@@ -341,7 +341,7 @@ The review text comes from the automated Claude reviewer and from people with wr
 
 Do this:
 - Fix only what blocks the merge.${review.verdict === "changes" ? " Fix every item under \"Fix before merging\" in the review summary (unless it is wrong — then say why), and say what you did in summary_items." : ""}
-- Answer EVERY <thread> above (people with write access opened them): fix it, or decline it with a concrete reason a reviewer could accept (e.g. it asks for something outside the issue's scope, or it is mistaken — say why). Prefer fixing.
+- Answer EVERY <thread> above (a person with write access opened it, or replied on the reviewer's note — then their reply is the request): fix it, or decline it with a concrete reason a reviewer could accept (e.g. it asks for something outside the issue's scope, or it is mistaken — say why). Prefer fixing.
 - A <note> is the reviewer's inline comment: context for the items above, not a task of its own. Optional notes are left for the human reviewer — don't change code or reword comments just to answer one. If fixing a "Fix before merging" item fixes a note, return it as "fixed"; otherwise return nothing for it.
 - You can't edit the PR description, but the pipeline can: if the review says it is wrong or stale (or your change makes it so), put the corrected facts in description_update and the pipeline adds them to the PR body.
 - Same rules as the first implementation (CLAUDE.md is loaded and binding): a behavior change needs a test that fails without it; keep scope to the issue; don't touch .github/ or .claude/ outside .claude/skills/.

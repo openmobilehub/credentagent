@@ -139,7 +139,8 @@ export function threadsToAnswer(threads, isTrusted) {
     const [root, ...rest] = t.comments;
     if (!root || !ok(root.author)) { ignored.push(`a thread started by ${root?.author?.login ?? "a deleted user"} (no write access)`); continue; }
     const kept = rest.filter((c) => ok(c.author));
-    (isReviewBot(root.author) && !kept.some(byPerson) ? notes : answer).push({ id: t.id, path: t.path, line: t.line, comments: [root, ...kept].map((c) => ({ author: c.author?.login, body: c.body, databaseId: c.databaseId })) });
+    const asked = isReviewBot(root.author) ? kept.findLast(byPerson) : root; // on a bot note, the person's reply is the request
+    (asked ? answer : notes).push({ id: t.id, path: t.path, line: t.line, ...(asked && { request: asked.body }), comments: [root, ...kept].map((c) => ({ author: c.author?.login, body: c.body, databaseId: c.databaseId })) });
   }
   return { answer, notes, ignored };
 }
@@ -148,10 +149,11 @@ const firstLine = (s, n = 200) => String(s).replace(/[*_`#>]/g, "").split("\n").
 
 /**
  * A review cycle's criteria: on ⛔, every "Fix before merging" item in the summary; and each open
- * thread a trusted person started (`threads`, threadsToAnswer's `answer`). A bot note is never one.
+ * thread a trusted person started or replied on (`threads`, threadsToAnswer's `answer`), quoting the
+ * person's request. A bot note nobody replied on is never one.
  */
 export function reviewFixCriteria({ verdict, threads, conflict = false }) {
-  const criteria = threads.map((t, i) => ({ id: `T${i + 1}`, text: `Review thread ${t.id} (${t.path ?? "general"}${t.line ? `:${t.line}` : ""}) is fixed, or declined with a concrete reason a reviewer would accept — "${firstLine(t.comments[0].body)}"`, verified_by: "review" }));
+  const criteria = threads.map((t, i) => ({ id: `T${i + 1}`, text: `Review thread ${t.id} (${t.path ?? "general"}${t.line ? `:${t.line}` : ""}) is fixed, or declined with a concrete reason a reviewer would accept — "${firstLine(t.request ?? t.comments[0].body)}"`, verified_by: "review" }));
   if (conflict) return criteria.length ? criteria : [{ id: "S1", text: "main is merged in cleanly and every gate still passes", verified_by: "review" }];
   if (verdict === "changes") criteria.unshift({ id: "S1", text: "Every item under 'Fix before merging' in the review summary is fixed, or declined with a concrete reason", verified_by: "review" });
   return criteria;
@@ -329,6 +331,17 @@ export const cyclesDone = (comments, isTrusted) =>
  */
 export const cycleMark = ({ cycle, sha, answeredChanges }) =>
   `<!-- issue-agent-review cycle=${cycle} sha=${sha ?? "none"}${answeredChanges ? " answered=changes" : ""} -->`;
+
+/**
+ * What a pushed cycle was, from values the push job checks itself — never the agents' fix.json: the
+ * trusted decision, the review's verdict, and `resolved`, the conflicted files (the push job's
+ * rebuild refuses them unless they are exactly what git reports). A cycle that met a conflict became
+ * a conflict cycle. `answeredChanges`: it was the fix for a ⛔, which cycleMark records.
+ */
+export function pushedCycle({ decision, verdict, resolved = [] }) {
+  const mode = decision?.conflict || resolved.length ? "conflict" : decision?.action === "verify" ? "verify" : "review";
+  return { mode, answeredChanges: mode === "review" && verdict === "changes" };
+}
 
 /** How many of those cycles answered a ⛔ — the count that sends the next ⛔ to a human. */
 export const changesFixesDone = (comments, isTrusted) =>

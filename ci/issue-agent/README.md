@@ -342,7 +342,9 @@ Claude review finishes on an agent:in-review PR, or the label is added   (or: ma
   commit that only reworded comments. ⛔ gets one fix cycle; **a second ⛔ goes to you as
   `agent:needs-human`**. Only a cycle that answered a ⛔ counts here (its cycle comment is marked
   `answered=changes`): a cycle that merged main in or made acceptance criteria true doesn't, so a
-  first ⛔ after one is still fixed. A bot note a person with write access replied on is answered like
+  first ⛔ after one is still fixed. (Cycles pushed before this mark existed carry no
+  `answered=changes`, so a PR already in the loop then may get one more ⛔ fix — never past the cycle
+  cap.) The push job sets the mark from its own checked values, not from the agents' output. A bot note a person with write access replied on is answered like
   their own thread. On a stop, the bot's open notes are listed plainly, not as "no action needed" —
   on a ⛔ they may be what blocks. The loop reads two verdicts, ✅ and ⛔; a 💬 Ready — small notes (which the
   review is dropping) reads as ✅, for one release.
