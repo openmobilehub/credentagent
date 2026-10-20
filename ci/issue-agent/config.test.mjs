@@ -158,6 +158,8 @@ describe("the prompts in another repo", () => {
       expect(text).toContain("Every lens checks the honesty rule. Blocking: a claim the library doesn't back.");
       expect(text).not.toContain("a missing bypass test for a new or changed control");
       expect(text).toMatch(/everything else is a "suggestion".*never sent back to the implementer/);
+      // Rules that list no blocking classes still leave the reviewers able to block.
+      expect(text).toContain("if they list none, only for what a maintainer would request changes on");
     }
   });
 

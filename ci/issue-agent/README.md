@@ -67,12 +67,15 @@ different agent before it reaches the PR:
 - **Reviewers check what the Claude review on GitHub checks.** Every lens carries `REVIEW.md`'s
   rules — the bypass-test question ("which test fails if this line is reverted?"), "fix it or flag
   it", and "stale docs, callers and examples are findings" — so a round on GitHub isn't spent on what
-  the internal round could have caught. A finding blocks only in REVIEW.md's classes — a broken
-  security invariant, a missing bypass test for a new or changed control, a correctness bug, a release
-  or README claim the code doesn't back, a regression against the DX rubric, or a change too big or
-  outside its ticket. Comment wording, doc phrasing, and an edge case that needs a host to break its
-  declared types are suggestions at most: they are reported on the draft pull request but never sent
-  back to the implementer. A repo's own `reviewRules` replaces that list. The reviewers get the diff (capped) and the pipeline's measured facts
+  the internal round could have caught. A finding blocks only in the classes the default review rules
+  (`DEFAULT_REVIEW_RULES` in `roles.mjs`) list — a broken security invariant, a missing bypass test for
+  a new or changed control, a correctness bug, a release or README claim the code doesn't back, an
+  overclaim of trust (REVIEW.md §4, honesty fencing), a regression against the DX rubric, or a change
+  too big or outside its ticket. Comment wording, doc phrasing that claims no extra trust, and an edge
+  case that needs a host to break its declared types (never input an attacker controls) are suggestions
+  at most: they are reported on the draft pull request but never sent back to the implementer. An unmet
+  acceptance criterion does go back, and the spec reviewer's verdict is then "request changes". A
+  repo's own `reviewRules` replaces that list. The reviewers get the diff (capped) and the pipeline's measured facts
   in the prompt, rather than spending turns finding them.
 - **Two models.** The spec agent and the three reviewers run on `ISSUE_AGENT_REVIEW_MODEL` (faster);
   the implementer — every attempt, and the review loop's fixes — and the evidence agent on

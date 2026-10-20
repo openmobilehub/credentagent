@@ -39,9 +39,10 @@ const DEFAULT_REVIEW_RULES = `What blocks a merge — these classes, and only th
 - a missing bypass test for a new or changed control
 - a correctness bug
 - a release or README claim the code doesn't back
+- an overclaim of trust (REVIEW.md §4, honesty fencing): any doc, comment or UI copy implying more trust than the trust_level
 - a regression against the DX rubric
 - a change too big or outside its ticket
-Never blocking — a suggestion at most: comment wording, doc phrasing, and an edge case that needs a host to break its declared types.
+Never blocking — a suggestion at most: comment wording, doc phrasing (unless it overclaims trust), and an edge case that needs a host to break its declared types. Input an attacker controls — an order token, a request body, a presentation — is never such an edge case.
 
 Every lens applies these checks from REVIEW.md — the checklist the Claude review on GitHub runs after you:
 - §2, the bypass-test rule: for each new or changed security control (a gate, a claim check, an amount binding, state keying, an origin/nonce check — or a check this pipeline itself enforces), ask "Which test fails if this line is reverted?" No answer → blocking. A test that would still pass with the control removed is not a useful test. For other changed behavior, a test that guards nothing is a suggestion.
@@ -408,7 +409,7 @@ ${JSON.stringify(spec, null, 2)}
 
 The change is the diff between ${base} and the working tree — new files included. It is in the <diff> block below (\`git diff ${base}\` shows the same, if it was cut). Read surrounding code as needed. You may run focused tests (\`${cfg.focusedTest}\`). The <pipeline_facts> block below is what the pipeline itself measured (gates, main's pre-existing failures, the mutation check): treat it as established — don't mark a criterion unmet for something it already proves.
 
-Severity: "blocking" only for a finding in one of the blocking classes the rules above list; everything else is a "suggestion" — reported on the draft pull request, never sent back to the implementer. An unmet acceptance criterion goes in "criteria", not as a finding. Do not report style nits the linter owns. Verdict is request_changes iff there is at least one blocking finding.
+Severity: "blocking" only for a finding in one of the blocking classes the rules above list (if they list none, only for what a maintainer would request changes on); everything else is a "suggestion" — reported on the draft pull request, never sent back to the implementer. An unmet acceptance criterion goes in "criteria", not as a finding. Do not report style nits the linter owns. Verdict is request_changes iff there is at least one blocking finding or an unmet acceptance criterion in "criteria".
 
 Do not edit files. Return the structured result.`;
 

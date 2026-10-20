@@ -634,11 +634,17 @@ describe("the internal reviewers", () => {
     });
     it(`${lens}: lists what blocks and what never does`, () => {
       for (const blocks of ["a broken security invariant", "a missing bypass test for a new or changed control", "a correctness bug",
-        "a release or README claim the code doesn't back", "a regression against the DX rubric", "a change too big or outside its ticket"]) {
+        "a release or README claim the code doesn't back", "an overclaim of trust (REVIEW.md §4, honesty fencing)",
+        "a regression against the DX rubric", "a change too big or outside its ticket"]) {
         expect(text).toContain(blocks);
       }
-      for (const never of ["comment wording", "doc phrasing", "an edge case that needs a host to break its declared types"]) expect(text).toContain(never);
+      for (const never of ["comment wording", "doc phrasing (unless it overclaims trust)", "an edge case that needs a host to break its declared types"]) expect(text).toContain(never);
+      expect(text).toContain("Input an attacker controls — an order token, a request body, a presentation — is never such an edge case.");
       expect(text).toMatch(/never sent back to the implementer/);
+    });
+    // The verdict is what the PR body's per-lens tick shows: an unmet criterion must not read "spec ✅".
+    it(`${lens}: does not approve while an acceptance criterion is unmet`, () => {
+      expect(text).toContain(`Verdict is request_changes iff there is at least one blocking finding or an unmet acceptance criterion in "criteria".`);
     });
   }
 });
