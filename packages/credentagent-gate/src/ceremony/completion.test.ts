@@ -7,6 +7,7 @@ import { describe, it, expect, vi } from "vitest";
 import { completeOrder, type CompletedRecord, type CompletionContext, type SettlementRecordLike } from "./completion.js";
 import { MemoryVerificationStore } from "../store.js";
 import type { Credential } from "../types.js";
+import { age } from "../credentials.js";
 import { professionalLicense, prescription } from "./credential-gate/__fixtures__/customCredential.js";
 import type { CeremonyCatalog, CompletionInput } from "./types.js";
 
@@ -468,6 +469,151 @@ describe("completeOrder — draw TOCTOU: revoke mid-completion is caught atomica
     const res = await completeOrder(h.input([{ productId: "widget", quantity: 2 }], { amount: 20, draw: { intent, draw } }), { ...h.ctx, revocation: racing });
     expect(res.completed).toBe(false); // completes in-flight if commitDraw doesn't re-check revocation
     expect(res.refusals?.[0]?.code).toBe("revoked");
+    expect(h.records.size).toBe(0);
+  });
+});
+
+// ── #354: an age check in the POLICY is enforced at its own threshold ────────────────────────
+// `age.over(n)` in an order's policy used to count only if a line also carried `minimumAge`:
+// completion derived "is this order age-restricted?" from the lines alone, so an action that is
+// not a product (no tag) completed on an 18+ proof under a 21+ policy (invariants 1 + 5). The
+// order's own policy age now arrives as `input.policyMinAge`, and the stricter of it and the
+// lines is what must be proven — at that threshold, read from `ageVerifiedOver`.
+describe("completeOrder — an age check in the policy is enforced at its own threshold (#354)", () => {
+  it("BYPASS (invariant 1+5): an UNTAGGED line under a 21+ policy with NO proven age is refused (reason 'age')", async () => {
+    const h = harness();
+    const res = await completeOrder(h.input([{ productId: "widget", quantity: 1 }], { policyMinAge: 21 }), h.ctx);
+    expect(res).toMatchObject({ completed: false, reason: "age" });
+    expect(h.records.size).toBe(0);
+  });
+
+  it("BYPASS (invariant 5): an age proven at 18 does not complete a 21+ policy", async () => {
+    const h = harness();
+    await h.store.write("ORD-1", { ageVerified: true, ageVerifiedOver: 18 });
+    const res = await completeOrder(h.input([{ productId: "widget", quantity: 1 }], { policyMinAge: 21 }), h.ctx);
+    expect(res).toMatchObject({ completed: false, reason: "age" });
+  });
+
+  it("BYPASS (invariant 5): the policy wins when it is stricter than the line (25+ policy, 21+ wine, 21 proven)", async () => {
+    const h = harness();
+    await h.store.write("ORD-1", { ageVerified: true, ageVerifiedOver: 21 });
+    const res = await completeOrder(h.input([{ productId: "wine", quantity: 1 }], { policyMinAge: 25 }), h.ctx);
+    expect(res).toMatchObject({ completed: false, reason: "age" });
+  });
+
+  it("a record from before the threshold was stored counts as proven at the line age, so it cannot open a stricter policy", async () => {
+    const h = harness();
+    await h.store.write("ORD-1", { ageVerified: true }); // no ageVerifiedOver: the rails proved 21 by default
+    const strict = await completeOrder(h.input([{ productId: "widget", quantity: 1 }], { policyMinAge: 25 }), h.ctx);
+    expect(strict).toMatchObject({ completed: false, reason: "age" });
+  });
+
+  it("the SAME untagged order completes once 21+ is proven (control: the refusal was the policy age)", async () => {
+    const h = harness();
+    await h.store.write("ORD-1", { ageVerified: true, ageVerifiedOver: 21 });
+    const res = await completeOrder(h.input([{ productId: "widget", quantity: 1 }], { policyMinAge: 21 }), h.ctx);
+    expect(res.completed).toBe(true);
+  });
+
+  it("an untagged order whose policy has no age still completes without any age proof (control: additive)", async () => {
+    const h = harness();
+    const res = await completeOrder(h.input([{ productId: "widget", quantity: 1 }], { policyMinAge: 0 }), h.ctx);
+    expect(res.completed).toBe(true);
+  });
+
+  it("BYPASS (draw path): a delegated draw on an untagged line under a 21+ policy steps up, with no sealed age proof", async () => {
+    const h = harness();
+    const rev = new MemoryRevocationStore();
+    const { intent, mkDraw } = await drawFixture({ maxAmount: 100 });
+    const res = await completeOrder(
+      h.input([{ productId: "widget", quantity: 2 }], { amount: 20, policyMinAge: 21, draw: { intent, draw: await mkDraw(20) } }),
+      { ...h.ctx, revocation: rev },
+    );
+    expect(res.completed).toBe(false);
+    expect(res.refusals?.[0]?.code).toBe("step-up");
+  });
+});
+
+// ── #357 review: an order the server forgot keeps its age check ──────────────────────────────
+// `policyMinAge` is absent when nothing remembers the order's policy: it was evicted from the
+// gate's bounded memory, the server restarted, or another instance resolved it. Absent used to
+// mean "only the lines decide", so a policy-only age silently switched off. It now falls back to
+// the registered `age` credential, the way the custom-gate sweep falls back to the whole registry.
+describe("completeOrder — an unknown policy age falls back to the registered age credential (#357 review)", () => {
+  const registryOf = (c: Credential) => new Map<string, Credential>([[c.id, c]]);
+
+  it("BYPASS (invariant 1): an untagged order whose policy age is UNKNOWN is held to the registered age.over(21)", async () => {
+    const h = harness({ registry: registryOf(age.over(21)) });
+    const res = await completeOrder(h.input([{ productId: "widget", quantity: 1 }]), h.ctx);
+    expect(res).toMatchObject({ completed: false, reason: "age" });
+    expect(h.records.size).toBe(0);
+  });
+
+  it("BYPASS (invariant 5): the registered age wins when it is stricter than the line (25+ registered, 21+ wine, 21 proven)", async () => {
+    const h = harness({ registry: registryOf(age.over(25)) });
+    await h.store.write("ORD-1", { ageVerified: true, ageVerifiedOver: 21 });
+    const res = await completeOrder(h.input([{ productId: "wine", quantity: 1 }]), h.ctx);
+    expect(res).toMatchObject({ completed: false, reason: "age" });
+  });
+
+  it("a KNOWN policy with no age (policyMinAge 0) is not held to the registered one (control: per-order scope)", async () => {
+    const h = harness({ registry: registryOf(age.over(21)) });
+    const res = await completeOrder(h.input([{ productId: "widget", quantity: 1 }], { policyMinAge: 0 }), h.ctx);
+    expect(res.completed).toBe(true);
+  });
+
+  it("known policy ids without `age` keep the fallback off, scoped like the custom-gate sweep (control)", async () => {
+    const h = harness({ registry: registryOf(age.over(21)) });
+    const res = await completeOrder(h.input([{ productId: "widget", quantity: 1 }], { policyCredentialIds: ["payment"] }), h.ctx);
+    expect(res.completed).toBe(true);
+  });
+
+  it("the registered age's own .when() decides whether it applies to the order (control)", async () => {
+    const h = harness({ registry: registryOf(age.over(21).when((o) => o.lines.some((l) => l.id === "wine"))) });
+    const res = await completeOrder(h.input([{ productId: "widget", quantity: 1 }]), h.ctx);
+    expect(res.completed).toBe(true);
+  });
+});
+
+// ── #357 review: an age threshold that isn't a number fails closed ───────────────────────────
+// `Math.max(21, NaN)` is NaN and `NaN > 0` is false, so a NaN anywhere in the age math made the
+// order look unrestricted and skipped the age check — the line's own 21+ tag included.
+describe("completeOrder — an age threshold that isn't a number fails closed (#357 review)", () => {
+  it("BYPASS (invariants 1+5): a NaN policy age does not switch off the wine line's own 21+ tag", async () => {
+    const h = harness();
+    const res = await completeOrder(h.input([{ productId: "wine", quantity: 1 }], { policyMinAge: NaN }), h.ctx);
+    expect(res).toMatchObject({ completed: false, reason: "age" });
+    expect(h.records.size).toBe(0);
+  });
+
+  it("BYPASS (invariants 1+5): a catalog line with minimumAge NaN does not switch off another line's 21+ tag", async () => {
+    const h = harness();
+    const broken: CeremonyCatalog = {
+      createOrder(items, orderId, opts) {
+        const order = catalog.createOrder(items, orderId, opts);
+        return { ...order, lines: order.lines.map((l) => (l.id === "widget" ? { ...l, minimumAge: NaN } : l)) };
+      },
+    };
+    const res = await completeOrder(
+      h.input([{ productId: "wine", quantity: 1 }, { productId: "widget", quantity: 1 }], { policyMinAge: 0 }),
+      { ...h.ctx, catalog: broken },
+    );
+    expect(res).toMatchObject({ completed: false, reason: "age" });
+  });
+
+  // +Infinity is "a number" but not finite. A record from before rails stored the proven age counts
+  // at the line age, here Infinity, so only the finiteness check refuses it — not a NaN check.
+  it("BYPASS (invariants 1+5): a catalog line with minimumAge +Infinity is refused, even for a record without a proven age", async () => {
+    const h = harness();
+    const infinite: CeremonyCatalog = {
+      createOrder(items, orderId, opts) {
+        const order = catalog.createOrder(items, orderId, opts);
+        return { ...order, lines: order.lines.map((l) => (l.id === "wine" ? { ...l, minimumAge: Infinity } : l)) };
+      },
+    };
+    await h.store.write("ORD-1", { ageVerified: true });
+    const res = await completeOrder(h.input([{ productId: "wine", quantity: 1 }], { policyMinAge: 0 }), { ...h.ctx, catalog: infinite });
+    expect(res).toMatchObject({ completed: false, reason: "age" });
     expect(h.records.size).toBe(0);
   });
 });

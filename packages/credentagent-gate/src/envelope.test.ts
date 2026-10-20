@@ -79,6 +79,12 @@ describe("ageDcql", () => {
       expect(leavesOf(c)).toEqual(["age_over_18"]);
     }
   });
+
+  it("an age under 18 asks for its own claim too — verify needs age_over_16, so 18 alone is a dead end", () => {
+    for (const c of ageDcql(16).credentials) {
+      expect(leavesOf(c)).toEqual(["age_over_16", "age_over_18"]);
+    }
+  });
 });
 
 describe("buildVerificationRequired", () => {

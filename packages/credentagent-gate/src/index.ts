@@ -243,6 +243,7 @@ export type {
   CompletionSeam,
   SettlementSeam,
   GateOutcome,
+  PolicyAgeLookup,
 } from "./ceremony/types.js";
 
 // ── Delegated verification seam (008, #60) — run a REAL external verifier/processor

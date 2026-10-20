@@ -33,8 +33,9 @@ import { decodeCartMandateParam } from "../cartMandate.js";
 import { RESERVED_CREDENTIAL_IDS, claimLeaf } from "../../credentials.js";
 import type { Credential } from "../../types.js";
 import type { RequestLike } from "../origin.js";
+import type { CeremonyOrder } from "../types.js";
 import { buildCredentialRequest, buildSignedRequestForDcql } from "./request.js";
-import { evaluateCredential, evaluateCustom, requiredAgeForOrder, verifyCredentialPresentation, type CredentialKind, type PresentationResult } from "./verify.js";
+import { evaluateCredential, evaluateCustom, requiredAgeFor, verifyCredentialPresentation, type CredentialKind, type PresentationResult } from "./verify.js";
 import { inspectionResponse } from "../inspect.js";
 import { upsertProof, type ProofEntry } from "../proofs.js";
 import { verifyMdocPresentation } from "./mdoc-verify.js";
@@ -130,14 +131,16 @@ async function readJsonBody(req: RailRequest): Promise<Record<string, unknown>> 
 }
 
 // Persist a successful verification, scoped to THIS order (never process-global —
-// invariant 4). Age writes the positive over-threshold claim; membership marks the
-// loyalty discount, which resolveOrder/completeOrder then re-derive exactly once. The proof
-// itself rides along (the order proof receipt), replacing an earlier proof of the same gate.
-async function recordVerified(ctx: CeremonyContext, orderId: string, kind: CredentialKind, membershipNumber: string | null, proof: ProofEntry): Promise<void> {
+// invariant 4). Age writes the positive over-threshold claim AND the threshold it was proven at
+// (`ageVerifiedOver`, which completeOrder checks against the order's required age — #354);
+// membership marks the loyalty discount, which resolveOrder/completeOrder then re-derive exactly
+// once. The proof itself rides along (the order proof receipt), replacing an earlier proof of the
+// same gate.
+async function recordVerified(ctx: CeremonyContext, orderId: string, kind: CredentialKind, membershipNumber: string | null, proof: ProofEntry, minimumAge?: number): Promise<void> {
   const prev = (await ctx.verificationStore.read(orderId)) ?? {};
   const proofs = upsertProof(prev.proofs, proof);
   if (kind === "age") {
-    await ctx.verificationStore.write(orderId, { ...prev, ageVerified: true, proofs });
+    await ctx.verificationStore.write(orderId, { ...prev, ageVerified: true, ...(minimumAge !== undefined ? { ageVerifiedOver: minimumAge } : {}), proofs });
   } else {
     await ctx.verificationStore.write(orderId, { ...prev, loyalty: { applied: true, membershipNumber }, proofs });
   }
@@ -160,6 +163,9 @@ function percentFor(order: { discount: number; subtotal: number }): number | und
 }
 
 export const registerCredentialGate: RailRegistrar = (app: CeremonyApp, ctx: CeremonyContext): void => {
+  // The age THIS order must prove: its lines' `minimumAge` AND its own policy's `age.over(n)`
+  // (#354), the stricter wins — the same threshold `completeOrder` enforces. `null` ⇒ no age asked.
+  const ageFor = (order: CeremonyOrder): Promise<number | null> => requiredAgeFor(ctx, order);
   // The Foundational fail-fast tests mount() with a route-less app shape; only
   // attach when the host app can actually route (CeremonyApp.get/post are optional).
   const get = app.get?.bind(app) as ((path: string, ...handlers: RailHandler[]) => unknown) | undefined;
@@ -210,7 +216,7 @@ export const registerCredentialGate: RailRegistrar = (app: CeremonyApp, ctx: Cer
         kind: resolved.kind,
         order: order.id,
         returnUrl: ctx.returnUrl?.(order.id),
-        minimumAge: requiredAgeForOrder(order) ?? undefined,
+        minimumAge: (await ageFor(order)) ?? undefined,
         total: order.total,
         currency: order.currency,
         percent: percentFor(order),
@@ -238,10 +244,10 @@ export const registerCredentialGate: RailRegistrar = (app: CeremonyApp, ctx: Cer
       // the age/membership order-parameterized builders. Same signer + crypto either way.
       const oid = resolved.credential
         ? await buildSignedRequestForDcql(resolved.credential.request, reqOrigin, ctx.signingKey, ctx.readerIdentity)
-        : await buildCredentialRequest(resolved.kind, reqOrigin, ctx.signingKey, { minimumAge: resolved.kind === "age" ? requiredAgeForOrder(order) ?? 21 : undefined }, ctx.readerIdentity);
+        : await buildCredentialRequest(resolved.kind, reqOrigin, ctx.signingKey, { minimumAge: resolved.kind === "age" ? (await ageFor(order)) ?? 21 : undefined }, ctx.readerIdentity);
       const docSpec = resolved.credential
         ? mdocDocSpecsFromDcql(resolved.credential.request) // every credential → one iOS doc spec (item 6)
-        : mdocDocSpec(resolved.kind, resolved.kind === "age" ? requiredAgeForOrder(order) ?? 21 : 21);
+        : mdocDocSpec(resolved.kind, resolved.kind === "age" ? (await ageFor(order)) ?? 21 : 21);
       const mdoc = await buildMdocRequestParts(docSpec, reqOrigin.origin, signed, ctx.readerIdentity);
       const mdocContextToken = await sealMdocContext(
         { readerPrivateJwk: mdoc.readerPrivateJwk, base64EncryptionInfo: mdoc.base64EncryptionInfo },
@@ -276,7 +282,7 @@ export const registerCredentialGate: RailRegistrar = (app: CeremonyApp, ctx: Cer
     // `kind` only shapes the built-in path; when a custom credential is resolved it is a
     // harmless placeholder (the credential path runs its own verify below).
     const kind: CredentialKind = resolved.kind ?? "age";
-    const minimumAge = resolved.kind === "age" ? requiredAgeForOrder(order) ?? 21 : undefined;
+    const minimumAge = resolved.kind === "age" ? (await ageFor(order)) ?? 21 : undefined;
     const percent = resolved.kind === "membership" ? percentFor(order) : undefined;
 
     try {
@@ -316,7 +322,7 @@ export const registerCredentialGate: RailRegistrar = (app: CeremonyApp, ctx: Cer
           presentedAt: new Date().toISOString(),
         };
         if (credential) await recordVerifiedGate(ctx, order.id, credential.id, proof);
-        else await recordVerified(ctx, order.id, kind, out.membershipNumber, proof);
+        else await recordVerified(ctx, order.id, kind, out.membershipNumber, proof, minimumAge);
       }
       // The wallet's DeviceResponse goes back to this page only when the host opted in
       // (inspectPresentations) — for a refused proof too, the case worth inspecting. This

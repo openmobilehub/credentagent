@@ -130,6 +130,17 @@ function makeCredential(base: Omit<Credential, "when">): Credential {
 /** Age verification. `age.over(21)` proves the `age_over_21` claim (explicit positive). */
 export const age = {
   over(minAge: number): Credential {
+    // A threshold that isn't a whole positive number can't be proven (there is no `age_over_NaN`
+    // claim) and, worse, makes every age comparison false — so the check would be skipped, not
+    // failed. Refuse it at construction, like the other builders (e.g. `age.over(Number(env))`
+    // with the variable unset).
+    if (!Number.isInteger(minAge) || minAge <= 0) {
+      // Name the value's type: `age.over("21")` (a string read from process.env) must not read
+      // like `age.over(21)` in the message.
+      const shown = typeof minAge === "string" ? JSON.stringify(minAge) : String(minAge);
+      const got = typeof minAge === "number" ? "" : ` — got a ${typeof minAge}`;
+      throw new Error(`age.over(${shown}): the age must be a whole number above 0, like age.over(21)${got}.`);
+    }
     return makeCredential({
       id: "age",
       // Ask at THIS threshold, so every credential the wallet can pick is one that can

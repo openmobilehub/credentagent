@@ -32,7 +32,9 @@ import * as jose from "jose";
 import { age, membership } from "../../credentials.js";
 import { DEFAULT_LOYALTY_DISCOUNT_PCT } from "../mandate.js";
 import type { CeremonyOrder } from "../types.js";
+import type { CeremonyContext } from "../mount.js";
 import type { Credential } from "../../types.js";
+import { registeredMinAge } from "../../manifest.js";
 import type { CredentialKind } from "./dcql.js";
 import { openReaderContext } from "../mdoc/readerContext.js";
 import { decodeVpToken, type DisclosedEntry } from "../mdoc/mdoc.js";
@@ -78,9 +80,26 @@ export function requiredAgeForOrder(order: CeremonyOrder): number | null {
   return ages.length ? Math.max(...ages) : null;
 }
 
-/** True iff this order is age-restricted but carries no positive per-order age claim. */
-export function isAgeUnsatisfied(order: CeremonyOrder, verification: { ageVerified?: boolean } | undefined | null): boolean {
-  return requiredAgeForOrder(order) != null && verification?.ageVerified !== true;
+/**
+ * The age THIS order must prove: the strictest of its lines' `minimumAge` and the age its own
+ * policy requires (`age.over(n)` — `CompletionInput.policyMinAge`, #354), or `null` when neither
+ * asks for one. The policy age comes from the mounted lookup; when that doesn't know the order,
+ * from the registered `age` credential — the same fallback `completeOrder` uses. Every rail
+ * evaluates an age proof at this threshold. `completeOrder` does not call this: it re-derives
+ * the threshold inline from the same sources and enforces it. They differ in two cases. On a
+ * malformed age they fail closed: a line `minimumAge` of NaN, or a NaN from the host's `policyAge`
+ * lookup, is dropped here, while `completeOrder` refuses the whole order. And a host completion
+ * built without `credentialRegistry` has no registered `age` to fall back to, so for an order the
+ * server forgot it asks none while this asks the mount's (#411).
+ */
+export async function requiredAgeFor(
+  ctx: Pick<CeremonyContext, "policyAge" | "credentialRegistry" | "orderPolicies">,
+  order: CeremonyOrder,
+): Promise<number | null> {
+  const gateOrder = { id: order.id, total: order.total, currency: order.currency, lines: order.lines.map((l) => ({ ...l })) };
+  const policyAge = (await ctx.policyAge?.(order.id)) ?? registeredMinAge(gateOrder, ctx.credentialRegistry, ctx.orderPolicies?.get(order.id));
+  const age = Math.max(requiredAgeForOrder(order) ?? 0, policyAge);
+  return age > 0 ? age : null;
 }
 
 /**

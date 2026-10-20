@@ -174,6 +174,12 @@ export interface VerificationManifestEntry {
 
 export interface VerificationRecord {
   ageVerified?: boolean;
+  /** The age `ageVerified` was proven at (e.g. 21 for an `age_over_21` proof). `completeOrder`
+   *  compares it with the strictest age the order requires — its lines' `minimumAge` and its
+   *  policy's `age.over(n)` — so a proof made at a lower threshold cannot complete a stricter
+   *  order (invariant 5, #354). Absent on a record written before it existed ⇒ read as the
+   *  threshold the rails used then: the line age, or 21. */
+  ageVerifiedOver?: number;
   loyalty?: { applied: boolean; membershipNumber: string | null };
   /**
    * Custom gate() credentials proven for THIS order, keyed by credential id
@@ -307,6 +313,12 @@ export interface CredentAgentOptions {
    * instance that COMPLETES an order is often not the one that ran checkout, so its registry is
    * empty and the completion sweep would no-op — an applicable `gate()` checking out UNPROVEN
    * (fail-open). Declare your custom credentials here and every instance enforces them.
+   *
+   * The same holds for an `age.over(n)` that only the policy asks for (no `minimumAge` on the
+   * item): an instance that doesn't know the order's policy enforces the age declared here.
+   * Declare the policy's own rule, `.when()` included — `credentials: policy.map((s) => s.credential)`.
+   * A server keeps ONE `age` and each `requirements()` replaces it, so with several age rules an
+   * order the server forgot can be held to a lower age, or none (#411).
    */
   credentials?: Credential[];
   /** Persist created orders (`orders.create`); default in-memory, inject a shared store for multi-instance. */

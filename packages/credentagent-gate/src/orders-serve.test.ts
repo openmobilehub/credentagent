@@ -3,6 +3,7 @@ import { CredentAgent } from "./client.js";
 import { age, payment, membership, required, optional, defineCredential, dcql, gate } from "./credentials.js";
 import type { CompletionInput, CompletionResult } from "./ceremony/types.js";
 import { Orders, MemoryOrderStore, type CompletedOrder } from "./orders.js";
+import { MemoryVerificationStore } from "./store.js";
 import * as jose from "jose";
 import { Encoder, Tag } from "cbor-x";
 
@@ -192,6 +193,57 @@ describe("orders.serve — checkout wiring", () => {
 
       const res = await seamOf(app)(stickerInput(id));
       expect(res).toMatchObject({ completed: false, reason: "gate" }); // unproven + in-policy → refused
+    });
+  });
+
+  // #354: orders.serve carries the order's stored policy age to the completion, so an
+  // `age.over(n)` in the policy holds on an item with no `minimumAge` tag (the sticker).
+  describe("#354 — the stored policy's age is enforced on an untagged item", () => {
+    const seamOf = (app: ReturnType<typeof fakeApp>) =>
+      (app.locals.credentagent as { completion: (i: CompletionInput) => Promise<CompletionResult> }).completion;
+    const stickerInput = (id: string): CompletionInput => ({
+      order: { id, lines: [{ id: "sticker", name: "Sticker", unitPrice: 5, quantity: 1, lineTotal: 5, currency: "USD" }], subtotal: 5, discount: 0, total: 5, currency: "USD" },
+      mandateId: "m", amount: 5, currency: "USD", method: "test", gates: [{ gate: "g", pass: true, detail: "" }],
+    });
+    const serveWith = async (policy: ReturnType<typeof gatedPolicy>) => {
+      const ca = new CredentAgent({ walletOrigin: "http://localhost:4000" });
+      const app = fakeApp();
+      ca.orders.serve(app);
+      const { id } = await ca.orders.create({ order: stickerOrder(), policy });
+      await app._get.get("/credentagent/orders/:id")!({ params: { id } }, fakeRes()); // warm the order for re-pricing
+      return { app, id };
+    };
+
+    it("BYPASS (invariant 1+5): an untagged item under a 21+ policy with NO proven age is refused (reason 'age')", async () => {
+      const { app, id } = await serveWith([required(age.over(21))]);
+      expect(await seamOf(app)(stickerInput(id))).toMatchObject({ completed: false, reason: "age" });
+    });
+
+    it("control: the same untagged item completes when its policy asks no age", async () => {
+      const { app, id } = await serveWith([]);
+      expect((await seamOf(app)(stickerInput(id))).completed).toBe(true);
+    });
+
+    // The server keeps ONE registered `age`, so a later 21+ order overwrites a 25+ order's rule.
+    // Only orders.serve's per-order lookup still knows the first order asked for 25 (#357 review).
+    const twoAgesWithProof = async (provenAt: number) => {
+      const store = new MemoryVerificationStore();
+      const ca = new CredentAgent({ walletOrigin: "http://localhost:4000", store });
+      const app = fakeApp();
+      ca.orders.serve(app);
+      const { id } = await ca.orders.create({ order: stickerOrder(), policy: [required(age.over(25))] });
+      await app._get.get("/credentagent/orders/:id")!({ params: { id } }, fakeRes()); // re-resolves: slot = 25
+      await ca.orders.create({ order: stickerOrder(), policy: [required(age.over(21))] }); // slot = 21 now
+      store.write(id, { ageVerified: true, ageVerifiedOver: provenAt });
+      return seamOf(app)(stickerInput(id));
+    };
+
+    it("BYPASS (invariant 1+5): a 21+ proof can't complete a 25+ order after a 21+ order took the server's age rule", async () => {
+      expect(await twoAgesWithProof(21)).toMatchObject({ completed: false, reason: "age" });
+    });
+
+    it("control: a 25+ proof completes that order", async () => {
+      expect((await twoAgesWithProof(25)).completed).toBe(true);
     });
   });
 

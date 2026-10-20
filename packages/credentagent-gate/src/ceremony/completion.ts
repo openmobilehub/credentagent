@@ -15,6 +15,7 @@ import { refusal } from "./refusals.js";
 import { KeyedMutex } from "../keyed-mutex.js";
 import { preserveLineAttributes } from "./order-attributes.js";
 import { RESERVED_CREDENTIAL_IDS } from "../credentials.js";
+import { registeredMinAge } from "../manifest.js";
 import { withoutPresentations, type ProofEntry } from "./proofs.js";
 
 // Per-order in-process serializer for completion (#103). The idempotency read at the top and
@@ -105,6 +106,16 @@ export interface CompletionContext {
 }
 
 /**
+ * The re-priced order as the `appliesTo` predicates see it. Evaluate `appliesTo` against the FULL
+ * re-priced line — spread every field, never a hand-picked allow-list. A dropped field could make
+ * an applicable gate look inapplicable (fail-OPEN), skipping enforcement the manifest promised
+ * (invariant 1). #64 item 1 — narrowing this projection — was declined for exactly that reason.
+ */
+function gateOrderOf(repriced: CeremonyOrder): GateOrder {
+  return { id: repriced.id, total: repriced.total, currency: repriced.currency, lines: repriced.lines.map((l) => ({ ...l })) };
+}
+
+/**
  * Invariant 1 (007, generalized): is there an applicable custom `gate()` credential with NO
  * proof for THIS order? Shared by the human-present path AND the delegated-draw path — a draw
  * is a completion path too, and an unattended agent can't present a prescription/license, so
@@ -138,16 +149,7 @@ function hasUnprovenCustomGate(
       (!policyScope || policyScope.has(cred.id)),
   );
   if (customGates.length === 0) return false;
-  // Evaluate `appliesTo` against the FULL re-priced line — spread every field, never a
-  // hand-picked allow-list. A dropped field could make an applicable gate look inapplicable
-  // here (fail-OPEN), skipping enforcement the manifest promised (invariant 1). #64 item 1
-  // — narrowing this projection — was declined for exactly that reason.
-  const gateOrder: GateOrder = {
-    id: repriced.id,
-    total: repriced.total,
-    currency: repriced.currency,
-    lines: repriced.lines.map((l) => ({ ...l })),
-  };
+  const gateOrder = gateOrderOf(repriced);
   const verifiedGates = (verification as { verifiedGates?: Record<string, true> } | undefined)?.verifiedGates ?? {};
   for (const cred of customGates) {
     const applies = cred.appliesTo ? cred.appliesTo(gateOrder) : true;
@@ -251,16 +253,27 @@ async function completeOrderLocked(input: CompletionInput, ctx: CompletionContex
   }
 
   // Invariant 1: enforce the age gate on EVERY completion path. The age restriction
-  // is re-derived from the catalog-priced lines (never the token); an age-restricted
-  // order must carry a positive per-order age claim — written by the credential
-  // gate's verify handler (credential-gate/routes.ts) — before it can complete. This
-  // is the shared-completion-seam half of CT9; the demo's place-order + MCP
-  // order-completion-tool halves are wired in T014.
-  const ageRestricted = repriced.lines.some((l) => typeof l.minimumAge === "number" && l.minimumAge > 0);
-  // The STRICTEST threshold this order demands, re-derived from the catalog-priced lines (never
-  // the token — invariant 2). 0 when nothing is restricted. Read by the delegated branch below to
-  // test a sealed age proof at the RIGHT threshold, so an 18+ proof cannot open a 21+ item.
-  const requiredAge = Math.max(0, ...repriced.lines.map((l) => (typeof l.minimumAge === "number" ? l.minimumAge : 0)));
+  // is re-derived from the catalog-priced lines (never the token) AND from the order's own
+  // policy (`policyMinAge` — an `age.over(n)` in the policy, #354: before it, a policy age on an
+  // item with no `minimumAge` tag was never enforced). An age-restricted order must carry a
+  // positive per-order age claim — written by the credential gate's verify handler
+  // (credential-gate/routes.ts) — before it can complete. This is the shared-completion-seam
+  // half of CT9; the demo's place-order + MCP order-completion-tool halves are wired in T014.
+  const lineAge = Math.max(0, ...repriced.lines.map((l) => (typeof l.minimumAge === "number" ? l.minimumAge : 0)));
+  // When nothing says what the order's policy asked (the server forgot the order, restarted, or
+  // another instance resolved it), the registered `age` credential decides — the same fallback
+  // as the custom-gate sweep. It is the order's OWN age only while the server has one age rule:
+  // the registry holds the last `age` resolved, which can ask less, or nothing (its `.when()`
+  // excludes this order, or none is registered). Open gap, #411.
+  const policyAge = input.policyMinAge ?? registeredMinAge(gateOrderOf(repriced), ctx.credentialRegistry, policyCredentialIds);
+  // The STRICTEST threshold this order demands (lines vs policy, the stricter wins). 0 when
+  // nothing is restricted. Read below to test an age proof at the RIGHT threshold, so an 18+
+  // proof cannot open a 21+ order (invariant 5).
+  const requiredAge = Math.max(lineAge, policyAge);
+  // A threshold that isn't a number (a `minimumAge: NaN` catalog line, a malformed policy age)
+  // would make every comparison below false and skip the age check entirely — refuse instead.
+  if (!Number.isFinite(requiredAge)) return { completed: false, reason: "age" };
+  const ageRestricted = requiredAge > 0;
 
   // ── HNP delegated-draw branch (005 FR-006): additive + fail-closed. Only taken when a
   // draw is present; every HP path above/below is byte-unchanged. The gate re-runs the FULL
@@ -363,8 +376,12 @@ async function completeOrderLocked(input: CompletionInput, ctx: CompletionContex
     return { completed: true, delegationId: intent.intentId };
   }
 
-  if (ageRestricted && (verification as { ageVerified?: boolean } | undefined)?.ageVerified !== true) {
-    return { completed: false, reason: "age" };
+  if (ageRestricted) {
+    const v = verification as { ageVerified?: boolean; ageVerifiedOver?: number } | undefined;
+    // The age the proof was made at. A record from before rails stored it was proven at the
+    // threshold they used then: the line age, or 21 when no line set one.
+    const provenAge = v?.ageVerifiedOver ?? (lineAge > 0 ? lineAge : 21);
+    if (v?.ageVerified !== true || provenAge < requiredAge) return { completed: false, reason: "age" };
   }
 
   // Invariant 1 (generalized — 007): enforce EVERY applicable custom `gate()` credential, not

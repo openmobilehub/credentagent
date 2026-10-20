@@ -26,6 +26,49 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
 
 ## [Unreleased]
 
+### Changed
+
+- An `age.over(n)` in the policy now sets the age the order must prove, together with any
+  `minimumAge` on its items; the stricter wins (#354). What this changes for you:
+  - With the documented quickstart policy (`age.over(21)` when any line has a `minimumAge`), an
+    item tagged 18+ now asks for 21+.
+  - A policy stricter than the tags (25+ on wine tagged 21) now asks for 25+.
+  - An 18+ policy on untagged items asks for 18+, not the old default of 21.
+- **BREAKING:** `age.over()` throws unless the age is a whole number above 0. In 0.6.0 and earlier
+  a policy's age decided nothing at completion, so a bad value went unnoticed. Now that it is
+  enforced, a value it can't check would switch the check off, so it is refused when the policy is
+  built: at startup for a policy built once, at the first checkout for one built per order (as in
+  the quickstart). What breaks on upgrade: a string, such as `age.over(process.env.MIN_AGE)` with
+  `MIN_AGE=21` (it worked in 0.6.0; wrap it in `Number()`), and a fraction, 0, a negative number or
+  NaN (#354).
+- `VerificationRecord` gains `ageVerifiedOver`, the age a proof was made at. Completion refuses a
+  proof made below the order's age, so a 21+ proof can't complete a 25+ order. A record written
+  before this counts as proven at the item's age, or 21 (#354).
+
+### Fixed
+
+- An age gate asks the wallet for the order's own age (`age_over_25` for 25+, `age_over_16` for
+  16+). Before, the iPhone request (ISO mdoc) asked only for 18 or 21, and every request asked an
+  age under 18 for 18 alone, so those ages could never be proven. A wallet now proves them when
+  its credential holds that claim (#354).
+
+### Security
+
+- An age check written only in the policy is enforced. Before, `age.over(21)` on an item with no
+  `minimumAge` (a health record, an access grant) completed with no age proof at all (#354).
+
+### Known issues
+
+- A server keeps one registered `age`, the last one resolved:
+  - An order the server no longer remembers (after 10,000 newer orders, a restart, or on another
+    instance) is held to that age. Where the server's age rules differ in age or in `.when()`,
+    that can be lower than the order's own policy, or no age check at all; with no `age`
+    registered, none at all. Tag age-restricted items with `minimumAge` at the policy's age (a
+    tag always holds, but only at its own age), or use `orders.serve` with a shared store (#411).
+  - The outside verifier's page asks the wallet for that age. For an order the server remembers,
+    completion still refuses a proof below the order's own age, so a person can be stuck, not let
+    through (#359).
+
 ## [0.6.0] - 2026-10-19
 
 ### Added

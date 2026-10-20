@@ -7,6 +7,7 @@
 // what the agent and the widget receive.
 
 import type {
+  Credential,
   Effect,
   GateOrder,
   Step,
@@ -69,6 +70,45 @@ function mountedApproveUrlFor(walletOrigin: string, credentialId: string, effect
     return `${origin}/credentagent/dc-payment?order=${order}`;
   }
   return `${origin}/credentagent/credential?order=${order}&cred=${encodeURIComponent(credentialId)}`;
+}
+
+/** The strictest `age.over(n)` among these credentials that applies to the order; 0 when none. */
+function strictestAge(order: GateOrder, credentials: Iterable<Credential>): number {
+  let min = 0;
+  for (const c of credentials) {
+    if (c.id !== "age" || typeof c.params?.minAge !== "number") continue;
+    if (c.appliesTo && !c.appliesTo(order)) continue;
+    min = Math.max(min, c.params.minAge);
+  }
+  return min;
+}
+
+/**
+ * The age an order's own policy requires: the strictest `age.over(n)` step that applies to it
+ * (its `appliesTo` / `.when()` run server-side, exactly as for the manifest below), or `0` when
+ * the policy asks for no age. Like any gate, it blocks whether the step is `required` or not.
+ * This is what `CompletionInput.policyMinAge` carries (#354).
+ */
+export function policyMinAge(order: GateOrder, policy: readonly Step[]): number {
+  return strictestAge(order, policy.map((step) => step.credential));
+}
+
+/**
+ * The age the REGISTERED `age` credential requires of this order, or `0` when none applies —
+ * what decides when the order's own policy age is unknown (the server forgot the order, it
+ * restarted, or another instance resolved it). It mirrors the custom-gate sweep: scoped to the
+ * order's policy when its credential ids are known, the whole registry otherwise. The registry
+ * holds ONE `age` (the last resolved), so this is the order's own age only on a server with a
+ * single age rule; with several it can be lower, or 0 (#411).
+ */
+export function registeredMinAge(
+  order: GateOrder,
+  registry: ReadonlyMap<string, Credential> | undefined,
+  policyCredentialIds?: readonly string[],
+): number {
+  const cred = registry?.get("age");
+  if (!cred || (policyCredentialIds && !policyCredentialIds.includes("age"))) return 0;
+  return strictestAge(order, [cred]);
 }
 
 /**

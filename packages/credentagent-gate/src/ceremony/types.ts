@@ -146,7 +146,22 @@ export interface CompletionInput {
    * the created order's stored policy.
    */
   policyCredentialIds?: readonly string[];
+  /**
+   * The age THIS order's own policy requires — the strictest `age.over(n)` in it that applies to
+   * the order (#354). `completeOrder` enforces the stricter of this and the lines' `minimumAge`, so
+   * an age check in the policy holds on an item that carries no `minimumAge` tag (invariants 1 + 5).
+   * Supplied like `policyCredentialIds`: the mounted ceremony adds it to every rail's completion
+   * (from `requirements()`), `orders.serve` from the stored created order, and `host.complete`
+   * from the mounted lookup. `0` ⇒ the policy asks no age. Absent ⇒ the registered `age`
+   * credential decides when it applies, like the custom-gate sweep. That is the order's own age
+   * only while the server has one age rule; otherwise it can be lower, or none (#411).
+   */
+  policyMinAge?: number;
 }
+
+/** Look up the age an order's own policy requires (see `CompletionInput.policyMinAge`): `0` when
+ *  the policy asks none, `undefined` when the order is unknown to this lookup. */
+export type PolicyAgeLookup = (orderId: string) => MaybePromise<number | undefined>;
 
 /**
  * Why a non-completion happened — a failed ceremony ("gates"), a tampered/replayed/

@@ -18,6 +18,7 @@
 
 import { mountCeremony, type CeremonyApp } from "./ceremony/mount.js";
 import { basePathOf } from "./ceremony/origin.js";
+import { policyMinAge } from "./manifest.js";
 import { completeOrder, type CompletedRecord, type CompletedOrderStore } from "./ceremony/completion.js";
 import { renderRequirements, type RenderOrder } from "./ceremony/checkout-page.js";
 import type { CartItemRef, CeremonyCatalog, CeremonyOrder, CeremonyOrderStore, RepriceOpts } from "./ceremony/types.js";
@@ -207,6 +208,13 @@ export function serveOrders(app: CeremonyApp, deps: ServeOrdersDeps): void {
       const created = await deps.created.read(input.order.id);
       const scoped = created ? { ...input, policyCredentialIds: created.policy.map((s) => s.credential.id) } : input;
       return completeOrder(scoped, { catalog, verificationStore: deps.verificationStore, records, credentialRegistry: deps.credentialRegistry });
+    },
+    // The age THIS order's stored policy requires (#354; 0 = none), from the same durable carrier:
+    // the rails prove age at it, and mountCeremony adds it to the completion above as
+    // `policyMinAge`. An order the store doesn't hold ⇒ the registered `age` credential decides.
+    policyAge: async (id) => {
+      const created = await deps.created.read(id);
+      return created ? policyMinAge(created.order, created.policy) : undefined;
     },
     verificationStore: deps.verificationStore,
     credentialRegistry: deps.credentialRegistry,
