@@ -1,4 +1,4 @@
-// checkDraw bounds tests — the spike's 13 (spike/intent-mandate/intent-mandate.test.mjs)
+// checkDraw bounds tests — the 13 from an earlier prototype (see git history)
 // ported to the library surface, per 005 tasks T003. Each fixture mutation asserts
 // EXACTLY which gate refuses (typed refusal codes, not first-fail).
 import { describe, expect, it } from "vitest";
