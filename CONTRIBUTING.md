@@ -139,6 +139,14 @@ comment and a maintainer can add `scope:approved`. The automated review checks t
 (REVIEW.md §8). For an issue the agents build, the brief does this for you (`ci/issue-agent/README.md`,
 "Splitting a big issue").
 
+**A second symptom of one root cause gets a design note before another fix**, however small the fix
+(`scope:approved` doesn't waive this). Before fixing a bug, search the open issues and pull requests
+for the same symptom or the same code. If another issue or fix for the same cause is already open,
+stop: write the design that fixes the cause once (step 1 above — an `epic`, or a spec in `specs/`),
+label the issue `needs-decision`, and build it as tickets. Two fix pull requests on one cause, with no
+design behind either, are sent back in review (REVIEW.md §8). For an issue the agents build, the brief
+runs this search over recent open work (`ci/issue-agent/README.md`, "The brief").
+
 ## Tests must exercise the bypass paths
 
 CredentAgent is a consent layer; a test that only checks the happy-path shape is not enough.
