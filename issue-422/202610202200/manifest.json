@@ -1,0 +1,50 @@
+[
+  {
+    "kind": "image",
+    "file": "before-after-01.png",
+    "caption": "Before and after: A maintainer renders the brief prompt for a checkout bug while an earlier fix for the same bug is still open, and checks whether the agent sees that fix and is asked to name it",
+    "side": "example",
+    "session": "before-after",
+    "url": "about:blank",
+    "at": "2026-10-20T22:08:11.971Z"
+  },
+  {
+    "kind": "events",
+    "session": "before-after",
+    "side": "example",
+    "events": [],
+    "at": "2026-10-20T22:08:13.762Z"
+  },
+  {
+    "kind": "video",
+    "file": "before-after.webm",
+    "caption": "Before and after: A maintainer renders the brief prompt for a checkout bug while an earlier fix for the same bug is still open, and checks whether the agent sees that fix and is asked to name it",
+    "side": "example",
+    "session": "before-after",
+    "at": "2026-10-20T22:08:13.763Z"
+  },
+  {
+    "kind": "image",
+    "file": "test-proof-01.png",
+    "caption": "Test proof: the pipeline's own gate runs, and the changed tests failing on main's code and passing on the fix",
+    "side": "proof",
+    "session": "test-proof",
+    "url": "about:blank",
+    "at": "2026-10-20T22:08:14.736Z"
+  },
+  {
+    "kind": "events",
+    "session": "test-proof",
+    "side": "proof",
+    "events": [],
+    "at": "2026-10-20T22:08:17.958Z"
+  },
+  {
+    "kind": "video",
+    "file": "test-proof.webm",
+    "caption": "Test proof: the pipeline's own gate runs, and the changed tests failing on main's code and passing on the fix",
+    "side": "proof",
+    "session": "test-proof",
+    "at": "2026-10-20T22:08:17.959Z"
+  }
+]
