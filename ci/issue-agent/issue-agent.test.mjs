@@ -4,7 +4,7 @@
 
 import { describe, it, expect, beforeEach } from "vitest";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -530,6 +530,13 @@ describe("the review loop", () => {
     expect(pushedCycle({ decision: fix, verdict: "changes", resolved: ["a.ts"] })).toEqual({ mode: "conflict", answeredChanges: false }); // became a conflict cycle
     expect(pushedCycle({ decision: { action: "verify" }, verdict: "changes" })).toEqual({ mode: "verify", answeredChanges: false });
     expect(pushedCycle({ decision: { action: "verify" }, verdict: "ready", resolved: ["a.ts"] }).mode).toBe("conflict");
+  });
+
+  it("writes that answer into the cycle's comment — the mark the next decision counts", () => {
+    // The push job's wiring: pushedCycle's trusted values feed the mark, not a constant or the agent's word.
+    const src = readFileSync(new URL("./run.mjs", import.meta.url), "utf8");
+    expect(src).toMatch(/const pushed = pushedCycle\(\{ decision: review\.decision, verdict: review\.verdict, resolved: outcome\.mergedMain \? resolved : \[\] \}\);/);
+    expect(src).toMatch(/cycleMark\(\{ cycle: k, sha, answeredChanges: pushed\.answeredChanges \}\)/);
   });
 
   it("counts pushed cycles — not hand-overs, outsiders' copies, or another bot's", () => {
