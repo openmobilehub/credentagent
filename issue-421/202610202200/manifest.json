@@ -1,0 +1,50 @@
+[
+  {
+    "kind": "image",
+    "file": "before-after-01.png",
+    "caption": "Before and after: A maintainer renders the prompt the issue agent's security reviewer gets and checks what it is allowed to mark blocking",
+    "side": "example",
+    "session": "before-after",
+    "url": "about:blank",
+    "at": "2026-10-20T22:05:58.532Z"
+  },
+  {
+    "kind": "events",
+    "session": "before-after",
+    "side": "example",
+    "events": [],
+    "at": "2026-10-20T22:06:00.419Z"
+  },
+  {
+    "kind": "video",
+    "file": "before-after.webm",
+    "caption": "Before and after: A maintainer renders the prompt the issue agent's security reviewer gets and checks what it is allowed to mark blocking",
+    "side": "example",
+    "session": "before-after",
+    "at": "2026-10-20T22:06:00.419Z"
+  },
+  {
+    "kind": "image",
+    "file": "test-proof-01.png",
+    "caption": "Test proof: the pipeline's own gate runs, and the changed tests failing on main's code and passing on the fix",
+    "side": "proof",
+    "session": "test-proof",
+    "url": "about:blank",
+    "at": "2026-10-20T22:06:01.425Z"
+  },
+  {
+    "kind": "events",
+    "session": "test-proof",
+    "side": "proof",
+    "events": [],
+    "at": "2026-10-20T22:06:04.691Z"
+  },
+  {
+    "kind": "video",
+    "file": "test-proof.webm",
+    "caption": "Test proof: the pipeline's own gate runs, and the changed tests failing on main's code and passing on the fix",
+    "side": "proof",
+    "session": "test-proof",
+    "at": "2026-10-20T22:06:04.692Z"
+  }
+]
