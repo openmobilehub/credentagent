@@ -600,4 +600,20 @@ describe("completeOrder — an age threshold that isn't a number fails closed (#
     );
     expect(res).toMatchObject({ completed: false, reason: "age" });
   });
+
+  // +Infinity is "a number" but not finite. A record from before rails stored the proven age counts
+  // at the line age, here Infinity, so only the finiteness check refuses it — not a NaN check.
+  it("BYPASS (invariants 1+5): a catalog line with minimumAge +Infinity is refused, even for a record without a proven age", async () => {
+    const h = harness();
+    const infinite: CeremonyCatalog = {
+      createOrder(items, orderId, opts) {
+        const order = catalog.createOrder(items, orderId, opts);
+        return { ...order, lines: order.lines.map((l) => (l.id === "wine" ? { ...l, minimumAge: Infinity } : l)) };
+      },
+    };
+    await h.store.write("ORD-1", { ageVerified: true });
+    const res = await completeOrder(h.input([{ productId: "wine", quantity: 1 }], { policyMinAge: 0 }), { ...h.ctx, catalog: infinite });
+    expect(res).toMatchObject({ completed: false, reason: "age" });
+    expect(h.records.size).toBe(0);
+  });
 });
