@@ -16,7 +16,7 @@ import { CredentAgent } from "./client.js";
 import { defineHost } from "./host.js";
 import { age, membership, payment, required, optional, defineCredential, dcql, gate } from "./credentials.js";
 import { completeOrder, type CompletedRecord } from "./ceremony/completion.js";
-import { requiredAgeFor } from "./ceremony/credential-gate/verify.js";
+import { ageStepFor, requiredAgeFor } from "./ceremony/credential-gate/verify.js";
 import type { CartItemRef, CeremonyCatalog, CeremonyOrder, CompletionInput, DelegatedVerifier } from "./ceremony/types.js";
 import type { Credential, Step } from "./types.js";
 import type { PolicyAgeLookup } from "./ceremony/types.js";
@@ -414,5 +414,29 @@ describe("#414 — the pay pages show the Age step the order's policy asks for",
     const tagged = { ...catalog.createOrder([{ productId: "gift-card", quantity: 1 }], "ORD-1") };
     tagged.lines = tagged.lines.map((l) => ({ ...l, minimumAge: 21 }));
     expect(await requiredAgeFor({ policyAge: () => NaN }, tagged)).toBe(21);
+  });
+
+  // Completion refuses an order whose age isn't a number (`Math.max(21, NaN)` is NaN), so the
+  // page must not tick Age for it, whatever proof is on record.
+  it("a NaN policy age never ticks Age — completion refuses the order", async () => {
+    const tagged = { ...catalog.createOrder([{ productId: "gift-card", quantity: 1 }], "ORD-1") };
+    tagged.lines = tagged.lines.map((l) => ({ ...l, minimumAge: 21 }));
+    const proof = { ageVerified: true, ageVerifiedOver: 21 };
+    expect(await ageStepFor({ policyAge: () => NaN }, tagged, proof)).toEqual({ requiredAge: 21, ageVerified: false });
+    // control: the same proof under a well-formed policy age ticks it
+    expect(await ageStepFor({ policyAge: () => 21 }, tagged, proof)).toEqual({ requiredAge: 21, ageVerified: true });
+  });
+
+  it("a NaN line minimumAge never ticks Age", async () => {
+    const order = { ...catalog.createOrder([{ productId: "gift-card", quantity: 1 }], "ORD-1") };
+    order.lines = [...order.lines, { ...order.lines[0], minimumAge: NaN }];
+    expect((await ageStepFor({ policyAge: () => 21 }, order, { ageVerified: true, ageVerifiedOver: 21 })).ageVerified).toBe(false);
+  });
+
+  it("a numeric-string policy age (an untyped store read) asks that age, as completion does", async () => {
+    const order = catalog.createOrder([{ productId: "gift-card", quantity: 1 }], "ORD-1");
+    const lookup = (() => "25") as unknown as PolicyAgeLookup;
+    expect(await requiredAgeFor({ policyAge: lookup }, order)).toBe(25);
+    expect(await ageStepFor({ policyAge: lookup }, order, { ageVerified: true, ageVerifiedOver: 21 })).toEqual({ requiredAge: 25, ageVerified: false });
   });
 });

@@ -562,8 +562,8 @@ export function checkoutRail(
   current: string, // "age" | "membership" | "pay" | a custom credential id
   // `includePay: false` drops the Pay step for a policy with NO payment credential — the
   // delegated rail builds no settle step for it, so a priced order must not imply a Pay step.
-  // `requiredAge` + `ageVerified` are REQUIRED (pass `ageStepFor`'s result): a page that left
-  // them out would fall back to the items' tags and hide an age only the policy asks for (#414).
+  // `requiredAge` + `ageVerified` are REQUIRED (pass `ageStepFor`'s result), so every page shows
+  // the age completion will ask, the policy's included (#414).
   opts: { ageVerified: boolean; requiredAge: number; currentLabel?: string; includePay?: boolean },
 ): string {
   const isBuiltin = current === "age" || current === "membership" || current === "pay";

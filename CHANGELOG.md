@@ -53,8 +53,8 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
   its credential holds that claim (#354).
 - The payment, passkey, credential and outside-verifier pages' progress bar shows the Age step
   for an age that only the policy asks for (an item with no `minimumAge`), and ticks it only when
-  the proof on record is old enough for the order. Before, such an order's progress bar showed
-  only Pay (#414).
+  the proof on record is old enough for the order. Before, the bar never listed Age as a step
+  the order needed: it showed Age only on the age page itself, as the current step (#414).
 
 ### Security
 

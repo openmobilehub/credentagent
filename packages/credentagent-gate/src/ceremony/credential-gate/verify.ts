@@ -97,12 +97,24 @@ export async function requiredAgeFor(
   ctx: Pick<CeremonyContext, "policyAge" | "credentialRegistry" | "orderPolicies">,
   order: CeremonyOrder,
 ): Promise<number | null> {
+  return (await ageDemandFor(ctx, order)).age;
+}
+
+/** `requiredAgeFor`'s threshold, plus whether a malformed age was dropped from it — an order
+ *  `completeOrder` refuses for age whatever proof is on record. */
+async function ageDemandFor(
+  ctx: Pick<CeremonyContext, "policyAge" | "credentialRegistry" | "orderPolicies">,
+  order: CeremonyOrder,
+): Promise<{ age: number | null; malformed: boolean }> {
   const gateOrder = { id: order.id, total: order.total, currency: order.currency, lines: order.lines.map((l) => ({ ...l })) };
-  const policyAge = (await ctx.policyAge?.(order.id)) ?? registeredMinAge(gateOrder, ctx.credentialRegistry, ctx.orderPolicies?.get(order.id));
+  const rawPolicyAge = (await ctx.policyAge?.(order.id)) ?? registeredMinAge(gateOrder, ctx.credentialRegistry, ctx.orderPolicies?.get(order.id));
+  // Convert as completion's `Math.max` does, so an untyped store read of "25" asks 25 here too.
+  const policyAge = rawPolicyAge == null ? 0 : Number(rawPolicyAge);
   // Drop a malformed policy age alone: `Math.max` with NaN is NaN, which would also drop the
   // lines' own `minimumAge` and hide a tagged item's Age step.
   const age = Math.max(requiredAgeForOrder(order) ?? 0, Number.isFinite(policyAge) ? policyAge : 0);
-  return age > 0 ? age : null;
+  const malformed = !Number.isFinite(policyAge) || order.lines.some((l) => typeof l.minimumAge === "number" && !Number.isFinite(l.minimumAge));
+  return { age: age > 0 ? age : null, malformed };
 }
 
 /**
@@ -110,16 +122,24 @@ export async function requiredAgeFor(
  * outside-verifier pages: the age completion will ask (`requiredAgeFor`, 0 = none) and whether
  * the proof on record covers it (`recordedAgeCovers`, completion's own rule). Pass it to
  * `checkoutRail` so the progress rail shows an Age step for an age only the policy asks for, and
- * never ticks a proof made below the order's age. (The checkout page itself, `checkout-page.ts`,
- * does not read it yet.)
+ * never ticks a proof made below the order's age. A malformed age (a NaN line `minimumAge` or
+ * policy age) never ticks: completion refuses that order whatever the proof.
+ *
+ * Out of scope here, deliberately: the checkout page itself (`checkout-page.ts`) still ticks Age
+ * for any `ageVerified`. It renders from the policy manifest and the exported `RenderVerification`
+ * (a bare boolean, no proven age), and its Age status also unlocks the Pay button, so changing it
+ * changes a public render API and that page's flow, not just a progress rail. Completion still
+ * refuses a too-young proof there. Tracked as a follow-up to #414 (a maintainer files it: this
+ * change was made without GitHub access).
  */
 export async function ageStepFor(
   ctx: Pick<CeremonyContext, "policyAge" | "credentialRegistry" | "orderPolicies">,
   order: CeremonyOrder,
   record: { ageVerified?: boolean; ageVerifiedOver?: number } | null | undefined,
 ): Promise<{ requiredAge: number; ageVerified: boolean }> {
-  const requiredAge = (await requiredAgeFor(ctx, order)) ?? 0;
-  return { requiredAge, ageVerified: recordedAgeCovers(record, requiredAge, requiredAgeForOrder(order) ?? 0) };
+  const { age, malformed } = await ageDemandFor(ctx, order);
+  const requiredAge = age ?? 0;
+  return { requiredAge, ageVerified: !malformed && recordedAgeCovers(record, requiredAge, requiredAgeForOrder(order) ?? 0) };
 }
 
 /**
