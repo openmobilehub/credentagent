@@ -107,8 +107,9 @@ export async function requiredAgeFor(
 
 /** `requiredAgeFor`'s threshold, plus `malformed`: a value the pages never tick Age for. Payment
  *  refuses the order for NaN or +Infinity (a policy age or a line `minimumAge`) and throws on a
- *  BigInt; it reads a `true` as 1, dropping the policy's own age, so only there is the page the
- *  stricter. -Infinity and numeric text aren't malformed: both sides ignore / convert them. */
+ *  BigInt. It reads a `true` as 1, a `false` as 0, and an object that reads as a number (`[25]`)
+ *  as that number, so for those the page is the stricter: payment may complete, the page never
+ *  ticks. -Infinity and numeric text aren't malformed: both sides ignore / convert them. */
 async function ageDemandFor(
   ctx: Pick<CeremonyContext, "policyAge" | "credentialRegistry" | "orderPolicies">,
   order: CeremonyOrder,

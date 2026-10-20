@@ -306,7 +306,7 @@ export function ageProofCovers(proof: SealedAgeProof | undefined, requiredAge: n
  * rule `completeOrder` enforces, shared with the rails' own pages (payment, passkey, credential,
  * outside-verifier) so their Age step never ticks an age that completion would refuse (#414;
  * `ageStepFor` also never ticks an order whose age is malformed — NaN or +Infinity, which completion
- * refuses, or a policy age that isn't a number). The
+ * refuses, or a policy age that is neither a number nor numeric text). The
  * proof must be explicitly positive and made at an age at or above `requiredAge`
  * (`ageVerifiedOver`, #354). A record from before rails stored that age counts as proven at the
  * threshold they used then: the line age, or 21 when no line set one. `requiredAge` comes second,
