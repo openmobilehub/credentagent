@@ -501,6 +501,17 @@ describe("completeOrder — an age check in the policy is enforced at its own th
     expect(res).toMatchObject({ completed: false, reason: "age" });
   });
 
+  it("BYPASS (invariant 5): a record for the order WITHOUT a positive age claim does not complete 21+ wine, even with a proven age that covers it", async () => {
+    // A record that exists but doesn't say `ageVerified: true` (hand-written or corrupted) must not
+    // count as an age proof: the claim itself has to be `ageVerified === true`, not merely "a
+    // record exists" (#414 review).
+    const h = harness();
+    await h.store.write("ORD-1", { ageVerified: false, ageVerifiedOver: 21 });
+    const res = await completeOrder(h.input([{ productId: "wine", quantity: 1 }]), h.ctx);
+    expect(res).toMatchObject({ completed: false, reason: "age" });
+    expect(h.records.size).toBe(0);
+  });
+
   it("a record from before the threshold was stored counts as proven at the line age, so it cannot open a stricter policy", async () => {
     const h = harness();
     await h.store.write("ORD-1", { ageVerified: true }); // no ageVerifiedOver: the rails proved 21 by default

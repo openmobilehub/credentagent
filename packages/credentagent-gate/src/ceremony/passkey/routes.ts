@@ -31,6 +31,7 @@ import { buildPasskeyMandate, buildBindingFields, runGates } from "../mandate.js
 import { buildRegistrationOptions, verifyPasskeyAssertion } from "./verify.js";
 import { renderPasskeyPage } from "./page.js";
 import { checkoutRail, proofLinksHtml } from "../theme.js";
+import { ageStepFor } from "../credential-gate/verify.js";
 import { withoutPresentations } from "../proofs.js";
 
 // Minimal structural request/response shapes — the real Express req/res satisfy
@@ -141,7 +142,7 @@ export const registerPasskeyGate: RailRegistrar = (app: CeremonyApp, ctx: Ceremo
     // Order-derived stepper with Pay current: reflects only the gates THIS order has, and
     // shows Age ✓ only when it was ACTUALLY verified (read from the store) — never hardcoded.
     const verified = (await ctx.verificationStore.read(order.id)) ?? {};
-    const rail = checkoutRail(order, "pay", { ageVerified: verified.ageVerified === true });
+    const rail = checkoutRail(order, "pay", await ageStepFor(ctx, order, verified)); // policy age too (#414)
     try {
       res.status(200).type("html").send(renderPasskeyPage({ order, crossDevice: isCrossDevice(req.query.xdev), cart: typeof req.query.cart === "string" ? req.query.cart : undefined, rail, returnUrl: ctx.returnUrl?.(order.id), statusUrl: ctx.statusUrl?.(order.id), branding: ctx.branding, basePath: ctx.basePath }));
     } catch {

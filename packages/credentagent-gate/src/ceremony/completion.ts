@@ -9,7 +9,7 @@ import type { Credential, GateOrder, TrustLevel, VerificationStore } from "../ty
 import type { CartItemRef, CeremonyCatalog, CeremonyOrder, CompletionInput, CompletionResult, GateOutcome } from "./types.js";
 import { verifyCartMandate, type CartMandate } from "./cartMandate.js";
 import { reconcileCartPayment } from "./reconciliation.js";
-import { checkDraw, ageProofCovers, type DrawVerifier } from "./mandate.js";
+import { checkDraw, ageProofCovers, recordedAgeCovers, type DrawVerifier } from "./mandate.js";
 import type { RevocationStore } from "./revocation.js";
 import { refusal } from "./refusals.js";
 import { KeyedMutex } from "../keyed-mutex.js";
@@ -376,12 +376,10 @@ async function completeOrderLocked(input: CompletionInput, ctx: CompletionContex
     return { completed: true, delegationId: intent.intentId };
   }
 
-  if (ageRestricted) {
-    const v = verification as { ageVerified?: boolean; ageVerifiedOver?: number } | undefined;
-    // The age the proof was made at. A record from before rails stored it was proven at the
-    // threshold they used then: the line age, or 21 when no line set one.
-    const provenAge = v?.ageVerifiedOver ?? (lineAge > 0 ? lineAge : 21);
-    if (v?.ageVerified !== true || provenAge < requiredAge) return { completed: false, reason: "age" };
+  // The proof on record must cover the required age (the age it was made at, #354) — the same
+  // rule the pay pages tick their Age step by (`recordedAgeCovers`, #414).
+  if (ageRestricted && !recordedAgeCovers(verification as { ageVerified?: boolean; ageVerifiedOver?: number } | undefined, requiredAge, lineAge)) {
+    return { completed: false, reason: "age" };
   }
 
   // Invariant 1 (generalized — 007): enforce EVERY applicable custom `gate()` credential, not

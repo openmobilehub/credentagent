@@ -14,8 +14,9 @@ import express from "express";
 import request from "supertest";
 import { CredentAgent } from "./client.js";
 import { defineHost } from "./host.js";
-import { age, payment, required } from "./credentials.js";
+import { age, membership, payment, required, optional, defineCredential, dcql, gate } from "./credentials.js";
 import { completeOrder, type CompletedRecord } from "./ceremony/completion.js";
+import { ageStepFor, requiredAgeFor } from "./ceremony/credential-gate/verify.js";
 import type { CartItemRef, CeremonyCatalog, CeremonyOrder, CompletionInput, DelegatedVerifier } from "./ceremony/types.js";
 import type { Credential, Step } from "./types.js";
 import type { PolicyAgeLookup } from "./ceremony/types.js";
@@ -338,5 +339,132 @@ describe("#357 review — age.over() refuses a threshold it could never check", 
 
   it("a string age (process.env read without Number()) is named as one, not shown as a valid-looking 21", () => {
     expect(() => age.over("21" as unknown as number)).toThrow('age.over("21"): the age must be a whole number above 0, like age.over(21) — got a string.');
+  });
+});
+
+// #414 — the pay pages' progress rail (Age → Membership → Pay) must show the Age step the order
+// will actually be asked for — its policy's age too, not only an item's `minimumAge` tag — and
+// tick it only when the proof on record covers that age, the same rule completion enforces.
+describe("#414 — the pay pages show the Age step the order's policy asks for", () => {
+  // The rail's steps as [label, state]: "done" (✓), "current", or "" (still to come).
+  const railOf = (html: string) =>
+    [...html.matchAll(/<div class="rail-step ([a-z]*)"><div class="rail-dot">[^<]*<\/div><div class="rail-label">([^<]*)<\/div>/g)].map((m) => [m[2], m[1]]);
+  const page = async (app: express.Express, path: string) => railOf((await request(app).get(path)).text);
+  const POLICY = [required(age.over(21)), required(payment.in("usd"))];
+
+  it.each(["dc-payment", "passkey"])("the %s page of an untagged item under a 21+ policy shows Age, not yet done", async (rail) => {
+    const s = setup();
+    s.open("ORD-1", "gift-card", POLICY);
+    expect(await page(s.app, `/credentagent/${rail}?order=ORD-1`)).toEqual([["Age", ""], ["Pay", "current"]]);
+  });
+
+  it("the outside verifier's (delegated) page shows it too", async () => {
+    const s = setup({ verifier: { buildRequest: vi.fn(), consume: vi.fn() } as unknown as DelegatedVerifier });
+    s.open("ORD-1", "gift-card", POLICY);
+    expect(await page(s.app, "/credentagent/delegated?order=ORD-1")).toEqual([["Age", ""], ["Pay", "current"]]);
+  });
+
+  it("the membership page shows it before Membership", async () => {
+    const s = setup();
+    s.open("ORD-1", "gift-card", [required(age.over(21)), optional(membership.discount(10)), required(payment.in("usd"))]);
+    expect(await page(s.app, "/credentagent/credential?order=ORD-1&cred=membership")).toEqual([["Age", ""], ["Membership", "current"], ["Pay", ""]]);
+  });
+
+  it("a 21+ proof on a 25+ order leaves Age un-ticked — completion will refuse it", async () => {
+    const s = setup();
+    s.open("ORD-1", "gift-card", [required(age.over(25)), required(payment.in("usd"))]);
+    s.host.verificationStore.write("ORD-1", { ageVerified: true, ageVerifiedOver: 21 });
+    expect(await page(s.app, "/credentagent/dc-payment?order=ORD-1")).toEqual([["Age", ""], ["Pay", "current"]]);
+  });
+
+  it("control: a 25+ proof on that order ticks Age", async () => {
+    const s = setup();
+    s.open("ORD-1", "gift-card", [required(age.over(25)), required(payment.in("usd"))]);
+    s.host.verificationStore.write("ORD-1", { ageVerified: true, ageVerifiedOver: 25 });
+    expect(await page(s.app, "/credentagent/dc-payment?order=ORD-1")).toEqual([["Age", "done"], ["Pay", "current"]]);
+  });
+
+  it("control: a policy with no age shows no Age step", async () => {
+    const s = setup();
+    s.open("ORD-1", "gift-card", [required(payment.in("usd"))]);
+    expect(await page(s.app, "/credentagent/dc-payment?order=ORD-1")).toEqual([["Pay", "current"]]);
+  });
+
+  const RX = defineCredential({
+    id: "prescription",
+    request: dcql({ docType: "org.hl7.prescription.1", claims: ["rx_valid"] }),
+    verify: (c) => c.rx_valid === true,
+    effect: gate(),
+    ui: { label: "Prescription", action: "Verify prescription" },
+  });
+
+  it("a custom credential's page shows it before that credential", async () => {
+    const s = setup({ credentials: [RX] });
+    s.open("ORD-1", "gift-card", [required(age.over(21)), required(RX), required(payment.in("usd"))]);
+    expect(await page(s.app, "/credentagent/credential?order=ORD-1&cred=prescription")).toEqual([["Age", ""], ["Prescription", "current"], ["Pay", ""]]);
+  });
+
+  it("the outside verifier's page for an order with no payment (identity only) shows it before the identity step", async () => {
+    const s = setup({ credentials: [RX], verifier: { buildRequest: vi.fn(), consume: vi.fn() } as unknown as DelegatedVerifier });
+    s.open("REQ-1", "sealed-record", [required(RX), required(age.over(21))]);
+    expect(await page(s.app, "/credentagent/delegated?order=REQ-1")).toEqual([["Age", ""], ["Prescription", "current"]]);
+  });
+
+  it("a policy-age lookup that returns NaN doesn't drop a tagged item's own age", async () => {
+    const tagged = { ...catalog.createOrder([{ productId: "gift-card", quantity: 1 }], "ORD-1") };
+    tagged.lines = tagged.lines.map((l) => ({ ...l, minimumAge: 21 }));
+    expect(await requiredAgeFor({ policyAge: () => NaN }, tagged)).toBe(21);
+  });
+
+  // Completion refuses an order whose age isn't a number (`Math.max(21, NaN)` is NaN), so the
+  // page must not tick Age for it, whatever proof is on record.
+  it("a NaN policy age never ticks Age — completion refuses the order", async () => {
+    const tagged = { ...catalog.createOrder([{ productId: "gift-card", quantity: 1 }], "ORD-1") };
+    tagged.lines = tagged.lines.map((l) => ({ ...l, minimumAge: 21 }));
+    const proof = { ageVerified: true, ageVerifiedOver: 21 };
+    expect(await ageStepFor({ policyAge: () => NaN }, tagged, proof)).toEqual({ requiredAge: 21, ageVerified: false });
+    // +Infinity too: completion's `Math.max(21, Infinity)` is not finite, so it refuses the order.
+    expect(await ageStepFor({ policyAge: () => Infinity }, tagged, proof)).toEqual({ requiredAge: 21, ageVerified: false });
+    // control: the same proof under a well-formed policy age ticks it
+    expect(await ageStepFor({ policyAge: () => 21 }, tagged, proof)).toEqual({ requiredAge: 21, ageVerified: true });
+  });
+
+  // A record from before rails stored the proven age counts as proven at the line age, here
+  // Infinity — so only the malformed check stops a tick that payment (`Math.max` not finite) refuses.
+  it("a +Infinity line minimumAge never ticks Age, even for a record without a proven age", async () => {
+    const order = { ...catalog.createOrder([{ productId: "gift-card", quantity: 1 }], "ORD-1") };
+    order.lines = order.lines.map((l) => ({ ...l, minimumAge: Infinity }));
+    expect((await ageStepFor({ policyAge: () => 0 }, order, { ageVerified: true })).ageVerified).toBe(false);
+  });
+
+  it("a NaN line minimumAge never ticks Age", async () => {
+    const order = { ...catalog.createOrder([{ productId: "gift-card", quantity: 1 }], "ORD-1") };
+    order.lines = [...order.lines, { ...order.lines[0], minimumAge: NaN }];
+    expect((await ageStepFor({ policyAge: () => 21 }, order, { ageVerified: true, ageVerifiedOver: 21 })).ageVerified).toBe(false);
+  });
+
+  it("a numeric-string policy age (an untyped store read) asks that age, as completion does", async () => {
+    const order = catalog.createOrder([{ productId: "gift-card", quantity: 1 }], "ORD-1");
+    const lookup = (() => "25") as unknown as PolicyAgeLookup;
+    expect(await requiredAgeFor({ policyAge: lookup }, order)).toBe(25);
+    expect(await ageStepFor({ policyAge: lookup }, order, { ageVerified: true, ageVerifiedOver: 21 })).toEqual({ requiredAge: 25, ageVerified: false });
+  });
+
+  // Only text is converted: a lookup that wrongly returns `true` must not ask "over 1" (`Number(true)`),
+  // and a BigInt must not tick an age completion's `Math.max` throws on.
+  it.each([
+    ["true", true],
+    ["a BigInt", 25n],
+  ])("a policy age of %s is malformed, not converted — no lowered threshold, no tick", async (_, raw) => {
+    const order = catalog.createOrder([{ productId: "gift-card", quantity: 1 }], "ORD-1");
+    const lookup = (() => raw) as unknown as PolicyAgeLookup;
+    expect(await requiredAgeFor({ policyAge: lookup }, order)).toBeNull();
+    expect(await ageStepFor({ policyAge: lookup }, order, { ageVerified: true, ageVerifiedOver: 25 })).toEqual({ requiredAge: 0, ageVerified: false });
+  });
+
+  it("a -Infinity policy age is ignored, as completion ignores it — a tagged item's proof still ticks", async () => {
+    const tagged = { ...catalog.createOrder([{ productId: "gift-card", quantity: 1 }], "ORD-1") };
+    tagged.lines = tagged.lines.map((l) => ({ ...l, minimumAge: 21 }));
+    expect(await ageStepFor({ policyAge: () => -Infinity }, tagged, { ageVerified: true, ageVerifiedOver: 21 })).toEqual({ requiredAge: 21, ageVerified: true });
   });
 });

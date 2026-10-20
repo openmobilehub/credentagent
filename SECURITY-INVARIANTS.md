@@ -70,13 +70,17 @@ const policyAge = input.policyMinAge ?? registeredMinAge(gateOrderOf(repriced), 
 const requiredAge = Math.max(lineAge, policyAge);
 if (!Number.isFinite(requiredAge)) return { completed: false, reason: "age" };
 // …
-if (requiredAge > 0 && (verification?.ageVerified !== true || provenAge < requiredAge)) {
+if (ageRestricted && !recordedAgeCovers(verification, requiredAge, lineAge)) {
   return { completed: false, reason: "age" };
 }
 ```
 
-`provenAge` is the age the proof was made at (`VerificationRecord.ageVerifiedOver`, see
-invariant 5).
+`recordedAgeCovers` ([`ceremony/mandate.ts`](../../packages/credentagent-gate/src/ceremony/mandate.ts))
+requires `ageVerified === true` and a proven age at or above `requiredAge`. The proven age is the
+age the proof was made at (`VerificationRecord.ageVerifiedOver`, see invariant 5). The rails'
+pages tick their Age step by the same function, and never for an order whose age is malformed
+(NaN or +Infinity, or a policy age that is neither a number nor numeric text), so they can't tick
+an age completion refuses (#414).
 
 **Open gap: an order the server has forgotten** (#411). The policy age is remembered per order in
 memory, for the last 10,000 orders. An order evicted from that, or completed after a restart or on

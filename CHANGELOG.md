@@ -51,6 +51,10 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
   16+). Before, the iPhone request (ISO mdoc) asked only for 18 or 21, and every request asked an
   age under 18 for 18 alone, so those ages could never be proven. A wallet now proves them when
   its credential holds that claim (#354).
+- The payment, passkey, credential and outside-verifier pages' progress bar shows the Age step
+  for an age that only the policy asks for (an item with no `minimumAge`), and ticks it only when
+  the proof on record is old enough for the order. Before, the bar never listed Age as a step
+  the order needed: it showed Age only on the age page itself, as the current step (#414).
 
 ### Security
 
