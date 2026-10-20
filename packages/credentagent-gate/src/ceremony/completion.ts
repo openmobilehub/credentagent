@@ -378,7 +378,7 @@ async function completeOrderLocked(input: CompletionInput, ctx: CompletionContex
 
   // The proof on record must cover the required age (the age it was made at, #354) — the same
   // rule the pay pages tick their Age step by (`recordedAgeCovers`, #414).
-  if (ageRestricted && !recordedAgeCovers(verification as { ageVerified?: boolean; ageVerifiedOver?: number } | undefined, lineAge, requiredAge)) {
+  if (ageRestricted && !recordedAgeCovers(verification as { ageVerified?: boolean; ageVerifiedOver?: number } | undefined, requiredAge, lineAge)) {
     return { completed: false, reason: "age" };
   }
 

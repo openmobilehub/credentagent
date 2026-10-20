@@ -14,8 +14,9 @@ import express from "express";
 import request from "supertest";
 import { CredentAgent } from "./client.js";
 import { defineHost } from "./host.js";
-import { age, membership, payment, required, optional } from "./credentials.js";
+import { age, membership, payment, required, optional, defineCredential, dcql, gate } from "./credentials.js";
 import { completeOrder, type CompletedRecord } from "./ceremony/completion.js";
+import { requiredAgeFor } from "./ceremony/credential-gate/verify.js";
 import type { CartItemRef, CeremonyCatalog, CeremonyOrder, CompletionInput, DelegatedVerifier } from "./ceremony/types.js";
 import type { Credential, Step } from "./types.js";
 import type { PolicyAgeLookup } from "./ceremony/types.js";
@@ -387,5 +388,31 @@ describe("#414 — the pay pages show the Age step the order's policy asks for",
     const s = setup();
     s.open("ORD-1", "gift-card", [required(payment.in("usd"))]);
     expect(await page(s.app, "/credentagent/dc-payment?order=ORD-1")).toEqual([["Pay", "current"]]);
+  });
+
+  const RX = defineCredential({
+    id: "prescription",
+    request: dcql({ docType: "org.hl7.prescription.1", claims: ["rx_valid"] }),
+    verify: (c) => c.rx_valid === true,
+    effect: gate(),
+    ui: { label: "Prescription", action: "Verify prescription" },
+  });
+
+  it("a custom credential's page shows it before that credential", async () => {
+    const s = setup({ credentials: [RX] });
+    s.open("ORD-1", "gift-card", [required(age.over(21)), required(RX), required(payment.in("usd"))]);
+    expect(await page(s.app, "/credentagent/credential?order=ORD-1&cred=prescription")).toEqual([["Age", ""], ["Prescription", "current"], ["Pay", ""]]);
+  });
+
+  it("the outside verifier's page for an order with no payment (identity only) shows it before the identity step", async () => {
+    const s = setup({ credentials: [RX], verifier: { buildRequest: vi.fn(), consume: vi.fn() } as unknown as DelegatedVerifier });
+    s.open("REQ-1", "sealed-record", [required(RX), required(age.over(21))]);
+    expect(await page(s.app, "/credentagent/delegated?order=REQ-1")).toEqual([["Age", ""], ["Prescription", "current"]]);
+  });
+
+  it("a policy-age lookup that returns NaN doesn't drop a tagged item's own age", async () => {
+    const tagged = { ...catalog.createOrder([{ productId: "gift-card", quantity: 1 }], "ORD-1") };
+    tagged.lines = tagged.lines.map((l) => ({ ...l, minimumAge: 21 }));
+    expect(await requiredAgeFor({ policyAge: () => NaN }, tagged)).toBe(21);
   });
 });

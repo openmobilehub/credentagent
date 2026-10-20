@@ -550,8 +550,7 @@ export function progressRail(steps: RailStep[], currentIndex: number): string {
  * Order-derived progress rail for the ceremony gate pages (payment / credential). Includes
  * ONLY the gates the ORDER actually has — Age when the order must prove an age (`requiredAge`,
  * which the rails pass from `ageStepFor`: the items' `minimumAge` AND the policy's `age.over(n)`,
- * #414; without it, the items' tags alone), Membership
- * when a discount is in play, Pay when there's an amount — plus the CURRENT gate, which is
+ * #414), Membership when a discount is in play, Pay when there's an amount — plus the CURRENT gate, which is
  * always shown even if the order can't imply it (a custom credential id). A step shows ✓
  * only when ACTUALLY satisfied (age from the verification record, membership from an applied
  * discount), never merely because it precedes the current step — so a payment page can't
@@ -559,18 +558,17 @@ export function progressRail(steps: RailStep[], currentIndex: number): string {
  * the policy manifest, which the rails don't carry.
  */
 export function checkoutRail(
-  order: { lines: { minimumAge?: number }[]; discount: number; total: number },
+  order: { discount: number; total: number },
   current: string, // "age" | "membership" | "pay" | a custom credential id
   // `includePay: false` drops the Pay step for a policy with NO payment credential — the
   // delegated rail builds no settle step for it, so a priced order must not imply a Pay step.
-  opts: { ageVerified?: boolean; requiredAge?: number; currentLabel?: string; includePay?: boolean } = {},
+  // `requiredAge` + `ageVerified` are REQUIRED (pass `ageStepFor`'s result): a page that left
+  // them out would fall back to the items' tags and hide an age only the policy asks for (#414).
+  opts: { ageVerified: boolean; requiredAge: number; currentLabel?: string; includePay?: boolean },
 ): string {
   const isBuiltin = current === "age" || current === "membership" || current === "pay";
-  const ageApplies = opts.requiredAge !== undefined
-    ? opts.requiredAge > 0
-    : order.lines.some((l) => typeof l.minimumAge === "number" && l.minimumAge > 0);
   const gates = [
-    { key: "age", label: "Age", applies: ageApplies, done: opts.ageVerified === true },
+    { key: "age", label: "Age", applies: opts.requiredAge > 0, done: opts.ageVerified },
     { key: "membership", label: "Membership", applies: order.discount > 0, done: order.discount > 0 },
     // A custom gate isn't implied by the order — surface it only while it's the current step.
     ...(isBuiltin ? [] : [{ key: current, label: opts.currentLabel ?? current, applies: false, done: false }]),

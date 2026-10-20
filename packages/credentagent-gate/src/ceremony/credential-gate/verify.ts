@@ -87,8 +87,9 @@ export function requiredAgeForOrder(order: CeremonyOrder): number | null {
  * from the registered `age` credential — the same fallback `completeOrder` uses. Every rail
  * evaluates an age proof at this threshold. `completeOrder` does not call this: it re-derives
  * the threshold inline from the same sources and enforces it. They differ in two cases. On a
- * malformed age they fail closed: a line `minimumAge` of NaN, or a NaN from the host's `policyAge`
- * lookup, is dropped here, while `completeOrder` refuses the whole order. And a host completion
+ * malformed age they fail closed: a line `minimumAge` of NaN, or a policy age that isn't a finite
+ * number (a NaN from the host's `policyAge` lookup), is dropped here — only that value, the other
+ * source still counts — while `completeOrder` refuses the whole order. And a host completion
  * built without `credentialRegistry` has no registered `age` to fall back to, so for an order the
  * server forgot it asks none while this asks the mount's (#411).
  */
@@ -98,15 +99,19 @@ export async function requiredAgeFor(
 ): Promise<number | null> {
   const gateOrder = { id: order.id, total: order.total, currency: order.currency, lines: order.lines.map((l) => ({ ...l })) };
   const policyAge = (await ctx.policyAge?.(order.id)) ?? registeredMinAge(gateOrder, ctx.credentialRegistry, ctx.orderPolicies?.get(order.id));
-  const age = Math.max(requiredAgeForOrder(order) ?? 0, policyAge);
+  // Drop a malformed policy age alone: `Math.max` with NaN is NaN, which would also drop the
+  // lines' own `minimumAge` and hide a tagged item's Age step.
+  const age = Math.max(requiredAgeForOrder(order) ?? 0, Number.isFinite(policyAge) ? policyAge : 0);
   return age > 0 ? age : null;
 }
 
 /**
- * The pay pages' Age step for THIS order (#414): the age completion will ask (`requiredAgeFor`,
- * 0 = none) and whether the proof on record covers it (`recordedAgeCovers`, completion's own
- * rule). Pass it to `checkoutRail` so the progress rail shows an Age step for an age only the
- * policy asks for, and never ticks a proof made below the order's age.
+ * The rail pages' Age step for THIS order (#414) — the payment, passkey, credential and
+ * outside-verifier pages: the age completion will ask (`requiredAgeFor`, 0 = none) and whether
+ * the proof on record covers it (`recordedAgeCovers`, completion's own rule). Pass it to
+ * `checkoutRail` so the progress rail shows an Age step for an age only the policy asks for, and
+ * never ticks a proof made below the order's age. (The checkout page itself, `checkout-page.ts`,
+ * does not read it yet.)
  */
 export async function ageStepFor(
   ctx: Pick<CeremonyContext, "policyAge" | "credentialRegistry" | "orderPolicies">,
@@ -114,7 +119,7 @@ export async function ageStepFor(
   record: { ageVerified?: boolean; ageVerifiedOver?: number } | null | undefined,
 ): Promise<{ requiredAge: number; ageVerified: boolean }> {
   const requiredAge = (await requiredAgeFor(ctx, order)) ?? 0;
-  return { requiredAge, ageVerified: recordedAgeCovers(record, requiredAgeForOrder(order) ?? 0, requiredAge) };
+  return { requiredAge, ageVerified: recordedAgeCovers(record, requiredAge, requiredAgeForOrder(order) ?? 0) };
 }
 
 /**
