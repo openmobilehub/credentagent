@@ -88,8 +88,9 @@ export function requiredAgeForOrder(order: CeremonyOrder): number | null {
  * evaluates an age proof at this threshold. `completeOrder` does not call this: it re-derives
  * the threshold inline from the same sources and enforces it. They differ in two cases. On a
  * malformed age they fail closed: a line `minimumAge` of NaN, or a policy age that isn't a finite
- * number (a NaN from the host's `policyAge` lookup), is dropped here — only that value, the other
- * source still counts — while `completeOrder` refuses the whole order. And a host completion
+ * number (a NaN from the host's `policyAge` lookup, a `true` or a BigInt; numeric text such as
+ * "25" is read as that number), is dropped here — only that value, the other source still
+ * counts — while `completeOrder` refuses the order (`ageStepFor` never ticks it). And a host completion
  * built without `credentialRegistry` has no registered `age` to fall back to, so for an order the
  * server forgot it asks none while this asks the mount's (#411).
  */
@@ -108,12 +109,21 @@ async function ageDemandFor(
 ): Promise<{ age: number | null; malformed: boolean }> {
   const gateOrder = { id: order.id, total: order.total, currency: order.currency, lines: order.lines.map((l) => ({ ...l })) };
   const rawPolicyAge = (await ctx.policyAge?.(order.id)) ?? registeredMinAge(gateOrder, ctx.credentialRegistry, ctx.orderPolicies?.get(order.id));
-  // Convert as completion's `Math.max` does, so an untyped store read of "25" asks 25 here too.
-  const policyAge = rawPolicyAge == null ? 0 : Number(rawPolicyAge);
+  // Convert only text, so an untyped store read of "25" asks 25 as completion's `Math.max` does.
+  // Anything else that isn't a number (`true`, a BigInt) stays malformed: converting it would ask
+  // a made-up age (`true` → 1) or tick one completion throws on.
+  const policyAge: unknown = rawPolicyAge == null ? 0 : typeof rawPolicyAge === "string" ? Number(rawPolicyAge) : rawPolicyAge;
+  const policyOk = typeof policyAge === "number" && Number.isFinite(policyAge);
   // Drop a malformed policy age alone: `Math.max` with NaN is NaN, which would also drop the
   // lines' own `minimumAge` and hide a tagged item's Age step.
-  const age = Math.max(requiredAgeForOrder(order) ?? 0, Number.isFinite(policyAge) ? policyAge : 0);
-  const malformed = !Number.isFinite(policyAge) || order.lines.some((l) => typeof l.minimumAge === "number" && !Number.isFinite(l.minimumAge));
+  const age = Math.max(requiredAgeForOrder(order) ?? 0, policyOk ? policyAge : 0);
+  // Malformed = NaN or +Infinity, which completion refuses the order for, or a policy age that
+  // isn't a number at all. A -Infinity loses completion's `Math.max`, so it is ignored, not
+  // refused; so is a line `minimumAge` that isn't a number (completion reads it as 0).
+  const bad = (a: number) => Number.isNaN(a) || a === Infinity;
+  const malformed =
+    (rawPolicyAge != null && (typeof policyAge !== "number" || bad(policyAge))) ||
+    order.lines.some((l) => typeof l.minimumAge === "number" && bad(l.minimumAge));
   return { age: age > 0 ? age : null, malformed };
 }
 
@@ -129,8 +139,8 @@ async function ageDemandFor(
  * for any `ageVerified`. It renders from the policy manifest and the exported `RenderVerification`
  * (a bare boolean, no proven age), and its Age status also unlocks the Pay button, so changing it
  * changes a public render API and that page's flow, not just a progress rail. Completion still
- * refuses a too-young proof there. Tracked as a follow-up to #414 (a maintainer files it: this
- * change was made without GitHub access).
+ * refuses a too-young proof there. Making that page tick Age only for a proof that
+ * covers the order's age is deferred to its own change, after #414.
  */
 export async function ageStepFor(
   ctx: Pick<CeremonyContext, "policyAge" | "credentialRegistry" | "orderPolicies">,

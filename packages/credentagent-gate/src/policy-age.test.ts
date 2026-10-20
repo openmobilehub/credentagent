@@ -439,4 +439,22 @@ describe("#414 — the pay pages show the Age step the order's policy asks for",
     expect(await requiredAgeFor({ policyAge: lookup }, order)).toBe(25);
     expect(await ageStepFor({ policyAge: lookup }, order, { ageVerified: true, ageVerifiedOver: 21 })).toEqual({ requiredAge: 25, ageVerified: false });
   });
+
+  // Only text is converted: a lookup that wrongly returns `true` must not ask "over 1" (`Number(true)`),
+  // and a BigInt must not tick an age completion's `Math.max` throws on.
+  it.each([
+    ["true", true],
+    ["a BigInt", 25n],
+  ])("a policy age of %s is malformed, not converted — no lowered threshold, no tick", async (_, raw) => {
+    const order = catalog.createOrder([{ productId: "gift-card", quantity: 1 }], "ORD-1");
+    const lookup = (() => raw) as unknown as PolicyAgeLookup;
+    expect(await requiredAgeFor({ policyAge: lookup }, order)).toBeNull();
+    expect(await ageStepFor({ policyAge: lookup }, order, { ageVerified: true, ageVerifiedOver: 25 })).toEqual({ requiredAge: 0, ageVerified: false });
+  });
+
+  it("a -Infinity policy age is ignored, as completion ignores it — a tagged item's proof still ticks", async () => {
+    const tagged = { ...catalog.createOrder([{ productId: "gift-card", quantity: 1 }], "ORD-1") };
+    tagged.lines = tagged.lines.map((l) => ({ ...l, minimumAge: 21 }));
+    expect(await ageStepFor({ policyAge: () => -Infinity }, tagged, { ageVerified: true, ageVerifiedOver: 21 })).toEqual({ requiredAge: 21, ageVerified: true });
+  });
 });
