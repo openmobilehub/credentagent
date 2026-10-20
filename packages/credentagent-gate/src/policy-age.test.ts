@@ -423,6 +423,8 @@ describe("#414 — the pay pages show the Age step the order's policy asks for",
     tagged.lines = tagged.lines.map((l) => ({ ...l, minimumAge: 21 }));
     const proof = { ageVerified: true, ageVerifiedOver: 21 };
     expect(await ageStepFor({ policyAge: () => NaN }, tagged, proof)).toEqual({ requiredAge: 21, ageVerified: false });
+    // +Infinity too: completion's `Math.max(21, Infinity)` is not finite, so it refuses the order.
+    expect(await ageStepFor({ policyAge: () => Infinity }, tagged, proof)).toEqual({ requiredAge: 21, ageVerified: false });
     // control: the same proof under a well-formed policy age ticks it
     expect(await ageStepFor({ policyAge: () => 21 }, tagged, proof)).toEqual({ requiredAge: 21, ageVerified: true });
   });
