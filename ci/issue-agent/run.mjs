@@ -90,7 +90,7 @@ const EVIDENCE_BRANCH = "agent-evidence";
 // The review loop (README, "The review loop") — on when the workflow has a token whose pushes start
 // other workflows (AGENT_GH_TOKEN); with GITHUB_TOKEN a pushed fix would never be reviewed again.
 const REVIEW_LOOP = process.env.ISSUE_AGENT_REVIEW_LOOP === "on";
-const MAX_REVIEW_CYCLES = cycleCap(process.env.ISSUE_AGENT_MAX_REVIEW_CYCLES); // unset ("") or not a whole number ≥ 1 → 3
+const MAX_REVIEW_CYCLES = cycleCap(process.env.ISSUE_AGENT_MAX_REVIEW_CYCLES); // unset ("") or not a whole number ≥ 1 → 2
 const LABELS = { working: "agent:working", inReview: "agent:in-review", ready: "agent:ready-for-human", needsHuman: STOPPED_LABEL, awaiting: LABEL_AWAITING, approved: LABEL_APPROVED };
 // Briefs first (config `brief: "pause"`): what started this run — the `agent` label, `agent:approved`,
 // a comment while a brief waits, or a run by hand (README.md, "The brief").
