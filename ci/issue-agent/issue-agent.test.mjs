@@ -17,7 +17,7 @@ import {
 import { reviewPrompt } from "./roles.mjs";
 import { startMerge, buildResolvedMerge, replayResolution, rebuildForPush, treeOf } from "./merges.mjs";
 import { fingerprints, withinBaseline } from "./fingerprints.mjs";
-import { prBody, proofHtml, issueComment, statusBody, STATUS_MARK, md } from "./report.mjs";
+import { prBody, proofHtml, reportHtml, issueComment, statusBody, STATUS_MARK, md } from "./report.mjs";
 
 // Pinned so a contributor's own git config (quotePath off, signed commits) can't change the outcome.
 const git = (cwd, ...args) => {
@@ -307,6 +307,15 @@ describe("agent text in a PR body", () => {
     expect(prBody(failed, { mediaBase: "", repo: "o/r" })).toMatch(/`test` ❌/);
     expect(proofHtml({ issue: failed.issue, spec: failed.spec, last: failed.last, base: "a".repeat(40), patchSha256: "bb" })).toMatch(/<td class="bad">FAIL/);
     expect(issueComment({ kind: "needs-human", prUrl: "https://x/pr/1", report: { ...failed, manifest: [] } })).toMatch(/gates red/);
+  });
+  it("doesn't tick a spec review that approved while skipping or failing a criterion", () => {
+    const withSpec = (criteria) => ({ ...report, last: { ...report.last, reviews: [{ lens: "spec", verdict: "approve", criteria, findings: [] }, { lens: "dx", verdict: "approve", findings: [] }] } });
+    for (const criteria of [[], [{ id: "AC1", met: false, evidence: "no test" }]]) {
+      const b = prBody(withSpec(criteria), { mediaBase: "", repo: "o/r" });
+      expect(b).toContain("spec ❌ · dx ✅");
+      expect(reportHtml({ ...withSpec(criteria), rounds: [], base: "a".repeat(40) }, { mediaBase: "" })).toContain('<b>spec</b> — <span class="bad">');
+    }
+    expect(prBody(withSpec([{ id: "AC1", met: true, evidence: "pinned" }]), { mediaBase: "", repo: "o/r" })).toContain("spec ✅ · dx ✅");
   });
   it("says red in the issue comment when another gate failed and only the quick tests ran", () => {
     const r = { ...fast, manifest: [], last: { ...fast.last, gates: [{ name: "build", ok: false, green: false }, { name: "test", scope: "fast", ok: true, green: true }] } };
