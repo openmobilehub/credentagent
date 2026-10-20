@@ -34,7 +34,16 @@ const DEFAULT_LENSES = {
 
 // The checks the Claude review on GitHub runs (REVIEW.md), stated in every lens: what that review
 // would find, an internal round should find first — each GitHub review round costs minutes.
-const DEFAULT_REVIEW_RULES = `Every lens applies these checks from REVIEW.md — the checklist the Claude review on GitHub runs after you:
+const DEFAULT_REVIEW_RULES = `What blocks a merge — these classes, and only these:
+- a broken security invariant
+- a missing bypass test for a new or changed control
+- a correctness bug
+- a release or README claim the code doesn't back
+- a regression against the DX rubric
+- a change too big or outside its ticket
+Never blocking — a suggestion at most: comment wording, doc phrasing, and an edge case that needs a host to break its declared types.
+
+Every lens applies these checks from REVIEW.md — the checklist the Claude review on GitHub runs after you:
 - §2, the bypass-test rule: for each new or changed security control (a gate, a claim check, an amount binding, state keying, an origin/nonce check — or a check this pipeline itself enforces), ask "Which test fails if this line is reverted?" No answer → blocking. A test that would still pass with the control removed is not a useful test. For other changed behavior, a test that guards nothing is a suggestion.
 - §5, fix it or flag it: anything broken the author must have seen is either fixed inline (small and safe) or filed as an issue — never silently ignored. Flag what the diff walked past — as a suggestion: §5 is "flag, don't block alone".
 - §6, review what ships, not just the diff: a changed public API, README, behavior or dependency range puts its callers, \`examples/\`, and docs (READMEs, comments, the file's own header) in scope. Grep for them; stale ones are findings.
@@ -399,7 +408,7 @@ ${JSON.stringify(spec, null, 2)}
 
 The change is the diff between ${base} and the working tree — new files included. It is in the <diff> block below (\`git diff ${base}\` shows the same, if it was cut). Read surrounding code as needed. You may run focused tests (\`${cfg.focusedTest}\`). The <pipeline_facts> block below is what the pipeline itself measured (gates, main's pre-existing failures, the mutation check): treat it as established — don't mark a criterion unmet for something it already proves.
 
-Severity: "blocking" = a maintainer would request changes (bug, broken invariant, unmet criterion, a test that passes without its control, scope creep that adds risk). "suggestion" = optional polish. Do not report style nits the linter owns. Verdict is request_changes iff there is at least one blocking finding.
+Severity: "blocking" only for a finding in one of the blocking classes the rules above list; everything else is a "suggestion" — reported on the draft pull request, never sent back to the implementer. An unmet acceptance criterion goes in "criteria", not as a finding. Do not report style nits the linter owns. Verdict is request_changes iff there is at least one blocking finding.
 
 Do not edit files. Return the structured result.`;
 

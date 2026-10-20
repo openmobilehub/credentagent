@@ -25,7 +25,8 @@ issue labelled `agent` (by someone with write access)
   ├─ root test   once per round: the authoritative root `npm test`                         (script)
   ├─ review      spec · security · DX, in parallel, adversarial, on REVIEW.md              (3 agents)
   │                └─ any red above → back to the SAME implement session (≤3 review rounds;
-  │                   mechanical failures get up to 3 fixes inside a round)
+  │                   mechanical failures get up to 3 fixes inside a round). Only blocking
+  │                   findings and unmet criteria go back; suggestions go on the draft PR
   ├─ freeze      the reviewed change is saved as a patch — the only thing ever published   (script)
   ├─ evidence    anything browser-visible: before (main) vs after, screenshots + video     (agent)
   │              every change: a recorded test-proof page                                  (script)
@@ -66,7 +67,12 @@ different agent before it reaches the PR:
 - **Reviewers check what the Claude review on GitHub checks.** Every lens carries `REVIEW.md`'s
   rules — the bypass-test question ("which test fails if this line is reverted?"), "fix it or flag
   it", and "stale docs, callers and examples are findings" — so a round on GitHub isn't spent on what
-  the internal round could have caught. They get the diff (capped) and the pipeline's measured facts
+  the internal round could have caught. A finding blocks only in REVIEW.md's classes — a broken
+  security invariant, a missing bypass test for a new or changed control, a correctness bug, a release
+  or README claim the code doesn't back, a regression against the DX rubric, or a change too big or
+  outside its ticket. Comment wording, doc phrasing, and an edge case that needs a host to break its
+  declared types are suggestions at most: they are reported on the draft pull request but never sent
+  back to the implementer. A repo's own `reviewRules` replaces that list. The reviewers get the diff (capped) and the pipeline's measured facts
   in the prompt, rather than spending turns finding them.
 - **Two models.** The spec agent and the three reviewers run on `ISSUE_AGENT_REVIEW_MODEL` (faster);
   the implementer — every attempt, and the review loop's fixes — and the evidence agent on

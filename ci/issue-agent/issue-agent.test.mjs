@@ -12,7 +12,7 @@ import {
   isReviewBot, parseVerdict, agentBranch, threadsToAnswer, reviewDecision, sharedChanges, cyclesDone, loopRefusal, latestVerdict, cycleCap,
   isAgentComment, requestComments, leftLoop, labelledBy, requestBody, protectedHead, updateSection, noComments,
   roleModel, testGateCommand, rootTestRefusal, publishVerdict, isMutableSource, sameLockfile, publishRefusalHint,
-  parseCriteria, tickCriteria, verifiedFor, afterVerification, acceptVerified, conflictMidCycle,
+  parseCriteria, tickCriteria, verifiedFor, afterVerification, acceptVerified, conflictMidCycle, reviewFeedback,
 } from "./checks.mjs";
 import { reviewPrompt } from "./roles.mjs";
 import { startMerge, buildResolvedMerge, replayResolution, rebuildForPush, treeOf } from "./merges.mjs";
@@ -632,7 +632,40 @@ describe("the internal reviewers", () => {
     it(`${lens}: asks which test fails if the line is reverted`, () => {
       expect(text).toMatch(/which test fails if this line is reverted\?/i);
     });
+    it(`${lens}: lists what blocks and what never does`, () => {
+      for (const blocks of ["a broken security invariant", "a missing bypass test for a new or changed control", "a correctness bug",
+        "a release or README claim the code doesn't back", "a regression against the DX rubric", "a change too big or outside its ticket"]) {
+        expect(text).toContain(blocks);
+      }
+      for (const never of ["comment wording", "doc phrasing", "an edge case that needs a host to break its declared types"]) expect(text).toContain(never);
+      expect(text).toMatch(/never sent back to the implementer/);
+    });
   }
+});
+
+describe("what goes back to the implementer", () => {
+  const criteria = [{ id: "AC1", text: "x", verified_by: "test" }, { id: "AC2", text: "y", verified_by: "test" }];
+  const met = [{ id: "AC1", met: true, evidence: "t1" }, { id: "AC2", met: true, evidence: "t2" }];
+  const note = { severity: "suggestion", file: "a.mjs", line: 3, summary: "reword this comment" };
+  const bug = { severity: "blocking", file: "b.mjs", line: 9, summary: "the gate is skipped", fix: "check it" };
+
+  it("finishes clean when every finding is a suggestion", () => {
+    const reviews = [{ lens: "spec", criteria: met, findings: [note] }, { lens: "security", findings: [note] }, { lens: "dx", findings: [note, note] }];
+    expect(reviewFeedback({ reviews, criteria })).toEqual({ clean: true, blocking: [], unmet: [], feedback: "" });
+  });
+
+  it("sends back a blocking finding, without the suggestions", () => {
+    const out = reviewFeedback({ reviews: [{ lens: "spec", criteria: met, findings: [note] }, { lens: "dx", findings: [bug, note] }], criteria });
+    expect(out.clean).toBe(false);
+    expect(out.feedback).toBe("- [dx] b.mjs:9 — the gate is skipped\n  fix: check it");
+    expect(out.feedback).not.toContain("reword");
+  });
+
+  it("sends back an unmet or missing criterion", () => {
+    const out = reviewFeedback({ reviews: [{ lens: "spec", criteria: [{ id: "AC1", met: false, evidence: "no test" }], findings: [note] }], criteria });
+    expect(out.clean).toBe(false);
+    expect(out.feedback).toBe("- [spec] AC1 is NOT met: no test\n- [spec] AC2 is NOT met: the spec reviewer gave no verdict for it");
+  });
 });
 
 describe("models per role", () => {
