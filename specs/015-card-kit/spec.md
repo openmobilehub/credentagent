@@ -386,9 +386,10 @@ check it today — so every sentence says so:
   receipt types — said out loud, never defaulted — but a store's answer that arrives without it shows
   the "not recognised" sentence instead of throwing.
 - **The grant card too:** its line comes from this list, through `GrantViewData.trustLevel`, in place
-  of today's fixed "consent is dev-sealed, not wallet-signed" (false for a grant signed on a phone).
-  The gallery's honesty test changes to assert the list's sentence, and still fails when the line is
-  removed.
+  of the old fixed "consent is dev-sealed, not wallet-signed" (false for a grant signed on a phone).
+  A grant not approved yet, or declined, says so instead of a level — a pending grant reports
+  `server-issued-demo` even when the phone will sign it. The gallery's honesty test asserts the
+  list's sentence, and still fails when the line is removed (#429).
 - **The status label never says how a permission was approved.** An `authorized` permission shows
   "Approved", whatever its level; how it was approved is only in the honesty line, attributed to the
   store. A store that claims `device-signed` therefore gets the attributed sentence, never an

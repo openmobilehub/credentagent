@@ -14,7 +14,9 @@ import styles from "./grants.module.css";
 const render = (el: ReactElement): string => renderToStaticMarkup(el);
 const count = (haystack: string, needle: string): number => haystack.split(needle).length - 1;
 
-const FULL_TRUST = "limits enforced server-side · consent is dev-sealed, not wallet-signed";
+// The base grant below is an authorized click-to-approve grant; a pending one says it is not approved yet.
+const FULL_TRUST = "🔒 Limits enforced server-side. As the store reports it: a demo, approved with a click on a page";
+const NOT_APPROVED = "🔒 Limits enforced server-side. Not approved yet";
 
 const base: GrantViewData = {
   kind: "credentagent.grant",
@@ -56,7 +58,7 @@ describe("honesty frame — the non-omittable trust line (FR-4, bypass-tested)",
   for (const [label, grant, views] of cases) {
     it(`${label} renders the trust line + presence/trustLevel tokens`, () => {
       const html = render(<GrantCard grant={grant} views={views} />);
-      expect(html).toContain(FULL_TRUST);
+      expect(html).toContain(grant.status === "pending" ? NOT_APPROVED : FULL_TRUST);
       expect(html).toContain("delegated-demo");
       expect(html).toContain("server-issued-demo");
     });
@@ -91,8 +93,50 @@ describe("honesty frame — the non-omittable trust line (FR-4, bypass-tested)",
     // The full trust SENTENCE appears exactly once (the container footer) — repetition would
     // train the eye to skip it.
     expect(count(html, FULL_TRUST)).toBe(1);
-    // …but the literal presence token stays on every row (3 rows) + the footer sentence = 4.
-    expect(count(html, "delegated-demo")).toBeGreaterThanOrEqual(4);
+    // …but the literal presence token stays on every row (3 rows); the footer sentence no longer
+    // repeats it (spec 015 FR-10: the sentence is the card's own words, the data rides as data).
+    expect(count(html, "delegated-demo")).toBeGreaterThanOrEqual(3);
+  });
+});
+
+describe("the trust line says how THIS grant's consent was given (#429, spec 015 FR-10)", () => {
+  const line = (grant: GrantViewData): string => render(<GrantCard grant={grant} />);
+  const phoneSigned = g({ presence: "delegated", trustLevel: "device-signed" });
+
+  it("a grant signed with the wallet says so, and never 'not wallet-signed'", () => {
+    const html = line(phoneSigned);
+    expect(html).toContain("As the store reports it: signed on the person&#x27;s phone");
+    expect(html).not.toContain("not wallet-signed");
+    expect(html).not.toContain("approved with a click");
+  });
+
+  it("a click-to-approve grant says nothing was signed on a phone", () => {
+    expect(line(open)).toContain("approved with a click on a page — nothing was signed on a phone");
+  });
+
+  it("a pending grant claims no consent at all — even though it reports server-issued-demo before signing", () => {
+    const html = line(g({ status: "pending", lifecycle: "pending", trustLevel: "server-issued-demo" }));
+    expect(html).toContain("Not approved yet — nothing can be spent until the person approves.");
+    expect(html).not.toContain("approved with a click");
+    expect(html).not.toContain("signed on the person");
+  });
+
+  it("a declined grant says nothing can be spent", () => {
+    expect(line(g({ status: "denied", lifecycle: "denied" }))).toContain("Declined — nothing can be spent.");
+  });
+
+  it("a level the card does not know — even issuer-verified from the server's word — is never shown as given", () => {
+    for (const trustLevel of ["issuer-verified", "totally-trusted", ""]) {
+      const html = line(g({ trustLevel }));
+      expect(html).toContain("Trust level not recognised by this card; treat it as unverified.");
+      expect(html).not.toContain("As the store reports it");
+    }
+  });
+
+  it("a dense list keeps one true footer line per distinct way the grants were approved", () => {
+    const html = render(<GrantList grants={[open, phoneSigned, g({ id: "c" })]} />);
+    expect(count(html, "approved with a click on a page")).toBe(1);
+    expect(count(html, "signed on the person&#x27;s phone")).toBe(1);
   });
 });
 

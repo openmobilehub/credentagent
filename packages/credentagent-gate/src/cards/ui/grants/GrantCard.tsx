@@ -65,7 +65,8 @@ export interface GrantListProps {
 }
 
 /** The dense multi-grant layout (A7). Each row keeps the literal `delegated-demo` token; the full
- *  trust sentence de-duplicates to the container footer. Use it for ≥ 3 grants (design §7). */
+ *  trust sentences de-duplicate to the container footer — one line per distinct sentence, so rows
+ *  approved in different ways each keep a true one. Use it for ≥ 3 grants (design §7). */
 export function GrantList({ grants, accent }: GrantListProps) {
   return (
     <div className={styles.gallery} style={accentStyle(accent)}>
@@ -82,7 +83,9 @@ export function GrantList({ grants, accent }: GrantListProps) {
             <div className={styles.mLock}>{compactTrustToken(grant)}</div>
           </div>
         ))}
-        {grants.length > 0 && <div className={styles.listTrust}>{fullTrustSentence(grants[0])}</div>}
+        {[...new Set(grants.map(fullTrustSentence))].map((sentence) => (
+          <div key={sentence} className={styles.listTrust}>{sentence}</div>
+        ))}
       </div>
     </div>
   );

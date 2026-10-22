@@ -1,7 +1,7 @@
 // Pure, non-JSX shared bits for the grant gallery: the token role set, money formatting, the
 // status-pill table, and the DATA-DRIVEN trust strings. The trust wording is honest on BOTH axes
-// (design §5): the LIMITS are genuinely enforced server-side; the CONSENT is dev-sealed, not
-// wallet-signed. Built from `presence`/`trustLevel` so it stays truthful if those ever change.
+// (design §5): the LIMITS are genuinely enforced server-side; HOW the consent was given comes from
+// the grant's status and `trustLevel` (spec 015 FR-10), never one fixed claim for every grant.
 
 import type { GrantLifecycle } from "../../../grants.js";
 import type { GrantTokens, GrantViewData } from "./types";
@@ -38,9 +38,31 @@ export const STATUS_PILL: Record<GrantLifecycle, { tone: "accent" | "warn" | "mu
   denied: { tone: "muted", icon: "✕", label: "Declined" },
 };
 
-/** The full trust sentence (the frame footer + the dense-list footer). Presence is data-driven. */
-export function fullTrustSentence(grant: Pick<GrantViewData, "presence">): string {
-  return `🔒 ${grant.presence} · limits enforced server-side · consent is dev-sealed, not wallet-signed`;
+/** The card's sentence for each trust level (spec 015 FR-10). The level is the server's claim and the
+ *  card cannot check it, so each sentence says so; a level not listed here is never shown as given. */
+const TRUST_SENTENCES: Readonly<Record<string, string>> = {
+  "presence-only-demo":
+    "As the store reports it: a demo — the signatures are real, but the payment credential is not checked against its issuer yet. No real money moves.",
+  "device-signed":
+    "As the store reports it: signed on the person's phone. This card did not check that signature, and the credential is not checked against its issuer yet.",
+  "server-issued-demo":
+    "As the store reports it: a demo, approved with a click on a page — nothing was signed on a phone. No real money moves.",
+};
+const UNKNOWN_TRUST = "Trust level not recognised by this card; treat it as unverified.";
+
+/** The full trust sentence (the frame footer + the dense-list footer). A grant nobody has approved
+ *  yet, or one declined, says so: its trust level describes no consent yet (a pending grant reports
+ *  `server-issued-demo` even when the phone will sign it). Otherwise, the level's sentence. */
+export function fullTrustSentence(grant: Pick<GrantViewData, "status" | "trustLevel">): string {
+  const consent =
+    grant.status === "pending"
+      ? "Not approved yet — nothing can be spent until the person approves."
+      : grant.status === "denied"
+        ? "Declined — nothing can be spent."
+        : Object.hasOwn(TRUST_SENTENCES, grant.trustLevel)
+          ? TRUST_SENTENCES[grant.trustLevel]
+          : UNKNOWN_TRUST;
+  return `🔒 Limits enforced server-side. ${consent}`;
 }
 
 /** The compact per-row trust token (dense list). Keeps the LITERAL presence token on every row so
