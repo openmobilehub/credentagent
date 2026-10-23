@@ -1,8 +1,8 @@
 // GrantCard — the zero-config entry point (spec 011 §The surface). Picks the highest-specificity
 // fitting stock view automatically; `views` overrides the candidate set; `density="row"` delegates
 // to the budgetMeter (A6). GrantList renders the dense multi-grant layout (≥3 grants, A7): compact
-// rows with the literal per-row trust token, and ONE full trust sentence de-duplicated to the
-// container footer — so repetition never trains the eye to skip the honesty line.
+// rows with the literal per-row trust token, and the full trust sentence once in the container
+// footer when every row shares it — so repetition never trains the eye to skip the honesty line.
 
 import type { CSSProperties } from "react";
 import type { GrantSlots, GrantView, GrantViewData } from "./types";
@@ -64,14 +64,16 @@ export interface GrantListProps {
   accent?: string;
 }
 
-/** The dense multi-grant layout (A7). Each row keeps the literal `delegated-demo` token; the full
- *  trust sentences de-duplicate to the container footer — one line per distinct sentence, so rows
- *  approved in different ways each keep a true one. Use it for ≥ 3 grants (design §7). */
+/** The dense multi-grant layout (A7). Each row keeps its literal presence token. When every row has
+ *  the same trust sentence it shows once, in the container footer; when they differ, each row carries
+ *  its own, so no line is left without the grant it describes. Use it for ≥ 3 grants (design §7). */
 export function GrantList({ grants, accent }: GrantListProps) {
+  const sentences = grants.map(fullTrustSentence);
+  const shared = new Set(sentences).size === 1;
   return (
     <div className={styles.gallery} style={accentStyle(accent)}>
       <div className={styles.meterList}>
-        {grants.map((grant) => (
+        {grants.map((grant, i) => (
           <div key={grant.id} className={styles.mrow}>
             <div className={styles.mName}>{grant.merchant}</div>
             <div className={styles.mVals}>
@@ -80,12 +82,13 @@ export function GrantList({ grants, accent }: GrantListProps) {
             <div className={styles.mBar}>
               <BudgetMeter grant={grant} compact frozen={isTerminal(grant.lifecycle)} />
             </div>
-            <div className={styles.mLock}>{compactTrustToken(grant)}</div>
+            <div className={styles.mLock}>
+              {compactTrustToken(grant)}
+              {shared ? null : <> · {sentences[i]}</>}
+            </div>
           </div>
         ))}
-        {[...new Set(grants.map(fullTrustSentence))].map((sentence) => (
-          <div key={sentence} className={styles.listTrust}>{sentence}</div>
-        ))}
+        {shared && <div className={styles.listTrust}>{sentences[0]}</div>}
       </div>
     </div>
   );

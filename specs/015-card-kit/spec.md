@@ -388,7 +388,8 @@ check it today — so every sentence says so:
 - **The grant card too:** its line comes from this list, through `GrantViewData.trustLevel`, in place
   of the old fixed "consent is dev-sealed, not wallet-signed" (false for a grant signed on a phone).
   A grant not approved yet, or declined, says so instead of a level — a pending grant reports
-  `server-issued-demo` even when the phone will sign it. The gallery's honesty test asserts the
+  `server-issued-demo` even when the phone will sign it. A revoked grant at `server-issued-demo` says
+  only "Revoked": a grant withdrawn before anyone approved it reports that same level. The gallery's honesty test asserts the
   list's sentence, and still fails when the line is removed (#429).
 - **The status label never says how a permission was approved.** An `authorized` permission shows
   "Approved", whatever its level; how it was approved is only in the honesty line, attributed to the

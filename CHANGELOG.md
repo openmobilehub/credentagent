@@ -29,9 +29,11 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
 ### Fixed
 
 - The spending-grant card no longer says "consent is dev-sealed, not wallet-signed" for every grant.
-  Its last line now comes from the grant: "signed on the person's phone" for a wallet-signed grant,
-  "approved with a click on a page" for a click-approved one, "not approved yet" while pending — each
-  marked as the store's report — and "not recognised" for any other trust level (#429).
+  Its last line now comes from the grant: "signed on the person's phone" for a wallet-signed grant and
+  "approved with a click on a page" for a click-approved one, each prefixed "As the store reports it";
+  "not approved yet" while pending; "declined" once declined; "revoked" for a grant withdrawn at the
+  click-approval level, which a grant revoked before anyone approved it shares; and "not recognised"
+  for a trust level the card does not know (#429).
 
 ## [0.6.0] - 2026-10-19
 

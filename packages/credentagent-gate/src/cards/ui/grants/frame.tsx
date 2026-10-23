@@ -34,7 +34,7 @@ export function StatusPill({ lifecycle }: { lifecycle: GrantViewData["lifecycle"
 
 /** The immovable trust line (FR-4). Presence/trustLevel ride as data-attributes so BOTH literal
  *  tokens are in the DOM (the honesty bypass test checks them), while the visible copy is the
- *  honest sentence built from presence. */
+ *  honest sentence built from the grant's status and trust level (spec 015 FR-10). */
 export function TrustLine({ grant }: { grant: GrantViewData }) {
   return (
     <div className={styles.trust} data-presence={grant.presence} data-trust-level={grant.trustLevel}>

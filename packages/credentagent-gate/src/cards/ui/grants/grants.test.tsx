@@ -17,6 +17,7 @@ const count = (haystack: string, needle: string): number => haystack.split(needl
 // The base grant below is an authorized click-to-approve grant; a pending one says it is not approved yet.
 const FULL_TRUST = "🔒 Limits enforced server-side. As the store reports it: a demo, approved with a click on a page";
 const NOT_APPROVED = "🔒 Limits enforced server-side. Not approved yet";
+const REVOKED = "🔒 Limits enforced server-side. Revoked — nothing can be spent.";
 
 const base: GrantViewData = {
   kind: "credentagent.grant",
@@ -58,7 +59,7 @@ describe("honesty frame — the non-omittable trust line (FR-4, bypass-tested)",
   for (const [label, grant, views] of cases) {
     it(`${label} renders the trust line + presence/trustLevel tokens`, () => {
       const html = render(<GrantCard grant={grant} views={views} />);
-      expect(html).toContain(grant.status === "pending" ? NOT_APPROVED : FULL_TRUST);
+      expect(html).toContain(grant.status === "pending" ? NOT_APPROVED : grant.status === "revoked" ? REVOKED : FULL_TRUST);
       expect(html).toContain("delegated-demo");
       expect(html).toContain("server-issued-demo");
     });
@@ -125,18 +126,35 @@ describe("the trust line says how THIS grant's consent was given (#429, spec 015
     expect(line(g({ status: "denied", lifecycle: "denied" }))).toContain("Declined — nothing can be spent.");
   });
 
+  it("a grant revoked before anyone approved it never claims an approval", () => {
+    // What revoking a PENDING grant projects: status revoked, and the server-issued-demo fallback level
+    // a grant nobody approved reports — the same level a click-approved grant has.
+    const html = line(g({ status: "revoked", lifecycle: "revoked", spent: 0, remaining: 200, trustLevel: "server-issued-demo" }));
+    expect(html).toContain("Revoked — nothing can be spent.");
+    expect(html).not.toContain("approved with a click");
+  });
+
+  it("a wallet-signed grant revoked later still says how it was signed", () => {
+    expect(line(g({ ...phoneSigned, status: "revoked", lifecycle: "revoked" }))).toContain("signed on the person&#x27;s phone");
+  });
+
   it("a level the card does not know — even issuer-verified from the server's word — is never shown as given", () => {
-    for (const trustLevel of ["issuer-verified", "totally-trusted", ""]) {
+    // …including names every JavaScript object inherits, which a plain property lookup would find.
+    for (const trustLevel of ["issuer-verified", "totally-trusted", "", "constructor", "toString", "__proto__", "hasOwnProperty"]) {
       const html = line(g({ trustLevel }));
       expect(html).toContain("Trust level not recognised by this card; treat it as unverified.");
       expect(html).not.toContain("As the store reports it");
     }
   });
 
-  it("a dense list keeps one true footer line per distinct way the grants were approved", () => {
-    const html = render(<GrantList grants={[open, phoneSigned, g({ id: "c" })]} />);
-    expect(count(html, "approved with a click on a page")).toBe(1);
-    expect(count(html, "signed on the person&#x27;s phone")).toBe(1);
+  it("a dense list of grants approved in different ways puts each one's sentence on its own row", () => {
+    const html = render(<GrantList grants={[open, phoneSigned, g({ id: "c", status: "pending", lifecycle: "pending" })]} />);
+    const rows = html.split(`class="${styles.mrow}"`).slice(1);
+    expect(rows).toHaveLength(3);
+    expect(rows[0]).toContain("approved with a click on a page");
+    expect(rows[1]).toContain("signed on the person&#x27;s phone");
+    expect(rows[2]).toContain("Not approved yet");
+    expect(html).not.toContain(styles.listTrust); // no shared footer to mismatch them
   });
 });
 

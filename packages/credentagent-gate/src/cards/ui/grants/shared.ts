@@ -50,23 +50,27 @@ const TRUST_SENTENCES: Readonly<Record<string, string>> = {
 };
 const UNKNOWN_TRUST = "Trust level not recognised by this card; treat it as unverified.";
 
-/** The full trust sentence (the frame footer + the dense-list footer). A grant nobody has approved
- *  yet, or one declined, says so: its trust level describes no consent yet (a pending grant reports
- *  `server-issued-demo` even when the phone will sign it). Otherwise, the level's sentence. */
+/** The full trust sentence (the frame footer, and the dense list's). A grant nobody has approved yet,
+ *  or one declined, says so: its trust level describes no consent (a pending grant reports
+ *  `server-issued-demo` even when the phone will sign it). A revoked grant at that level says only
+ *  that it is revoked — a grant withdrawn before anyone approved it reports the same level as a
+ *  click-approved one, so the card cannot claim an approval. Otherwise, the level's sentence. */
 export function fullTrustSentence(grant: Pick<GrantViewData, "status" | "trustLevel">): string {
   const consent =
     grant.status === "pending"
       ? "Not approved yet — nothing can be spent until the person approves."
       : grant.status === "denied"
         ? "Declined — nothing can be spent."
-        : Object.hasOwn(TRUST_SENTENCES, grant.trustLevel)
-          ? TRUST_SENTENCES[grant.trustLevel]
-          : UNKNOWN_TRUST;
+        : grant.status === "revoked" && grant.trustLevel === "server-issued-demo"
+          ? "Revoked — nothing can be spent."
+          : Object.prototype.hasOwnProperty.call(TRUST_SENTENCES, grant.trustLevel) // not Object.hasOwn: older browsers
+            ? TRUST_SENTENCES[grant.trustLevel]
+            : UNKNOWN_TRUST;
   return `🔒 Limits enforced server-side. ${consent}`;
 }
 
 /** The compact per-row trust token (dense list). Keeps the LITERAL presence token on every row so
- *  the FR-4 bypass test passes per-view, while the full sentence de-duplicates to the container. */
+ *  the FR-4 bypass test passes per-view. */
 export function compactTrustToken(grant: Pick<GrantViewData, "presence">): string {
   return `🔒 ${grant.presence}`;
 }
