@@ -26,6 +26,12 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
 
 ## [Unreleased]
 
+### Fixed
+
+- The storefront widget no longer flashes the product grid before a spending-grant card. It now
+  shows nothing until the tool result that opened it arrives, then the card for that result; a host
+  that never sends one still gets the product picker after two seconds (#428).
+
 ## [0.6.0] - 2026-10-19
 
 ### Added
