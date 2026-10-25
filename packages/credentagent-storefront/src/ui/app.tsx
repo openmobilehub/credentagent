@@ -18,20 +18,10 @@ import styles from "./app.module.css";
 import { updateQueue } from "./update-queue";
 import { CartFooter } from "./CartFooter";
 import { ProofRows, type WidgetProof } from "./ProofRows";
-import { ShowProducts } from "./ShowProducts";
+import { WidgetView, firstChatGptView, grantViewOf, isResult, useFallback, useFirstResult } from "./WidgetView";
 import { formatMoney } from "./money";
 // The grant gallery lives in the gate's card kit (spec 015); this widget compiles it from source.
-import { GrantCard, GRANT_VIEW_KIND, type GrantViewData, type GrantActions } from "../../../credentagent-gate/src/cards/ui/grants";
-
-// A grant tool result (create/get/spend/revoke) carries the GrantViewData projection, discriminated
-// by `kind`, on BOTH host channels (Claude's structuredContent / text, ChatGPT's toolOutput). When
-// present, the widget renders the grant card instead of the product picker.
-function grantViewOf(value: unknown): GrantViewData | null {
-  if (value && typeof value === "object" && (value as { kind?: unknown }).kind === GRANT_VIEW_KIND) {
-    return value as GrantViewData;
-  }
-  return null;
-}
+import type { GrantViewData, GrantActions } from "../../../credentagent-gate/src/cards/ui/grants";
 
 // Optimistic client-side pricing against the bundled catalog; the server re-prices
 // authoritatively on every tool call. (A host that injects its own catalog at
@@ -281,6 +271,8 @@ function HostApp() {
   // place of the picker. Cleared when a shopping (cart/catalog) result arrives, so the same widget
   // flips back to shopping.
   const [grantView, setGrantView] = useState<GrantViewData | null>(null);
+  // Nothing shows until the tool result that opened the widget arrives (#428).
+  const [received, markReceived] = useFirstResult(false);
   const appRef = useRef<Parameters<NonNullable<Parameters<typeof useApp>[0]["onAppCreated"]>>[0] | null>(null);
   // Mirrors `cart` so setQuantity can read the current value synchronously
   // (state is async) and compute the next optimistic cart.
@@ -309,6 +301,7 @@ function HostApp() {
       // add-to-cart / set-quantity / get-cart calls the AGENT made in chat.
       // That keeps the cart badge in sync with chat-driven changes.
       app.ontoolresult = async (result) => {
+        markReceived();
         // A grant tool result wins: render the grant card. structuredContent carries the projection;
         // fall back to the JSON text block for hosts that only forward content.
         const grant = grantViewOf(result.structuredContent) ?? grantViewOf(parseJsonContent(result));
@@ -418,18 +411,21 @@ function HostApp() {
     },
   }), []);
 
+  // The fallback's clock starts once connected: the handshake can take a while, and must not run it out.
+  useFallback(received, Boolean(app), markReceived);
+
   if (error) return <div className={styles.status}><strong>Error:</strong> {error.message}</div>;
   if (!app) return <div className={styles.status}>Connecting…</div>;
-  if (grantView) {
-    return (
-      <>
-        <GrantCard grant={grantView} actions={grantActions} />
-        <ShowProducts itemCount={cart.itemCount} onShow={() => setGrantView(null)} />
-      </>
-    );
-  }
-
-  return <Picker products={products} cart={cart} insets={insets} setQuantity={setQuantity} checkout={checkout} openLink={openLink} confirmedOrder={confirmedOrder} pendingCheckoutUrl={pendingCheckoutUrl} />;
+  return (
+    <WidgetView
+      received={received}
+      grantView={grantView}
+      grantActions={grantActions}
+      itemCount={cart.itemCount}
+      onShowProducts={() => setGrantView(null)}
+      picker={<Picker products={products} cart={cart} insets={insets} setQuantity={setQuantity} checkout={checkout} openLink={openLink} confirmedOrder={confirmedOrder} pendingCheckoutUrl={pendingCheckoutUrl} />}
+    />
+  );
 }
 
 // ----- ChatGPT mode: connects to the window.openai bridge -----
@@ -444,11 +440,17 @@ function ChatGptApp() {
   const [cart, setCart] = useState<PricedCart>(emptyCart());
   const [confirmedOrder, setConfirmedOrder] = useState<CompletedOrder | null>(null);
   const [pendingCheckoutUrl, setPendingCheckoutUrl] = useState<string | null>(null);
-  const [grantView, setGrantView] = useState<GrantViewData | null>(null);
+  // Read the result that opened the widget BEFORE the first paint (ChatGPT may hand it over only later,
+  // on openai:set_globals); until one arrives, nothing shows (#428).
+  const [first] = useState(() => firstChatGptView(window.openai?.toolOutput));
+  const [grantView, setGrantView] = useState<GrantViewData | null>(first.grantView);
+  const [received, markReceived] = useFirstResult(first.received);
+  useFallback(received, true, markReceived);
 
   // A grant tool's toolOutput is the GrantViewData (kind-marked); browse-products yields
   // { products, cart }; cart tools yield a PricedCart.
   const applyToolOutput = useCallback((output: unknown) => {
+    if (isResult(output)) markReceived();
     const grant = grantViewOf(output);
     if (grant) {
       setGrantView(grant);
@@ -460,7 +462,7 @@ function ChatGptApp() {
     if (Array.isArray(o.products)) setProducts(o.products as Product[]);
     const maybeCart = (o.cart ?? o) as PricedCart;
     if (Array.isArray(maybeCart.lines)) setCart(maybeCart);
-  }, []);
+  }, [markReceived]);
 
   useEffect(() => {
     applyToolOutput(window.openai?.toolOutput);
@@ -518,16 +520,16 @@ function ChatGptApp() {
     },
   }), [oai]);
 
-  if (grantView) {
-    return (
-      <>
-        <GrantCard grant={grantView} actions={grantActions} />
-        <ShowProducts itemCount={cart.itemCount} onShow={() => setGrantView(null)} />
-      </>
-    );
-  }
-
-  return <Picker products={products} cart={cart} setQuantity={setQuantity} checkout={checkout} openLink={openLink} confirmedOrder={confirmedOrder} pendingCheckoutUrl={pendingCheckoutUrl} />;
+  return (
+    <WidgetView
+      received={received}
+      grantView={grantView}
+      grantActions={grantActions}
+      itemCount={cart.itemCount}
+      onShowProducts={() => setGrantView(null)}
+      picker={<Picker products={products} cart={cart} setQuantity={setQuantity} checkout={checkout} openLink={openLink} confirmedOrder={confirmedOrder} pendingCheckoutUrl={pendingCheckoutUrl} />}
+    />
+  );
 }
 
 // ----- Standalone mode: runs in a plain browser with the local catalog -----
