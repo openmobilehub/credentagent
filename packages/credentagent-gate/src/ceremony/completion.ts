@@ -9,7 +9,7 @@ import type { Credential, GateOrder, TrustLevel, VerificationStore } from "../ty
 import type { CartItemRef, CeremonyCatalog, CeremonyOrder, CompletionInput, CompletionResult, GateOutcome } from "./types.js";
 import { verifyCartMandate, type CartMandate } from "./cartMandate.js";
 import { reconcileCartPayment } from "./reconciliation.js";
-import { checkDraw, ageProofCovers, type DrawVerifier } from "./mandate.js";
+import { checkDraw, ageProofCovers, inMinorUnits, type DrawVerifier } from "./mandate.js";
 import type { RevocationStore } from "./revocation.js";
 import { refusal } from "./refusals.js";
 import { KeyedMutex } from "../keyed-mutex.js";
@@ -395,7 +395,9 @@ async function completeOrderLocked(input: CompletionInput, ctx: CompletionContex
   await ctx.records.write({
     orderId: input.order.id,
     mandateId: input.mandateId,
-    amount: input.amount,
+    // The whole-minor-units amount the payment checks bound (#360: a float 14.700000000000001 is
+    // recorded as 14.7); a value that denotes no whole minor units is kept as given.
+    amount: inMinorUnits(input.amount, input.currency),
     currency: input.currency,
     method: input.method,
     instrument: input.instrument,

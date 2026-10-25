@@ -17,6 +17,7 @@ import type {
   CeremonyOrderStore,
   CompletionSeam,
   DelegatedVerifier,
+  MaybePromise,
   SettlementSeam,
 } from "./types.js";
 import { verifyCartMandate } from "./cartMandate.js";
@@ -107,6 +108,13 @@ export interface CeremonySeams {
    *  URL a rail page fetches, links or redirects to carries it. Normally derived from a
    *  `walletOrigin` that includes the path. Absent ⇒ "" (served at the root). */
   basePath?: string;
+  /** INTERNAL — not a host option (`MountCeremony` omits it). The discount percent THIS order's
+   *  policy grants (e.g. 15 for `membership.discount(15)`), which the payment rails' amount check
+   *  holds the order's discount to (#360). Only `orders.serve` fills it, from the created-order
+   *  store (which also prices the order at that percent). `CredentAgent.mount()` leaves it unset:
+   *  there the host's catalog prices the discount, and the rails check the default. Absent, or
+   *  `undefined` for an order ⇒ `DEFAULT_LOYALTY_DISCOUNT_PCT` (10), as before. */
+  discountPercentFor?: (orderId: string) => MaybePromise<number | undefined>;
 }
 
 /** The resolved context each rail receives (every required seam present). */
@@ -143,6 +151,8 @@ export interface CeremonyContext {
   inspectPresentations?: boolean;
   /** The browser-visible path prefix every page URL carries ("" at the root). */
   basePath?: string;
+  /** The order's policy discount percent for the amount check (absent ⇒ the default 10). */
+  discountPercentFor?: (orderId: string) => MaybePromise<number | undefined>;
 }
 
 /** A rail attaches its routes to the host app given the resolved context. */
@@ -182,6 +192,7 @@ export function mountCeremony(app: CeremonyApp, options: Partial<CeremonySeams> 
   const branding = options.branding ?? locals.branding;
   const inspectPresentations = options.inspectPresentations ?? locals.inspectPresentations ?? false;
   const basePath = (options.basePath ?? locals.basePath ?? "").replace(/\/+$/, "");
+  const discountPercentFor = options.discountPercentFor ?? locals.discountPercentFor;
   let signingKey = options.signingKey ?? locals.signingKey;
 
   // Fail fast (CT2) — a load-bearing seam must never silently default. (`origin`
@@ -245,6 +256,7 @@ export function mountCeremony(app: CeremonyApp, options: Partial<CeremonySeams> 
     ...(branding ? { branding } : {}),
     ...(inspectPresentations ? { inspectPresentations } : {}),
     ...(basePath ? { basePath } : {}),
+    ...(discountPercentFor ? { discountPercentFor } : {}),
   };
 
   // Re-expose the resolved seams on app.locals so the storefront's gate routes

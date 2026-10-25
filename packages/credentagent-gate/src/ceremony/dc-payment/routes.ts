@@ -136,6 +136,8 @@ export const registerDcPaymentGate: RailRegistrar = (app: CeremonyApp, ctx: Cere
     let mandate: DcMandate;
     let gates: GateResult[];
     try {
+      // The discount percent THIS order's policy grants, for the amount check (absent ⇒ 10).
+      const loyaltyDiscountPct = await ctx.discountPercentFor?.(order.id);
       const result = body.result as { protocol?: string; data?: unknown } | undefined;
       if (result && typeof result === "object") {
         // REAL OpenID4VP presentation — decrypt the wallet's response, re-check the
@@ -144,7 +146,7 @@ export const registerDcPaymentGate: RailRegistrar = (app: CeremonyApp, ctx: Cere
           res.status(400).json({ completed: false, error: "missing readerContextToken for openid4vp presentation" });
           return;
         }
-        const out = await verifyDcPresentation({ order, origin, result, readerContextToken: body.readerContextToken, secret: ctx.signingKey });
+        const out = await verifyDcPresentation({ order, origin, result, readerContextToken: body.readerContextToken, secret: ctx.signingKey, loyaltyDiscountPct });
         mandate = out.mandate;
         gates = out.gates;
       } else {
@@ -152,7 +154,7 @@ export const registerDcPaymentGate: RailRegistrar = (app: CeremonyApp, ctx: Cere
         const claims = (body.claims && typeof body.claims === "object" ? body.claims : {}) as Record<string, unknown>;
         const presentedAmount = typeof body.amount === "number" ? body.amount : order.total;
         mandate = buildDcMandate({ order, origin, claims, presentedAmount });
-        gates = runDcGates(mandate, origin);
+        gates = runDcGates(mandate, origin, { loyaltyDiscountPct });
       }
     } catch (err) {
       res.status(400).json({ completed: false, error: (err as Error).message, trust_level: "presence-only-demo" });

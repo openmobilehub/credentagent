@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { CredentAgent } from "./client.js";
 import { age, payment, membership, required, optional, defineCredential, dcql, gate } from "./credentials.js";
 import type { CompletionInput, CompletionResult } from "./ceremony/types.js";
-import { Orders, MemoryOrderStore, type CompletedOrder } from "./orders.js";
+import { Orders, MemoryOrderStore, type CompletedOrder, type CreatedOrder } from "./orders.js";
 import * as jose from "jose";
 import { Encoder, Tag } from "cbor-x";
 
@@ -311,5 +311,137 @@ describe("orders.serve — the order proof receipt", () => {
     expect(JSON.stringify(delivered[0])).not.toContain("RAW");
     expect((await completed.read("O1"))?.proofs).toEqual(delivered[0].proofs); // #320: nothing public reads the bytes back
     expect(JSON.stringify(await completed.read("O1"))).not.toContain("RAW");
+  });
+});
+
+// Invariant 3 — the line sum, the order total and the signed amount must agree. 3 × $4.90 is
+// 14.700000000000001 in float dollars; before #360 the re-priced order carried that unrounded
+// total, Gate 1 re-derived a rounded payable of 14.7, and the strict comparison refused a
+// correct payment ("Amount binding: FAIL"). Gate 1 now compares in whole cents (checkAmounts),
+// and orders.serve re-prices in whole cents too.
+describe("orders.serve — amounts that are not exact in binary (#360)", () => {
+  const teaOrder = (unitPrice: number) => ({ id: "", total: unitPrice * 3, currency: "USD", lines: [{ id: "tea", name: "Tea", quantity: 3, unitPrice }] });
+  const claims = { issuer_name: "Demo Bank", payment_instrument_id: "pi-1", masked_account_reference: "•••• 4242", holder_name: "Demo", expiry_date: "2032-09-01" };
+
+  async function setup(unitPrice: number, policy = [required(payment.in("usd"))]) {
+    const ca = new CredentAgent({ walletOrigin: "http://localhost:4000" });
+    const app = fakeApp();
+    ca.orders.serve(app);
+    const { id } = await ca.orders.create({ order: teaOrder(unitPrice), policy });
+    const pay = async (amount: number) => {
+      const res = fakeRes();
+      await app._post.get("/credentagent/dc-payment/verify")!({
+        query: {}, headers: { host: "localhost:4000" }, protocol: "http",
+        body: { order: id, amount, claims },
+      }, res);
+      return res._json as { completed: boolean; mandate?: { cart: { total: number } }; gates?: Array<{ gate: string; pass: boolean; detail: string }> };
+    };
+    const place = async () => {
+      const res = fakeRes();
+      await app._post.get("/credentagent/orders/:id/place")!({ params: { id } }, res);
+      return res;
+    };
+    return { ca, id, pay, place };
+  }
+
+  it("a 3 × $4.90 order completes when paid 14.70 through the instant demo", async () => {
+    const { ca, id, pay } = await setup(4.9);
+    const out = await pay(14.7);
+    expect(out.completed).toBe(true);
+    const done = await ca.orders.retrieve(id);
+    expect(done.ok && done.completion.amount).toBe(14.7);
+  });
+
+  it("control: a 3 × $5.00 order still completes when paid 15", async () => {
+    const { pay } = await setup(5);
+    expect((await pay(15)).completed).toBe(true);
+  });
+
+  it.each([14.69, 14.71])("REFUSES a payment of %s for the 14.70 order — amount binding stays enforced", async (amount) => {
+    const { ca, id, pay } = await setup(4.9);
+    const out = await pay(amount);
+    expect(out.completed).toBe(false);
+    const binding = out.gates?.find((g) => g.gate === "Amount binding");
+    expect(binding?.pass).toBe(false);
+    // The order the wallet is asked to sign carries the whole-cent total, not the float sum.
+    expect(out.mandate?.cart.total).toBe(14.7);
+    expect((await ca.orders.retrieve(id)).ok).toBe(false);
+  });
+
+  it("a loyalty-discounted 3 × $4.90 order completes for exactly 13.23 (14.70 − 10%) and refuses the undiscounted 14.70", async () => {
+    const { ca, id, pay } = await setup(4.9, [optional(membership.discount(10)), required(payment.in("usd"))]);
+    await ca.store.write(id, { loyalty: { applied: true, membershipNumber: "M-1" } });
+    expect((await pay(14.7)).completed).toBe(false);
+    expect((await pay(13.23)).completed).toBe(true);
+  });
+
+  // Invariant 3 — the page prices a `discount(15)` member at 15% off; the payment rails must
+  // check the same 15%, not their default 10% (which refused every such member).
+  it("a 15% member discount completes at the discounted price — and the undiscounted price is refused", async () => {
+    const { ca, id, pay } = await setup(10, [optional(membership.discount(15)), required(payment.in("usd"))]);
+    await ca.store.write(id, { loyalty: { applied: true, membershipNumber: "M-1" } });
+    expect((await pay(30)).completed).toBe(false);
+    expect((await pay(25.5)).completed).toBe(true); // 3 × $10 − 15%
+  });
+
+  // Invariant 3 — a tiered discount is priced and checked at the tier whose .when() applies to
+  // THIS order, not the first discount step in the policy (which would charge 15% off a $30 order).
+  it("a tiered member discount charges the tier that applies (10% on a $30 order), not the first one", async () => {
+    const { ca, id, pay } = await setup(10, [
+      optional(membership.discount(15).when((o) => o.total > 100)),
+      optional(membership.discount(10).when((o) => o.total <= 100)),
+      required(payment.in("usd")),
+    ]);
+    await ca.store.write(id, { loyalty: { applied: true, membershipNumber: "M-1" } });
+    expect((await pay(25.5)).completed).toBe(false); // the 15% tier doesn't apply
+    expect((await pay(27)).completed).toBe(true); // 3 × $10 − 10%
+  });
+
+  // A real fraction of a cent is refused, never rounded (ap2/money.ts) — 3 × $0.002 is not $0.01.
+  it("REFUSES a sub-cent order rather than rounding it to whole cents", async () => {
+    const { ca, id, pay } = await setup(0.002);
+    const out = await pay(0.01);
+    expect(out.completed).toBe(false);
+    expect(out.gates?.find((g) => g.gate === "Amount binding")?.detail).toContain("refused");
+    expect((await ca.orders.retrieve(id)).ok).toBe(false);
+  });
+
+  // Invariant 3 — the instant-demo place path records the price the page showed, discount included.
+  it("the instant-demo place path records a proven member's discounted total, not the full price", async () => {
+    const { ca, id, place } = await setup(4.9, [optional(membership.discount(10))]);
+    await ca.store.write(id, { loyalty: { applied: true, membershipNumber: "M-1" } });
+    await place();
+    const done = await ca.orders.retrieve(id);
+    expect(done.ok && done.completion.amount).toBe(13.23);
+  });
+
+  const whiskey = { id: "", total: 30, currency: "USD", lines: [{ id: "whiskey", name: "Whiskey", quantity: 1, unitPrice: 30, minimumAge: 21 }] };
+
+  // A 21+ line with no age step in the policy could never be paid (payment refuses it for age and
+  // the page offers no age step), so create() refuses it up front with the fix in the message.
+  it("orders.create() REFUSES an order with a minimumAge line when the policy has no age step for it", async () => {
+    const ca = new CredentAgent({ walletOrigin: "http://localhost:4000" });
+    await expect(ca.orders.create({ order: whiskey, policy: [optional(membership.discount(10))] }))
+      .rejects.toThrow(/line "whiskey" has minimumAge 21.*required\(age\.over\(21\)\)/);
+    await expect(ca.orders.create({ order: whiskey, policy: [required(age.over(21).when(() => false))] }))
+      .rejects.toThrow(/no age step/); // an age step whose .when() skips this order doesn't count
+    await expect(ca.orders.create({ order: whiskey, policy: [required(age.over(21))] })).resolves.toHaveProperty("id");
+  });
+
+  // Invariant 1 — a 21+ line gates the order even when the policy has no age step: the rails'
+  // completion refuses an unproven age-restricted line, so the demo place path must too. create()
+  // refuses such an order now; this one is written to the store directly (e.g. stored before
+  // that check, or by another instance's version).
+  it("BYPASS: the instant-demo place path REFUSES an order with a minimumAge line and no age step in the policy", async () => {
+    const orderStore = new MemoryOrderStore<CreatedOrder>();
+    const ca = new CredentAgent({ walletOrigin: "http://localhost:4000", orderStore });
+    const app = fakeApp();
+    ca.orders.serve(app);
+    const id = "ORD-W";
+    orderStore.write(id, { order: { ...whiskey, id }, policy: [optional(membership.discount(10))] });
+    const res = fakeRes();
+    await app._post.get("/credentagent/orders/:id/place")!({ params: { id } }, res);
+    expect(res._status).toBe(403);
+    expect((await ca.orders.retrieve(id)).ok).toBe(false); // nothing recorded
   });
 });
