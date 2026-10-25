@@ -156,6 +156,20 @@ scope, and the agents' plan.
   never reaches the job's public console — a failed run prints only which agent failed and how. The
   stop is decided where the brief is written and again before anything is posted (`briefOutcome`). A
   brief run that fails part-way uploads nothing at all.
+- **A second symptom of one root cause gets a design, not another patch.** The snapshot job (with the
+  token) lists the other open issues and pull requests — number and kind, plus a title and a pull
+  request's changed files only when their author has write access (and only paths of plain
+  characters) — and the brief agent reads it as data in an `<open_work>` tag (the agent itself still
+  has no GitHub access). The search is best effort: the 100 most recently updated open issues and 50
+  pull requests, 30 files each; if the list can't be read, the brief says so and carries on as usual.
+  A ticket of an approved plan is not compared (its epic and sibling tickets share its design). When
+  an open issue or pull request shares the symptom or the code, the brief comes back split (a design
+  and tickets, see "Splitting a big issue") and names it under **Same root cause as**, with a link.
+  Publishing re-reads the open list itself and keeps only numbers on it, since the run's output is
+  untrusted; a split brief with at least one such match adds `needs-decision` to the issue (created
+  if the repo lacks it). Approving the brief is that decision: the label comes off when its tickets
+  are opened, or when a later version drops the design. A false match costs one reply asking for a
+  plain fix.
 - `needs-decision` doesn't stop a brief: approving it *is* the decision.
 - Re-adding `agent` starts over: a fresh brief, and a fresh count of versions.
 

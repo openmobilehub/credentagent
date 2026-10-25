@@ -51,9 +51,10 @@ import {
   parseCriteria, tickCriteria, verifiedFor, afterVerification, acceptVerified, conflictMidCycle,
   isAgentComment, requestComments, leftLoop, isLoopAuthor, labelledBy, requestBody, updateSection,
   roleModel, testGateCommand, rootTestRefusal, publishVerdict, isMutableSource, sameLockfile, publishRefusalHint,
+  blockingLabels, openWorkList,
 } from "./checks.mjs";
 import { reportHtml, prBody, issueComment, md, statusBody, STATUS_MARK } from "./report.mjs";
-import { briefBody, replyBody, challengeBody, briefState, briefOutcome, briefFailure, planRun, specFromBrief, splitConversation, clampBrief, sweepWanted, approvalRefusal, LABEL_AWAITING, LABEL_APPROVED, BRIEF_MARK } from "./brief.mjs";
+import { briefBody, replyBody, challengeBody, briefState, briefOutcome, briefFailure, planRun, specFromBrief, splitConversation, clampBrief, sweepWanted, approvalRefusal, relatedOf, briefLabels, decisionLabel, LABEL_AWAITING, LABEL_APPROVED, LABEL_DECISION, BRIEF_MARK } from "./brief.mjs";
 import { blockersLeft, isSplit, parseTicket, pastLimits, planProgress, scopeProblems, ticketAsBrief, ticketBody, ticketHeader, ticketOrder, ticketSpec, STOPPED_LABEL } from "./scope.mjs";
 import { cardProblems } from "./card.mjs";
 import { validateExample, runExample, exampleHtml } from "./example.mjs";
@@ -85,7 +86,6 @@ const AGENT_BUDGET_USD = Number(process.env.ISSUE_AGENT_BUDGET_USD ?? 25);
 const RUN_BUDGET_USD = Number(process.env.ISSUE_AGENT_RUN_BUDGET_USD ?? 100);
 const TRIGGER_LABEL = process.env.ISSUE_AGENT_LABEL ?? "agent";
 const SCOPE_WAIVER = "scope:approved"; // ci/pr-scope/check.mjs, OVERRIDE_LABEL
-const BLOCKING_LABELS =["needs-decision", "epic", "wontfix", "duplicate", "question"];
 const EVIDENCE_BRANCH = "agent-evidence";
 // The review loop (README, "The review loop") — on when the workflow has a token whose pushes start
 // other workflows (AGENT_GH_TOKEN); with GITHUB_TOKEN a pushed fix would never be reviewed again.
@@ -151,6 +151,8 @@ const ensureLabels = () => {
       [LABELS.approved, "0E8A16", "Issue agent: a person approved the latest brief — build it (never added by the agent)"],
     ] : []),
   ]) sh("gh", ["label", "create", name, "-R", REPO, "--color", color, "--description", description, "--force"], { allowFail: true });
+  // Not ours: created only where it's missing (no --force), so a repo's own `needs-decision` stays as it is.
+  if (PAUSE) sh("gh", ["label", "create", LABEL_DECISION, "-R", REPO, "--color", "D876E3", "--description", "A maintainer has to decide before work goes on"], { allowFail: true });
 };
 
 let RUN; // per issue: { id, dir, costUsd, log() }
@@ -253,7 +255,32 @@ function snapshotIssue(n, snapshotAt = new Date().toISOString()) {
     issue.previousBrief = state.latest;
   }
   if (plan.brief) issue.brief = plan.brief;
-  return { issue, phase: plan.phase, skip: preflight(issue) };
+  const skip = preflight(issue);
+  // A ticket's design is already decided, and its epic and siblings share it: it isn't compared with them.
+  if (!skip && plan.phase === "brief") {
+    if (editedTicket) issue.ticketOf = ticketHeader(i.body).parent;
+    else issue.openWork = openWork(n);
+  }
+  return { issue, phase: plan.phase, skip };
+}
+
+// The open issues and pull requests other than `n`, for the brief agent to compare with (README.md,
+// "The brief"). Fetched here and again when the brief is published, both with the token: the run's
+// own list is never trusted. Best effort: the 100 most recently updated open issues and 50 pull
+// requests, 30 files each. A failed fetch is null — the brief says so and is then the usual one.
+function openWork(n) {
+  const renamed = "timelineItems(itemTypes:[RENAMED_TITLE_EVENT], last:1){nodes{... on RenamedTitleEvent{actor{login}}}}";
+  const q = `query($o:String!,$r:String!){repository(owner:$o,name:$r){
+    issues(states:OPEN, first:100, orderBy:{field:UPDATED_AT,direction:DESC}){nodes{number title author{login __typename} ${renamed}}}
+    pullRequests(states:OPEN, first:50, orderBy:{field:UPDATED_AT,direction:DESC}){nodes{number title author{login __typename} ${renamed} files(first:30){nodes{path}}}}}}`;
+  try {
+    const { issues, pullRequests } = ghJson(["api", "graphql", "-f", `query=${q}`, "-f", `o=${OWNER}`, "-f", `r=${NAME}`]).data.repository;
+    const item = (kind) => (w) => ({ number: w.number, kind, title: w.title, author: w.author, renames: w.timelineItems.nodes, files: w.files?.nodes.map((f) => f.path) });
+    return openWorkList([...issues.nodes.map(item("issue")), ...pullRequests.nodes.map(item("pr"))], { self: n, isTrusted: trusted });
+  } catch (e) {
+    console.error(`(the open issues and pull requests could not be read: ${e.message.split("\n")[0]})`);
+    return null;
+  }
 }
 
 function openPrsFor(n) {
@@ -270,7 +297,7 @@ function preflight(issue) {
   if (flag("--force")) return null;
   if (issue.state !== "OPEN") return `the issue is ${issue.state.toLowerCase()}`;
   // With briefs, a decision is what the brief is for: approving it decides.
-  const blocking = issue.labels.filter((l) => BLOCKING_LABELS.includes(l) && !(PAUSE && l === "needs-decision"));
+  const blocking = blockingLabels(issue.labels, { pause: PAUSE });
   if (blocking.length) return `it is labelled ${blocking.join(", ")} — a maintainer has to act first`;
   // Someone else has taken it: don't race them. (Assigned to whoever labelled it is fine.)
   const labeller = process.env.ISSUE_AGENT_LABELLER;
@@ -1013,8 +1040,11 @@ async function publishBrief(dir) {
   const v = state.versions + 1;
   const start = STARTS_OVER || !state.latest ? v : state.latest.start ?? 1;
   const lintProblems = [...cardProblems(brief.card, { criteria: brief.acceptance_criteria, behaviorChange: brief.behavior_change }), ...scopeProblems(brief)];
+  // Related work only as the trusted job lists it: a number the run made up names and labels nothing.
+  const listed = (openWork(n) ?? []).map((w) => w.number);
+  const shown = { ...brief, related: relatedOf(brief, { listed }) };
   const discussUrl = await fireDiscuss(n, v);
-  postComment(n, briefBody({ v, start, asOf, brief, base, lintProblems, ...(discussUrl ? { discussUrl } : {}) }), dir);
+  postComment(n, briefBody({ v, start, asOf, brief: shown, base, lintProblems, repo: REPO, ...(discussUrl ? { discussUrl } : {}) }), dir);
   // Older versions fold away (GitHub's "outdated"), so the thread reads as the latest brief plus the talk.
   if (!flag("--dry-run") && !flag("--no-publish")) {
     for (const c of issueComments(n)) {
@@ -1022,7 +1052,10 @@ async function publishBrief(dir) {
       sh("gh", ["api", "graphql", "-f", `query=mutation($id:ID!){minimizeComment(input:{subjectId:$id,classifier:OUTDATED}){minimizedComment{isMinimized}}}`, "-f", `id=${c.id}`], { allowFail: true });
     }
   }
-  relabel(n, { add: [LABELS.awaiting], remove: [LABELS.working, LABELS.approved] });
+  // A design proposed because of related work is the maintainer's decision (CLAUDE.md, "Big changes");
+  // a later version that drops it takes the label off again.
+  const decision = briefLabels(shown, { listed, previous: state.latest?.brief });
+  relabel(n, { add: [LABELS.awaiting, ...decision.add], remove: [LABELS.working, LABELS.approved, ...decision.remove] });
   // A comment written while this brief was being prepared started no run (the brief wasn't waiting yet).
   const missed = !flag("--dry-run") && !flag("--no-publish") && briefState(issueComments(n), trusted).unanswered;
   setStatus(n, missed
@@ -1117,7 +1150,8 @@ function publishSplit(n, dir) {
     for (const t of start) sh("gh", ["issue", "edit", String(t), "-R", REPO, "--add-label", TRIGGER_LABEL], { allowFail: true });
     sh("gh", ["issue", "edit", String(n), "-R", REPO, "--add-label", "epic"], { allowFail: true });
   }
-  relabel(n, { remove: [LABELS.working, LABELS.awaiting, LABELS.approved, TRIGGER_LABEL] });
+  // Approving a design proposed because of related work was the decision `needs-decision` waited for.
+  relabel(n, { remove: [LABELS.working, LABELS.awaiting, LABELS.approved, TRIGGER_LABEL, ...decisionLabel(brief)] });
   postComment(n, `${"<!-- issue-agent -->"}\n🤖 **The approved plan (brief v${v}) is now ${tickets.length} tickets.** Each is built and reviewed as its own pull request; a ticket starts on its own once everything blocking it is closed.\n\n${tickets.map((t, i) => `${i + 1}. #${numbers.get(t.id)} — ${t.title}${(t.blocked_by ?? []).length ? ` _(after ${t.blocked_by.map((b) => `#${numbers.get(b)}`).join(", ")})_` : " _(starting now)_"}`).join("\n")}\n\nThis issue is labelled \`epic\`: the agents won't build it as a whole.`, dir);
   setStatus(n, `split into ${tickets.length} tickets — ${start.map((s) => `#${s}`).join(", ")} started; the rest follow as their blockers close`, { working: false });
   return { n, status: "split", tickets: Object.fromEntries(numbers) };
