@@ -48,7 +48,7 @@ import { fingerprints, stripAnsi, withinBaseline } from "./fingerprints.mjs";
 import {
   TRUSTED_PERMISSIONS, titleAuthor, forbiddenPaths, applyAndCheck, changedSince, isRunId, isCommitId, publishIssueNumber,
   isReviewBot, parseVerdict, agentBranch, threadsToAnswer, reviewDecision, sharedChanges, filesBetween, cyclesDone, loopRefusal, latestVerdict, cycleCap,
-  parseCriteria, tickCriteria, verifiedFor, afterVerification, acceptVerified, conflictMidCycle,
+  parseCriteria, tickCriteria, verifiedFor, afterVerification, acceptVerified, conflictMidCycle, reviewFeedback,
   isAgentComment, requestComments, leftLoop, isLoopAuthor, labelledBy, requestBody, updateSection,
   roleModel, testGateCommand, rootTestRefusal, publishVerdict, isMutableSource, sameLockfile, publishRefusalHint,
 } from "./checks.mjs";
@@ -653,16 +653,10 @@ async function iterate({ issue, spec, roles, repoDir, baseline, diffBase, mutati
       }
       const reviews = settled.map((s) => s.value);
       r.reviews = reviews;
-      const blocking = reviews.flatMap((rv) => rv.findings.filter((f) => f.severity === "blocking").map((f) => ({ lens: rv.lens, ...f })));
-      // Every criterion needs a "met" verdict with proof; a missing one counts as unmet.
-      const verdicts = reviews.find((rv) => rv.lens === "spec")?.criteria ?? [];
-      const unmet = spec.acceptance_criteria.map((ac) => verdicts.find((c) => c.id === ac.id) ?? { id: ac.id, met: false, evidence: "the spec reviewer gave no verdict for it" }).filter((c) => !c.met);
-      RUN.log(`  review: ${reviews.map((rv) => `${rv.lens}=${rv.verdict}`).join(" ")} · ${blocking.length} blocking · ${unmet.length} unmet criteria`);
-      if (!blocking.length && !unmet.length) { r.clean = true; reviewedPatch = patch; break; }
-      feedback = [
-        ...unmet.map((c) => `- [spec] ${c.id} is NOT met: ${c.evidence}`),
-        ...blocking.map((f) => `- [${f.lens}] ${f.file ? `${f.file}${f.line ? `:${f.line}` : ""} — ` : ""}${f.summary}${f.fix ? `\n  fix: ${f.fix}` : ""}`),
-      ].join("\n");
+      const back = reviewFeedback({ reviews, criteria: spec.acceptance_criteria });
+      RUN.log(`  review: ${reviews.map((rv) => `${rv.lens}=${rv.verdict}`).join(" ")} · ${back.blocking.length} blocking · ${back.unmet.length} unmet criteria`);
+      if (back.clean) { r.clean = true; reviewedPatch = patch; break; }
+      feedback = back.feedback;
     }
   } catch (e) {
     if (!(e instanceof BudgetSpent)) throw e;

@@ -4,6 +4,8 @@
 // Everything an agent wrote is untrusted text: in HTML it is escaped; in Markdown it goes through
 // md(), which neutralizes HTML (an unclosed `<!--` would hide the rest of a PR body) and @mentions.
 
+import { reviewFeedback } from "./checks.mjs";
+
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 // Outside `code spans` only: inside one, GitHub shows `&lt;` literally — and HTML there is inert anyway.
 export const md = (s) => String(s ?? "").split(/(`[^`\n]*`)/).map((part, i) => i % 2
@@ -32,6 +34,9 @@ export const notFullRun = (g, patchSha256) => g.name !== "test" || !g.ok ? ""
   : g.scope === "fast" ? "quick tests only, not the full run"
   : g.patchSha256 && patchSha256 && g.patchSha256 !== patchSha256 ? "ran on an earlier version of this change, not this one" : "";
 const specVerdicts = (r) => r.last.reviews?.find((x) => x.lens === "spec")?.criteria ?? [];
+// A lens passes on its own verdict; the spec lens also needs every criterion met — the same rule that
+// sends work back (reviewFeedback), so a criterion the model skipped can't sit under a tick.
+const passed = (rv, r) => rv.verdict === "approve" && (rv.lens !== "spec" || !reviewFeedback({ reviews: [rv], criteria: r.spec?.acceptance_criteria ?? [] }).unmet.length);
 
 // The page the pipeline records as a video for every issue: what it checked, with its own outputs.
 export function proofHtml({ issue, spec, last, base, patchSha256 }) {
@@ -69,8 +74,8 @@ function mediaFigures(manifest, mediaBase) {
 
 export function reportHtml(r, { mediaBase }) {
   const status = r.done ? `<span class="pill ok">ready for human review</span>` : `<span class="pill bad">needs a human${r.stopped ? ` — ${esc(r.stopped)}` : ""}</span>`;
-  const reviews = (r.last.reviews ?? []).map((rv) => `<div class="card"><b>${esc(rv.lens)}</b> — <span class="${rv.verdict === "approve" ? "ok" : "bad"}">${esc(rv.verdict)}</span>${rv.findings.length ? `<ul>${rv.findings.map((f) => `<li><span class="${f.severity === "blocking" ? "bad" : "warn"}">${esc(f.severity)}</span> ${esc(f.file ?? "")}${f.line ? `:${f.line}` : ""} ${esc(f.summary)}</li>`).join("")}</ul>` : ` · no findings`}</div>`).join("");
-  const history = r.rounds.map((x) => `<tr><td>${x.round}</td><td>${x.gates.map((g) => `${esc(g.name)} ${g.ok ? "✓" : "✗"}`).join(" · ")}</td><td>${x.mutation ? (x.mutation.applicable ? (x.mutation.ok ? "✓" : `✗ ${esc(x.mutation.reason)}`) : "n/a") : "—"}</td><td>${x.reviews ? x.reviews.map((v) => `${esc(v.lens)} ${v.verdict === "approve" ? "✓" : "✗"}`).join(" · ") : "—"}</td></tr>`).join("");
+  const reviews = (r.last.reviews ?? []).map((rv) => `<div class="card"><b>${esc(rv.lens)}</b> — <span class="${passed(rv, r) ? "ok" : "bad"}">${esc(rv.verdict)}</span>${rv.findings.length ? `<ul>${rv.findings.map((f) => `<li><span class="${f.severity === "blocking" ? "bad" : "warn"}">${esc(f.severity)}</span> ${esc(f.file ?? "")}${f.line ? `:${f.line}` : ""} ${esc(f.summary)}</li>`).join("")}</ul>` : ` · no findings`}</div>`).join("");
+  const history = r.rounds.map((x) => `<tr><td>${x.round}</td><td>${x.gates.map((g) => `${esc(g.name)} ${g.ok ? "✓" : "✗"}`).join(" · ")}</td><td>${x.mutation ? (x.mutation.applicable ? (x.mutation.ok ? "✓" : `✗ ${esc(x.mutation.reason)}`) : "n/a") : "—"}</td><td>${x.reviews ? x.reviews.map((v) => `${esc(v.lens)} ${passed(v, r) ? "✓" : "✗"}`).join(" · ") : "—"}</td></tr>`).join("");
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Issue #${r.issue.number} report</title><style>${STYLE}</style></head><body><main>
 <p class="muted">Issue agent run ${esc(r.id)} · ${esc(r.model)} · ~$${r.costUsd.toFixed(2)} · base ${esc(r.base.slice(0, 7))}</p>
 <h1><a href="${esc(r.issue.url)}">#${r.issue.number}</a> ${esc(r.issue.title)}</h1><p>${status}</p>
@@ -147,7 +152,7 @@ ${md(r.last.impl.summary)}
 
 - **Changes:** ${files || "none"}.
 - **Checked by a machine, not by the agent that wrote it:** ${checkedGates(r.last.gates)} (${g}); ${m?.applicable ? (m.ok ? `with the source change undone, the changed tests **fail** — so they guard it (${(m.tests ?? []).map((t) => `\`${t}\``).join(", ")}). That is checked per test file: a reviewer should still confirm each new test case would fail on its own.` : `❌ the test-proof check failed: ${md(m.reason)}.`) : `no test-proof check (${md(m?.reason ?? "not run")}).`}
-- **Reviewed by three agents that didn't write it** (spec, security, developer experience): ${(r.last.reviews ?? []).map((v) => `${v.lens} ${v.verdict === "approve" ? "✅" : "❌"}`).join(" · ") || "not reached"}.
+- **Reviewed by three agents that didn't write it** (spec, security, developer experience): ${(r.last.reviews ?? []).map((v) => `${v.lens} ${passed(v, r) ? "✅" : "❌"}`).join(" · ") || "not reached"}.
 - **Not a substitute for your review.** Agents wrote this from the issue text${r.issue.dropped?.length ? `, leaving out: ${md(r.issue.dropped.join("; "))}` : ""}.
 
 ## How to test

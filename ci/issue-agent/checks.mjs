@@ -205,6 +205,22 @@ export function tickCriteria(body, verdicts, escape = (s) => s) {
 }
 
 /**
+ * What the three internal reviews send back to the implementer: only blocking findings and unmet
+ * criteria. Suggestions stay on the draft PR (report.mjs) and never cost another round. Every
+ * criterion needs a "met" verdict from the spec lens; a missing one counts as unmet.
+ */
+export function reviewFeedback({ reviews, criteria }) {
+  const blocking = reviews.flatMap((rv) => rv.findings.filter((f) => f.severity === "blocking").map((f) => ({ lens: rv.lens, ...f })));
+  const verdicts = reviews.find((rv) => rv.lens === "spec")?.criteria ?? [];
+  const unmet = criteria.map((ac) => verdicts.find((c) => c.id === ac.id) ?? { id: ac.id, met: false, evidence: "the spec reviewer gave no verdict for it" }).filter((c) => !c.met);
+  const feedback = [
+    ...unmet.map((c) => `- [spec] ${c.id} is NOT met: ${c.evidence}`),
+    ...blocking.map((f) => `- [${f.lens}] ${f.file ? `${f.file}${f.line ? `:${f.line}` : ""} — ` : ""}${f.summary}${f.fix ? `\n  fix: ${f.fix}` : ""}`),
+  ].join("\n");
+  return { clean: !blocking.length && !unmet.length, blocking, unmet, feedback };
+}
+
+/**
  * A review or verify cycle that meets a conflict with main: it becomes a conflict cycle — unless
  * the cycle cap is already reached, where the PR goes to a human instead of a cycle past it.
  */
