@@ -53,7 +53,11 @@ jobs:
       #   delta — a later push: review only the PR's new commits since the last reviewed head;
       #   skip  — the push left the PR's own diff unchanged (it only merged main in) and main
       #           touched none of the PR's files. CI still tests it; there is nothing new to read.
-      # To force a full re-review, mark the PR as draft, then ready for review.
+      #   capped — this PR already got MAX_ROUNDS Claude reviews since it was last marked ready
+      #           for review (default 2). A human decides now: merge, close, or redesign. On
+      #           #415 one day of push → review → 1–5 line fix → push ran six rounds on comment
+      #           wording; Stripe's agents get at most two CI rounds for the same reason.
+      # To force a full re-review (and reset the cap), mark the PR as draft, then ready for review.
       - name: Pick review scope
         id: scope
         env:
@@ -61,7 +65,11 @@ jobs:
           ACTION: ${{ github.event.action }}
           HEAD_REF: ${{ github.head_ref }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR: ${{ github.event.pull_request.number }}
+          MAX_ROUNDS: ${{ vars.CLAUDE_REVIEW_MAX_ROUNDS }}
         run: |
+          # Unset or not a whole number ≥ 1 → 2.
+          [[ "$MAX_ROUNDS" =~ ^[1-9][0-9]*$ ]] || MAX_ROUNDS=2
           mode="full"; last=""; commits=""; overlap=""
           if [ "$ACTION" = synchronize ]; then
             # The newest earlier head this workflow finished on for this branch (a review or a skip).
@@ -89,8 +97,28 @@ jobs:
               mode="skip"
             fi
           fi
+          # The cap counts this PR's posted review summaries since it was last marked ready for
+          # review; the ready_for_review run itself is the human reset, so it always reviews.
+          if [ "$mode" != skip ] && [ "$ACTION" != ready_for_review ]; then
+            since=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/timeline" --paginate \
+              --jq '.[] | select(.event == "ready_for_review") | .created_at' | tail -n 1)
+            rounds=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate \
+              --jq "[.[] | select(.user.type == \"Bot\" and (.body | startswith(\"## Claude review\")) and .created_at > \"${since:-0}\")] | length" \
+              | awk '{s+=$1} END {print s+0}')
+            echo "Claude reviews since ${since:-the PR opened}: $rounds (cap $MAX_ROUNDS)"
+            if [ "$rounds" -ge "$MAX_ROUNDS" ]; then
+              mode="capped"
+            fi
+          fi
+          review=false
+          if [ "$mode" = full ] || [ "$mode" = delta ]; then
+            review=true
+          fi
           {
             echo "mode=$mode"
+            echo "review=$review"
+            echo "since=${since:-}"
+            echo "max_rounds=$MAX_ROUNDS"
             echo "last=$last"
             echo "commits=$commits"
             echo "overlap=$overlap"
@@ -107,6 +135,27 @@ jobs:
           echo "::notice::No review: this push leaves the PR's own diff unchanged since $LAST (it only merged main in), and main touched none of the PR's files."
           echo "No Claude review needed: the PR's diff is unchanged since \`$LAST\`." >> "$GITHUB_STEP_SUMMARY"
 
+      # Say so on the PR once per cap, so the author stops pushing fixes for the bot and a
+      # person picks it up. A later push while capped posts nothing more.
+      - name: Stop — review cap reached
+        if: steps.scope.outputs.mode == 'capped'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          SINCE: ${{ steps.scope.outputs.since }}
+          MAX_ROUNDS: ${{ steps.scope.outputs.max_rounds }}
+        run: |
+          echo "::notice::No review: PR #$PR already had $MAX_ROUNDS Claude reviews. A human decides next."
+          echo "No Claude review: the cap of $MAX_ROUNDS rounds is reached. A human decides next." >> "$GITHUB_STEP_SUMMARY"
+          marker="<!-- claude-review-cap -->"
+          posted=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate \
+            --jq "[.[] | select((.body | startswith(\"$marker\")) and .created_at > \"${SINCE:-0}\")] | length" \
+            | awk '{s+=$1} END {print s+0}')
+          if [ "$posted" -eq 0 ]; then
+            gh pr comment "$PR" --body "$marker
+          **Claude review paused: $MAX_ROUNDS rounds done.** More pushes won't be reviewed automatically. A person now decides: merge, close, or step back and redesign. Don't push fixes for review notes that aren't blocking. To get one more round after a real change, mark the PR as draft, then ready for review."
+          fi
+
       - name: Record review start time
         id: start
         run: echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
@@ -119,7 +168,7 @@ jobs:
       # A delta review is judged by what it reads: the new commits and the overlapping files.
       - name: Pick review effort
         id: effort
-        if: steps.scope.outputs.mode != 'skip'
+        if: steps.scope.outputs.review == 'true'
         env:
           HEAD_REF: ${{ github.head_ref }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -148,7 +197,7 @@ jobs:
       # job still went green. Every tool this prompt uses is listed below.
       - name: Run Claude Code Review
         id: claude-review
-        if: steps.scope.outputs.mode != 'skip'
+        if: steps.scope.outputs.review == 'true'
         uses: anthropics/claude-code-action@v1
         env:
           # Sub-agents must block until they return. By default they run as background
@@ -272,7 +321,7 @@ jobs:
       # No fake green: a run that ends without posting a review fails, so a broken
       # review is visible on the PR instead of silently passing.
       - name: Verify Claude posted a review
-        if: steps.scope.outputs.mode != 'skip'
+        if: steps.scope.outputs.review == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           SINCE: ${{ steps.start.outputs.at }}

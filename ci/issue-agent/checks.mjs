@@ -320,7 +320,7 @@ export function requestBody(body) {
 export const sharedChanges = (mainChanged, prChanged) => [...new Set(prChanged)].filter((f) => mainChanged.includes(f)).sort();
 
 /** The review-cycle cap from a setting: a whole number ≥ 1, else the default — never NaN (no cap). */
-export function cycleCap(value, fallback = 3) {
+export function cycleCap(value, fallback = 2) {
   const n = Number(value);
   return Number.isInteger(n) && n >= 1 ? n : fallback;
 }

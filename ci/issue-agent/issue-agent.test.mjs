@@ -588,11 +588,11 @@ describe("the review loop", () => {
 
   it("reads the cycle cap as a whole number ≥ 1, never as no cap", () => {
     expect(cycleCap("4")).toBe(4);
-    expect(cycleCap("")).toBe(3);
-    expect(cycleCap(undefined)).toBe(3);
-    expect(cycleCap("four")).toBe(3);
-    expect(cycleCap("2.5")).toBe(3);
-    expect(cycleCap("0")).toBe(3);
+    expect(cycleCap("")).toBe(2);
+    expect(cycleCap(undefined)).toBe(2);
+    expect(cycleCap("four")).toBe(2);
+    expect(cycleCap("2.5")).toBe(2);
+    expect(cycleCap("0")).toBe(2);
   });
 
   it("hands a PR over when the review failed or gave no verdict, instead of waiting forever", () => {
