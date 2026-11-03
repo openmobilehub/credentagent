@@ -10,6 +10,7 @@ import type { ReactElement } from "react";
 import { GrantCard, GrantList, grantViews, defineGrantView, BudgetMeter } from "./index";
 import type { GrantViewContext, GrantViewData } from "./index";
 import styles from "./grants.module.css";
+import { UNSAFE_LINKS } from "../__fixtures__/links";
 
 const render = (el: ReactElement): string => renderToStaticMarkup(el);
 const count = (haystack: string, needle: string): number => haystack.split(needle).length - 1;
@@ -111,19 +112,20 @@ describe("display-only projection (A1) — a view can never touch the live grant
 });
 
 describe("Approve / Decline carry only a safe link (spec 015 FR-11)", () => {
+  // Rendered with an openLink, as Claude, ChatGPT and the storefront always pass: a check that leaned
+  // on the click handler would put the href back here.
+  const opener = { openLink: () => {} };
+
   it("a safe link is on both buttons", () => {
-    expect(count(render(<GrantCard grant={pending} />), `href="${pending.approveUrl}"`)).toBe(2);
+    expect(count(render(<GrantCard grant={pending} actions={opener} />), `href="${pending.approveUrl}"`)).toBe(2);
   });
 
-  it.each(["javascript:alert(1)", "http://example.test/approve", "/credentagent/grants/g1"])(
-    "an unsafe link (%s) is never in the markup, so no new tab or drag can open it",
-    (approveUrl) => {
-      const html = render(<GrantCard grant={{ ...pending, approveUrl }} />);
-      expect(html).not.toContain(approveUrl);
-      expect(html).not.toContain(">Approve<");
-      expect(html).toContain("safe web address, so this card doesn");
-    },
-  );
+  it.each(UNSAFE_LINKS)("an unsafe link (%s) is never in the markup, so no new tab or drag can open it", (approveUrl) => {
+    const html = render(<GrantCard grant={{ ...pending, approveUrl }} actions={opener} />);
+    expect(html).not.toContain(approveUrl);
+    expect(html).not.toContain(">Approve<");
+    expect(html).toContain("The merchant&#x27;s link isn&#x27;t a safe web address, so this card doesn&#x27;t show it.");
+  });
 });
 
 describe("selection by specificity (A3) — highest score wins, not array order", () => {

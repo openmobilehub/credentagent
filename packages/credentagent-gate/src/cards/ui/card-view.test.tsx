@@ -7,6 +7,7 @@ import { REVOKE_TOOL_META } from "../grant-view";
 import { readCard } from "./card-store";
 import { previewResult, previewViews } from "./preview";
 import type { Bridge } from "./bridge";
+import { UNSAFE_LINKS } from "./__fixtures__/links";
 
 const bridge: Bridge = { host: "preview", call: async () => null, open: async () => {} };
 const render = (result: { structuredContent: unknown; _meta?: unknown } | null): string =>
@@ -126,15 +127,7 @@ describe("grantActions: a failed button says so instead of failing silently", ()
     },
   );
 
-  it.each([
-    "javascript:alert(1)",
-    "data:text/html,<p>hi</p>",
-    "/credentagent/grants/g1",
-    "http://example.test/approve",
-    "http://localhost.evil.test/approve", // the host is localhost.evil.test
-    "http://localhost@evil.test/approve", // the host is evil.test; localhost is only a user name
-    "not a url",
-  ])(
+  it.each(UNSAFE_LINKS)(
     "a link that isn't a safe web address (%s) never reaches the host, and the card says so",
     async (url) => {
       const h = harness(async () => grant);

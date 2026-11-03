@@ -401,7 +401,7 @@ check it today — so every sentence says so:
 - **A store's link is checked, never thrown on.** `approveUrl` (in `permission()` and `grant()`) and
   `receiptUrl` (in a store's answer) are shown only if they are an absolute `https:` URL (`http:` only
   for `localhost`, `127.0.0.1` or `[::1]`, for local development). Anything else — `javascript:`,
-  `data:`, a relative path — shows no QR and no button; the card says "The store's link isn't a safe web
+  `data:`, a relative path — shows no QR and no button; the card says "The merchant's link isn't a safe web
   address, so this card doesn't show it," and the note tells the model the same and not to pass the
   link on. The card page checks a link again before it hands one to the host, so a grant result built
   without `grant()` is covered too.
