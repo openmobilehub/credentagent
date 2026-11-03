@@ -1,0 +1,4 @@
+{
+  "$comment": "The issue agent's settings for this repo (ci/issue-agent/config.mjs). Everything not named here is this repo's default setup. brief: the agents post a brief and build only after a person approves it (ci/issue-agent/README.md, \"The brief\").",
+  "brief": "pause"
+}

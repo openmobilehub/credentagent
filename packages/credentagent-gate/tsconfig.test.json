@@ -4,5 +4,10 @@
     "noEmit": true,
     "declaration": false
   },
-  "include": ["src/types.test-d.ts", "src/ap2/**/*.test.ts"]
+  "include": [
+    "src/types.test-d.ts",
+    "src/ap2/**/*.test.ts",
+    "src/ceremony/mdoc/mdoc.test.ts",
+    "src/ceremony/dc-payment/presentation.test.ts"
+  ]
 }

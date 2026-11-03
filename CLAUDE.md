@@ -25,10 +25,10 @@ This repo (`openmobilehub/credentagent`) is the **library**: two npm workspaces 
 Tests run with **`npm test` from the repo root** (vitest) — that is the authoritative run,
 and the only one that includes the cross-package integration suite (see *Testing
 expectations*). `npm run test:workspaces` is the faster inner loop and skips it.
-`npm run build` typechecks + builds each package. The end-to-end reference DEMO lives in a
-**separate** repo,
-[`openmobilehub/mcp-apps-shopping-demo`](https://github.com/openmobilehub/mcp-apps-shopping-demo),
-which consumes these packages — link to it, don't describe it as part of this repo.
+`npm run build` typechecks + builds each package. The end-to-end DEMO is the
+**Utopia Marketplace MCP server** in a **separate** repo,
+[`openwallet-foundation/multipaz-utopia`](https://github.com/openwallet-foundation/multipaz-utopia/tree/main/organizations/marketplace/mcp),
+which consumes these packages from npm — link to it, don't describe it as part of this repo.
 
 ## Status & decisions — GitHub is the source of truth
 
@@ -50,6 +50,21 @@ rots and lies — it claimed a PR was "MERGEABLE, all checks green" while that P
 conflicting with CI unable to run at all — and it conflicted on every branch that touched
 it (it was the sole merge conflict in both #41 reconciles). Anything derivable from
 `git`/`gh` should be **derived, not transcribed**.
+
+## Domain language — `GLOSSARY.md`
+
+Before naming a type, writing docs or copy, or reviewing wording, read
+[`GLOSSARY.md`](GLOSSARY.md) and use its terms (it lists what to avoid). When a term is
+contested or a new one is needed, use the `domain-modeling` skill: it updates the glossary
+and records hard-to-reverse decisions as ADRs in `docs/adr/`.
+
+## Big changes — plan, then one ticket per PR
+
+A change past 400 lines or 15 files (docs, specs and lockfiles not counted) is planned before it is
+built: a spec with the design (`to-spec`, `codebase-design` skills), then tracer-bullet tickets
+(`to-tickets` skill) as sub-issues of an `epic`, then one PR per ticket. The `pr-scope` check and
+REVIEW.md §8 refuse a big PR that isn't one ticket of a plan (CONTRIBUTING.md, "Big changes"); the
+issue agent's brief splits a big issue the same way (`ci/issue-agent/README.md`, "Splitting a big issue").
 
 ## Architecture (where things live)
 
@@ -156,7 +171,8 @@ Quick gate for any new/changed public API (full list in the rubric):
 - **Verify with the ROOT `npm test`, not a per-workspace run.** `storefront-gate.test.ts`
   lives at the repo root — it checks that the two published packages compose with zero
   glue, so it belongs to neither workspace and neither workspace's vitest picks it up. The
-  root run therefore includes exactly one more file than the per-package runs: that one. A
+  root run therefore includes files the per-package runs don't: that one, and repo-level
+  checks such as `scripts/check-changelog.test.ts` (the release's changelog guard). A
   per-workspace run is a legitimate fast inner loop; it is **not** a verification. Claiming
   green off one is how issue #184 happened — a contributor ran every test CLAUDE.md told
   them to run, saw it all pass, and CI failed on the cross-package file they never ran.
@@ -172,11 +188,21 @@ Quick gate for any new/changed public API (full list in the rubric):
   ceremony rail mirrors the existing rail layout; it does not bolt onto an existing one.
 - Keep the two package READMEs honest and in sync with the API surface — they are the
   published docs.
-- **Write PR/issue descriptions for a human who did NOT write the code.** Lead with plain
-  language — clear and concrete, not clever. Define each term on first use, spell out
+- **Write PR/issue descriptions for a human who did NOT write the code.** A PR opens with
+  **Before and after** (a few lines of real code and what `main` and the change each print — run
+  them, don't invent the output — or a screenshot of each), then plain language — clear and
+  concrete, not clever. Define each term on first use, spell out
   cross-references (never a bare `#85` or `invariant 4`), prefer everyday use cases, use at
   most one universal analogy and only for an abstract idea, and keep the technical detail
   below a divider. Follow `.github/pull_request_template.md`; the review enforces it (REVIEW.md §5).
+- **Every issue must be reproducible, through the SDK or the UI.** Give steps someone else can
+  follow and see the same result: for the SDK, a minimal runnable snippet or command against the
+  packages or an `examples/` script; for the UI, the URL and each click in order (storefront
+  widget, checkout / wallet pages, hosted marketplace). Add what happens, what should happen,
+  and the version or commit. For an enhancement, the steps show today's behavior. Follow
+  `.github/ISSUE_TEMPLATE/`. `gh issue create` skips those forms, so write their sections
+  (Reproduce via · Steps to reproduce · What happens · What should happen · Version or commit)
+  into the body yourself.
 
 ## Code review
 
@@ -188,7 +214,7 @@ anticipate it when authoring:
 > Claude review only runs on **same-repo** PRs (GitHub withholds secrets from fork-PR
 > workflow runs on a public repo — regardless of your permission level). If you push to a
 > branch here, you get the automatic review for free; if you fork, you only get a review
-> on-demand by commenting `@claude`.
+> on-demand by commenting `@claude review this PR against REVIEW.md and post a summary`.
 
 - **Same-repo PRs** — an automated Claude review (`anthropics/claude-code-action`) runs
   on every non-draft PR opened from a branch in this repo, grounded in this file's
@@ -196,22 +222,113 @@ anticipate it when authoring:
   Stripe-grade ergonomics (the example-is-the-test rule, above) alongside the security invariants.
   `claude-review` is **opt-in and currently ON** (re-enabled 2026-09-29): the job only runs when
   the repo variable `ENABLE_CLAUDE_REVIEW` is `"true"`, and it posts its findings to the PR
-  (`--comment`). It is not a required check, so **human review is still the gate**. To pause it,
+  (`--comment`). It runs Opus at `--effort high`, or `max` for `release/*` branches and any
+  change under `packages/credentagent-gate/src/`. It is **tiered**, so a review costs what the push
+  changed:
+  - **full** — when the PR opens, reopens or leaves draft. **To force a full re-review, mark the
+    PR as draft, then ready for review.**
+  - **delta** — on a later push: only the PR's own new commits since the last reviewed head (plus
+    any file main also changed), with the effort picked from those commits alone. Merge commits
+    aren't read on their own, so a conflict resolved by hand is reviewed only through that overlap
+    (a conflict is almost always in a file `main` changed).
+  - **skip** — a push that leaves the PR's own diff unchanged (merging `main` in) and where `main`
+    touched none of the PR's files. CI still tests it.
+
+  A new push cancels the review still running on the old head; a cancelled run never counts as
+  reviewed. It is not a required check, so **human review is still the gate**. To pause it,
   `gh variable set ENABLE_CLAUDE_REVIEW --body false` — the job is then **skipped**. The
   `CLAUDE_CODE_OAUTH_TOKEN` secret must come from an account that can use Claude Code
   (`claude setup-token`); an unusable token errors on every PR.
+- **Which account pays for Claude in CI** — the PR review and `@claude` replies **always** use the
+  Claude **subscription** login (`CLAUDE_CODE_OAUTH_TOKEN` secret). The nightly `agent-e2e` and the
+  `issue-agent` (both on the Agent SDK) follow one repo variable, `CLAUDE_AUTH`:
+  - unset, or anything but `api` — the subscription login too. This is the default. Runs count
+    against that subscription's usage limits.
+  - `api` — an **API key** (`ANTHROPIC_API_KEY` secret), billed to that key's Console
+    organization. If the secret is missing, or its credit runs out, the run **fails** until you
+    switch back.
+
+  Switch with `gh variable set CLAUDE_AUTH --body api` and back with
+  `gh variable set CLAUDE_AUTH --body subscription`. No PR is needed, and it takes effect on the
+  next run. Set the secrets in the GitHub web UI, not through a piped shell.
+
+  Why the review is not switchable: on 2026-10-13 `CLAUDE_AUTH=api` also moved the review onto
+  the key, and every review failed in under a second with "Credit balance is too low". The key's
+  only funding is the Max plan's included API credit, and the API refuses that credit for requests
+  from `anthropics/claude-code-action`, while accepting the same key from the Agent SDK (what
+  `agent-e2e` uses) and from `claude -p`. The action hides this message; a review that dies
+  instantly with `is_error: true` and `total_cost_usd: 0` is the signature.
 - **Fork / external-contributor PRs** — the automated job is **skipped** (fork runs can't
   read the `CLAUDE_CODE_OAUTH_TOKEN` secret), so it never blocks you. A skipped required
   check counts as passing. Those PRs are reviewed by one of:
-  - a maintainer commenting **`@claude`** on the PR (on-demand; runs in base-repo context
+  - a maintainer commenting **`@claude review this PR against REVIEW.md and post a summary`** on the PR (on-demand; runs in base-repo context
     so it has the secret),
   - the org-hosted **managed Claude review** integration (auto-reviews forks), and/or
   - an on-demand deep multi-agent review by a maintainer.
-- **Human review** — at least one approving review is required to merge to `main`, and all
-  review conversations must be resolved first.
+- **Human review** — at least one approving review is required to merge to `main`, and branch
+  protection **requires every review conversation to be resolved** (enforced since 2026-10-14;
+  before that it wasn't, and bot findings were merged unanswered). Resolve a thread by fixing
+  it, or reply with a won't-fix reason and then resolve — this includes bot threads. A branch
+  does **not** have to be up to date with `main` to merge (since 2026-10-15): CI tested the PR
+  merged onto `main` when it ran, and re-runs on `main` after every merge. Merging `main` in only
+  to clear "out-of-date" just re-ran CI and the review. (A merge queue isn't used: the DCO app
+  doesn't report on merge-queue runs, and DCO is a required check.)
 - A PR that edits `.github/workflows/claude-code-review.yml` itself will fail
   `claude-review` by design (the action validates the workflow matches `main`) and needs
-  an admin merge.
+  an admin merge. Since nothing reviews those PRs automatically, a maintainer comments
+  **`@claude review this PR against REVIEW.md and post a summary`** on them — that runs
+  `.github/workflows/claude.yml`, a separate workflow the edit doesn't break. Give it those
+  words: `claude.yml` has no review prompt of its own and only does what the comment asks.
+- **Codex** (`chatgpt-codex-connector[bot]`) — automatic reviews are **off** (turned off
+  2026-10-14). Why: across 23 PRs it reviewed once per PR, only for one author, often after
+  merge, and caught nothing the Claude review missed. On-demand `@codex` doesn't work here
+  either — it replies asking for a Codex environment this repo doesn't have — so don't
+  write `@codex` in PR descriptions or comments.
+
+## Issue agent — label an issue `agent`
+
+Labelling an issue **`agent`** (write access needed) runs `.github/workflows/issue-agent.yml`:
+agents spec, implement and review it, and it comes back as a **draft PR** with acceptance criteria,
+the pipeline's own gate runs, a mutation check (the changed tests fail with the fix reverted),
+three review verdicts, and before/after screenshots + video. **Here, it briefs before it builds**
+(`.github/issue-agent.json`, `"brief": "pause"`): the label gets a **brief** on the issue first — the
+problem reproduced on `main`, how bad it is, the fix (or options), what you're approving, how you'll
+know it's fixed, in plain words, with the acceptance criteria below. Reply to it in a comment and the
+agents answer or post a new version; add **`agent:approved`** and they build exactly that version. A
+security hole in a release or the hosted demo is never briefed in public (SECURITY.md). See
+[`ci/issue-agent/README.md`](ci/issue-agent/README.md), "The brief". It skips an issue that is closed,
+labelled `needs-decision` (unless briefs are on: approving the brief is the decision), `epic`, `wontfix`, `duplicate` or `question`, assigned to someone other
+than whoever labelled it, or already has an open PR,
+and says why in a comment on the issue. **Only words by people with write access reach the agents**
+(the title and body if their author has it, and such people's comments, frozen at the label) — so to give
+it a request from an outside contributor, restate it in a comment. The agents run in a job with no
+GitHub token; a separate job publishes their reviewed change. That change may edit `.claude/skills/`
+(skills are mostly guidance, like `docs/`), but never `.github/` or any other `.claude/` path — settings and
+hooks control the agents themselves, so a patch touching them is refused. A skill's frontmatter
+(`allowed-tools`, `hooks`) and bundled scripts can grant tools too: review a skill edit as carefully as settings. It never merges; its PRs go through
+the same human review as any other. Media lives on the `agent-evidence` branch — never merge it.
+With an `AGENT_GH_TOKEN` secret, the agent also works through the Claude review on its own PR
+(`.github/workflows/issue-agent-review.yml`): it fixes or answers every thread, pushes, resolves the
+threads, and repeats — labelled `agent:in-review` meanwhile — and **asks for a human review only
+when the review is ✅, or 💬 with nothing open** (`agent:ready-for-human`). After 3 cycles a 💬
+also goes to a human as ready, with the open small notes listed; a ⛔ stops as `agent:needs-human`,
+as does any other stated reason. Before any hand-over as ready it checks the issue's acceptance
+criteria on the final code and ticks the PR's checklist. If `main` moves and an agent PR now
+conflicts with it, the loop resolves the conflict itself (a sweep runs on every push to `main`) or
+hands over. Don't review an `agent:in-review` PR yet; you'll be asked.
+**A PR you (a coding agent) open can use the same loop:** open it ready for review (not a draft)
+from a branch in this repo, write the description as the request — what it must do, and optionally
+an acceptance-criteria checklist (`- [ ] **AC1** …`) the loop checks before hand-over — and add the
+label: `gh pr edit <n> --add-label agent:in-review` (adding it starts the loop; with no review
+finished yet it waits for one). Add that label only when you want the loop to
+take the PR over; never on a PR a human is iterating on, since the loop pushes fixes to its branch.
+To see what it's working on: the 🤖 status comment on the issue (edited at each step), the
+`agent:working` label (`is:open label:agent:working`), and Actions runs named `issue-agent #<n> · …`.
+How it works and how to run it locally: [`ci/issue-agent/README.md`](ci/issue-agent/README.md).
+Other repos run the same pipeline through `.github/workflows/issue-agent-run.yml` and their own
+`.github/issue-agent.json` (README, "Using it in another repo") — so a change to `ci/issue-agent/` or
+that workflow reaches them too (today: credentagent-website). With no config file, the defaults are this
+repo's own setup without the brief (`"brief": "off"`), and so without the PR's pipeline-run example.
 
 Apache-2.0 · part of [Open Mobile Hub](https://openmobilehub.org) (Linux Foundation).
 

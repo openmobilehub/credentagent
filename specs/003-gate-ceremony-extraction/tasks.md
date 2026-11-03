@@ -6,7 +6,7 @@ description: "Task list — Gate Ceremony Extraction (attesto.mount)"
 
 **Input**: Design documents from `/specs/003-gate-ceremony-extraction/`
 
-**Prerequisites**: plan.md, spec.md, research.md (D1–D8), data-model.md, contracts/attesto-mount.api.md (CT1–CT12)
+**Prerequisites**: plan.md, spec.md, research.md (D1–D8), data-model.md, contracts/credentagent-mount.api.md (CT1–CT12)
 
 **Tests**: REQUIRED. The constitution (Security Requirements) + spec FR-014 mandate bypass tests — a test that
 still passes with its control removed is rejected.

@@ -19,6 +19,7 @@
 import type { Branding, VerificationManifestEntry } from "../types.js";
 import { pageHead, brandHeader, progressRail, trustFooter, closeWindowButton, proofLinksHtml, type RailStep } from "./theme.js";
 import type { ProofEntry } from "./proofs.js";
+import { scriptJson } from "./script-json.js";
 
 // ── Inputs ──────────────────────────────────────────────────────────────────
 
@@ -85,8 +86,9 @@ export interface RenderPaid {
     /** Block-explorer link, when the backend settles on a chain. */
     hashscanUrl?: string;
   } | null;
-  /** What was proven for the order (the order proof receipt) — listed under the banner with the
-   *  Multipaz Tools links a wallet proof carries. */
+  /** What was proven for the order (the order proof receipt) — listed under the banner with each
+   *  proof's trust level and the Order record link. No Multipaz Tools links: a completed order
+   *  never carries the wallet's raw answer (#320). */
   proofs?: ProofEntry[];
 }
 
@@ -406,10 +408,10 @@ function renderPlaceScript(order: RenderOrder, methods: PaymentMethod[], payment
   for (const m of methods) map[m.value] = { ...(m.href ? { href: m.href } : {}), ...(m.placeOrder ? { placeOrder: true } : {}) };
 
   return `<script>
-    const METHODS = ${JSON.stringify(map)};
-    const PAY_LABEL = ${JSON.stringify(payLabel)};
-    const PLACE_PATH = ${JSON.stringify(placePath)};
-    const ORDER_TOKEN = ${JSON.stringify(token)};
+    const METHODS = ${scriptJson(map)};
+    const PAY_LABEL = ${scriptJson(payLabel)};
+    const PLACE_PATH = ${scriptJson(placePath)};
+    const ORDER_TOKEN = ${scriptJson(token)};
     // statelessOrders: forward the signed cart mandate (?cart=… in this page's URL) so the
     // store-less server can reconstruct the order on the instant-demo place-order path.
     const CART = new URLSearchParams(location.search).get('cart');
@@ -456,11 +458,11 @@ function renderPollScript(statusUrl: string, revision?: string): string {
   // loyalty applied) and the tab is stale ⇒ reload. Absent ⇒ completion-only (#63). The
   // reload is idempotent (a GET poll + full-page reload; completion re-reads the recorded
   // order). Route-agnostic — the host owns what the revision encodes.
-  const revDecl = revision != null ? `var rev = ${JSON.stringify(revision)};` : "";
+  const revDecl = revision != null ? `var rev = ${scriptJson(revision)};` : "";
   const changed = revision != null ? `(data.revision != null && data.revision !== rev)` : "false";
   return `<script>
     (function () {
-      var url = ${JSON.stringify(statusUrl)};
+      var url = ${scriptJson(statusUrl)};
       ${revDecl}
       function check() {
         return fetch(url, { headers: { accept: "application/json" } })

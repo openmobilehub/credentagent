@@ -131,6 +131,13 @@ describe("credentagent.grants — the sealed bounds enforce", () => {
     expect(await g.spend({ idempotencyKey: "x1", items: [{ sku: "coffee" }] })).toMatchObject({ ok: true });
   });
 
+  it("a fractional-qty spend refuses invalid-request — half a coffee is not bought at half price (bypass, #286)", async () => {
+    const g = await authorizedGrant(client());
+    for (const qty of [0.5, 0.01, Number.NaN]) {
+      expect(await g.spend({ idempotencyKey: `f${qty}`, items: [{ sku: "coffee", qty }] })).toMatchObject({ ok: false, code: "invalid-request" });
+    }
+  });
+
   it("a zero-qty spend refuses invalid-amount — never misreported as revoked (#112 P2)", async () => {
     const g = await authorizedGrant(client());
     const s = await g.spend({ idempotencyKey: "z1", items: [{ sku: "coffee", qty: 0 }] });

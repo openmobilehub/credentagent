@@ -1,6 +1,7 @@
 // Agent-in-the-loop E2E — a REAL Claude agent drives the deployed MCP storefront, unaided.
 //
 //   CLAUDE_CODE_OAUTH_TOKEN=... node ci/agent-e2e/agent-e2e.mjs    # token from `claude setup-token`
+//   ANTHROPIC_API_KEY=... node ci/agent-e2e/agent-e2e.mjs          # or an API key (billed to the API)
 //   node ci/agent-e2e/agent-e2e.mjs                                # locally: uses your Claude Code login
 //   E2E_MCP_URL=https://credentagent.ai/marketplace-dev/mcp        # aim at the dev twin (default: prod demo)
 //
@@ -11,8 +12,9 @@
 // (via the shared, parse-based `runAssertions`) — never on prose, so agent nondeterminism can't
 // flake it. The assertions live in ./assertions.mjs.
 //
-// The agent runs on the Claude Agent SDK (Claude Code as a library), so it authenticates with the
-// same CLAUDE_CODE_OAUTH_TOKEN as the automated PR review — no separate API key or bill. It sees
+// The agent runs on the Claude Agent SDK (Claude Code as a library), so it authenticates the same
+// way the automated PR review does: by default with CLAUDE_CODE_OAUTH_TOKEN (no separate API key or
+// bill), or with ANTHROPIC_API_KEY when the nightly workflow's CLAUDE_AUTH variable is "api". It sees
 // ONLY the storefront's MCP tools: built-in tools are off and no local settings are loaded.
 
 import { query } from "@anthropic-ai/claude-agent-sdk";

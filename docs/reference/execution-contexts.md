@@ -5,7 +5,7 @@ one physical fact splits an CredentAgent-gated flow into **three contexts that r
 different times, in different places**. Respecting the split is load-bearing:
 conflating the contexts is the **documented root cause of confusion** in every earlier
 draft of this design ([constitution, Principle II](../../.specify/memory/constitution.md);
-[spec §0](https://github.com/openmobilehub/mcp-apps-shopping-demo/blob/main/specs/001-attesto-sdk/spec.md)),
+[spec §0](../../specs/001-credentagent-sdk/spec.md)),
 and it is forbidden by the constitution.
 
 Read this page before wiring a gate. Every example in the CredentAgent docs assumes it.
@@ -161,5 +161,5 @@ sufficient to drive the agent.
 ---
 
 See also: [`@openmobilehub/credentagent-gate` README — "The three execution contexts"](../../packages/credentagent-gate/README.md)
-· [spec §0](https://github.com/openmobilehub/mcp-apps-shopping-demo/blob/main/specs/001-attesto-sdk/spec.md)
+· [spec §0](../../specs/001-credentagent-sdk/spec.md)
 · [constitution, Principles II & III](../../.specify/memory/constitution.md).

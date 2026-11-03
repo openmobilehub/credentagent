@@ -13,9 +13,12 @@ CredentAgent is part of [Open Mobile Hub](https://openmobilehub.org) under the O
 Linux Foundation, and the contribution rules below reflect that posture — most importantly the
 **DCO sign-off** and the **security-test bar**. Please read this file before opening a PR.
 
-The runnable end-to-end reference — a credential-gated agentic shopping app on every MCP surface —
-lives in a separate repo, [`mcp-apps-shopping-demo`](https://github.com/openmobilehub/mcp-apps-shopping-demo).
-Use it to see the packages in action; contribute library changes here.
+Found a vulnerability? Don't open an issue or PR — report it privately as described in
+[SECURITY.md](./SECURITY.md).
+
+To see the packages in action, run [`examples/quickstart`](./examples/quickstart) here, or look at
+the [Utopia Marketplace MCP server](https://github.com/openwallet-foundation/multipaz-utopia/tree/main/organizations/marketplace/mcp), a separate repo that runs both
+packages end to end. Contribute library changes here.
 
 ## Dev setup
 
@@ -89,25 +92,52 @@ your diff will be held against.
 
 - **Same-repo PRs** — an automated Claude review (`anthropics/claude-code-action`) runs on every
   non-draft PR opened from a branch in this repo. It's grounded in this project's security
-  invariants. **The review is opt-in and currently OFF** — it only runs when the repo variable
-  `ENABLE_CLAUDE_REVIEW` is `"true"`; otherwise `claude-review` is skipped, which counts as passing,
-  so it doesn't block merges (human review is the gate). (Draft PRs are also skipped to save cost;
-  mark a PR ready for review to trigger a run.)
+  invariants. **The review is opt-in and currently ON** — it only runs when the repo variable
+  `ENABLE_CLAUDE_REVIEW` is `"true"`, and posts its findings as PR comments. It is not a required
+  check, so human review is the gate — but its comments on specific lines are review threads, and
+  those must be resolved before merge (below). Its summary comment has no Resolve button and
+  doesn't block. (Draft PRs are skipped to save cost; mark a PR ready for
+  review to trigger a run.)
 - **Fork / external-contributor PRs** — the automated job is **skipped** (fork runs can't read the
   secret), and a skipped required check counts as passing, so it never blocks you. External PRs are
-  reviewed instead by a maintainer commenting **`@claude`** on the PR (which runs in base-repo
+  reviewed instead by a maintainer commenting **`@claude review this PR against REVIEW.md and post a summary`** on the PR (which runs in base-repo
   context, so it has the secret), the org-hosted managed Claude review integration, and/or an
   on-demand deeper review by a maintainer.
 - A PR that edits the review workflow (`.github/workflows/claude-code-review.yml`) itself will fail
-  `claude-review` by design and needs an admin merge.
+  `claude-review` by design and needs an admin merge. For a review, a maintainer comments
+  **`@claude review this PR against REVIEW.md and post a summary`** — a bare `@claude` only does
+  what the comment asks.
 
 ### Human review
 
 - At least **one approving human review** is required to merge to `main`.
-- **All review conversations must be resolved** before merge.
+- **All review conversations must be resolved** before merge — branch protection enforces it,
+  bot threads included. Fix the finding, or reply with why you won't, then resolve the thread.
 - Keep PRs small and well-scoped — one clear purpose per PR. Prefer a new, well-bounded module over
   growing a file past its single responsibility, and match the style, naming, and comment density of
-  the surrounding code.
+  the surrounding code. A big change is planned and split first: see *Big changes*.
+
+### Big changes
+
+A pull request past **400 changed lines or 15 files** (docs, `specs/` and lockfiles don't count) fails
+the `pr-scope` check unless it delivers **one ticket of a plan**. Before writing the code:
+
+1. **Write the plan down.** An issue labelled `epic` whose body is the spec — the problem, the
+   solution, and the decisions a builder must not make alone: what is stored and where, the
+   interfaces between the pieces, each security control and the test that fails without it. The
+   `to-spec` and `codebase-design` skills in `.claude/skills/` walk you through it. A feature big
+   enough to keep beside the code can instead live in `specs/NNN-name/` with a `tasks.md`.
+2. **Break it into tickets** with the `to-tickets` skill: thin slices that each work and are checked
+   on their own, prefactoring first, each saying what blocks it. Open them as sub-issues of the
+   epic, or list them as T001, T002, … in `tasks.md`.
+3. **One pull request per ticket.** Say which in the description — `Fixes #123` for a sub-issue, or
+   `specs/016-name/tasks.md T002` — and stay inside it. The check reads `tasks.md` from `main`, so
+   land the spec before the tickets that cite it.
+
+If a change truly can't be split (a mechanical rename across the codebase, say), explain why in a
+comment and a maintainer can add `scope:approved`. The automated review checks the same thing
+(REVIEW.md §8). For an issue the agents build, the brief does this for you (`ci/issue-agent/README.md`,
+"Splitting a big issue").
 
 ## Tests must exercise the bypass paths
 
@@ -147,7 +177,9 @@ thing we don't do here.
 - **Small and safe → fix it** in your PR (a one-line guard, an obvious typo, a mislabeled string).
 - **Bigger, risky, or out of scope → open an issue** (or leave a review comment) that names it. The
   bar for surfacing is deliberately low: a one-sentence "spotted this, out of scope, filed #NN" is
-  enough. The point is that nothing broken goes **unrecorded**.
+  enough in the PR. The point is that nothing broken goes **unrecorded**. The issue itself still
+  needs **steps to reproduce, through the SDK or the UI**: every issue must be reproducible (the
+  forms in `.github/ISSUE_TEMPLATE/` ask for them).
 
 The guardrail is to **keep PRs focused** — don't balloon your change to chase everything you find.
 The issue tracker is the pressure valve: fix the small thing inline, spin the rest into its own issue.
@@ -171,6 +203,44 @@ turns up something off, fix it or flag it.
 - [ ] Every commit is signed off (`git commit -s`); the DCO check will be green.
 - [ ] You pushed a branch to this repo (not a fork) so the automated review can run.
 - [ ] No presence-only gate is presented as a real safety control.
+- [ ] A change someone using the npm packages would notice adds a line under `[Unreleased]` in [`CHANGELOG.md`](CHANGELOG.md) — marked **BREAKING** if their code has to change.
 - [ ] Anything broken you noticed along the way is fixed or filed — never silently ignored.
+
+## After a release — the catch-up PRs
+
+Publishing to npm changes nothing people see. Until two catch-up PRs merge, both still show the
+previous version:
+
+- **The hosted demo** (https://credentagent.ai/marketplace) runs the *published* packages that
+  [`examples/quickstart/package.json`](examples/quickstart/package.json) pins. Below 1.0 a caret
+  (`^0.5.0`) never reaches the next minor, so the pin has to move with every release.
+- **The site** (https://credentagent.ai, repo
+  [credentagent-website](https://github.com/openmobilehub/credentagent-website)) writes the version
+  into its pages: the nav pill, the NEW strip, the storefront `npm i` line and the JSON-LD in
+  `index.html`, plus `index.md`, `llms.txt` and its CLAUDE.md.
+
+`publish.yml`'s **catch-up** job opens both PRs once npm serves the release. It skips, on purpose,
+a pre-release and a backport (a release older than what the demo already runs, such as 0.5.3
+after 0.6.0), which would move the demo and the site backwards. It needs the
+`AGENT_GH_TOKEN` secret with write access to both repos; without it the job only warns, and you
+open them by hand (commit with `-s`):
+
+```bash
+# The demo — the lockfile must match, or `npm ci` in quickstart-smoke and deploy-prod refuses it
+node scripts/post-release-bump.mjs quickstart X.Y.Z
+(cd examples/quickstart && npm install --package-lock-only --ignore-scripts)
+# The site, in a credentagent-website checkout
+node scripts/post-release-bump.mjs website ../credentagent-website X.Y.Z "vX.Y.Z — the release title" YYYY-MM-DD
+```
+
+A release isn't done until:
+
+- [ ] You've read the release's **BREAKING** and **Migration** notes. One that changes the merchant
+      id (`ap2.merchant.id`) or the grant format means grants signed on the prod demo before the
+      deploy are refused: merge the quickstart PR after any upcoming demo.
+- [ ] The quickstart PR is merged, `deploy-prod` passed, and
+      `curl https://credentagent.ai/marketplace/version` reports the new version.
+- [ ] The site PR is merged, after checking what no script bumps: the site's trust table and its
+      CLAUDE.md "Trust levels" note, and any code sample an API change affects.
 
 Apache-2.0 · part of [Open Mobile Hub](https://openmobilehub.org) (Linux Foundation).

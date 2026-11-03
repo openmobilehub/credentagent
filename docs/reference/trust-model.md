@@ -8,13 +8,14 @@ in the project's own vocabulary.
 
 The headline:
 
-> **The wire crypto is real. The trust anchor is not.** v0.1 enforces *disclosure* (an
+> **The wire crypto is real. The trust anchor is not.** The OpenID4VP rails enforce *disclosure* (an
 > explicit positive claim) and *binding* (nonce / ephemeral key / origin), but **not
 > trust** (issuer / device signatures against a real CA). A self-crafted mdoc would
 > still pass. This is a flow demo, not a real safety control — never present it as one.
 
 That sentence is not marketing copy; it is the literal trust footer shown on every
-ceremony page (`src/ceremony/theme.ts`):
+checkout ceremony page (`src/ceremony/theme.ts`) — the device-signed grant page shows its
+own `device-signed` footer instead:
 
 ```
 🔒 presence-only-demo · secured by CredentAgent · the wire crypto is real; issuer trust anchor is not
@@ -35,40 +36,45 @@ entry and every mandate.
 enforcedAt: "tool" | "checkout";
 ```
 
-- **`"checkout"`** — v0.1's consolidated **Mode A**. Every gate runs on the checkout page
+- **`"checkout"`** — the consolidated **Mode A**. Every gate runs on the checkout page
   (execution Context 2) and is enforced server-side on the completion path: the MCP tool
   only mints the link and reports requirements; the phone is never in the tool's loop.
   `requirements()` stamps this on every entry (`src/manifest.ts`).
 - **`"tool"`** — the Mode-B *blocking* shape, where a page-less tool refuses inline and
   returns a typed `verification_required` envelope the agent drives. The primitive exists
-  (`gated()`), but the consolidated v0.1 flow is `"checkout"`.
+  (`gated()`), but the consolidated flow is `"checkout"`.
 
-### Axis 2 — `trust_level: "presence-only-demo" | "issuer-verified"`
+### Axis 2 — `trust_level: "presence-only-demo" | "device-signed" | "issuer-verified"`
 
-*How honestly* the presented mdoc is trusted. From `src/types.ts`:
+*How honestly* the presented credential is trusted. From `src/types.ts`:
 
 ```ts
-/**
- * v0.1 enforces *disclosure* (explicit positive claim) and *binding* (nonce /
- * ephemeral key), but NOT *trust* (issuer / device signatures) — a self-crafted
- * mdoc would pass. … it's a flow demo, not a real safety control yet.
- */
-export type TrustLevel = "presence-only-demo" | "issuer-verified";
+export type TrustLevel = "presence-only-demo" | "device-signed" | "issuer-verified";
 ```
 
-Today every code path emits **`"presence-only-demo"`** — the manifest default
-(`src/manifest.ts`), the envelope default (`src/envelope.ts`), and the field hard-coded
-on each mandate (`src/ceremony/mandate.ts`, `dc-payment/verify.ts`,
-`credential-gate/verify.ts`). **`"issuer-verified"`** is reserved for v0.2 (see below) and
-is the *only* value for which the page suppresses the presence-only footer
+Every **built-in** checkout rail (`passkey`, `credential`, `dc-payment`) emits
+**`"presence-only-demo"`** — the manifest default (`src/manifest.ts`), the envelope default
+(`src/envelope.ts`), and the field hard-coded on each mandate (`src/ceremony/mandate.ts`,
+`dc-payment/verify.ts`, `credential-gate/verify.ts`). The `delegated` rail relays its
+external verifier's level verbatim (`delegated-payment/routes.ts`). Device-signed spending
+grants emit **`"device-signed"`**: the holder's signature is really verified, but its anchor
+is a self-minted demo credential. **`"issuer-verified"`** is reserved (see below): the gate
+never emits it for its own checks; only an external verifier on the `delegated` seam may
+relay it. It is the *only* value for which the page suppresses the presence-only footer
 (`src/ceremony/checkout-page.ts`).
+
+One level sits **below** all three, outside `TrustLevel`: **`"server-issued-demo"`**, the
+`trustLevel` of a click-approved page-mode spending grant (`grants.create({ signing: "page" })`)
+and of `DelegatedGate.preApprove` (`src/grants.ts`, `src/delegated.ts`). No credential is
+involved at all — the server takes the human's word for it. It exists for demos, examples
+and CI.
 
 ## What "presence-only" means, precisely
 
-Three things must be true for a gate to be a real safety control. v0.1 has the first two
-and not the third:
+Three things must be true for a gate to be a real safety control. The presence-only rails
+have the first two and not the third:
 
-| Property | Meaning | v0.1 |
+| Property | Meaning | Today |
 | :-- | :-- | :-- |
 | **Disclosure** | the wallet revealed the explicit positive claim (`age_over_21 === true`), not merely "a token was present" | ✅ enforced |
 | **Binding** | the response is bound to *this* request and *this* origin — nonce / ephemeral decryption key / RP-ID, with replay protection | ✅ enforced |
@@ -80,9 +86,10 @@ credential inside it. That is the whole gap, and it is the same gap on every rai
 
 ## What is real per rail
 
-`mount()` serves three ceremony rails. They differ in how much cryptography is real
-today — but **all three carry `trust_level: "presence-only-demo"`** because none verifies
-the issuer trust anchor.
+`mount()` serves three built-in ceremony rails, plus a fourth, `delegated`, when you
+configure an external verifier (it relays that verifier's level). The three built-in rails
+differ in how much cryptography is real today — but **all three carry
+`trust_level: "presence-only-demo"`** because none verifies the issuer trust anchor.
 
 ### `passkey` — same-device + cross-device (caBLE)
 
@@ -173,10 +180,10 @@ A useful way to read this table: the **OpenID4VP plumbing is scaffolded and the 
 crypto runs for real** — issuer-trust verification is an *integration* step, not new
 cryptography that has to be invented.
 
-## What `trust_level: "issuer-verified"` (v0.2) would add
+## What `trust_level: "issuer-verified"` would add
 
-`"issuer-verified"` is already a value of `TrustLevel`; v0.2 is what makes a path emit it
-honestly. It adds exactly the missing third property — **trust** — by verifying the mdoc's
+`"issuer-verified"` is already a value of `TrustLevel`; the planned issuer-trust work is what
+would make an in-gate path emit it honestly. It adds exactly the missing third property — **trust** — by verifying the mdoc's
 issuer and device signatures against a real anchor:
 
 - **Issuer-signature verification** — the mdoc's `issuerAuth` (the MSO COSE_Sign1) chains
@@ -198,6 +205,7 @@ Until issuer-trust verification lands, every gate that relies on the mdoc is **f
 behind the presence-only-demo mode** and **must not be presented as a real safety
 control** — in the UI, in a demo, or in a pitch. This is a load-bearing security
 invariant (constitution Security Requirements; `CLAUDE.md`), and the honesty tests assert
-the `presence-only-demo` token survives on every page and every mandate. The point of this
+the `presence-only-demo` token survives on every checkout page and every checkout mandate
+(the device-signed grant page carries its own `device-signed` caveat instead). The point of this
 document is that the limitation is stated plainly, in the data and in the words, rather
 than buried.

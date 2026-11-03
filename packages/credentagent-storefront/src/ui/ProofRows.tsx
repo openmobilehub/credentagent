@@ -3,8 +3,11 @@ import styles from "./app.module.css";
 // The confirmed order's proofs (the gate's order proof receipt) — one row per gate, e.g.
 // "✓ presence-only-demo · Inspect ↗ · Issuer ↗", then "Check the signatures ↗" (the Multipaz
 // verifier) when a wallet proof is shown, and "Order record ↗" (the store's order-status JSON).
-// Multipaz links show only for a wallet proof the store kept bytes for; an instant-demo proof says
-// so and never links. Nothing here claims more than the proof's own trust_level.
+// Multipaz links show only for a wallet proof that carries bytes; an instant-demo proof says so and
+// never links. Since #320 the completed order the widget polls never carries the wallet's raw
+// answer (anyone with the order id can read it), so in practice the row shows the trust level and
+// the Order record link; Inspect lives on the page that just presented. Nothing here claims more
+// than the proof's own trust_level.
 const INSPECTOR = "https://tools.multipaz.org/mdocDeviceResponse#";
 const X509 = "https://tools.multipaz.org/x509#";
 const VERIFIER = "https://tools.multipaz.org/verifier";

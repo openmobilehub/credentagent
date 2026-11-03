@@ -55,6 +55,26 @@ export type DelegateHashAlg = keyof typeof HASH_ALGS;
 /** What this rail asks for when a caller names nothing — the SD-JWT default (RFC 9901 §4.1.1). */
 export const DEFAULT_HASH_ALG: DelegateHashAlg = "sha-256";
 
+/**
+ * Why `merchantUrl` can't name a merchant, or null when it can. It must be an absolute
+ * http(s) URL: the store's `walletOrigin`. Checked at runtime because the intent-sign
+ * functions are exported: a JavaScript caller that leaves it out gets a message saying what to
+ * pass (and verify refuses instead of throwing `Invalid URL`), and a value like
+ * `"foo:shop.example/wine"` — which parses, with an empty host — cannot name another store.
+ * It is also the tripwire if a default derived from the request origin ever comes back (#331).
+ */
+export function merchantUrlProblem(v: unknown): string | null {
+  if (typeof v !== "string" || v.length === 0) return "merchantUrl is required: the store's public URL (walletOrigin), path included";
+  try {
+    const u = new URL(v);
+    if (u.protocol === "https:" || u.protocol === "http:") return null;
+  } catch {
+    // fall through
+  }
+  // eslint-disable-next-line no-restricted-syntax -- an error message, never rendered into a page <script>
+  return `merchantUrl must be an absolute http(s) URL, got ${JSON.stringify(v)}`;
+}
+
 /** Is `alg` one this rail can actually compute? A wallet asked for anything else cannot answer. */
 export function isDelegateHashAlg(alg: string): alg is DelegateHashAlg {
   return alg in HASH_ALGS;

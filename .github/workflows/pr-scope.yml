@@ -1,0 +1,40 @@
+name: pr-scope
+# The scope check (CONTRIBUTING.md, "Big changes"; REVIEW.md §8): a pull request too big to review in
+# one sitting must deliver one ticket of a plan — a sub-issue of an `epic` with several, or a task of
+# a spec's tasks.md — or carry the `scope:approved` label a maintainer adds. Otherwise it fails, with
+# a comment that says how to split it. Docs, specs and lockfiles don't count toward the size.
+#
+# pull_request_target, so it can comment on a fork's PR: it runs main's copy of the check, reads the
+# PR only through the API, and never checks out or runs the PR's code.
+
+on:
+  pull_request_target:
+    types: [opened, edited, synchronize, reopened, ready_for_review, labeled, unlabeled]
+
+concurrency:
+  group: pr-scope-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  scope:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: write # the one comment it keeps current
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }} # main's check, never the PR's
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Is it one ticket of a plan?
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: node ci/pr-scope/check.mjs "$PR"

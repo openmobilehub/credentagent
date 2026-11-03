@@ -14,6 +14,7 @@
 // crypto is real; the issuer trust anchor is not — never a real safety control.
 import type { Branding } from "../../types.js";
 import { pageHead, brandHeader, trustFooter, inspectLinkScript } from "../theme.js";
+import { scriptJson } from "../script-json.js";
 
 export interface CredentialPageArgs {
   /** `"age"` / `"membership"` (built-ins) OR a custom credential id (007). */
@@ -109,7 +110,7 @@ export function renderCredentialPage(args: CredentialPageArgs): string {
       : (args.demoClaims ?? {});
   const totalLine = args.total != null ? `<p class="small amount">Order ${escapeHtml(args.order)} · ${escapeHtml(args.currency ?? "USD")} ${args.total}</p>` : "";
   const base = args.basePath ?? "";
-  const returnUrl = args.returnUrl ?? `${base}/checkout?order=${encodeURIComponent(args.order)}${args.cart ? `&cart=${args.cart}` : ""}`;
+  const returnUrl = args.returnUrl ?? `${base}/checkout?order=${encodeURIComponent(args.order)}${args.cart ? `&cart=${encodeURIComponent(args.cart)}` : ""}`;
   // Identity-first tagline + the order-derived progress rail (built by the route via
   // checkoutRail) with THIS gate marked current. It lists only the gates the order
   // actually has — never a hardcoded Age · Membership · Pay. Absent ⇒ no rail.
@@ -141,18 +142,18 @@ ${pageHead(title, extraCss, args.branding)}
   <div id="done">✓ Done — returning to checkout… <a id="back" href="${escapeHtml(returnUrl)}">continue now ›</a></div>
   ${trustFooter()}
   <script type="module">
-    const ORDER = ${JSON.stringify(args.order)};
-    const CRED = ${JSON.stringify(args.kind)};
+    const ORDER = ${scriptJson(args.order)};
+    const CRED = ${scriptJson(args.kind)};
     // statelessOrders: forward the signed cart mandate (?cart=… in this page's URL) so a
     // store-less server can reconstruct THIS order on verify.
     const CART = new URLSearchParams(location.search).get("cart");
-    const DEMO_CLAIMS = ${JSON.stringify(demoClaims)};
+    const DEMO_CLAIMS = ${scriptJson(demoClaims)};
     // Whether the instant-demo button can actually prove this credential (#59 finding 5). Drives
     // the coherent unsupported-browser guidance below so we never point at a disabled button (#131).
     const DEMO_AVAILABLE = ${demoAvailable};
-    const RETURN_URL = ${JSON.stringify(returnUrl)};
-    const REQUEST_URL = ${JSON.stringify(args.endpoints?.request ?? `${base}/credentagent/credential/request`)};
-    const VERIFY_URL = ${JSON.stringify(args.endpoints?.verify ?? `${base}/credentagent/credential/verify`)};
+    const RETURN_URL = ${scriptJson(returnUrl)};
+    const REQUEST_URL = ${scriptJson(args.endpoints?.request ?? `${base}/credentagent/credential/request`)};
+    const VERIFY_URL = ${scriptJson(args.endpoints?.verify ?? `${base}/credentagent/credential/verify`)};
     const log = document.getElementById("log");
     const goDc = document.getElementById("go-dc");
     const go = document.getElementById("go");

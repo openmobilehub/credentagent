@@ -7,12 +7,13 @@ Each is runnable against the two `@openmobilehub/credentagent-*` packages (build
 - [`storefront.mjs`](#storefrontmjs--a-credential-gated-storefront-in-8-lines) — a credential-gated storefront in ~8 lines
 - [`custom-credential.mjs`](#custom-credentialmjs--gate-any-action-with-any-credential) — gate any action with **any** credential (Principle V)
 - [`with-x402-settlement.mjs`](#with-x402-settlementmjs--settle-payment-on-chain-via-the-settle-seam) — settle payment on-chain via the `settle` seam
-- [`storefront-redis.mjs`](storefront-redis.mjs) / [`storefront-firestore.mjs`](storefront-firestore.mjs) — injectable persistence (Upstash Redis stores / Firestore catalog source)
+- [`storefront-redis.mjs`](storefront-redis.mjs) — injectable persistence (Upstash Redis stores)
 - [`run-storefront/`](run-storefront/) — run THIS repo's storefront directly (stateful + stateless side by side)
 - [`delegated-verifier/`](delegated-verifier/) — the delegated-payment rail end-to-end with a LOCAL stand-in verifier (008): click a real delegated checkout, or boot with `VERDICT=wrong-amount|underage|declined` to watch the gate refuse a misbehaving verifier
 
 **Gating patterns** (identity-first, beyond commerce)
 - [`gate-any-action.mjs`](#gate-any-actionmjs--gate-a-non-commerce-action-identity-first-no-checkout) — gate a non-commerce action, no checkout
+- [`delegated-verifier-identity/`](delegated-verifier-identity/) — the identity twin of [`delegated-verifier/`](delegated-verifier/): the SAME external `verifier` seam checks that the person is **21 or older** before a sealed record is released (`required(age.over(21))`), with **no cart, no price, no `payment.in(...)`**. The stand-in verifier has **no `settle` member at all**, so a settle attempt would be refused, and the walk-through prints it if one ever happens. One approval covers one record, under a request id the server mints. `VERDICT=underage|declined` shows the gate refusing end-to-end. Same honesty fence: a local stand-in, `trust_level: "presence-only-demo"`, not a real trust anchor (real adapter = the downstream Multipaz work), and the built-in demo rails on the same server still accept self-asserted claims (#352). A licence gate is more than a swap today: the `defineCredential(...)` credential must apply to this action (no `appliesTo`, or one the sealed-record order matches — if it doesn't apply, nothing is checked and the verifier's approval alone releases the record), the action's `minimumAge` tag goes, the stand-in must disclose the licence claims under the credential's own id (e.g. `claims: { professional_license: { license_active: true } }`), and the refusal's `credential`/`request`/`gate`/`detail` should describe the licence — its `credential` field is typed to built-in names today (#23), so that works from JavaScript only
 
 **See it work — one page, click through it** (demo)
 - [`demo-hub/`](demo-hub/) — a single page that drives the real checkout AND shows the signed webhook arrive + get verified in a live feed. Start here to *see* the product. Plain-English guarantees + one-command proofs in [`demo-hub/GUARANTEES.md`](demo-hub/GUARANTEES.md).
@@ -117,7 +118,7 @@ const prescription = defineCredential({
   id: "prescription",
   request: dcql({ docType: "org.hl7.prescription.1", claims: ["rx_valid"] }), // what to ask the wallet
   verify: (claims) => claims.rx_valid === true,                               // explicit positive claim
-  effect: gate(),                                                             // gate() | discount() | authorize()
+  effect: gate(),                                                             // custom credentials support gate() only
   appliesTo: (order) => order.lines.some((l) => l.category === "Pharmacy"),   // ONLY for pharmacy lines
   ui: { label: "Prescription", action: "Verify prescription" },
 });

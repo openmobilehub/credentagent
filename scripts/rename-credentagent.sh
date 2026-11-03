@@ -3,7 +3,7 @@
 #
 # Repeatable, case-aware, exemption-respecting. Run from a repo root:
 #   ./scripts/rename-credentagent.sh
-# Reused by PR #31 (retrofit), attestomcp-website, and mcp-apps-shopping-demo.
+# Reused by PR #31 (retrofit) and attestomcp-website.
 #
 # Order matters: longest/most-specific tokens first so substrings never
 # double-replace. Standalone "Attesto"/"attesto" are NOT replaced here —

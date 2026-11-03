@@ -147,6 +147,10 @@ export type { VerifyOptions as VerifyMandateOptions, VerifyResult, MandateVerdic
 export { didWebFor, didDocument, publicJwkFromDidDocument, resolveSigningKey, SIGNING_ALG } from "./ap2/keys.js";
 export type { GateSigningKey, PrivateJwkP256, PublicJwkP256 } from "./ap2/keys.js";
 export { VCT, findConstraint } from "./ap2/types.js";
+// The one rule a cart line must meet, for the store that quotes it and the store that verifies it
+// (#286) — exported so a store can pre-check an agent's cart and answer by `code`, not catch a throw.
+export { checkLineItems } from "./ap2/from-gate.js";
+export type { LineItemsCheck, LineItemsRefusal } from "./ap2/from-gate.js";
 export type {
   Vct, Amount, Merchant, PaymentInstrument, UcpCheckout, UcpLineItem, UcpTotal,
   CheckoutMandate, PaymentMandate, OpenCheckoutMandate, OpenPaymentMandate, AnyMandate,
