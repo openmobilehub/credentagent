@@ -323,7 +323,7 @@ Claude review finishes on an agent:in-review PR, or the label is added   (or: ma
 ```
 
 - **A human is asked only at the end** — when the review is satisfied with nothing left open, or
-  when the loop stops (cycle cap `ISSUE_AGENT_MAX_REVIEW_CYCLES`, default 3; a budget; a fix that
+  when the loop stops (cycle cap `ISSUE_AGENT_MAX_REVIEW_CYCLES`, default 2; a budget; a fix that
   doesn't pass its own checks; a change it may not publish; an answer with no code change, which no
   new review would follow). It always says why, on the PR.
 - **Same trust split:** assess and push are trusted code; fix runs in a job with no GitHub token.
@@ -518,7 +518,7 @@ is left, so together they can't pass the cap. A run that hits its cap stops and 
 | `ISSUE_AGENT_BUDGET_USD` | `25` | per-session cap |
 | `ISSUE_AGENT_RUN_BUDGET_USD` | `100` | per-run cap |
 | `ISSUE_AGENT_LABEL` | `agent` | the label `--poll` looks for |
-| `ISSUE_AGENT_MAX_REVIEW_CYCLES` | `3` | review-loop fix cycles; at the cap 💬 → `agent:ready-for-human` (notes listed), ⛔ → `agent:needs-human` |
+| `ISSUE_AGENT_MAX_REVIEW_CYCLES` | `2` | review-loop fix cycles; at the cap 💬 → `agent:ready-for-human` (notes listed), ⛔ → `agent:needs-human` |
 | `ISSUE_AGENT_DISCUSS_ROUTINE`, `ISSUE_AGENT_DISCUSS_TOKEN` | — | secrets: the brief's "talk it through live" routine ("The brief") |
 
 Secrets/variables: `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` (+ `CLAUDE_AUTH`), and
