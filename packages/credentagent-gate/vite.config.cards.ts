@@ -14,8 +14,9 @@ export default defineConfig({
   plugins: [react(), viteSingleFile()],
   build: {
     outDir: here("./dist/cards"),
-    // Only dist/cards is wiped; tsc writes the server half there right after.
-    emptyOutDir: true,
+    // One self-contained file, overwritten on every build: nothing goes stale, and tsc's server
+    // half in dist/cards (index.js, grant-view.js) survives a page-only rebuild.
+    emptyOutDir: false,
     rollupOptions: { input: here("./src/cards/ui/cards.html") },
   },
 });
