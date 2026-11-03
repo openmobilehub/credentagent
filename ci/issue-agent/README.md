@@ -306,36 +306,52 @@ review:
 Claude review finishes on an agent:in-review PR, or the label is added   (or: main moved, and the PR now conflicts with it)
   ├─ assess   read the verdict + the open threads (the review bot's and maintainers' only)    (script)
   │             conflicts with main → fix: merge main, resolve the conflicts (or hand over at the cap)
-  │             ✅ Ready to merge, or 💬 with no thread open → verify first:
+  │             ✅ Ready to merge, and no maintainer's thread open → verify first:
   │               the spec reviewer checks the issue's acceptance criteria on the final code
   │                 all met → tick the checklist, hand to a human: label agent:ready-for-human,
-  │                           request the labeller's review, drop the banner                  ← stop
+  │                           request the labeller's review, drop the banner, list the
+  │                           reviewer's open notes as "no action needed"                      ← stop
   │                 some not → fix: make them true (a cycle)
-  │             cycle cap reached with 💬 → the same, with the open notes listed               ← stop
-  │             cycle cap reached with ⛔ → label agent:needs-human, say why                   ← stop
-  ├─ fix      answer every thread — fix it, or decline it with a reason (or resolve a conflict,
-  │           or make an unmet criterion true); then the same gates, mutation check (over the
-  │           whole PR) and three reviews as the first run                                  (agents)
-  └─ push     apply the checked fix to the PR head (fast-forward, no force), reply to every
-              thread with the agent's answer and resolve it; if main moved under it and the
-              new head conflicts, start a conflict cycle at once                             (script)
-                → the push starts the next Claude review → assess again
+  │             ⛔ Needs changes, first time → fix
+  │             ⛔ Needs changes after a fix cycle → label agent:needs-human, say why          ← stop
+  │             ✅ with a maintainer's thread open → fix; at the cycle cap, hand over with it listed
+  ├─ fix      fix only what blocks: ⛔'s "Fix before merging" items, and answer each thread a
+  │           maintainer opened (fix it, or decline it with a reason) — the review bot's inline
+  │           notes are context, not tasks (or resolve a conflict, or make an unmet criterion
+  │           true); then the same gates, mutation check (over the whole PR) and three reviews
+  │           as the first run                                                              (agents)
+  └─ push     apply the checked fix to the PR head (fast-forward, no force), reply to each
+              maintainer's thread and to each bot note the fix fixed, and resolve them (a
+              declined bot note gets no reply); add the review:again label to ask for one
+              re-review; if main moved under it and the new head conflicts, start a conflict
+              cycle at once                                                                  (script)
+                → the next Claude review → assess again
 ```
 
-- **A human is asked only at the end** — when the review is satisfied with nothing left open, or
-  when the loop stops (cycle cap `ISSUE_AGENT_MAX_REVIEW_CYCLES`, default 3; a budget; a fix that
-  doesn't pass its own checks; a change it may not publish; an answer with no code change, which no
-  new review would follow). It always says why, on the PR.
+- **A human is asked only at the end** — when the review is ✅, or when the loop stops (a second ⛔;
+  cycle cap `ISSUE_AGENT_MAX_REVIEW_CYCLES`, default 2; a budget; a fix that doesn't pass its own
+  checks; a change it may not publish; an answer with no code change, which no new review would
+  follow). It always says why, on the PR.
 - **Same trust split:** assess and push are trusted code; fix runs in a job with no GitHub token.
   Only threads started by the review bot (a GitHub App account, not any user named `claude`) or by
-  people with write access are answered, and only their replies are read.
-- **Small notes get fixed too — up to the cap.** 💬 with open threads is not "done": the agent
-  fixes or answers them. But each review of a fix reads only the new commit and tends to find a
-  new, smaller note — on pull request #347 (issue #322's fix) the reviews went ⛔ → 💬 → 💬 → ⛔
-  (a line `main` had added was now stale) → 💬, each with fresh small notes — so at the cycle cap
-  **💬 counts as ready**: the PR goes to you as `agent:ready-for-human` with the open notes listed
-  and linked. **⛔ at the cap never does** — that stops as `agent:needs-human` (as #347 did after
-  cycle 3; its fourth cycle was started by hand).
+  people with write access are read, and only their replies; only the maintainers' are answered.
+- **Only what blocks gets fixed.** A ✅ review goes to you at once, even with optional notes open:
+  they are listed and linked as "no action needed", and the agent pushes no commit for them. Chasing
+  them cost a cycle each and found a new, smaller note every time — on pull request #347 (issue
+  #322's fix) the reviews went ⛔ → 💬 → 💬 → ⛔ → 💬, and on pull request #415 a cycle pushed a
+  commit that only reworded comments. ⛔ gets one fix cycle; **a second ⛔ goes to you as
+  `agent:needs-human`**. Only a cycle that answered a ⛔ counts here (its cycle comment is marked
+  `answered=changes`): a cycle that merged main in or made acceptance criteria true doesn't, so a
+  first ⛔ after one is still fixed. (Cycles pushed before this mark existed carry no
+  `answered=changes`, so a PR already in the loop then may get one more ⛔ fix — never past the cycle
+  cap.) The push job sets the mark from its own checked values, not from the agents' output. A bot note a person with write access replied on is answered like
+  their own thread. On a stop, the bot's open notes are listed plainly, not as "no action needed" —
+  on a ⛔ they may be what blocks. The loop reads two verdicts, ✅ and ⛔; a 💬 Ready — small notes (which the
+  review is dropping) reads as ✅, for one release.
+- **One re-review, asked for by label.** After a fix push the push job adds **`review:again`**
+  (with `AGENT_GH_TOKEN`, once per cycle; it makes the label if it's missing). Until the Claude
+  review starts on that label instead of on a push, the label does nothing and the push still starts
+  the review. It is not `agent:in-review`, so adding it starts no review-loop run.
 - **Only PRs labelled into the loop, only from this repository.** It acts only on PRs from branches
   in this repository that carry `agent:in-review` (so a PR a human has taken over is left alone),
   and spends no fix session when `AGENT_GH_TOKEN` is missing. Every job checks out `main`'s harness
@@ -386,7 +402,8 @@ Claude review finishes on an agent:in-review PR, or the label is added   (or: ma
   locally: `run.mjs assess-review <pr> --dry-run`, `run.mjs fix-review review.json`,
   `run.mjs push-review <fix-dir> --review review.json --pr <pr> --dry-run`. A PR that was already
   handed over goes back into the loop by putting its `agent:in-review` label back (swap it for
-  `agent:needs-human` or `agent:ready-for-human`), which starts a run by itself; to give it more cycles than the cap, raise the cap — the repo variable
+  `agent:needs-human` or `agent:ready-for-human`), which starts a run by itself. That gets a PR
+  stopped on a second ⛔ nowhere — it stops again at once, whatever the cap; fix that one by hand. To give a PR stopped at the cap more cycles, raise the cap — the repo variable
   `ISSUE_AGENT_MAX_REVIEW_CYCLES` (`gh variable set ISSUE_AGENT_MAX_REVIEW_CYCLES --body 4`) for
   Actions runs, or the same environment variable locally. A review cancelled by hand without a new
   push starts nothing: run the loop by hand to resume it.
@@ -518,7 +535,7 @@ is left, so together they can't pass the cap. A run that hits its cap stops and 
 | `ISSUE_AGENT_BUDGET_USD` | `25` | per-session cap |
 | `ISSUE_AGENT_RUN_BUDGET_USD` | `100` | per-run cap |
 | `ISSUE_AGENT_LABEL` | `agent` | the label `--poll` looks for |
-| `ISSUE_AGENT_MAX_REVIEW_CYCLES` | `3` | review-loop fix cycles; at the cap 💬 → `agent:ready-for-human` (notes listed), ⛔ → `agent:needs-human` |
+| `ISSUE_AGENT_MAX_REVIEW_CYCLES` | `2` | review-loop fix cycles; ✅ → `agent:ready-for-human` (optional notes listed), a second ⛔ → `agent:needs-human` |
 | `ISSUE_AGENT_DISCUSS_ROUTINE`, `ISSUE_AGENT_DISCUSS_TOKEN` | — | secrets: the brief's "talk it through live" routine ("The brief") |
 
 Secrets/variables: `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` (+ `CLAUDE_AUTH`), and
