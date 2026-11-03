@@ -12,4 +12,5 @@ export const UNSAFE_LINKS = [
   "http://shop.localhost/approve", // a *.localhost subdomain is not localhost
   "http://192.168.1.10/approve", // a LAN address on plain http:
   "http://shop.local/approve", // a .local name on plain http:
+  "http://127.0.0.1.evil.test/approve", // a domain name that only starts like 127.0.0.1
 ];
