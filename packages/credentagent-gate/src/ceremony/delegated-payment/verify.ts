@@ -19,6 +19,7 @@ import type { CeremonyOrder, DelegatedVerdict, GateOutcome } from "../types.js";
 import type { Origin } from "../origin.js";
 import { evaluateCredential, evaluateCustom, requiredAgeForOrder } from "../credential-gate/verify.js";
 import { delegatedPolicyEntries, mergeDelegatedDcql } from "./dcql.js";
+import { savePart } from "../../store.js";
 
 /**
  * The two gates the gate itself owns on this rail (the rest of the presentment's trust is
@@ -61,15 +62,13 @@ function claimsForCredential(policyId: string, idMap: Map<string, string>, verdi
   return flat;
 }
 
-async function markAgeVerified(ctx: CeremonyContext, orderId: string): Promise<void> {
-  const prev = (await ctx.verificationStore.read(orderId)) ?? {};
-  await ctx.verificationStore.write(orderId, { ...prev, ageVerified: true });
+// Each proof is its own part of the order's record (#444), in the slot the credential rail uses.
+async function markAgeVerified(ctx: CeremonyContext, orderId: string, provenOver: number): Promise<void> {
+  await savePart(ctx.verificationStore, orderId, "age", { ageVerified: true, provenOver });
 }
 
 async function markGateVerified(ctx: CeremonyContext, orderId: string, credId: string): Promise<void> {
-  const prev = (await ctx.verificationStore.read(orderId)) ?? {};
-  const verifiedGates = { ...(prev as { verifiedGates?: Record<string, true> }).verifiedGates, [credId]: true as const };
-  await ctx.verificationStore.write(orderId, { ...prev, verifiedGates });
+  await savePart(ctx.verificationStore, orderId, `gate:${credId}`, { verifiedGates: { [credId]: true } });
 }
 
 /**
@@ -89,12 +88,13 @@ export async function applyDelegatedPolicy(ctx: CeremonyContext, order: Ceremony
     const cred = ctx.credentialRegistry?.get(credentialId);
     if (!cred || cred.effect.kind !== "gate") continue; // authorize → binding gate; discount → excluded
     const claims = claimsForCredential(credentialId, idMap, verdict.claims);
+    const minimumAge = requiredAgeForOrder(order) ?? 21;
     const result =
       credentialId === "age"
-        ? evaluateCredential("age", claims, { minimumAge: requiredAgeForOrder(order) ?? 21 })
+        ? evaluateCredential("age", claims, { minimumAge })
         : evaluateCustom(cred, claims);
     if (!result.verified) continue; // leave state unwritten → completeOrder refuses
-    if (credentialId === "age") await markAgeVerified(ctx, order.id);
+    if (credentialId === "age") await markAgeVerified(ctx, order.id, minimumAge);
     else await markGateVerified(ctx, order.id, credentialId);
   }
 }

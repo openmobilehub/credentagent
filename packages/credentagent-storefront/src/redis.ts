@@ -19,7 +19,7 @@
 
 import type { Order } from "./index.js";
 import type { CartStore, OrderStore, StorageProvider, CompletedOrderRecord } from "./server.js";
-import type { VerificationRecord, VerificationStore } from "@openmobilehub/credentagent-gate";
+import { mergeVerificationRecord, type VerificationRecord, type VerificationStore } from "@openmobilehub/credentagent-gate";
 
 /** The minimal slice of the Upstash client the adapters use (also the injectable test seam). */
 export interface RedisLike {
@@ -108,9 +108,15 @@ class RedisOrderStore<T> implements OrderStore<T> {
   }
 }
 
+// The parts of a verification record this store keeps under keys of their own (#444), so two
+// pages saving them for one order at the same moment can't overwrite each other. `RedisLike` can
+// only GET a key it can name, so a part it can't name in advance (a custom gate's `gate:<id>`)
+// is merged into the record instead, as every write was before.
+const OWN_KEY_SLOTS: readonly string[] = ["requirements", "age", "membership"];
+
 class RedisVerificationStore implements VerificationStore {
-  // Full-record get/set per order id. The ceremony merges fields at the call site before
-  // writing, so no adapter-level merge is needed; isolation is per-order keying.
+  // The record `write()` saves, plus one key per part `writePart()` saves; `read()` merges them.
+  // Isolation is per-order keying.
   constructor(
     private readonly redis: RedisLike,
     private readonly namespace: string,
@@ -118,14 +124,31 @@ class RedisVerificationStore implements VerificationStore {
   private keyFor(orderId: string): string {
     return joinKey(this.namespace, "verification", orderId);
   }
+  // Its own kind, so a part key never equals the record key of an order whose id ends in ":age".
+  private partKey(orderId: string, slot: string): string {
+    return joinKey(this.namespace, "verification-part", orderId, slot);
+  }
   async read(orderId: string): Promise<VerificationRecord | undefined> {
-    return (await this.redis.get<VerificationRecord>(this.keyFor(orderId))) ?? undefined;
+    const [record, ...parts] = await Promise.all([
+      this.redis.get<VerificationRecord>(this.keyFor(orderId)),
+      ...OWN_KEY_SLOTS.map((slot) => this.redis.get<VerificationRecord>(this.partKey(orderId, slot))),
+    ]);
+    const saved = parts.filter((p): p is VerificationRecord => p != null);
+    return saved.length > 0 ? saved.reduce(mergeVerificationRecord, record ?? {}) : (record ?? undefined);
   }
   async write(orderId: string, record: VerificationRecord): Promise<void> {
     await this.redis.set(this.keyFor(orderId), record);
   }
+  async writePart(orderId: string, slot: string, part: VerificationRecord): Promise<void> {
+    if (OWN_KEY_SLOTS.includes(slot)) {
+      await this.redis.set(this.partKey(orderId, slot), part);
+      return;
+    }
+    const prev = (await this.redis.get<VerificationRecord>(this.keyFor(orderId))) ?? {};
+    await this.redis.set(this.keyFor(orderId), mergeVerificationRecord(prev, part));
+  }
   async clear(orderId: string): Promise<void> {
-    await this.redis.del(this.keyFor(orderId));
+    await Promise.all([this.keyFor(orderId), ...OWN_KEY_SLOTS.map((slot) => this.partKey(orderId, slot))].map((key) => this.redis.del(key)));
   }
 }
 

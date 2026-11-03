@@ -26,6 +26,23 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
 
 ## [Unreleased]
 
+### Added
+
+- Each order's requirements are now saved with its proofs, in the order's verification record
+  (`record.requirements`), so a server that never ran `requirements()` can read what the order
+  needs. `requirements()` seals them into every mounted approve link (a new `requirements=` query
+  parameter, signed with the rails' signing key and bound to the order id), and the first page the
+  buyer opens saves them, once. An age requirement holds one number: the stricter of the policy's
+  `age.over(n)` and the order's highest `minimumAge` tag. An age proof now also saves the age it
+  was made at (`provenOver`). Nothing reads either yet, so no order completes or is refused
+  differently (#444, the first step of #442).
+- `VerificationStore` has an optional `writePart(orderId, slot, part)`, which saves one proof
+  without rewriting the rest of the record, so two proofs saved for one order at the same moment
+  no longer overwrite each other. The in-memory store and `redisStorage()` implement it (Redis
+  keeps the requirements, the age proof and the membership proof under keys of their own). A store
+  without it works as before, and `doctor()` warns about it on a deployment
+  (`verification-store-merges-parts`). `mergeVerificationRecord` is exported for stores that add it.
+
 ### Fixed
 
 - The storefront widget no longer flashes the product grid before a spending-grant card. It now

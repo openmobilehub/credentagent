@@ -4,17 +4,48 @@
 // VerificationStore.
 
 import type { VerificationRecord, VerificationStore } from "./types.js";
+import { upsertProof } from "./ceremony/proofs.js";
+
+/**
+ * Merge one saved part into an order's record: the part's fields replace the record's, except
+ * that `verifiedGates` and `proofs` add up (a proof replaces one with the same gate label). How
+ * a `VerificationStore` that implements `writePart` builds what `read()` returns.
+ */
+export function mergeVerificationRecord(record: VerificationRecord, part: VerificationRecord): VerificationRecord {
+  const merged: VerificationRecord = { ...record, ...part };
+  if (record.verifiedGates && part.verifiedGates) merged.verifiedGates = { ...record.verifiedGates, ...part.verifiedGates };
+  if (record.proofs && part.proofs) merged.proofs = part.proofs.reduce(upsertProof, record.proofs);
+  return merged;
+}
+
+/** Save one part of an order's record through `writePart`, or — for a store without it — by
+ *  reading, merging and writing the whole record back, as every write did before #444. */
+export async function savePart(store: VerificationStore, orderId: string, slot: string, part: VerificationRecord): Promise<void> {
+  if (store.writePart) return store.writePart(orderId, slot, part);
+  const prev = (await store.read(orderId)) ?? {};
+  await store.write(orderId, mergeVerificationRecord(prev, part));
+}
 
 export class MemoryVerificationStore implements VerificationStore {
   private readonly records = new Map<string, VerificationRecord>();
+  // Each order's parts by slot. One synchronous Map write each, so no two can interleave.
+  private readonly parts = new Map<string, Map<string, VerificationRecord>>();
 
   read(orderId: string): VerificationRecord | undefined {
-    return this.records.get(orderId);
+    const record = this.records.get(orderId);
+    const parts = this.parts.get(orderId);
+    return parts ? [...parts.values()].reduce(mergeVerificationRecord, record ?? {}) : record;
   }
   write(orderId: string, record: VerificationRecord): void {
     this.records.set(orderId, record);
   }
+  writePart(orderId: string, slot: string, part: VerificationRecord): void {
+    const parts = this.parts.get(orderId) ?? new Map<string, VerificationRecord>();
+    parts.set(slot, part);
+    this.parts.set(orderId, parts);
+  }
   clear(orderId: string): void {
     this.records.delete(orderId);
+    this.parts.delete(orderId);
   }
 }

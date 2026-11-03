@@ -172,8 +172,28 @@ export interface VerificationManifestEntry {
 
 // ── Store (per order id — never process-global; Security invariant 4) ──────
 
+/**
+ * One requirement as saved for an order (#444): what the order must prove, worked out once by
+ * `requirements()` and kept in the order's verification record, so a step on any server reads it
+ * instead of guessing. The manifest entry's own fields, without the page-facing ones.
+ */
+export interface SavedRequirement {
+  credential: string;
+  required: boolean;
+  effect: "gate" | "discount" | "authorize";
+  /** age only: the stricter of the policy's `age.over(n)` and the order's highest `minimumAge` tag. */
+  minAge?: number;
+  /** discount only. */
+  discountPct?: number;
+}
+
 export interface VerificationRecord {
+  /** The order's requirements, saved once by the first page that opens its approve link (#444).
+   *  A proof write never changes them. Nothing reads them yet (#445, #446). */
+  requirements?: SavedRequirement[];
   ageVerified?: boolean;
+  /** The age the age proof was made at (`age_over_<n>` disclosed true), saved beside `ageVerified`. */
+  provenOver?: number;
   loyalty?: { applied: boolean; membershipNumber: string | null };
   /**
    * Custom gate() credentials proven for THIS order, keyed by credential id
@@ -197,6 +217,18 @@ export interface VerificationStore {
   read(orderId: string): VerificationRecord | undefined | Promise<VerificationRecord | undefined>;
   write(orderId: string, record: VerificationRecord): void | Promise<void>;
   clear(orderId: string): void | Promise<void>;
+  /**
+   * Optional: save ONE part of an order's record (its requirements, or one proof) without
+   * reading and rewriting the rest, so two pages saving for one order at the same moment can't
+   * drop each other's part (#444). `slot` names the part: `"requirements"`, `"age"`,
+   * `"membership"`, or `"gate:<credential id>"`. A later write to the same slot replaces it.
+   * Parts sit beside the record `write()` saves: `read()` returns that record with every part
+   * merged in (`mergeVerificationRecord`), and `clear()` removes them all.
+   *
+   * A store without it still works: the gate reads, merges and `write()`s the whole record, as
+   * before, and `doctor()` warns that two parts saved at once can overwrite each other.
+   */
+  writePart?(orderId: string, slot: string, part: VerificationRecord): void | Promise<void>;
 }
 
 /**

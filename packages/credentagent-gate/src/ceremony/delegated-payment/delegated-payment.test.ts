@@ -383,6 +383,16 @@ describe("delegated rail — POST /verify happy path", () => {
     // per-order verification cleared on completion (invariant 4)
     expect(await h.verification.read("ORD-1")).toBeUndefined();
   });
+
+  it("records the age the proof was re-checked at (provenOver) beside ageVerified (#444)", async () => {
+    // A wrong amount refuses completion, so the order's record is still there to read.
+    const verifier = verifierReturning({ binding: { amount: 1, currency: "USD", payee: { id: "shop.example" } } });
+    const h = harness([payment.in("usd"), age.over(21)], verifier);
+    await h.verify({ order: "ORD-1", referenceToken: tokenFor("ORD-1") });
+    const record = await h.verification.read("ORD-1");
+    expect(record?.ageVerified).toBe(true);
+    expect(record?.provenOver).toBe(21);
+  });
 });
 
 describe("delegated rail — POST /verify bypass tests (each refusal must also NOT settle)", () => {

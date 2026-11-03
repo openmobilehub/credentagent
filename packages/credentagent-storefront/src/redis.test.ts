@@ -83,6 +83,57 @@ describe("redisStorage — cross-instance round-trip (US1 / FR-004)", () => {
   });
 });
 
+// A fake whose every call waits, so two writes for one order interleave as two instances' would.
+function slowRedis(): RedisLike & { store: Map<string, unknown> } {
+  const inner = fakeRedis();
+  const wait = () => new Promise<void>((resolve) => setTimeout(resolve, 20));
+  return {
+    store: inner.store,
+    async get<T = unknown>(key: string): Promise<T | null> { await wait(); return inner.get<T>(key); },
+    async set(key: string, value: unknown): Promise<unknown> { await wait(); return inner.set(key, value); },
+    async del(key: string): Promise<unknown> { await wait(); return inner.del(key); },
+  };
+}
+
+const proofOf = (gate: string) => ({ gate, rail: "instant-demo" as const, trust_level: "presence-only-demo" as const, checks: [], presentedAt: "2026-11-03T00:00:00.000Z" });
+
+describe("redisStorage — parts of a verification record (#444)", () => {
+  it("an age part and a membership part saved at the same moment by two instances both survive", async () => {
+    const client = slowRedis();
+    const a = redisStorage({ client }).verificationStore;
+    const b = redisStorage({ client }).verificationStore;
+    await Promise.all([
+      a.writePart!("ORD-1", "age", { ageVerified: true, provenOver: 21, proofs: [proofOf("Age 21+")] }),
+      b.writePart!("ORD-1", "membership", { loyalty: { applied: true, membershipNumber: "M-1" }, proofs: [proofOf("Membership")] }),
+    ]);
+    const record = await a.read("ORD-1");
+    expect(record?.ageVerified).toBe(true);
+    expect(record?.provenOver).toBe(21);
+    expect(record?.loyalty).toEqual({ applied: true, membershipNumber: "M-1" });
+    expect(record?.proofs?.map((p) => p.gate).sort()).toEqual(["Age 21+", "Membership"]);
+  });
+
+  it("read() merges the parts into the written record, and clear() removes them all", async () => {
+    const s = redisStorage({ client: fakeRedis() }).verificationStore;
+    await s.write("ORD-1", { verifiedGates: { rx: true } });
+    await s.writePart!("ORD-1", "requirements", { requirements: [{ credential: "age", required: true, effect: "gate", minAge: 21 }] });
+    await s.writePart!("ORD-1", "gate:license", { verifiedGates: { license: true } });
+    expect(await s.read("ORD-1")).toEqual({
+      verifiedGates: { rx: true, license: true },
+      requirements: [{ credential: "age", required: true, effect: "gate", minAge: 21 }],
+    });
+    await s.clear("ORD-1");
+    expect(await s.read("ORD-1")).toBeUndefined();
+  });
+
+  it("one order's parts never show on another order, even one whose id ends in the slot name", async () => {
+    const s = redisStorage({ client: fakeRedis() }).verificationStore;
+    await s.writePart!("ORD-1", "age", { ageVerified: true, provenOver: 21 });
+    expect(await s.read("ORD-2")).toBeUndefined();
+    expect(await s.read("ORD-1:age")).toBeUndefined();
+  });
+});
+
 describe("redisStorage — the order→cart link survives an instance split", () => {
   it("a second provider reads which cart an order came from, under its own key", async () => {
     const client = fakeRedis();
