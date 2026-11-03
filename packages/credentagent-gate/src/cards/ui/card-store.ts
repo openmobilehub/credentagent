@@ -3,6 +3,10 @@
 // each one made the AP2 demo's card flicker and restart its work. The store keeps the card on
 // screen and replaces it only when the result's data actually changed.
 
+/** The `_meta` key a grant result names its server's Revoke tool under. Without it the card draws no
+ *  Revoke: the page never guesses a tool name (the server half sets it from `tools.revoke`). */
+export const REVOKE_TOOL_META = "credentagent/revokeTool";
+
 /** A card's data: any JSON object marked with a `kind`. */
 export interface CardData {
   kind: string;

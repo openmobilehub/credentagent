@@ -311,7 +311,7 @@ fallback URI). Options:
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `permissions` | — | The `createPermissions()` result. Needed for `permission()`, the card's status tool and the wait tool; without it, `register()` registers only the page, and `permission()` throws a fix-it error. |
-| `tools` | `{ wait: "wait-for-approval" }` | The tool names the kit's notes and replies use. `buy`: the developer's purchase tool — **required when `permissions` is given** (fails at startup otherwise). `wait`: the model's wait tool. |
+| `tools` | `{ wait: "wait-for-approval" }` | The tool names the kit's notes and replies use. `buy`: the developer's purchase tool — **required when `permissions` is given** (fails at startup otherwise). `wait`: the model's wait tool. `revoke`: the developer's tool a grant card's Revoke button calls (registered with `toolMeta({ callableFromCard: true })`); `grant()` names it in the result's `_meta` under `credentagent/revokeTool`, and without it the card draws no Revoke — the page never guesses a tool name. |
 | `registerWait` | `true` | `false` when the developer registers their own wait tool under `tools.wait` (FR-13); the replies still name it. |
 
 Members: `html`, `register(server)`, `toolMeta({ invoking?, invoked?, callableFromCard? })`, `offers(input, { note? })`,
@@ -403,7 +403,8 @@ check it today — so every sentence says so:
   for `localhost`, `127.0.0.1` or `[::1]`, for local development). Anything else — `javascript:`,
   `data:`, a relative path — shows no QR and no button; the card says "The store's link isn't a safe web
   address, so this card doesn't show it," and the note tells the model the same and not to pass the
-  link on.
+  link on. The card page checks a link again before it hands one to the host, so a grant result built
+  without `grant()` is covered too.
 - The card's status tool takes only a `trackingId`, never an address.
 - The surface example calls only stores from a list the server knows: the input schemas accept only
   those ids, so the SDK refuses any other before a handler runs, and `read`, `prepare` and `send` get

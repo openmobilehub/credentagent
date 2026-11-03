@@ -74,7 +74,10 @@ function ActionFooter({ grant }: { grant: GrantViewData }) {
     return (
       <div className={styles.agency}>
         <span>Spends at {grant.merchant} while you&apos;re away</span>
-        <button type="button" className={styles.revoke} onClick={() => actions.revoke?.(grant.id)}>Revoke</button>
+        {/* Drawn only when the host can revoke: a button that can do nothing is a broken promise. */}
+        {actions.revoke ? (
+          <button type="button" className={styles.revoke} onClick={() => actions.revoke?.(grant.id)}>Revoke</button>
+        ) : null}
       </div>
     );
   }

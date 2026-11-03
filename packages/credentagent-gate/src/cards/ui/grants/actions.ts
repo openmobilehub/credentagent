@@ -9,7 +9,8 @@ export interface GrantActions {
   /** Open a deep-link (the approval page) through the host bridge (sandboxed iframes block
    *  plain target="_blank"). */
   openLink?: (url: string) => void | Promise<void>;
-  /** Revoke a grant via the existing `revoke-grant` tool; the card re-renders from the result. */
+  /** Revoke a grant through the host's revoke tool; the card re-renders from the result. Without it,
+   *  an active grant's card draws no Revoke button. */
   revoke?: (grantId: string) => void | Promise<void>;
 }
 
