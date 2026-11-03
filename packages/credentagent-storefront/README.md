@@ -314,8 +314,9 @@ import { GrantCard, grantViews, defineGrantView, BudgetMeter } from "./grants";
 
 // Zero-config: picks the most specific fitting view automatically — a single-SKU grant renders the
 // flagship product card (name/price/image + "up to 3 per purchase"), a category grant renders chips,
-// a pending grant renders the Approve/Decline consent card (for an https or local link), a
-// spent/revoked grant renders a closed card with no live buttons.
+// a pending grant renders the Approve/Decline consent card (its buttons only for an https: link, or
+// http: on localhost, 127.0.0.1 or [::1]), a spent/revoked grant renders a closed card with no live
+// buttons.
 <GrantCard grant={grant} />
 
 // Choose or reorder the candidate views (e.g. the compact one-line meter for a dense list):

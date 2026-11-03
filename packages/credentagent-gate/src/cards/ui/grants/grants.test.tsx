@@ -112,20 +112,23 @@ describe("display-only projection (A1) — a view can never touch the live grant
 });
 
 describe("Approve / Decline carry only a safe link (spec 015 FR-11)", () => {
-  // Rendered with an openLink, as Claude, ChatGPT and the storefront always pass: a check that leaned
-  // on the click handler would put the href back here.
   const opener = { openLink: () => {} };
 
   it("a safe link is on both buttons", () => {
     expect(count(render(<GrantCard grant={pending} actions={opener} />), `href="${pending.approveUrl}"`)).toBe(2);
   });
 
-  it.each(UNSAFE_LINKS)("an unsafe link (%s) is never in the markup, so no new tab or drag can open it", (approveUrl) => {
-    const html = render(<GrantCard grant={{ ...pending, approveUrl }} actions={opener} />);
-    expect(html).not.toContain(approveUrl);
-    expect(html).not.toContain(">Approve<");
-    expect(html).toContain("The merchant&#x27;s link isn&#x27;t a safe web address, so this card doesn&#x27;t show it.");
-  });
+  // Both ways: with an openLink, as the chat apps and the storefront pass, so a check that leaned on the
+  // click handler would fail; and with none, as the zero-config <GrantCard grant={grant} /> renders,
+  // where no click handler runs and the href is all there is.
+  for (const [how, actions] of [["with an openLink", opener], ["with no actions", undefined]] as const) {
+    it.each(UNSAFE_LINKS)(`an unsafe link (%s), rendered ${how}, is never in the markup`, (approveUrl) => {
+      const html = render(<GrantCard grant={{ ...pending, approveUrl }} actions={actions} />);
+      expect(html).not.toContain(approveUrl);
+      expect(html).not.toContain(">Approve<");
+      expect(html).toContain("The merchant&#x27;s link isn&#x27;t a safe web address, so this card doesn&#x27;t show it.");
+    });
+  }
 });
 
 describe("selection by specificity (A3) — highest score wins, not array order", () => {

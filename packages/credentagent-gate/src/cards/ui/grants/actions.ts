@@ -1,7 +1,8 @@
 // Frame-owned actions (spec 011 FR-5). The card is display-only; its affordances are deep-links
 // to the server ceremony or calls to the existing grant tools, provided by the host via context so
 // the view bodies stay pure ({ grant, tokens, slots } only). Absent a provider (tests / a plain
-// browser), the affordances still render but are inert — a stale card can never enact anything.
+// browser), Revoke is not drawn, and Approve/Decline are plain links that a click follows — so the
+// frame puts only a safe link in their href (spec 015 FR-11). Nothing in the card enacts anything.
 
 import { createContext, useContext } from "react";
 
