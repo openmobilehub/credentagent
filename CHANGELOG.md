@@ -31,6 +31,10 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
 - The storefront widget no longer flashes the product grid before a spending-grant card. It now
   shows nothing until the tool result that opened it arrives, then the card for that result; a host
   that never sends one still gets the product picker after two seconds (#428).
+- Paying with a current Multipaz wallet no longer fails with "this wallet signed no
+  transaction_data_hash … (update the wallet app)". Multipaz renamed the signed amount fields to
+  `transactionDataHash` / `transactionDataHashAlg` in August 2026, and the gate only read the old
+  names. It now reads both, and still refuses a missing or mismatched hash.
 
 ## [0.6.0] - 2026-10-19
 
