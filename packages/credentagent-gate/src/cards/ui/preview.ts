@@ -1,4 +1,4 @@
-// Sample results for previewing every card without a chat (spec 015 FR-5). Open the built page in a
+// Sample results for previewing every card without a chat (spec 015 FR-9). Open the built page in a
 // browser tab with `?view=<name>` (add `&theme=dark` for dark); with no view it lists them all. Each
 // sample is shaped exactly like a tool result, so the preview runs the same code path as a chat.
 

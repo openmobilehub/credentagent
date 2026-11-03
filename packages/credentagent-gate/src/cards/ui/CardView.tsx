@@ -1,4 +1,4 @@
-// Picks the card for a tool result by its `kind` (spec 015 FR-5). A card only shows: its buttons
+// Picks the card for a tool result by its `kind` (spec 015 FR-9). A card only shows: its buttons
 // open a link or call a server tool, and the server decides everything (security invariant 1).
 
 import { Component, useState, type ReactNode } from "react";

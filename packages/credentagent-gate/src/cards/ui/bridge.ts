@@ -1,4 +1,4 @@
-// The card page's one bridge to whichever app shows it (spec 015 FR-5). Its methods are the card's
+// The card page's one bridge to whichever app shows it (spec 015 FR-9). Its methods are the card's
 // only reach outside itself — open a link, call a server tool — and neither decides anything: the
 // server does (security invariant 1).
 

@@ -1,4 +1,4 @@
-// Connects the card page to whichever app shows it (spec 015 FR-5) and returns its Bridge.
+// Connects the card page to whichever app shows it (spec 015 FR-9) and returns its Bridge.
 //  • Claude and other MCP Apps hosts: the ext-apps client — results arrive as `toolresult`.
 //  • ChatGPT: `window.openai` — the result is re-delivered on every `openai:set_globals`, which the
 //    card store absorbs (it replaces the card only when the data changed), and which `read()`

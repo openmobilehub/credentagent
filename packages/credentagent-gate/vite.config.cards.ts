@@ -1,4 +1,4 @@
-// Builds the card page (spec 015 FR-1) into ONE self-contained dist/cards/cards.html — React, the
+// Builds the card page (spec 015 FR-5) into ONE self-contained dist/cards/cards.html — React, the
 // MCP Apps client and the styles all inlined — which createCards() serves to Claude and ChatGPT.
 // Named *.cards.ts (not vite.config.ts) so no vitest run picks it up as a test config; invoked
 // explicitly by `npm run build`.

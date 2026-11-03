@@ -1,4 +1,4 @@
-// The card page's dispatch (spec 015 FR-5): a result's `kind` picks the card, an unknown kind shows
+// The card page's dispatch (spec 015 FR-9): a result's `kind` picks the card, an unknown kind shows
 // nothing, and every preview sample renders inside the gallery's frame — the trust line included.
 import { describe, it, expect, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -38,7 +38,7 @@ describe("CardView", () => {
 });
 
 // The Revoke and Open buttons are bare event handlers in the frame: a promise they return is never
-// awaited. So a failure must be routed to `fail` here, or it vanishes (spec 015 FR-5: no silent failure).
+// awaited. So a failure must be routed to `fail` here, or it vanishes (spec 015 FR-9: no silent failure).
 describe("grantActions: a failed button says so instead of failing silently", () => {
   const grant = previewResult("grant-revoked")?.structuredContent;
   const boom = new Error("boom");

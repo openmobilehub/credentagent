@@ -1,4 +1,4 @@
-// The built card page must reach the chat apps intact (spec 015 FR-3). The AP2 demo learned this the
+// The built card page must reach the chat apps intact (spec 015 FR-5). The AP2 demo learned this the
 // hard way: it inlined the MCP Apps client with a replacement STRING, where "$&", "$`" and "$$" are
 // patterns, and ChatGPT showed a bare "Runtime error". This test fails if a build step mangles the
 // page's script, if the page loads anything from elsewhere, or if the MCP Apps client goes missing.

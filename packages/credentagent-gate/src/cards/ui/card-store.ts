@@ -1,4 +1,4 @@
-// What the card page shows, kept OUTSIDE the DOM (spec 015 FR-5). ChatGPT re-delivers the tool
+// What the card page shows, kept OUTSIDE the DOM (spec 015 FR-9). ChatGPT re-delivers the tool
 // output on every `openai:set_globals` event, and a host may re-announce a result; re-rendering on
 // each one made the AP2 demo's card flicker and restart its work. The store keeps the card on
 // screen and replaces it only when the result's data actually changed.

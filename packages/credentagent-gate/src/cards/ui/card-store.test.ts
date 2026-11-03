@@ -1,4 +1,4 @@
-// The redraw guard (spec 015 FR-5). ChatGPT re-delivers the tool output on every
+// The redraw guard (spec 015 FR-9). ChatGPT re-delivers the tool output on every
 // `openai:set_globals`; the AP2 demo's card re-rendered on each one, flickered back to "Waiting",
 // and restarted its work. These tests go red if the store stops comparing the data it shows.
 import { describe, it, expect, vi } from "vitest";
