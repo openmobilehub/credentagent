@@ -110,6 +110,22 @@ describe("display-only projection (A1) — a view can never touch the live grant
   });
 });
 
+describe("Approve / Decline carry only a safe link (spec 015 FR-11)", () => {
+  it("a safe link is on both buttons", () => {
+    expect(count(render(<GrantCard grant={pending} />), `href="${pending.approveUrl}"`)).toBe(2);
+  });
+
+  it.each(["javascript:alert(1)", "http://example.test/approve", "/credentagent/grants/g1"])(
+    "an unsafe link (%s) is never in the markup, so no new tab or drag can open it",
+    (approveUrl) => {
+      const html = render(<GrantCard grant={{ ...pending, approveUrl }} />);
+      expect(html).not.toContain(approveUrl);
+      expect(html).not.toContain(">Approve<");
+      expect(html).toContain("safe web address, so this card doesn");
+    },
+  );
+});
+
 describe("selection by specificity (A3) — highest score wins, not array order", () => {
   it("a pending grant selects the approvalCard over the active cards", () => {
     const html = render(<GrantCard grant={pending} />);

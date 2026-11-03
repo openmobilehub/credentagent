@@ -1049,8 +1049,8 @@ ageDcql()  ·  ENVELOPE_VERSION  ·  ENVELOPE_SENTINEL
 // Entry points besides the root
 "@openmobilehub/credentagent-gate/agent"   // the AGENT's side; holds its private key, so never imported by a store
   AgentKey.generate() · AgentKey.fromJwk(jwk) · DelegatedIntent.fromWalletPresentation({ presentation, disclosures }) · intent.spend(args) → DelegatedPurchaseProof
-"@openmobilehub/credentagent-gate/cards"   // the card kit, first slice: the permission card's data contract
-  GRANT_VIEW_KIND · GrantViewData · GrantViewProduct
+"@openmobilehub/credentagent-gate/cards"   // the card kit, first slice: the grant card's data contract
+  GRANT_VIEW_KIND · REVOKE_TOOL_META · GrantViewData · GrantViewProduct
 ```
 
 More on the API: [`docs/reference/api.md`](https://github.com/openmobilehub/credentagent/blob/main/docs/reference/api.md).

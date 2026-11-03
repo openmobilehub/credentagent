@@ -513,7 +513,8 @@ trustLevel }`, calls `permissions.track()`, and returns the card with the QR of 
   `text/html;profile=mcp-app` / `text/html+skybridge`; CSP `data:` images, no network origins; kinds
   `credentagent.grant`, `credentagent.permission`, `credentagent.offers`, `credentagent.receipt`,
   `credentagent.notice`; the card's status tool `credentagent-permission-status`; the model's wait tool
-  `wait-for-approval`; the QR's `_meta` key `credentagent/qr`.
+  `wait-for-approval`; the QR's `_meta` key `credentagent/qr`; the grant's Revoke-tool `_meta` key
+  `credentagent/revokeTool` (`REVOKE_TOOL_META`).
 - Every pull request opens with a video of the change working (a storyboard for a spec), a short story
   about one person, and the few lines a developer writes. Every step that adds or changes a card shows
   each state in light and dark, and real-host captures when the step claims host behaviour.

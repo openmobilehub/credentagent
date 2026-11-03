@@ -2,8 +2,7 @@
 // browser tab with `?view=<name>` (add `&theme=dark` for dark); with no view it lists them all. Each
 // sample is shaped exactly like a tool result, so the preview runs the same code path as a chat.
 
-import { GRANT_VIEW_KIND, type GrantViewData } from "../grant-view";
-import { REVOKE_TOOL_META } from "./card-store";
+import { GRANT_VIEW_KIND, REVOKE_TOOL_META, type GrantViewData } from "../grant-view";
 
 const grant = (over: Partial<GrantViewData>): GrantViewData => ({
   kind: GRANT_VIEW_KIND,

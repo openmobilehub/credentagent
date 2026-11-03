@@ -4,7 +4,8 @@
 import { Component, useState, type ReactNode } from "react";
 import { GrantCard, GRANT_VIEW_KIND, type GrantActions, type GrantViewData } from "./grants";
 import type { Bridge } from "./bridge";
-import { readCard, REVOKE_TOOL_META, type CardStore, type ShownCard } from "./card-store";
+import { REVOKE_TOOL_META } from "../grant-view";
+import { readCard, type CardStore, type ShownCard } from "./card-store";
 import { isSafeLink } from "./links";
 
 export interface CardViewProps {

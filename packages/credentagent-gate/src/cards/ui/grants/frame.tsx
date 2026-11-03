@@ -12,6 +12,7 @@ import type { MouseEvent, ReactNode } from "react";
 import type { GrantSlots, GrantViewData, DefineGrantViewInput, GrantView } from "./types";
 import { useGrantActions } from "./actions";
 import { STATUS_PILL, fullTrustSentence, isTerminal } from "./shared";
+import { isSafeLink } from "../links";
 import styles from "./grants.module.css";
 
 /** The ONLY door for adding a view (FR-3). Returns a {@link GrantView}; the frame is applied by
@@ -47,11 +48,17 @@ export function TrustLine({ grant }: { grant: GrantViewData }) {
  *  A body receives only the inert `{ grant, tokens, slots }`; the actions (a ceremony deep-link, a
  *  revoke tool call — never a `spend`, never a live grant handle) live here, keyed on the
  *  server-derived lifecycle. `active`/`low` get the agency line + a quiet Revoke; `pending` gets
- *  equal-weight Approve/Decline that both open the approval page (consent happens there, FR-5);
- *  terminal states get nothing (closed objects, no live affordances, design §4.6). */
+ *  equal-weight Approve/Decline that both open the approval page (consent happens there, FR-5),
+ *  drawn only for a safe link (spec 015 FR-11); terminal states get nothing (closed objects, no live
+ *  affordances, design §4.6). */
 function ActionFooter({ grant }: { grant: GrantViewData }) {
   const actions = useGrantActions();
   if (grant.lifecycle === "pending") {
+    // An unsafe link is never put in the markup: a middle-click or "Open in new tab" uses the href
+    // and skips the click handler, so a check made only on click would not cover it.
+    if (!isSafeLink(grant.approveUrl)) {
+      return <div className={styles.deeplink}>The merchant&apos;s link isn&apos;t a safe web address, so this card doesn&apos;t show it.</div>;
+    }
     // Both buttons open the CredentAgent approval page — consent happens there, never in the widget.
     // Equal weight, Approve first by reading order (anti-dark-pattern, design §4.4).
     const open = (e: MouseEvent) => {
