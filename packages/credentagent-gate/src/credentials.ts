@@ -19,7 +19,15 @@ export function gate(): Effect {
   return { kind: "gate" };
 }
 export function discount(opts: { percent?: number; amount?: number }): Effect {
+  if (opts.percent !== undefined) checkPercent(`discount({ percent: ${opts.percent} })`, opts.percent);
   return { kind: "discount", ...opts };
+}
+// Fail fast when the policy is built: the payment checks hold an order's discount to this
+// percent, so 150 would complete an order at a negative price and -10 would overcharge.
+function checkPercent(call: string, percent: number): void {
+  if (!(Number.isFinite(percent) && percent >= 0 && percent <= 100)) {
+    throw new RangeError(`${call}: percent must be between 0 and 100`);
+  }
 }
 export function authorize(): Effect {
   return { kind: "authorize" };
@@ -149,6 +157,7 @@ export const age = {
 /** Loyalty / membership — optional; presenting it applies a discount. */
 export const membership = {
   discount(percent: number): Credential {
+    checkPercent(`membership.discount(${percent})`, percent);
     return makeCredential({
       id: "membership",
       // Real, interoperable loyalty doctype a wallet actually holds (Multipaz),

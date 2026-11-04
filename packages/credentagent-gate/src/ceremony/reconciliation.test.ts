@@ -19,6 +19,7 @@ const round2 = (n: number) => Math.round(n * 100) / 100;
 const PRODUCTS: Record<string, { price: number; minimumAge?: number }> = {
   widget: { price: 10 },
   gizmo: { price: 25 },
+  tea: { price: 4.9 },
 };
 
 const catalog: CeremonyCatalog = {
@@ -81,6 +82,18 @@ describe("reconcileCartPayment — the cross-mandate agreement (unit)", () => {
     // total and the bound payment amount — the discount reconciles, it doesn't unbind.
     const v = reconcileCartPayment(cart("ORD-1", { total: 18 }), { amount: 18, currency: "USD", orderId: "ORD-1" }, 18);
     expect(v.ok).toBe(true);
+  });
+
+  // #360 — compared in whole cents: a host that sums float dollars seals 3 × 4.90 as
+  // 14.700000000000001; a payment for 14.7 is the same 1470 cents. One cent off, or a real
+  // fraction of a cent, is still refused.
+  it("#360: a float-summed sealed total (3 × 4.90) agrees with a 14.70 payment; 14.71 and 14.705 are refused", () => {
+    const tea: CartMandateLine = { id: "tea", quantity: 3, unitPrice: 4.9, lineTotal: 4.9 * 3 };
+    const sealed = cart("ORD-1", { lines: [tea], total: 4.9 * 3 });
+    const pay = (amount: number) => reconcileCartPayment(sealed, { amount, currency: "USD", orderId: "ORD-1" }, 14.7);
+    expect(pay(14.7).ok).toBe(true);
+    expect(pay(14.71)).toMatchObject({ ok: false, reason: "amount" });
+    expect(pay(14.705)).toMatchObject({ ok: false, reason: "amount" });
   });
 });
 
@@ -170,5 +183,14 @@ describe("reconcileCartPayment — enforced on completeOrder (cross-mandate bypa
     const res = await completeOrder({ order, mandateId: "m", amount: order.total, currency: order.currency, method: "test", gates: [{ gate: "g", pass: true, detail: "" }], cartMandate: undiscountedCart }, h.ctx);
     expect(res).toMatchObject({ completed: false, reason: "reconcile" });
     expect(h.records.size).toBe(0);
+  });
+
+  it("#360: a cart sealed at a float-summed 14.700000000000001 completes against a 14.70 payment, and records 14.7", async () => {
+    const h = harness();
+    const order = catalog.createOrder([{ productId: "tea", quantity: 3 }], "ORD-R"); // re-derives 14.7
+    const sealed = mandateFor("ORD-R", [{ productId: "tea", quantity: 3 }], { total: 4.9 * 3 });
+    const res = await completeOrder({ order, mandateId: "m", amount: 4.9 * 3, currency: "USD", method: "test", gates: [{ gate: "g", pass: true, detail: "" }], cartMandate: sealed }, h.ctx);
+    expect(res.completed).toBe(true);
+    expect(h.records.get("ORD-R")?.amount).toBe(14.7); // the whole-cents amount, not the caller's float
   });
 });
