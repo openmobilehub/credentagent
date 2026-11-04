@@ -11,11 +11,15 @@ import { GrantCard, GrantList, grantViews, defineGrantView, BudgetMeter } from "
 import type { GrantViewContext, GrantViewData } from "./index";
 import styles from "./grants.module.css";
 import { UNSAFE_LINKS } from "../__fixtures__/links";
+import { UNRECOGNISED_TRUST } from "../trust";
 
 const render = (el: ReactElement): string => renderToStaticMarkup(el);
 const count = (haystack: string, needle: string): number => haystack.split(needle).length - 1;
 
-const FULL_TRUST = "limits enforced server-side · consent is dev-sealed, not wallet-signed";
+// The kit's fixed sentence for `server-issued-demo` (spec 015 FR-10), the level every fixture below carries.
+const FULL_TRUST = "🔒 As the store reports it: a demo, approved with a click on a page — nothing was signed on a phone. No real money moves.";
+const DEVICE_SIGNED =
+  "🔒 As the store reports it: signed on the person&#x27;s phone. This card did not check that signature, and the credential is not checked against its issuer yet.";
 
 const base: GrantViewData = {
   kind: "credentagent.grant",
@@ -43,8 +47,8 @@ const revoked = g({ status: "revoked", lifecycle: "revoked", remaining: 62 });
 const exhausted = g({ lifecycle: "exhausted", remaining: 0, spent: 200 });
 
 describe("honesty frame — the non-omittable trust line (FR-4, bypass-tested)", () => {
-  // Every stock view rendered via its selecting grant must carry the FULL trust sentence AND both
-  // literal presence/trustLevel tokens. This fails if the frame stops rendering the trust line.
+  // Every stock view rendered via its selecting grant must carry the kit's trust sentence for its level.
+  // This fails if the frame stops rendering the trust line.
   const cases: Array<[string, GrantViewData, Parameters<typeof GrantCard>[0]["views"]?]> = [
     ["productGrantCard", product],
     ["categoryGrantCard", category],
@@ -55,11 +59,8 @@ describe("honesty frame — the non-omittable trust line (FR-4, bypass-tested)",
     ["budgetMeter (explicit)", open, [grantViews.budgetMeter]],
   ];
   for (const [label, grant, views] of cases) {
-    it(`${label} renders the trust line + presence/trustLevel tokens`, () => {
-      const html = render(<GrantCard grant={grant} views={views} />);
-      expect(html).toContain(FULL_TRUST);
-      expect(html).toContain("delegated-demo");
-      expect(html).toContain("server-issued-demo");
+    it(`${label} renders the trust line`, () => {
+      expect(render(<GrantCard grant={grant} views={views} />)).toContain(FULL_TRUST);
     });
   }
 
@@ -79,21 +80,51 @@ describe("honesty frame — the non-omittable trust line (FR-4, bypass-tested)",
     const html = render(<GrantCard grant={wineGrant} views={[wineClub, ...grantViews.all]} accent="#7c3aed" />);
     expect(html).toContain("Utopia Wine Club"); // the custom body rendered
     expect(html).toContain(FULL_TRUST); // …still inside the immovable frame
-    expect(html).toContain("delegated-demo");
   });
 
-  it("dense layout (A7): full sentence de-duplicates to the container; each row keeps the literal token", () => {
+  it("dense layout (A7): each distinct sentence appears once, in the container footer", () => {
     const grants = [
       g({ id: "a", merchant: "Utopia", remaining: 146 }),
       g({ id: "b", merchant: "Utopia", remaining: 16, lifecycle: "low" }),
-      g({ id: "c", merchant: "Utopia", remaining: 0, lifecycle: "exhausted" }),
+      g({ id: "c", merchant: "Utopia", remaining: 0, lifecycle: "exhausted", trustLevel: "device-signed" }),
     ];
     const html = render(<GrantList grants={grants} />);
-    // The full trust SENTENCE appears exactly once (the container footer) — repetition would
-    // train the eye to skip it.
+    // Repetition would train the eye to skip it; a row at another level still gets its own.
     expect(count(html, FULL_TRUST)).toBe(1);
-    // …but the literal presence token stays on every row (3 rows) + the footer sentence = 4.
-    expect(count(html, "delegated-demo")).toBeGreaterThanOrEqual(4);
+    expect(count(html, DEVICE_SIGNED)).toBe(1);
+    expect(count(html, "🔒")).toBe(5); // a lock on each of the 3 rows + the 2 sentences
+  });
+});
+
+describe("the trust line is the kit's sentence, never the store's words (spec 015 FR-10)", () => {
+  // Bypass guard: printing `presence` or `trustLevel` again, or trusting a level the kit doesn't
+  // list, fails here. The store's claim is data the card can't check.
+  it("a phone-signed grant gets the attributed sentence, not the old 'not wallet-signed'", () => {
+    const html = render(<GrantCard grant={g({ trustLevel: "device-signed" })} />);
+    expect(html).toContain(DEVICE_SIGNED);
+    expect(html).not.toContain("wallet-signed");
+  });
+
+  it("a payment credential with no issuer anchor gets the demo sentence", () => {
+    expect(render(<GrantCard grant={g({ trustLevel: "presence-only-demo" })} />)).toContain(
+      "🔒 As the store reports it: a demo — the signatures are real, but the payment credential is not checked against its issuer yet. No real money moves.",
+    );
+  });
+
+  // `issuer-verified` from a store's word is not recognised: the gate never claims it (#14).
+  it.each(["issuer-verified", "bank-approved", "", "constructor", "__proto__", "toString"])(
+    "an unknown level (%j) is 'not recognised', and the store's text never shows",
+    (trustLevel) => {
+      const html = render(<GrantCard grant={g({ trustLevel, presence: "verified-by-the-store" })} />);
+      expect(html).toContain(`🔒 ${UNRECOGNISED_TRUST}`);
+      expect(html).not.toContain("verified-by-the-store");
+      if (trustLevel) expect(html).not.toContain(trustLevel);
+    },
+  );
+
+  it("a missing level is 'not recognised' too, and nothing throws", () => {
+    const grant = { ...base, trustLevel: undefined } as unknown as GrantViewData;
+    expect(render(<GrantCard grant={grant} />)).toContain(`🔒 ${UNRECOGNISED_TRUST}`);
   });
 });
 

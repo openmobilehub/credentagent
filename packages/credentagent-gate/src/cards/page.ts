@@ -1,4 +1,4 @@
-// The built card page (spec 015 FR-2): read once, hashed, and FAIL FAST when missing — never a
+// The built card page (spec 015 FR-6): read once, hashed, and FAIL FAST when missing — never a
 // "dev" fallback URI, which would poison connected hosts' caches (the storefront's #55 lesson).
 
 import { readFileSync } from "node:fs";

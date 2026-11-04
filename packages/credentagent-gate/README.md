@@ -490,27 +490,43 @@ storefront or an agent — with no widget code of its own:
 
 ```js
 import { McpServer } from "@modelcontextprotocol/server";
+import { z } from "zod";
 import { createCards } from "@openmobilehub/credentagent-gate/cards";
 
-// Once per process — fails at startup if the package was built without its page. `tools.revoke` is the
-// tool a grant card's Revoke button calls; leave it out and the card draws no Revoke.
+// Once per process — fails at startup if the package was built without its page. `tools.revoke` names
+// the tool a grant card's Revoke button calls; leave it out and the card draws no Revoke.
 const cards = createCards({ tools: { revoke: "revoke-grant" } });
+const inputSchema = z.object({ grantId: z.string() });
 
 function buildServer() {
   const server = new McpServer({ name: "my-server", version: "1.0.0" });
   cards.register(server); // the page for Claude (MCP Apps) and ChatGPT (skybridge), with its CSP
+
+  // The default: only the model calls this tool. Its result shows as the grant card.
   server.registerTool("get-grant", { inputSchema, _meta: cards.toolMeta() }, async ({ grantId }) =>
-    cards.grant(await viewOf(grantId)), // takes a GrantViewData: the grant card's plain data (kind: GRANT_VIEW_KIND), money already computed on the server
+    cards.grant(await viewOf(grantId)),
   );
+  // The card's Revoke button calls this one, so it opts in. Never opt in a tool that spends.
+  server.registerTool("revoke-grant", { inputSchema, _meta: cards.toolMeta({ callableFromCard: true }) }, async ({ grantId }) => {
+    await revokeMyGrant(grantId);
+    return cards.grant(await viewOf(grantId));
+  });
   return server;
 }
+
+// viewOf(grantId) and revokeMyGrant(grantId) are yours. viewOf returns a GrantViewData: the grant's
+// plain data (kind: GRANT_VIEW_KIND), with the money already computed on your server.
 
 app.get("/cards", (_req, res) => res.type("html").send(cards.html)); // your Express app · preview: /cards?view=grant-product
 ```
 
 `createStorefront()` builds this data from a live grant for its own grant tools; another server passes its own `GrantViewData` (the type and `GRANT_VIEW_KIND` are exported from `@openmobilehub/credentagent-gate/cards`).
 
-The grant card's **Revoke** button calls the tool you name in `tools.revoke`, with `{ grantId }`. Register that tool with `_meta: cards.toolMeta()` (ChatGPT needs it to let the card call the tool) and return `cards.grant(view)`. `cards.grant()` names the tool in the result's `_meta` under `REVOKE_TOOL_META` (`"credentagent/revokeTool"`); without `tools.revoke` the card draws no Revoke button, because the page never guesses a tool name. If the call fails, the card says "This card couldn't complete that action".
+**Which tools a card can call.** `cards.toolMeta()` lets only the model call a tool, so a script in the card can never reach one that spends. `toolMeta({ callableFromCard: true })` opts a tool in for a card's own button, such as Revoke. The grant card's **Revoke** button calls the tool you name in `tools.revoke`, with `{ grantId }`: `cards.grant()` names it in the result's `_meta` under `REVOKE_TOOL_META` (`"credentagent/revokeTool"`). Without `tools.revoke` the card draws no Revoke button, because the page never guesses a tool name. If the call fails, the card says "This card couldn't complete that action".
+
+**What a grant card says about trust.** Its honesty line is one of the kit's fixed sentences, picked by `trustLevel` (`server-issued-demo`, `device-signed` or `presence-only-demo`) and worded as the store's claim, since the card can't check it. Any other level, `issuer-verified` included, shows "Trust level not recognised by this card; treat it as unverified." The store's own `presence` text never appears. A pending grant's Approve and Decline buttons show only for an `https:` link (or `http:` on localhost, 127.0.0.1 or [::1]); for any other link the card says it isn't a safe web address, and `cards.grant()` tells the model not to pass it on.
+
+`/cards` runs on Node: importing it reads the built page with `node:fs`, so don't bundle it for a browser.
 
 A card only shows; it never decides — every limit must be enforced on your server. Today the page renders
 grants; `/cards` with no `view` lists them all (`?view=grant-pending`, `grant-product`, `grant-category`,
@@ -1052,11 +1068,6 @@ MemoryVerificationStore  ·  completeOrder(input, ctx)
 defineHost({ catalog, orderStore, records | completion, signingKey | allowEphemeralKey })
   → { verificationStore, publish(app), complete(input) → { completed, reason? } }
 
-// Cards (spec 015) — one card page any MCP server serves to Claude and ChatGPT (see the Cards section)
-// from "@openmobilehub/credentagent-gate/cards"
-createCards({ tools?: { revoke? } }) → { html, register(server), toolMeta(status?), grant(view, { note? }) → CardResult }
-GRANT_VIEW_KIND  ·  REVOKE_TOOL_META  ·  GrantViewData / CardResult (types)
-
 // Delegated draws (HNP, 005 preview) — the Stripe-grade facade + the underlying seams
 DelegatedGate  ·  gate.preApprove(bounds) → DelegatedGrant  ·  grant.spend(purchase) → SpendResult  ·  grant.revoke()
 sealIntent  ·  checkDraw  ·  signDraw  ·  MemoryRevocationStore  ·  Draw / IntentBounds / CommittedDraw / Refusal
@@ -1091,7 +1102,8 @@ ageDcql()  ·  ENVELOPE_VERSION  ·  ENVELOPE_SENTINEL
 "@openmobilehub/credentagent-gate/agent"   // the AGENT's side; holds its private key, so never imported by a store
   AgentKey.generate() · AgentKey.fromJwk(jwk) · DelegatedIntent.fromWalletPresentation({ presentation, disclosures }) · intent.spend(args) → DelegatedPurchaseProof
 "@openmobilehub/credentagent-gate/cards"   // the card kit: one card page any MCP server serves (see Cards)
-  createCards({ tools? }) · GRANT_VIEW_KIND · REVOKE_TOOL_META · GrantViewData · GrantViewProduct · CardsOptions · CardResult · CardsServer · CardToolMeta
+  createCards({ tools?: { revoke? } }) → { html, register(server), toolMeta({ invoking?, invoked?, callableFromCard? }), grant(view, { note? }) → CardResult }
+  GRANT_VIEW_KIND · REVOKE_TOOL_META · GrantViewData · GrantViewProduct · CardsOptions · CardResult · CardsServer · CardToolMeta · CardToolMetaOptions
 ```
 
 More on the API: [`docs/reference/api.md`](https://github.com/openmobilehub/credentagent/blob/main/docs/reference/api.md).

@@ -1,4 +1,4 @@
-// Tool results that render as a card (spec 015 FR-4): the card's data as `structuredContent`, marked
+// Tool results that render as a card (spec 015 FR-8): the card's data as `structuredContent`, marked
 // with a `kind`; one text block for the model — a note on what to do next, then the same data as
 // JSON; and card-only extras in `_meta`, which reach the card without costing the model context.
 
@@ -13,6 +13,7 @@ export function cardResult(data: { kind: string }, note: string, extras?: Record
   return {
     content: [{ type: "text", text: `${note}\n\n${JSON.stringify(data, null, 2)}` }],
     structuredContent: { ...data },
-    ...(extras ? { _meta: extras } : {}),
+    // A copy per result: one result's `_meta`, changed by its caller, never reaches the next.
+    ...(extras ? { _meta: { ...extras } } : {}),
   };
 }

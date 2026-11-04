@@ -1,5 +1,5 @@
-// The card page reaches both chat apps (spec 015 FR-2, FR-3), proven against the REAL MCP SDK: the
-// kit registers through a structural port, so this test is what shows McpServer fits it.
+// The card page reaches both chat apps (spec 015 FR-7), proven against the REAL MCP SDK: the kit
+// registers through a structural port, so this test is what shows McpServer fits it.
 import { describe, it, expect } from "vitest";
 import { McpServer } from "@modelcontextprotocol/server";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
@@ -32,22 +32,25 @@ describe("the card page's two resources", () => {
     );
   });
 
-  it("serve the page exactly as built, with a CSP that allows data: images and no network", async () => {
+  it("serve the page exactly as built, with no network origins and no bare scheme in the MCP Apps CSP (#372)", async () => {
+    // Bypass guard: a bare `data:` back in either `_meta.ui.csp`, the skybridge copy losing its
+    // `_meta.ui.csp`, or ChatGPT's own CSP losing `data:` (a blank QR there) each fails this test.
+    const BARE = /^(\*|[a-z][a-z0-9+.-]*:)$/i;
     const client = await connect((server) => registerCardResources(server, html, uris));
     const [claude] = (await client.readResource({ uri: uris.resourceUri })).contents;
     const [chatgpt] = (await client.readResource({ uri: uris.skybridgeUri })).contents;
-    expect(claude).toMatchObject({
-      uri: uris.resourceUri,
-      mimeType: "text/html;profile=mcp-app",
-      text: html,
-      _meta: { ui: { csp: { resourceDomains: ["data:"], connectDomains: [] } } },
-    });
-    expect(chatgpt).toMatchObject({
+    const uiCsp = { ui: { csp: { resourceDomains: [], connectDomains: [] } } };
+    expect(claude).toEqual({ uri: uris.resourceUri, mimeType: "text/html;profile=mcp-app", text: html, _meta: uiCsp });
+    expect(chatgpt).toEqual({
       uri: uris.skybridgeUri,
       mimeType: "text/html+skybridge",
       text: html,
-      _meta: { "openai/widgetCSP": { connect_domains: [], resource_domains: ["data:"] } },
+      _meta: { ...uiCsp, "openai/widgetCSP": { connect_domains: [], resource_domains: ["data:"] } },
     });
+    for (const { _meta } of [claude, chatgpt]) {
+      const csp = (_meta as typeof uiCsp).ui.csp;
+      for (const entry of [...csp.resourceDomains, ...csp.connectDomains]) expect(entry).not.toMatch(BARE);
+    }
   });
 
   it("Claude's MIME type is the one the MCP Apps SDK defines", () => {
@@ -56,7 +59,7 @@ describe("the card page's two resources", () => {
 });
 
 describe("cardToolMeta", () => {
-  it("links a tool's result to the page on both hosts, with every key a card's buttons need in ChatGPT", async () => {
+  it("links a tool's result to the page on both hosts, and by default only the model calls the tool", async () => {
     const client = await connect((server) => {
       registerCardResources(server, html, uris);
       server.registerTool(
@@ -67,15 +70,33 @@ describe("cardToolMeta", () => {
     });
     const [tool] = (await client.listTools()).tools;
     expect(tool._meta).toEqual({
-      ui: { resourceUri: uris.resourceUri },
+      ui: { resourceUri: uris.resourceUri, visibility: ["model"] },
       "ui/resourceUri": uris.resourceUri,
       "openai/outputTemplate": uris.skybridgeUri,
-      "openai/widgetAccessible": true,
-      "openai/toolInvocation": { invoking: "Reading the stores…", invoked: "Done" },
+      "openai/widgetAccessible": false,
+      "openai/toolInvocation/invoking": "Reading the stores…",
+      "openai/toolInvocation/invoked": "Done",
     });
   });
 
-  it("defaults the status lines", () => {
-    expect(cardToolMeta(uris)["openai/toolInvocation"]).toEqual({ invoking: "Working…", invoked: "Done" });
+  it("the card's script can't call a tool unless it opts in (spec 015 FR-7)", () => {
+    // Bypass guard: a default that lets the card call the tool — on either host — fails here. MCP
+    // Apps' own default is ["model", "app"], so a missing visibility counts as callable too.
+    for (const meta of [cardToolMeta(uris), cardToolMeta(uris, { callableFromCard: false }), cardToolMeta(uris, { invoking: "x" })]) {
+      expect(meta.ui.visibility).toEqual(["model"]);
+      expect(meta["openai/widgetAccessible"]).toBe(false);
+    }
+  });
+
+  it("callableFromCard: true lets the card's button call it, on both hosts", () => {
+    const meta = cardToolMeta(uris, { callableFromCard: true });
+    expect(meta.ui.visibility).toEqual(["model", "app"]);
+    expect(meta["openai/widgetAccessible"]).toBe(true);
+  });
+
+  it("defaults the status lines, under the flat keys ChatGPT reads", () => {
+    const meta = cardToolMeta(uris);
+    expect(meta["openai/toolInvocation/invoking"]).toBe("Working…");
+    expect(meta["openai/toolInvocation/invoked"]).toBe("Done");
   });
 });

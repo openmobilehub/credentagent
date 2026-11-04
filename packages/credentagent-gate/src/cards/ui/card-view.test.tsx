@@ -17,7 +17,7 @@ describe("CardView", () => {
   it("renders a grant result as the gallery's card", () => {
     const html = render(previewResult("grant-product"));
     expect(html).toContain("Oak Reserve Whiskey");
-    expect(html).toContain("limits enforced server-side");
+    expect(html).toContain("🔒 As the store reports it:");
   });
 
   it("shows nothing for a kind it does not know", () => {
@@ -28,8 +28,7 @@ describe("CardView", () => {
     expect(previewViews().length).toBe(8);
     for (const view of previewViews()) {
       const html = render(previewResult(view));
-      expect(html, view).toContain("limits enforced server-side");
-      expect(html, view).toContain("delegated-demo");
+      expect(html, view).toContain("🔒 As the store reports it: a demo, approved with a click on a page");
     }
   });
 

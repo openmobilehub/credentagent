@@ -323,12 +323,15 @@ These throw only for the developer's own mistakes (a missing page, `permissions`
 **FR-7 — One page, two resources.** The same HTML is registered as the MCP Apps resource
 (`ui://credentagent-cards/cards-<hash>.html`, `text/html;profile=mcp-app`) for Claude and the Apps SDK
 resource (`ui://credentagent-cards/cards-<hash>.skybridge.html`, `text/html+skybridge`) for ChatGPT.
-The URI carries the content hash, so a host never serves a stale copy. Both declare a CSP that allows
-`data:` images (the QR) and no network origins. The page is served exactly as built — no serve-time
-string substitution.
+The URI carries the content hash, so a host never serves a stale copy. Both carry the MCP Apps
+`_meta.ui.csp` with no network origins and no bare `data:` — the MCP Apps default view CSP already
+allows `data:` images (the QR), and scanners refuse a bare scheme there (#372); the skybridge copy adds
+ChatGPT's own `openai/widgetCSP`, which allows `data:`. The page is served exactly as built — no
+serve-time string substitution.
 
 `toolMeta()` builds every key both hosts need in one place (`ui.resourceUri`, `ui/resourceUri`,
-`ui.visibility`, `openai/outputTemplate`, `openai/widgetAccessible`, `openai/toolInvocation`), and
+`ui.visibility`, `openai/outputTemplate`, `openai/widgetAccessible`, and the two flat status keys
+`openai/toolInvocation/invoking` and `openai/toolInvocation/invoked`), and
 **by default the card cannot call the tool**: `ui.visibility: ["model"]` (MCP Apps' default is
 `["model", "app"]`) and `openai/widgetAccessible: false` (in ChatGPT, `true` lets script in the card
 call the tool with `window.openai.callTool`, with no model turn).
@@ -337,8 +340,9 @@ call the tool with `window.openai.callTool`, with no model turn).
   — for a tool a card's own button calls, such as a cart stepper or Revoke; never for one that spends.
 - The kit's own tools: the card's status tool is `["app"]` with `widgetAccessible: true`; the model's
   wait tool is `["model"]` with `widgetAccessible: false`.
-- This is the one helper: the storefront's `appToolMeta` (`tool-meta.ts`) is replaced by it, and the
-  storefront marks its cart tools `callableFromCard: true`.
+- This is the one helper: when the storefront moves onto the kit (#293), its `appToolMeta`
+  (`tool-meta.ts`) is replaced by it, and the storefront marks its cart tools `callableFromCard: true`.
+  Until then the storefront serves its own page, which `toolMeta()` does not link to.
 
 **FR-8 — Results, and what is written by whom.** Every builder returns a `CallToolResult`:
 `structuredContent` is the card's data, marked with a `kind` (`credentagent.grant` — unchanged —,
@@ -538,7 +542,7 @@ spec first. The steps already open, and what each takes from this spec:
 | 1 | #258 — the gallery moves into the gate | (as is) |
 | 2 | #294 — this spec | — |
 | 3 | #259 — the card page | FR-9 |
-| 4 | #272 — `createCards()` serves it | FR-6, FR-7 (`toolMeta()` model-only by default; the storefront switches to it); FR-10 and FR-11 for `grant()` (the list's sentence, the link check) |
+| 4 | #272 — `createCards()` serves it | FR-6, FR-7 (`toolMeta()` model-only by default; the storefront switches to it with #293, when it moves onto the kit); FR-10 and FR-11 for `grant()` (the list's sentence, the link check) |
 | 5 | #273 — becomes `createPermissions()` in `/agent` | FR-1 to FR-3: `trackingId`, async memory with compare-and-set, final statuses, expiry, the shared read, the wait and its limits |
 | 6 | #274 — `cards.permission()` and the wait tool | FR-11, FR-12 (status tool), FR-13 |
 | 7 | #275 — the permission card | FR-10 (honesty line, label), `perSpend` / `budget`, currency formatting |
