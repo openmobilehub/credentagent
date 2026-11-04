@@ -18,6 +18,11 @@ import type { GrantLifecycle, GrantStatus } from "../grants.js";
  *  dispatch renders the grant view instead of the product picker. */
 export const GRANT_VIEW_KIND = "credentagent.grant";
 
+/** The `_meta` key a grant result names its server's Revoke tool under. Without it the card draws no
+ *  Revoke: the page never guesses a tool name. A server that builds a grant result by hand imports this
+ *  rather than typing the string, since a misspelled key makes the button disappear with no error. */
+export const REVOKE_TOOL_META = "credentagent/revokeTool";
+
 /** The resolved product for a single-SKU grant (FR-1) — pulled from the live catalog so the
  *  flagship card shows the real name / price / image, not just an id. */
 export interface GrantViewProduct {
