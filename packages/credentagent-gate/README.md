@@ -492,7 +492,9 @@ storefront or an agent — with no widget code of its own:
 import { McpServer } from "@modelcontextprotocol/server";
 import { createCards } from "@openmobilehub/credentagent-gate/cards";
 
-const cards = createCards(); // once per process — fails at startup if the package was built without its page
+// Once per process — fails at startup if the package was built without its page. `tools.revoke` is the
+// tool a grant card's Revoke button calls; leave it out and the card draws no Revoke.
+const cards = createCards({ tools: { revoke: "revoke-grant" } });
 
 function buildServer() {
   const server = new McpServer({ name: "my-server", version: "1.0.0" });
@@ -508,7 +510,7 @@ app.get("/cards", (_req, res) => res.type("html").send(cards.html)); // your Exp
 
 `createStorefront()` builds this data from a live grant for its own grant tools; another server passes its own `GrantViewData` (the type and `GRANT_VIEW_KIND` are exported from `@openmobilehub/credentagent-gate/cards`).
 
-The grant card's **Revoke** button calls your server's `revoke-grant` tool with `{ grantId }` — register it with `_meta: cards.toolMeta()` (ChatGPT needs that to let the card call it) and return `cards.grant(view)`; without that tool, Revoke shows "This card couldn't complete that action".
+The grant card's **Revoke** button calls the tool you name in `tools.revoke`, with `{ grantId }`. Register that tool with `_meta: cards.toolMeta()` (ChatGPT needs it to let the card call the tool) and return `cards.grant(view)`. `cards.grant()` names the tool in the result's `_meta` under `REVOKE_TOOL_META` (`"credentagent/revokeTool"`); without `tools.revoke` the card draws no Revoke button, because the page never guesses a tool name. If the call fails, the card says "This card couldn't complete that action".
 
 A card only shows; it never decides — every limit must be enforced on your server. Today the page renders
 grants; `/cards` with no `view` lists them all (`?view=grant-pending`, `grant-product`, `grant-category`,
@@ -1052,8 +1054,8 @@ defineHost({ catalog, orderStore, records | completion, signingKey | allowEpheme
 
 // Cards (spec 015) — one card page any MCP server serves to Claude and ChatGPT (see the Cards section)
 // from "@openmobilehub/credentagent-gate/cards"
-createCards() → { html, register(server), toolMeta(status?), grant(view, { note? }) → CardResult }
-GRANT_VIEW_KIND  ·  GrantViewData / CardResult (types)
+createCards({ tools?: { revoke? } }) → { html, register(server), toolMeta(status?), grant(view, { note? }) → CardResult }
+GRANT_VIEW_KIND  ·  REVOKE_TOOL_META  ·  GrantViewData / CardResult (types)
 
 // Delegated draws (HNP, 005 preview) — the Stripe-grade facade + the underlying seams
 DelegatedGate  ·  gate.preApprove(bounds) → DelegatedGrant  ·  grant.spend(purchase) → SpendResult  ·  grant.revoke()
@@ -1088,8 +1090,8 @@ ageDcql()  ·  ENVELOPE_VERSION  ·  ENVELOPE_SENTINEL
 // Entry points besides the root
 "@openmobilehub/credentagent-gate/agent"   // the AGENT's side; holds its private key, so never imported by a store
   AgentKey.generate() · AgentKey.fromJwk(jwk) · DelegatedIntent.fromWalletPresentation({ presentation, disclosures }) · intent.spend(args) → DelegatedPurchaseProof
-"@openmobilehub/credentagent-gate/cards"   // the card kit, first slice: the grant card's data contract
-  GRANT_VIEW_KIND · REVOKE_TOOL_META · GrantViewData · GrantViewProduct
+"@openmobilehub/credentagent-gate/cards"   // the card kit: one card page any MCP server serves (see Cards)
+  createCards({ tools? }) · GRANT_VIEW_KIND · REVOKE_TOOL_META · GrantViewData · GrantViewProduct · CardsOptions · CardResult · CardsServer · CardToolMeta
 ```
 
 More on the API: [`docs/reference/api.md`](https://github.com/openmobilehub/credentagent/blob/main/docs/reference/api.md).

@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { describe, it, expect } from "vitest";
 import { McpServer } from "@modelcontextprotocol/server";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
-import { createCards, GRANT_VIEW_KIND, type GrantViewData } from "./index.js";
+import { createCards, GRANT_VIEW_KIND, REVOKE_TOOL_META, type GrantViewData } from "./index.js";
 
 const grant: GrantViewData = {
   kind: GRANT_VIEW_KIND,
@@ -81,5 +81,21 @@ describe("cards.grant", () => {
     const [block] = createCards().grant(grant, { note: "AUTHORIZED — you can spend now." }).content;
     expect(block.text.startsWith("AUTHORIZED — you can spend now.\n\n")).toBe(true);
     expect(block.text).not.toContain("this grant in a card");
+  });
+});
+
+describe("cards.grant names the Revoke tool (spec 015 FR-6)", () => {
+  it("with tools.revoke, the result names that tool in _meta, so the card draws Revoke and calls it", async () => {
+    const cards = createCards({ tools: { revoke: "my-revoke" } });
+    const client = await connect((server) => {
+      cards.register(server);
+      server.registerTool("get-grant", { description: "the grant", _meta: cards.toolMeta() }, async () => cards.grant(grant));
+    });
+    const result = await client.callTool({ name: "get-grant", arguments: {} });
+    expect(result._meta?.[REVOKE_TOOL_META]).toBe("my-revoke");
+  });
+
+  it("without it, the result names no tool, so the card draws no Revoke rather than guess one", () => {
+    expect(createCards().grant(grant)._meta?.[REVOKE_TOOL_META]).toBeUndefined();
   });
 });
