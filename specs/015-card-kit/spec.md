@@ -396,10 +396,12 @@ check it today — so every sentence says so:
   agent holds (GLOSSARY.md, Revoke).
   - `false` (the server spends the grant): the closed card's "No further purchases will be made." and
     the approval card's "or you revoke it".
-  - `true` (an agent-held key): "If you signed it, the agent keeps its signed copy: revoking doesn't
-    recall it." and "Once you sign, revoking won't recall it from the agent." The first is conditional
-    because a grant revoked before it was signed left nothing in the agent's hands.
-  - Anything else: "Further purchases are refused, unless the agent holds its own signed copy of this
+  - `true` (an agent-held key, set from how the grant was created, signed or not yet): "If it was
+    approved before being revoked, the agent keeps its signed copy: revoking doesn't recall it." and
+    "Once you sign, revoking won't recall it from the agent." The first is conditional because a grant
+    revoked before it was approved left nothing in the agent's hands, even when the person was signing
+    at that moment.
+  - Anything else: "Spending is refused from now on, unless the agent holds its own signed copy of this
     permission: revoking doesn't recall that.", and the approval card says nothing about revoking.
 - A store's own text is never shown as a trust level — not in the honesty line, not in a status
   label. `issuer-verified` from a store's word is "not recognised": the gate never claims it itself,

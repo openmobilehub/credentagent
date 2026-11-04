@@ -153,8 +153,8 @@ function untilRevoked(grant: GrantViewData): string {
 
 function revokedSub(grant: GrantViewData): string {
   if (grant.agentHeld === false) return "No further purchases will be made.";
-  if (grant.agentHeld === true) return "If you signed it, the agent keeps its signed copy: revoking doesn't recall it.";
-  return "Further purchases are refused, unless the agent holds its own signed copy of this permission: revoking doesn't recall that.";
+  if (grant.agentHeld === true) return "If it was approved before being revoked, the agent keeps its signed copy: revoking doesn't recall it.";
+  return "Spending is refused from now on, unless the agent holds its own signed copy of this permission: revoking doesn't recall that.";
 }
 
 function terminalCopy(grant: GrantViewData): { line: string; sub: string } {

@@ -40,8 +40,11 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
   `createCards({ tools: { revoke } })`. A tool with no visibility of its own can be called by a card
   in Claude, so give every tool that spends `_meta: { ui: { visibility: ["model"] } }` and leave
   `openai/widgetAccessible` unset or `false`. The storefront's own tools don't follow this yet,
-  `spend-from-grant` included: they move onto `cards.toolMeta()` in a later step (#293). The `/cards` entry point
-  now runs on Node: it reads the built page with `node:fs` (#435).
+  `spend-from-grant` included: they move onto `cards.toolMeta()` in a later step (#293). The `/cards`
+  entry point now runs on Node: it reads the built page with `node:fs` (#435).
+- `GrantViewData.agentHeld` from `@openmobilehub/credentagent-gate/cards`: `true` for a grant created
+  with `agentKey`, signed or not yet, so a card never says revoking stops what it can't. Set it with
+  `agentHeld: grant.agentKey !== undefined`; `createStorefront()` does (#435).
 
 ### Changed
 
@@ -58,12 +61,15 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
   server-side · consent is dev-sealed, not wallet-signed", which was false for a grant signed on a
   phone. A grant waiting for approval, or declined, reads "As the merchant reports it: not approved, so
   this grant can't spend anything.", and a revoked one with nothing spent "As the merchant reports it:
-  revoked." A grant card now says what revoking stops only as far as the grant data's new
-  `agentHeld` field tells it, since revoking doesn't recall a permission the agent holds itself:
-  `false` keeps "No further purchases will be made.", `true` says "If you signed it, the agent
-  keeps its signed copy: revoking doesn't recall it." and drops the approval card's "or you revoke it", and a missing
-  field says neither for sure. The storefront fills `agentHeld` from the grant. A level the card doesn't know shows "Trust level not recognised by
-  this card; treat it as unverified." (#435).
+  revoked." A level the card doesn't know shows "Trust level not recognised by this card; treat it as
+  unverified." (#435).
+- A spending-grant card says what revoking stops only as far as the new `agentHeld` field tells it,
+  since revoking doesn't recall a permission the agent holds itself. With `false`, the closed card
+  keeps "No further purchases will be made." and the approval card keeps "or you revoke it". With
+  `true`, the closed card says "If it was approved before being revoked, the agent keeps its signed
+  copy: revoking doesn't recall it." and the approval card "Once you sign, revoking won't recall it
+  from the agent." Without it, neither card says what revoking stops for sure. The storefront fills it
+  in (#435).
 
 ### Fixed
 

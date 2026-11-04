@@ -24,7 +24,7 @@ const DEVICE_SIGNED =
 // nothing spent.
 const NOT_APPROVED = `🔒 ${NOT_APPROVED_TRUST.replace("can't", "can&#x27;t")}`;
 const REVOKED = `🔒 ${REVOKED_TRUST}`;
-const NOT_RECALLED = "If you signed it, the agent keeps its signed copy: revoking doesn&#x27;t recall it.";
+const NOT_RECALLED = "If it was approved before being revoked, the agent keeps its signed copy: revoking doesn&#x27;t recall it.";
 
 const base: GrantViewData = {
   kind: "credentagent.grant",
@@ -148,8 +148,8 @@ describe("the trust line is the kit's sentence, never the merchant's words (spec
     expect(render(<GrantCard grant={revoked} />)).toContain(FULL_TRUST); // spent: 54
   });
 
-  it("a revoked grant with no spent figure counts as nothing spent", () => {
-    const grant = { ...revoked, spent: undefined } as unknown as GrantViewData;
+  it.each([undefined, -5])("a revoked grant with spent %j counts as nothing spent", (spent) => {
+    const grant = { ...revoked, spent } as unknown as GrantViewData;
     expect(render(<GrantCard grant={grant} />)).toContain(REVOKED);
   });
 
@@ -265,14 +265,15 @@ describe("<BudgetMeter/> — severity (FIXED colors) + accessible value text (FR
 describe("what revoking stops, said only as far as agentHeld tells (GLOSSARY.md, Revoke)", () => {
   const revokedAs = (agentHeld: unknown) => ({ ...revoked, spent: 0, remaining: 200, agentHeld }) as unknown as GrantViewData;
   const pendingAs = (agentHeld: unknown) => ({ ...pending, agentHeld }) as unknown as GrantViewData;
-  const HEDGED = "Further purchases are refused, unless the agent holds its own signed copy of this permission: revoking doesn&#x27;t recall that.";
+  const HEDGED = "Spending is refused from now on, unless the agent holds its own signed copy of this permission: revoking doesn&#x27;t recall that.";
 
-  it("a grant the server spends: revoking stops every purchase, and the approval card says so", () => {
+  it("a grant the server spends: revoking refuses every later spend, and the approval card says so", () => {
     expect(render(<GrantCard grant={revokedAs(false)} />)).toContain("No further purchases will be made.");
     expect(render(<GrantCard grant={pendingAs(false)} />)).toContain("until the budget runs out — or you revoke it.");
   });
 
-  // Conditional, because a grant revoked before it was signed left nothing in the agent's hands.
+  // Conditional, because a grant revoked before it was approved left nothing in the agent's hands, even
+  // when the person was signing at that moment: the gate refuses the signature (grants.ts _authorizeDevice).
   it("a grant whose permission the agent holds: no card says revoking stops it", () => {
     const html = render(<GrantCard grant={revokedAs(true)} />);
     expect(html).toContain(NOT_RECALLED);
