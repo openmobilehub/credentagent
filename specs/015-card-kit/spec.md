@@ -342,7 +342,8 @@ call the tool with `window.openai.callTool`, with no model turn).
   wait tool is `["model"]` with `widgetAccessible: false`.
 - This is the one helper: when the storefront moves onto the kit (#293), its `appToolMeta`
   (`tool-meta.ts`) is replaced by it, and the storefront marks its cart tools `callableFromCard: true`.
-  Until then the storefront serves its own page, which `toolMeta()` does not link to.
+  Until then the storefront serves its own page, which `toolMeta()` does not link to, and every
+  storefront tool stays card-callable, `spend-from-grant` included.
 
 **FR-8 — Results, and what is written by whom.** Every builder returns a `CallToolResult`:
 `structuredContent` is the card's data, marked with a `kind` (`credentagent.grant` — unchanged —,
@@ -381,12 +382,14 @@ check it today — so every sentence says so:
 | `device-signed` | a grant the person signed with their phone's wallet | "As the merchant reports it: signed on the person's phone. This card did not check that signature, and the credential is not checked against its issuer yet." |
 | `server-issued-demo` | a grant approved with a click on a page | "As the merchant reports it: a demo, approved with a click on a page — nothing was signed on a phone. No real money moves." |
 | any level, on a grant that is `pending` or `denied` | a grant nobody approved | "As the merchant reports it: not approved, so this grant can't spend anything." |
+| any level, on a grant that is `revoked` | a grant withdrawn, approved or not before it was | "As the merchant reports it: revoked, so this grant can't spend anything." |
 | anything else, or missing | — | "Trust level not recognised by this card; treat it as unverified." |
 
 - The sentences call the store "the merchant", the glossary's word for the seller.
-- A grant waiting for approval, or declined, gets the "not approved" sentence whatever its level: a
-  grant waiting for the phone reports `server-issued-demo` until it is signed, so a line picked by
-  level alone would say "approved with a click" above the button that opens the phone.
+- A grant that can't spend (waiting for approval, declined or revoked) gets its sentence whatever its
+  level, and none says how it was approved: a grant waiting for the phone reports `server-issued-demo`
+  until it is signed, and `revoke()` works on a grant nobody approved, so a line picked by level alone
+  would tell a person who never approved that they approved with a click.
 - A store's own text is never shown as a trust level — not in the honesty line, not in a status
   label. `issuer-verified` from a store's word is "not recognised": the gate never claims it itself,
   and the kit has no verified channel for it yet (issuer-verified trust is #14).

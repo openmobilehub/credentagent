@@ -1,10 +1,11 @@
 // Pure, non-JSX shared bits for the grant gallery: the token role set, money formatting, the
 // status-pill table, and the trust line. The trust line is one of the kit's fixed sentences, picked
-// by `trustLevel` (spec 015 FR-10) — never the merchant's own words, which a card can't check.
+// by `lifecycle` and `trustLevel` (spec 015 FR-10) — never the merchant's own words, which a card
+// can't check.
 
 import type { GrantLifecycle } from "../../../grants.js";
 import type { GrantTokens, GrantViewData } from "./types";
-import { NOT_APPROVED_TRUST, trustSentence } from "../trust";
+import { NOT_APPROVED_TRUST, REVOKED_TRUST, trustSentence } from "../trust";
 
 /** The token role set as CSS custom-property references (resolved in grants.module.css). Only
  *  `accent` is host-brandable; `status.*` are the FIXED never-themed status colors. */
@@ -39,10 +40,14 @@ export const STATUS_PILL: Record<GrantLifecycle, { tone: "accent" | "warn" | "mu
 };
 
 /** The trust line (the frame footer + the dense-list footer): the kit's sentence for the grant's level,
- *  or, for a grant nobody approved (pending or declined), the one that says it can't spend. */
+ *  or, for a grant that can't spend (pending, declined or revoked), the one that says so. */
 export function fullTrustSentence(grant: Pick<GrantViewData, "trustLevel" | "lifecycle">): string {
-  const approved = grant.lifecycle !== "pending" && grant.lifecycle !== "denied";
-  return `🔒 ${approved ? trustSentence(grant.trustLevel) : NOT_APPROVED_TRUST}`;
+  const { lifecycle } = grant;
+  const line =
+    lifecycle === "pending" || lifecycle === "denied" ? NOT_APPROVED_TRUST
+    : lifecycle === "revoked" ? REVOKED_TRUST
+    : trustSentence(grant.trustLevel);
+  return `🔒 ${line}`;
 }
 
 /** The terminal lifecycles — closed objects with no live affordances (design §4.6). */

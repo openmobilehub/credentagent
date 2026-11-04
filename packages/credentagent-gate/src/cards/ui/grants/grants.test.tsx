@@ -11,7 +11,7 @@ import { GrantCard, GrantList, grantViews, defineGrantView, BudgetMeter } from "
 import type { GrantViewContext, GrantViewData } from "./index";
 import styles from "./grants.module.css";
 import { UNSAFE_LINKS } from "../__fixtures__/links";
-import { NOT_APPROVED_TRUST, UNRECOGNISED_TRUST } from "../trust";
+import { NOT_APPROVED_TRUST, REVOKED_TRUST, UNRECOGNISED_TRUST } from "../trust";
 
 const render = (el: ReactElement): string => renderToStaticMarkup(el);
 const count = (haystack: string, needle: string): number => haystack.split(needle).length - 1;
@@ -20,8 +20,9 @@ const count = (haystack: string, needle: string): number => haystack.split(needl
 const FULL_TRUST = "🔒 As the merchant reports it: a demo, approved with a click on a page — nothing was signed on a phone. No real money moves.";
 const DEVICE_SIGNED =
   "🔒 As the merchant reports it: signed on the person&#x27;s phone. This card did not check that signature, and the credential is not checked against its issuer yet.";
-// A pending or declined grant's line, whatever its level.
+// The lines of a grant that can't spend, whatever its level: pending or declined, and revoked.
 const NOT_APPROVED = `🔒 ${NOT_APPROVED_TRUST.replace("can't", "can&#x27;t")}`;
+const REVOKED = `🔒 ${REVOKED_TRUST.replace("can't", "can&#x27;t")}`;
 
 const base: GrantViewData = {
   kind: "credentagent.grant",
@@ -57,7 +58,7 @@ describe("honesty frame — the non-omittable trust line (FR-4, bypass-tested)",
     ["categoryGrantCard", category, FULL_TRUST],
     ["openGrantCard", open, FULL_TRUST],
     ["approvalCard", pending, NOT_APPROVED],
-    ["terminalCard(revoked)", revoked, FULL_TRUST],
+    ["terminalCard(revoked)", revoked, REVOKED],
     ["terminalCard(exhausted)", exhausted, FULL_TRUST],
     ["terminalCard(declined)", declined, NOT_APPROVED],
     ["budgetMeter (explicit)", open, FULL_TRUST, [grantViews.budgetMeter]],
@@ -117,14 +118,16 @@ describe("the trust line is the kit's sentence, never the merchant's words (spec
   });
 
   // A grant waiting for the phone reports `server-issued-demo` until it is signed (grants.ts view()),
-  // so a line picked by level alone would say "approved with a click" above the button that opens
-  // the phone. Pending and declined say neither, whatever the level.
+  // and `revoke()` works on a pending or declined grant too, so a line picked by level alone would
+  // tell a person who never approved that they approved with a click. A grant that can't spend says
+  // neither, whatever the level.
+  const revokedWhilePending = g({ status: "revoked", lifecycle: "revoked", spent: 0, remaining: 200 });
   it.each(["server-issued-demo", "device-signed", "presence-only-demo"])(
-    "a pending or declined grant at %s doesn't say how it was approved",
+    "a pending, declined or revoked grant at %s doesn't say how it was approved",
     (trustLevel) => {
-      for (const grant of [pending, declined]) {
+      for (const [grant, line] of [[pending, NOT_APPROVED], [declined, NOT_APPROVED], [revokedWhilePending, REVOKED]] as const) {
         const html = render(<GrantCard grant={{ ...grant, trustLevel }} />);
-        expect(html).toContain(NOT_APPROVED);
+        expect(html).toContain(line);
         expect(html).not.toContain("approved with a click");
         expect(html).not.toContain("signed on the person");
         expect(html).not.toContain("a demo");

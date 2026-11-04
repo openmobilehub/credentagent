@@ -13,9 +13,13 @@ const SENTENCES: Readonly<Record<string, string>> = {
 
 export const UNRECOGNISED_TRUST = "Trust level not recognised by this card; treat it as unverified.";
 
-/** For a grant still waiting for approval, or declined: it says nothing about how it was, or will be,
- *  approved, since a pending grant's level is not the one it gets once the person approves. */
+// A grant that can't spend says so, and nothing about how it was approved: a grant waiting for the
+// phone reports `server-issued-demo` until it is signed, and a revoked one may never have been approved.
+
+/** For a grant still waiting for approval, or declined. */
 export const NOT_APPROVED_TRUST = "As the merchant reports it: not approved, so this grant can't spend anything.";
+/** For a revoked grant, approved or not before it was revoked. */
+export const REVOKED_TRUST = "As the merchant reports it: revoked, so this grant can't spend anything.";
 
 /** The sentence for a level. Own keys only, so a level such as `constructor` is unrecognised too. */
 export function trustSentence(level: unknown): string {

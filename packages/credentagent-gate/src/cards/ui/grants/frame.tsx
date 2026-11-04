@@ -33,9 +33,9 @@ export function StatusPill({ lifecycle }: { lifecycle: GrantViewData["lifecycle"
   );
 }
 
-/** The immovable trust line (FR-4): the kit's fixed sentence for the grant's `trustLevel` (spec 015
- *  FR-10). The store's own `presence` and `trustLevel` text appear nowhere on the card, not even in an
- *  attribute. */
+/** The immovable trust line (FR-4): the kit's fixed sentence for the grant's `lifecycle` and
+ *  `trustLevel` (spec 015 FR-10). The merchant's own `presence` and `trustLevel` text appear nowhere on
+ *  the card, not even in an attribute. */
 export function TrustLine({ grant }: { grant: GrantViewData }) {
   return (
     <div className={styles.trust}>

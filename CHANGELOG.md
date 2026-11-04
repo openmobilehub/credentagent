@@ -38,7 +38,9 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
   linked with `cards.toolMeta()` is called only by the model; `toolMeta({ callableFromCard: true })`
   lets a card's button call one, such as the Revoke tool you name in
   `createCards({ tools: { revoke } })`. A tool with no visibility of its own can be called by a card
-  in Claude, so give every tool that spends `_meta: { ui: { visibility: ["model"] } }`. The `/cards` entry point
+  in Claude, so give every tool that spends `_meta: { ui: { visibility: ["model"] } }` and leave
+  `openai/widgetAccessible` unset or `false`. The storefront's own tools don't follow this yet,
+  `spend-from-grant` included: they move onto `cards.toolMeta()` in a later step (#293). The `/cards` entry point
   now runs on Node: it reads the built page with `node:fs` (#435).
 
 ### Changed
@@ -55,7 +57,8 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
   nothing was signed on a phone. No real money moves." instead of "delegated-demo · limits enforced
   server-side · consent is dev-sealed, not wallet-signed", which was false for a grant signed on a
   phone. A grant waiting for approval, or declined, reads "As the merchant reports it: not approved, so
-  this grant can't spend anything." A level the card doesn't know shows "Trust level not recognised by
+  this grant can't spend anything.", and a revoked one "As the merchant reports it: revoked, so this
+  grant can't spend anything." A level the card doesn't know shows "Trust level not recognised by
   this card; treat it as unverified." (#435).
 
 ### Fixed
