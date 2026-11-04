@@ -34,9 +34,11 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
   imports this rather than typing the string (#434).
 - `createCards()` from `@openmobilehub/credentagent-gate/cards`: any MCP server can now show the card
   kit's grant cards in Claude and ChatGPT. `cards.register(server)` serves the card page,
-  `cards.toolMeta()` links a tool to it, and `cards.grant(view)` returns a grant as a card. By default
-  only the model calls a tool; `toolMeta({ callableFromCard: true })` lets a card's button call one,
-  such as the Revoke tool you name in `createCards({ tools: { revoke } })`. The `/cards` entry point
+  `cards.toolMeta()` links a tool to it, and `cards.grant(view)` returns a grant as a card. A tool
+  linked with `cards.toolMeta()` is called only by the model; `toolMeta({ callableFromCard: true })`
+  lets a card's button call one, such as the Revoke tool you name in
+  `createCards({ tools: { revoke } })`. A tool with no visibility of its own can be called by a card
+  in Claude, so give every tool that spends `_meta: { ui: { visibility: ["model"] } }`. The `/cards` entry point
   now runs on Node: it reads the built page with `node:fs` (#435).
 
 ### Changed
@@ -48,12 +50,13 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
   address, a `.local` name, a `*.localhost` subdomain) no longer gets the buttons: serve it over
   `https:` or use `localhost` (#434).
 - A spending-grant card's honesty line, in the storefront widget too, is now one of the card kit's
-  fixed sentences, chosen by the grant's `trustLevel` and worded as the store's claim. A
-  click-approved grant now reads "As the store reports it: a demo, approved with a click on a page —
+  fixed sentences, chosen by the grant's `trustLevel` and worded as the merchant's claim. A
+  click-approved grant now reads "As the merchant reports it: a demo, approved with a click on a page —
   nothing was signed on a phone. No real money moves." instead of "delegated-demo · limits enforced
   server-side · consent is dev-sealed, not wallet-signed", which was false for a grant signed on a
-  phone. A level the card doesn't know shows "Trust level not recognised by this card; treat it as
-  unverified." (#435).
+  phone. A grant waiting for approval, or declined, reads "As the merchant reports it: not approved, so
+  this grant can't spend anything." A level the card doesn't know shows "Trust level not recognised by
+  this card; treat it as unverified." (#435).
 
 ### Fixed
 

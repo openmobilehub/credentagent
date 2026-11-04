@@ -377,11 +377,16 @@ check it today — so every sentence says so:
 
 | Level | Produced by | The honesty line says |
 | --- | --- | --- |
-| `presence-only-demo` | a payment credential with no issuer trust anchor yet | "As the store reports it: a demo — the signatures are real, but the payment credential is not checked against its issuer yet. No real money moves." |
-| `device-signed` | a grant the person signed with their phone's wallet | "As the store reports it: signed on the person's phone. This card did not check that signature, and the credential is not checked against its issuer yet." |
-| `server-issued-demo` | a grant approved with a click on a page | "As the store reports it: a demo, approved with a click on a page — nothing was signed on a phone. No real money moves." |
+| `presence-only-demo` | a payment credential with no issuer trust anchor yet | "As the merchant reports it: a demo — the credential is not checked against its issuer, so a made-up one would pass. No real money moves." |
+| `device-signed` | a grant the person signed with their phone's wallet | "As the merchant reports it: signed on the person's phone. This card did not check that signature, and the credential is not checked against its issuer yet." |
+| `server-issued-demo` | a grant approved with a click on a page | "As the merchant reports it: a demo, approved with a click on a page — nothing was signed on a phone. No real money moves." |
+| any level, on a grant that is `pending` or `denied` | a grant nobody approved | "As the merchant reports it: not approved, so this grant can't spend anything." |
 | anything else, or missing | — | "Trust level not recognised by this card; treat it as unverified." |
 
+- The sentences call the store "the merchant", the glossary's word for the seller.
+- A grant waiting for approval, or declined, gets the "not approved" sentence whatever its level: a
+  grant waiting for the phone reports `server-issued-demo` until it is signed, so a line picked by
+  level alone would say "approved with a click" above the button that opens the phone.
 - A store's own text is never shown as a trust level — not in the honesty line, not in a status
   label. `issuer-verified` from a store's word is "not recognised": the gate never claims it itself,
   and the kit has no verified channel for it yet (issuer-verified trust is #14).

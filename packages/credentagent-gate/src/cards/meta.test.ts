@@ -82,7 +82,9 @@ describe("cardToolMeta", () => {
   it("the card's script can't call a tool unless it opts in (spec 015 FR-7)", () => {
     // Bypass guard: a default that lets the card call the tool — on either host — fails here. MCP
     // Apps' own default is ["model", "app"], so a missing visibility counts as callable too.
-    for (const meta of [cardToolMeta(uris), cardToolMeta(uris, { callableFromCard: false }), cardToolMeta(uris, { invoking: "x" })]) {
+    // Only `true` opts in: a truthy value from untyped JS ("false", 1) keeps the tool model-only.
+    const truthy = ["false", 1].map((v) => cardToolMeta(uris, { callableFromCard: v as unknown as boolean }));
+    for (const meta of [cardToolMeta(uris), cardToolMeta(uris, { callableFromCard: false }), cardToolMeta(uris, { invoking: "x" }), ...truthy]) {
       expect(meta.ui.visibility).toEqual(["model"]);
       expect(meta["openai/widgetAccessible"]).toBe(false);
     }

@@ -11,15 +11,17 @@ import { GrantCard, GrantList, grantViews, defineGrantView, BudgetMeter } from "
 import type { GrantViewContext, GrantViewData } from "./index";
 import styles from "./grants.module.css";
 import { UNSAFE_LINKS } from "../__fixtures__/links";
-import { UNRECOGNISED_TRUST } from "../trust";
+import { NOT_APPROVED_TRUST, UNRECOGNISED_TRUST } from "../trust";
 
 const render = (el: ReactElement): string => renderToStaticMarkup(el);
 const count = (haystack: string, needle: string): number => haystack.split(needle).length - 1;
 
 // The kit's fixed sentence for `server-issued-demo` (spec 015 FR-10), the level every fixture below carries.
-const FULL_TRUST = "🔒 As the store reports it: a demo, approved with a click on a page — nothing was signed on a phone. No real money moves.";
+const FULL_TRUST = "🔒 As the merchant reports it: a demo, approved with a click on a page — nothing was signed on a phone. No real money moves.";
 const DEVICE_SIGNED =
-  "🔒 As the store reports it: signed on the person&#x27;s phone. This card did not check that signature, and the credential is not checked against its issuer yet.";
+  "🔒 As the merchant reports it: signed on the person&#x27;s phone. This card did not check that signature, and the credential is not checked against its issuer yet.";
+// A pending or declined grant's line, whatever its level.
+const NOT_APPROVED = `🔒 ${NOT_APPROVED_TRUST.replace("can't", "can&#x27;t")}`;
 
 const base: GrantViewData = {
   kind: "credentagent.grant",
@@ -43,24 +45,26 @@ const product = g({ allow: { skus: ["oak-whiskey"], categories: [] }, product: {
 const category = g({ allow: { skus: ["drift-mouse"], categories: ["Beverages", "Electronics"] } });
 const open = g({ allow: { skus: [], categories: [] } });
 const pending = g({ status: "pending", lifecycle: "pending" });
+const declined = g({ status: "denied", lifecycle: "denied" });
 const revoked = g({ status: "revoked", lifecycle: "revoked", remaining: 62 });
 const exhausted = g({ lifecycle: "exhausted", remaining: 0, spent: 200 });
 
 describe("honesty frame — the non-omittable trust line (FR-4, bypass-tested)", () => {
   // Every stock view rendered via its selecting grant must carry the kit's trust sentence for its level.
   // This fails if the frame stops rendering the trust line.
-  const cases: Array<[string, GrantViewData, Parameters<typeof GrantCard>[0]["views"]?]> = [
-    ["productGrantCard", product],
-    ["categoryGrantCard", category],
-    ["openGrantCard", open],
-    ["approvalCard", pending],
-    ["terminalCard(revoked)", revoked],
-    ["terminalCard(exhausted)", exhausted],
-    ["budgetMeter (explicit)", open, [grantViews.budgetMeter]],
+  const cases: Array<[string, GrantViewData, string, Parameters<typeof GrantCard>[0]["views"]?]> = [
+    ["productGrantCard", product, FULL_TRUST],
+    ["categoryGrantCard", category, FULL_TRUST],
+    ["openGrantCard", open, FULL_TRUST],
+    ["approvalCard", pending, NOT_APPROVED],
+    ["terminalCard(revoked)", revoked, FULL_TRUST],
+    ["terminalCard(exhausted)", exhausted, FULL_TRUST],
+    ["terminalCard(declined)", declined, NOT_APPROVED],
+    ["budgetMeter (explicit)", open, FULL_TRUST, [grantViews.budgetMeter]],
   ];
-  for (const [label, grant, views] of cases) {
+  for (const [label, grant, sentence, views] of cases) {
     it(`${label} renders the trust line`, () => {
-      expect(render(<GrantCard grant={grant} views={views} />)).toContain(FULL_TRUST);
+      expect(render(<GrantCard grant={grant} views={views} />)).toContain(sentence);
     });
   }
 
@@ -93,12 +97,13 @@ describe("honesty frame — the non-omittable trust line (FR-4, bypass-tested)",
     expect(count(html, FULL_TRUST)).toBe(1);
     expect(count(html, DEVICE_SIGNED)).toBe(1);
     expect(count(html, "🔒")).toBe(5); // a lock on each of the 3 rows + the 2 sentences
+    expect(html).not.toContain("delegated-demo"); // the merchant's own words never reach a row
   });
 });
 
-describe("the trust line is the kit's sentence, never the store's words (spec 015 FR-10)", () => {
+describe("the trust line is the kit's sentence, never the merchant's words (spec 015 FR-10)", () => {
   // Bypass guard: printing `presence` or `trustLevel` again, or trusting a level the kit doesn't
-  // list, fails here. The store's claim is data the card can't check.
+  // list, fails here. The merchant's claim is data the card can't check.
   it("a phone-signed grant gets the attributed sentence, not the old 'not wallet-signed'", () => {
     const html = render(<GrantCard grant={g({ trustLevel: "device-signed" })} />);
     expect(html).toContain(DEVICE_SIGNED);
@@ -107,8 +112,30 @@ describe("the trust line is the kit's sentence, never the store's words (spec 01
 
   it("a payment credential with no issuer anchor gets the demo sentence", () => {
     expect(render(<GrantCard grant={g({ trustLevel: "presence-only-demo" })} />)).toContain(
-      "🔒 As the store reports it: a demo — the signatures are real, but the payment credential is not checked against its issuer yet. No real money moves.",
+      "🔒 As the merchant reports it: a demo — the credential is not checked against its issuer, so a made-up one would pass. No real money moves.",
     );
+  });
+
+  // A grant waiting for the phone reports `server-issued-demo` until it is signed (grants.ts view()),
+  // so a line picked by level alone would say "approved with a click" above the button that opens
+  // the phone. Pending and declined say neither, whatever the level.
+  it.each(["server-issued-demo", "device-signed", "presence-only-demo"])(
+    "a pending or declined grant at %s doesn't say how it was approved",
+    (trustLevel) => {
+      for (const grant of [pending, declined]) {
+        const html = render(<GrantCard grant={{ ...grant, trustLevel }} />);
+        expect(html).toContain(NOT_APPROVED);
+        expect(html).not.toContain("approved with a click");
+        expect(html).not.toContain("signed on the person");
+        expect(html).not.toContain("a demo");
+      }
+    },
+  );
+
+  it("a dense list of pending grants doesn't say how they were approved either", () => {
+    const html = render(<GrantList grants={[pending, g({ ...pending, id: "p2", trustLevel: "device-signed" })]} />);
+    expect(count(html, NOT_APPROVED)).toBe(1);
+    expect(html).not.toContain("approved with a click");
   });
 
   // `issuer-verified` from a store's word is not recognised: the gate never claims it (#14).

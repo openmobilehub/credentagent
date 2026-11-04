@@ -54,7 +54,8 @@ export interface GrantViewData {
   description?: string;
   /** Where the human approves once — the ceremony deep-link the approvalCard links to. */
   approveUrl: string;
-  /** Honesty axis — carried verbatim into the non-omittable trust line (FR-4). */
+  /** The merchant's own honesty label. A card never shows it: its trust line is the kit's fixed
+   *  sentence for `trustLevel` (spec 015 FR-10). */
   presence: string;
   trustLevel: string;
   /** Present for single-SKU grants: the resolved product (the flagship productGrantCard). */
