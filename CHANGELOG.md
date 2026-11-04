@@ -57,8 +57,12 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
   nothing was signed on a phone. No real money moves." instead of "delegated-demo · limits enforced
   server-side · consent is dev-sealed, not wallet-signed", which was false for a grant signed on a
   phone. A grant waiting for approval, or declined, reads "As the merchant reports it: not approved, so
-  this grant can't spend anything.", and a revoked one "As the merchant reports it: revoked, so this
-  grant can't spend anything." A level the card doesn't know shows "Trust level not recognised by
+  this grant can't spend anything.", and a revoked one with nothing spent "As the merchant reports it:
+  revoked." A grant card now says what revoking stops only as far as the grant data's new
+  `agentHeld` field tells it, since revoking doesn't recall a permission the agent holds itself:
+  `false` keeps "No further purchases will be made.", `true` says "If you signed it, the agent
+  keeps its signed copy: revoking doesn't recall it." and drops the approval card's "or you revoke it", and a missing
+  field says neither for sure. The storefront fills `agentHeld` from the grant. A level the card doesn't know shows "Trust level not recognised by
   this card; treat it as unverified." (#435).
 
 ### Fixed

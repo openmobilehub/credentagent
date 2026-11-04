@@ -382,14 +382,25 @@ check it today — so every sentence says so:
 | `device-signed` | a grant the person signed with their phone's wallet | "As the merchant reports it: signed on the person's phone. This card did not check that signature, and the credential is not checked against its issuer yet." |
 | `server-issued-demo` | a grant approved with a click on a page | "As the merchant reports it: a demo, approved with a click on a page — nothing was signed on a phone. No real money moves." |
 | any level, on a grant that is `pending` or `denied` | a grant nobody approved | "As the merchant reports it: not approved, so this grant can't spend anything." |
-| any level, on a grant that is `revoked` | a grant withdrawn, approved or not before it was | "As the merchant reports it: revoked, so this grant can't spend anything." |
+| any level, on a `revoked` grant with nothing spent | a grant withdrawn, approved or not before it was | "As the merchant reports it: revoked." |
 | anything else, or missing | — | "Trust level not recognised by this card; treat it as unverified." |
 
 - The sentences call the store "the merchant", the glossary's word for the seller.
-- A grant that can't spend (waiting for approval, declined or revoked) gets its sentence whatever its
-  level, and none says how it was approved: a grant waiting for the phone reports `server-issued-demo`
-  until it is signed, and `revoke()` works on a grant nobody approved, so a line picked by level alone
-  would tell a person who never approved that they approved with a click.
+- A grant waiting for approval, declined, or revoked with nothing spent gets its row's sentence
+  whatever its level, and none says how it was approved: a grant waiting for the phone reports
+  `server-issued-demo` until it is signed, and `revoke()` works on a grant nobody approved, so a line
+  picked by level alone would tell a person who never approved that they approved with a click. A
+  revoked grant that spent was approved (only an approved grant spends), so it keeps its level's line.
+- What revoking stops is never in the honesty line, and the rest of the card says it only as far as
+  `GrantViewData.agentHeld` tells it: `revoke()` doesn't recall a grant whose signed permission the
+  agent holds (GLOSSARY.md, Revoke).
+  - `false` (the server spends the grant): the closed card's "No further purchases will be made." and
+    the approval card's "or you revoke it".
+  - `true` (an agent-held key): "If you signed it, the agent keeps its signed copy: revoking doesn't
+    recall it." and "Once you sign, revoking won't recall it from the agent." The first is conditional
+    because a grant revoked before it was signed left nothing in the agent's hands.
+  - Anything else: "Further purchases are refused, unless the agent holds its own signed copy of this
+    permission: revoking doesn't recall that.", and the approval card says nothing about revoking.
 - A store's own text is never shown as a trust level — not in the honesty line, not in a status
   label. `issuer-verified` from a store's word is "not recognised": the gate never claims it itself,
   and the kit has no verified channel for it yet (issuer-verified trust is #14).

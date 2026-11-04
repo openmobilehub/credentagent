@@ -40,12 +40,13 @@ export const STATUS_PILL: Record<GrantLifecycle, { tone: "accent" | "warn" | "mu
 };
 
 /** The trust line (the frame footer + the dense-list footer): the kit's sentence for the grant's level,
- *  or, for a grant that can't spend (pending, declined or revoked), the one that says so. */
-export function fullTrustSentence(grant: Pick<GrantViewData, "trustLevel" | "lifecycle">): string {
+ *  except for a grant nobody approved (pending or declined) and a revoked one with nothing spent, which
+ *  may never have been approved. A revoked grant that spent was approved, so it keeps its level's line. */
+export function fullTrustSentence(grant: Pick<GrantViewData, "trustLevel" | "lifecycle" | "spent">): string {
   const { lifecycle } = grant;
   const line =
     lifecycle === "pending" || lifecycle === "denied" ? NOT_APPROVED_TRUST
-    : lifecycle === "revoked" ? REVOKED_TRUST
+    : lifecycle === "revoked" && !(grant.spent > 0) ? REVOKED_TRUST
     : trustSentence(grant.trustLevel);
   return `🔒 ${line}`;
 }

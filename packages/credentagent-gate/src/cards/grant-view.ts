@@ -58,6 +58,10 @@ export interface GrantViewData {
    *  sentence for `lifecycle` and `trustLevel` (spec 015 FR-10). */
   presence: string;
   trustLevel: string;
+  /** `true` when the agent holds the signed permission itself (a grant created with `agentKey`), so
+   *  revoking doesn't recall it (GLOSSARY.md, Revoke); `false` when the server spends the grant, so
+   *  revoking stops every purchase. Left out, a card says neither. */
+  agentHeld?: boolean;
   /** Present for single-SKU grants: the resolved product (the flagship productGrantCard). */
   product?: GrantViewProduct;
   /**

@@ -28,11 +28,9 @@ describe("CardView", () => {
     expect(previewViews().length).toBe(8);
     for (const view of previewViews()) {
       const html = render(previewResult(view));
-      // The pending, declined and revoked samples can't spend, so their line says so (spec 015 FR-10).
-      const line =
-        view === "grant-pending" || view === "grant-declined" ? "not approved, so this grant can"
-        : view === "grant-revoked" ? "revoked, so this grant can"
-        : "a demo, approved with a click on a page";
+      // The pending and declined samples were never approved, so their line says so (spec 015 FR-10).
+      // The revoked sample spent, so it was approved and keeps its level's line.
+      const line = view === "grant-pending" || view === "grant-declined" ? "not approved, so this grant can" : "a demo, approved with a click on a page";
       expect(html, view).toContain(`🔒 As the merchant reports it: ${line}`);
     }
   });
