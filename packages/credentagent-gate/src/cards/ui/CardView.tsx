@@ -1,10 +1,12 @@
-// Picks the card for a tool result by its `kind` (spec 015 FR-5). A card only shows: its buttons
+// Picks the card for a tool result by its `kind` (spec 015 FR-9). A card only shows: its buttons
 // open a link or call a server tool, and the server decides everything (security invariant 1).
 
 import { Component, useState, type ReactNode } from "react";
 import { GrantCard, GRANT_VIEW_KIND, type GrantActions, type GrantViewData } from "./grants";
 import type { Bridge } from "./bridge";
+import { REVOKE_TOOL_META } from "../grant-view";
 import { readCard, type CardStore, type ShownCard } from "./card-store";
+import { isSafeLink } from "./links";
 
 export interface CardViewProps {
   card: ShownCard | null;
@@ -12,48 +14,66 @@ export interface CardViewProps {
   show: CardStore["show"];
 }
 
+/** A failed button press. Held as `{ error }` so a thrown null or undefined still counts. */
+export type Failure = { error: unknown } | null;
+
 export function CardView({ card, bridge, show }: CardViewProps) {
-  // The last failed button press, if any. Held as `{ error }` so a thrown null or undefined still counts.
-  const [trouble, setTrouble] = useState<{ error: unknown } | null>(null);
+  const [trouble, setTrouble] = useState<Failure>(null);
   if (!card) return null;
-  if (card.data.kind === GRANT_VIEW_KIND) {
-    const actions = grantActions(
-      bridge,
-      (result) => {
-        setTrouble(null); // a card that now shows a good result clears the old failure
-        return show(result);
-      },
-      (error) => setTrouble({ error }),
-    );
-    return (
-      <>
-        <GrantCard grant={card.data as unknown as GrantViewData} actions={actions} />
-        {trouble ? <Trouble what="complete that action" error={trouble.error} /> : null}
-      </>
-    );
-  }
-  return null; // a kind this page does not know: show nothing rather than guess
+  const actions = grantActions(
+    bridge,
+    card.meta,
+    (result) => {
+      setTrouble(null); // a card that now shows a good result clears the old failure
+      return show(result);
+    },
+    (error) => setTrouble({ error }),
+  );
+  return <CardBody card={card} actions={actions} trouble={trouble} />;
 }
 
-/** The gallery's buttons. Approve/Decline open the approval page; Revoke calls the server's
- *  `revoke-grant` tool — the name the storefront's grant tools use — and shows the grant it returns.
+/** The card for a result's `kind`, then the last failed button press, if any. */
+export function CardBody({ card, actions, trouble }: { card: ShownCard; actions: GrantActions; trouble: Failure }) {
+  if (card.data.kind !== GRANT_VIEW_KIND) return null; // a kind this page does not know: show nothing rather than guess
+  return (
+    <>
+      <GrantCard grant={card.data as unknown as GrantViewData} actions={actions} />
+      {trouble ? <Trouble what="complete that action" error={trouble.error} /> : null}
+    </>
+  );
+}
+
+/** The gallery's buttons. Approve/Decline open the approval page, if its link is a safe web address;
+ *  Revoke calls the tool the result names under {@link REVOKE_TOOL_META} and shows the grant it returns.
  *  The frame calls these from bare event handlers that never await them, so every failure goes to
- *  `fail`: a rejected call, and an answer that is not the grant (the server's unknown-grant refusal). */
-export function grantActions(bridge: Bridge, show: CardStore["show"], fail: (error: unknown) => void): GrantActions {
+ *  `fail`: an unsafe link, a rejected call, and an answer that is not the grant (the server's
+ *  unknown-grant refusal). */
+export function grantActions(
+  bridge: Bridge,
+  meta: Record<string, unknown>,
+  show: CardStore["show"],
+  fail: (error: unknown) => void,
+): GrantActions {
+  const revokeTool = meta[REVOKE_TOOL_META];
   return {
-    openLink: (url) => bridge.open(url).catch(fail),
-    revoke: async (grantId) => {
-      try {
-        const result = await bridge.call("revoke-grant", { grantId });
-        if (readCard({ structuredContent: result })?.data.kind === GRANT_VIEW_KIND) {
-          show({ structuredContent: result });
-        } else {
-          fail(new Error("the server did not answer with the grant"));
+    openLink: (url) =>
+      isSafeLink(url) ? bridge.open(url).catch(fail) : fail(new Error("the merchant's link isn't a safe web address")),
+    ...(typeof revokeTool === "string" && revokeTool
+      ? {
+          revoke: async (grantId: string) => {
+            try {
+              const result = await bridge.call(revokeTool, { grantId });
+              if (readCard({ structuredContent: result })?.data.kind === GRANT_VIEW_KIND) {
+                show({ structuredContent: result });
+              } else {
+                fail(new Error("the server did not answer with the grant"));
+              }
+            } catch (error) {
+              fail(error);
+            }
+          },
         }
-      } catch (error) {
-        fail(error);
-      }
-    },
+      : {}),
   };
 }
 

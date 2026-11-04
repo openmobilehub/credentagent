@@ -146,6 +146,7 @@ verify compliance with these articles; a deviation MUST be justified in writing,
 
 Versioning (semantic): **MAJOR** — backward-incompatible principle removal or redefinition; **MINOR** — a
 new principle/section or materially expanded guidance; **PATCH** — clarifications and wording. Runtime
-guidance for agents lives in `CLAUDE.md` and `specs/001-attesto-sdk/spec.md`.
+guidance for agents lives in `CLAUDE.md` and `docs/reference/api.md` (the specs under `specs/` are
+historical design records).
 
-**Version**: 1.2.0 | **Ratified**: 2026-06-25 | **Last Amended**: 2026-07-10
+**Version**: 1.2.1 | **Ratified**: 2026-06-25 | **Last Amended**: 2026-10-16

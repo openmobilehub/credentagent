@@ -1,0 +1,132 @@
+// Bringing main into an agent PR when it conflicts — the two halves that must agree exactly:
+//   buildResolvedMerge  (fix job)  the merge commit a resolution makes; keeps copies of the resolved files
+//   replayResolution    (push job) rebuilds that same merge from main + those copies, with its own checks
+// The fix job's patch is taken on top of the first; the push job applies it on top of the second.
+// Tested in issue-agent.test.mjs against a real conflict.
+
+import { spawnSync } from "node:child_process";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { applyAndCheck, forbiddenPaths } from "./checks.mjs";
+
+const run = (cwd, args, { allowFail = false, env } = {}) => {
+  const r = spawnSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", ...args], { cwd, encoding: "utf8", env: env ? { ...process.env, ...env } : process.env });
+  if (r.status !== 0 && !allowFail) throw new Error(`git ${args.join(" ")} (cwd ${cwd}) exited ${r.status}:\n${r.stdout}${r.stderr}`);
+  return { code: r.status ?? 1, out: r.stdout };
+};
+// `git merge` wants an identity even with --no-commit (a CI runner has none, so it would refuse);
+// the commits that get published are made by the caller, under its own signed-off identity.
+const anon = ["-c", "user.name=issue-agent", "-c", "user.email=issue-agent@localhost"];
+const conflictedFiles = (cwd) => run(cwd, ["diff", "--name-only", "--diff-filter=U"]).out.split("\n").filter(Boolean).sort();
+export const hasMarkers = (file) => existsSync(file) && /^(<{7}|={7}|>{7})( |$)/m.test(readFileSync(file, "utf8"));
+
+/**
+ * The tree id of a working tree exactly as it stands (new files included), without touching its
+ * index — so the push job can prove it rebuilt byte-for-byte what the fix job tested.
+ */
+export function treeOf(dir) {
+  const idx = join(mkdtempSync(join(tmpdir(), "issue-agent-index-")), "index");
+  const env = { GIT_INDEX_FILE: idx };
+  run(dir, ["read-tree", "HEAD"], { env });
+  run(dir, ["add", "-A"], { env });
+  return run(dir, ["write-tree"], { env }).out.trim();
+}
+
+/**
+ * Merge `mainSha` into the checkout at `dir` (the PR head). Clean → committed, returns { clean: true }.
+ * Conflicting → the merged tree with markers is left as an uncommitted change on the PR head (so the
+ * agent can resolve it and every diff still reads against a normal HEAD); returns { conflicted }.
+ */
+export function startMerge(dir, head, mainSha) {
+  const m = run(dir, [...anon, "merge", "--quiet", "--no-ff", "--no-edit", "--signoff", mainSha], { allowFail: true });
+  if (m.code === 0) return { clean: true, conflicted: [] };
+  const conflicted = conflictedFiles(dir);
+  if (!conflicted.length) { run(dir, ["merge", "--abort"], { allowFail: true }); return { clean: false, conflicted: [], failed: true }; }
+  run(dir, ["reset", "--quiet", "--mixed", head]);
+  return { clean: false, conflicted };
+}
+
+/**
+ * The merge commit the agent's resolution makes: PR head + main, each conflicted file taken from the
+ * resolved working tree at `resolvedFrom`, everything else from git's own merge. Built in a scratch
+ * worktree `scratch` of the same repository; copies the resolved files to `keepDir/<path>` for the
+ * push job, and names the ones the resolution deleted (so a missing copy is never mistaken for a
+ * deletion). Returns { sha, deleted }.
+ */
+export function buildResolvedMerge({ repo, scratch, head, mainSha, conflicted, resolvedFrom, keepDir }) {
+  if (existsSync(scratch)) run(repo, ["worktree", "remove", "--force", scratch], { allowFail: true });
+  run(repo, ["worktree", "add", "--quiet", "--detach", scratch, head]);
+  const deleted = [];
+  try {
+    run(scratch, [...anon, "merge", "--quiet", "--no-ff", "--no-commit", mainSha], { allowFail: true });
+    for (const f of conflicted) {
+      const from = join(resolvedFrom, f), to = join(scratch, f), keep = join(keepDir, f);
+      if (existsSync(from)) {
+        mkdirSync(dirname(to), { recursive: true }); cpSync(from, to);
+        mkdirSync(dirname(keep), { recursive: true }); cpSync(from, keep);
+      } else { rmSync(to, { force: true }); deleted.push(f); }
+    }
+    run(scratch, ["add", "-A"]);
+    run(scratch, [...anon, "commit", "--quiet", "--no-verify", "-m", "merge main (resolved)"]);
+    return { sha: run(scratch, ["rev-parse", "HEAD"]).out.trim(), deleted };
+  } finally {
+    run(repo, ["worktree", "remove", "--force", scratch], { allowFail: true });
+  }
+}
+
+/**
+ * The push job's whole rebuild, in `wt` (a clean checkout of the PR head): bring main in (clean, or
+ * replaying the resolution), apply the hand-over patch, commit each step with `commitArgs` (the
+ * caller's signed-off identity) — and refuse unless the result is byte-for-byte `expectedTree`, the
+ * tree the fix job tested. Returns { ok: true, sha } or { ok: false, why }.
+ */
+export function rebuildForPush({ wt, mainSha, resolved = [], resolvedDir, deleted = [], patch = "", expectedTree, mergeMessage, fixMessage, commitArgs = [] }) {
+  const commit = (message) => {
+    const r = spawnSync("git", ["-c", "core.hooksPath=/dev/null", ...commitArgs, "commit", "--quiet", "-s", "-F", "-"], { cwd: wt, input: message, encoding: "utf8" });
+    if (r.status !== 0) throw new Error(`git commit failed: ${r.stderr}`);
+  };
+  if (mainSha) {
+    const replay = replayResolution(wt, mainSha, resolved, resolvedDir, deleted);
+    if (!replay.ok) return replay;
+    commit(mergeMessage);
+  }
+  if (patch.trim()) {
+    let forbidden;
+    try { ({ forbidden } = applyAndCheck(wt, patch)); } // the same apply-and-check publish uses — one copy of the rule
+    catch (e) { return { ok: false, why: `the fix's patch doesn't apply: ${e.message.split("\n")[0]}` }; }
+    if (forbidden.length) return { ok: false, why: `the fix touches ${forbidden.join(", ")}, which the agent never publishes` };
+    commit(fixMessage);
+  }
+  const tree = run(wt, ["rev-parse", "HEAD^{tree}"]).out.trim();
+  if (!expectedTree || tree !== expectedTree) return { ok: false, why: "the change rebuilt for pushing differs from the one the pipeline tested" };
+  return { ok: true, sha: run(wt, ["rev-parse", "HEAD"]).out.trim() };
+}
+
+/**
+ * In the push job's clean checkout `wt` (the PR head): merge `mainSha` and, if it conflicts, rebuild
+ * the resolution from `resolvedDir` — but only for exactly the files git itself says conflict, never
+ * a forbidden or escaping path, and never with markers left. Leaves the merge staged, uncommitted
+ * (the caller commits it, signed off). Returns { ok: true } or { ok: false, why } (merge aborted).
+ */
+export function replayResolution(wt, mainSha, resolved, resolvedDir, deleted = []) {
+  const m = run(wt, [...anon, "merge", "--quiet", "--no-ff", "--no-commit", mainSha], { allowFail: true });
+  const fail = (why) => { run(wt, ["merge", "--abort"], { allowFail: true }); return { ok: false, why }; };
+  const want = [...resolved].sort();
+  if (m.code === 0) {
+    if (want.length) return fail("main merges cleanly here but the fix resolved conflicts — refusing a mismatched resolution");
+    return { ok: true };
+  }
+  const got = conflictedFiles(wt);
+  if (JSON.stringify(got) !== JSON.stringify(want)) return fail(`bringing main in conflicts in ${got.join(", ") || "nothing git reports"}, not in the files the fix resolved`);
+  if (forbiddenPaths(want).length || want.some((f) => f.startsWith("/") || f.split("/").includes(".."))) return fail("the conflict resolution touches paths the agent never changes");
+  for (const f of want) {
+    const from = join(resolvedDir, f);
+    if (existsSync(from)) cpSync(from, join(wt, f));
+    else if (deleted.includes(f)) run(wt, ["rm", "--quiet", "-f", "--", f], { allowFail: true });
+    else return fail(`the resolved copy of ${f} is missing`); // never read a lost file as a deletion
+  }
+  if (want.some((f) => hasMarkers(join(wt, f)))) return fail("the conflict resolution still has conflict markers");
+  run(wt, ["add", "-A"]);
+  return { ok: true };
+}

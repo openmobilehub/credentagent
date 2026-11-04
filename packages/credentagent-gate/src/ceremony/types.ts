@@ -132,7 +132,8 @@ export interface CompletionInput {
    *  Absent ⇒ the record omits it (the built-in rails' honesty level stays the manifest's). */
   trustLevel?: import("../types.js").TrustLevel;
   /** The payment rail's own proof (the order proof receipt) — appended after the order's
-   *  credential proofs on the completed record. Absent ⇒ only those are kept. */
+   *  credential proofs on the completed record. Absent ⇒ only those are kept. It never carries
+   *  the wallet's raw answer (#320): a completed record is read by order id alone. */
   proof?: import("./proofs.js").ProofEntry;
   /**
    * The custom-credential ids in THIS order's resolved policy (007 / #59 finding 2). The

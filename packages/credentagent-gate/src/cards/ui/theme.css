@@ -1,4 +1,4 @@
-/* The card page's base (spec 015 FR-5). Light by default; dark from the host's theme (data-theme and
+/* The card page's base (spec 015 FR-9). Light by default; dark from the host's theme (data-theme and
    color-scheme, set by hosts.ts) or the OS. The host's MCP Apps style variables land on :root, and
    every color here falls back to a light/dark pair when a host sends none. */
 :root { color-scheme: light dark; }

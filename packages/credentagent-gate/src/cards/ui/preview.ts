@@ -1,8 +1,8 @@
-// Sample results for previewing every card without a chat (spec 015 FR-5). Open the built page in a
+// Sample results for previewing every card without a chat (spec 015 FR-9). Open the built page in a
 // browser tab with `?view=<name>` (add `&theme=dark` for dark); with no view it lists them all. Each
 // sample is shaped exactly like a tool result, so the preview runs the same code path as a chat.
 
-import { GRANT_VIEW_KIND, type GrantViewData } from "../grant-view";
+import { GRANT_VIEW_KIND, REVOKE_TOOL_META, type GrantViewData } from "../grant-view";
 
 const grant = (over: Partial<GrantViewData>): GrantViewData => ({
   kind: GRANT_VIEW_KIND,
@@ -26,7 +26,8 @@ const whiskey = { id: "oak-whiskey", name: "Oak Reserve Whiskey", price: 124, cu
 
 const SAMPLES: Readonly<Record<string, object>> = {
   "grant-pending": grant({ status: "pending", lifecycle: "pending", spent: 0, remaining: 200, allow: { skus: [whiskey.id], categories: [] }, product: whiskey }),
-  "grant-product": grant({ allow: { skus: [whiskey.id], categories: [] }, product: whiskey }),
+  // The whiskey is 21+: an active grant spends on it unattended only with the age proof it carries.
+  "grant-product": grant({ allow: { skus: [whiskey.id], categories: [] }, product: whiskey, credentials: { ageVerified: 21, loyaltyDiscountPct: null, trustLevel: "presence-only-demo" } }),
   "grant-category": grant({ allow: { skus: ["drift-mouse"], categories: ["Beverages", "Electronics"] } }),
   "grant-open": grant({}),
   "grant-low": grant({ lifecycle: "low", spent: 180, remaining: 20 }),
@@ -38,7 +39,10 @@ const SAMPLES: Readonly<Record<string, object>> = {
 /** The names `?view=` accepts, in display order. */
 export const previewViews = (): string[] => Object.keys(SAMPLES);
 
-/** A sample tool result for a view name, or null for an unknown or missing name. */
-export function previewResult(view: string | null): { structuredContent: object } | null {
-  return view !== null && Object.hasOwn(SAMPLES, view) ? { structuredContent: SAMPLES[view] } : null;
+/** A sample tool result for a view name, or null for an unknown or missing name. It names a Revoke
+ *  tool as a server would, so the preview draws Revoke; the preview has no server to call it on. */
+export function previewResult(view: string | null): { structuredContent: object; _meta: Record<string, unknown> } | null {
+  return view !== null && Object.hasOwn(SAMPLES, view)
+    ? { structuredContent: SAMPLES[view], _meta: { [REVOKE_TOOL_META]: "revoke-grant" } }
+    : null;
 }

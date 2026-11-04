@@ -37,7 +37,7 @@ export function createCards(): Cards {
   };
 }
 
-export { GRANT_VIEW_KIND } from "./grant-view.js";
+export { GRANT_VIEW_KIND, REVOKE_TOOL_META } from "./grant-view.js";
 export type { GrantViewData, GrantViewProduct } from "./grant-view.js";
 export type { CardsServer, CardToolMeta } from "./meta.js";
 export type { CardResult } from "./results.js";

@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import { generateKeyPairSync } from "node:crypto";
 import express from "express";
 import request from "supertest";
-import { CredentAgent, publicJwkFromDidDocument, verifyDelegatedPurchase, toMinorUnits, verifyMandate, VCT, type UcpCheckout } from "../index.js";
+import { CredentAgent, checkLineItems, publicJwkFromDidDocument, verifyDelegatedPurchase, toMinorUnits, verifyMandate, VCT, type UcpCheckout } from "../index.js";
 import { AgentKey, DelegatedIntent } from "../agent.js";
 import { devSimulateWalletSignature } from "../ceremony/intent-sign/simulate.js";
 
@@ -116,5 +116,37 @@ describe("README — AP2 mandates", () => {
     else console.error(verdict.code, verdict.violations);
     expect(verdict.ok).toBe(true);
     expect(ledger.spent(intent.permissionId)).toEqual({ amount: 450, uses: 1 });
+  });
+
+  it("delegated purchases: the store checks an agent's cart before quoting it — a 400 for −1 tea (#286)", async () => {
+    const credentagent = new CredentAgent({ walletOrigin: "http://shop.example" });
+    const app = express();
+    app.use(express.json());
+    const prices: Record<string, number> = { coffee: 2200, tea: 950 };
+    const cartFrom = (items: Array<{ id: string; quantity: number }>): UcpCheckout => {
+      const line_items = items.map((i, n) => ({
+        id: `li_${n + 1}`, item: { id: i.id, title: i.id, price: prices[i.id] }, quantity: i.quantity,
+        totals: [{ type: "total" as const, amount: prices[i.id] * i.quantity }],
+      }));
+      const total = line_items.reduce((s, l) => s + l.totals[0].amount, 0);
+      return { id: "ord_1", status: "ready_for_complete", currency: "USD", links: [], line_items, totals: [{ type: "total", amount: total }] };
+    };
+    const issueNonce = () => "merchant-nonce";
+
+    // ── README block: MERCHANT — check the agent's cart, then quote it ──
+    app.post("/quote", (req, res) => {
+      const cart = cartFrom(req.body.items);              // YOUR code: the agent's items, priced from your catalog
+      const lines = checkLineItems(cart.line_items);      // the same rule signCheckout applies
+      if (!lines.ok && lines.code === "quantity") return res.status(400).json({ error: lines.detail });
+      if (!lines.ok) throw new Error(lines.detail);       // your catalog's bug, not the agent's
+      res.json({ checkoutJwt: credentagent.ap2.signCheckout(cart), nonce: issueNonce() });
+    });
+
+    const bad = await request(app).post("/quote").send({ items: [{ id: "coffee", quantity: 1 }, { id: "tea", quantity: -1 }] });
+    expect(bad.status).toBe(400);
+    expect(bad.body.error).toMatch(/quantity -1/);
+    const good = await request(app).post("/quote").send({ items: [{ id: "coffee", quantity: 1 }, { id: "tea", quantity: 1 }] });
+    expect(good.status).toBe(200);
+    expect(good.body.checkoutJwt).toEqual(expect.any(String));
   });
 });

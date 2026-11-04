@@ -46,6 +46,46 @@ export interface DisclosedEntry {
   claims: { label: string; value: any }[];
 }
 
+// A structural VIEW of untrusted CBOR, not a validated ISO 18013-5 structure:
+// decodeDeviceResponse casts whatever the wallet sent, so a field can hold any CBOR
+// value at runtime (a numeric docType comes out as `type: 7`). Shape validation is
+// tracked in #305.
+export interface MdocDocument {
+  docType?: string;
+  issuerSigned?: { nameSpaces?: Record<string, unknown[]>; issuerAuth?: unknown };
+  deviceSigned?: { nameSpaces?: unknown; deviceAuth?: { deviceSignature?: unknown; deviceMac?: unknown } };
+}
+
+export interface DeviceResponse {
+  documents?: MdocDocument[];
+}
+
+// Raw bytes or a base64url string in → the parsed (unvalidated) response out. Decode
+// once here and pass the result to the helpers below.
+export function decodeDeviceResponse(input: Uint8Array | string): DeviceResponse {
+  return decode(input instanceof Uint8Array ? input : b64urlToBytes(input)) as DeviceResponse;
+}
+
+// One document in → its issuer-signed claims out, labelled "<namespace> / <element>".
+function disclosedFromDocument(doc: MdocDocument): DisclosedEntry["claims"] {
+  const claims: DisclosedEntry["claims"] = [];
+  for (const [ns, items] of Object.entries(doc.issuerSigned?.nameSpaces ?? {})) {
+    for (const raw of items) {
+      const isi = decodeTagged(raw);
+      claims.push({ label: `${ns} / ${isi.elementIdentifier}`, value: sanitize(isi.elementValue) });
+    }
+  }
+  return claims;
+}
+
+// A parsed response in → ONE entry out. Inherited behaviour, not a design: every
+// document's claims are merged into that entry under the LAST document's docType.
+// Reading a presentation from a single document is tracked in #305.
+export function disclosedFromResponse(response: DeviceResponse, id: string): DisclosedEntry {
+  const documents = response.documents ?? [];
+  return { id, format: "mso_mdoc", type: documents.at(-1)?.docType, claims: documents.flatMap(disclosedFromDocument) };
+}
+
 // vp_token from OpenID4VP DC API: { "<dcql-id>": "<base64url DeviceResponse>" }
 // (older shape: an array, or a wrapping array per id). Returns a flattened shape.
 export function decodeVpToken(vpToken: unknown): DisclosedEntry[] {
@@ -54,58 +94,50 @@ export function decodeVpToken(vpToken: unknown): DisclosedEntry[] {
     : Object.entries((vpToken as Record<string, unknown>) ?? {});
   return entries.map(([id, token]) => {
     const str = Array.isArray(token) ? token[0] : token;
-    const dr = decode(b64urlToBytes(str as string)) as any;
-    const flat: { label: string; value: any }[] = [];
-    let type: string | undefined;
-    for (const doc of dr.documents ?? []) {
-      type = doc.docType;
-      const nameSpaces = doc.issuerSigned?.nameSpaces ?? {};
-      for (const [ns, items] of Object.entries(nameSpaces)) {
-        for (const raw of items as unknown[]) {
-          const isi = decodeTagged(raw);
-          flat.push({ label: `${ns} / ${isi.elementIdentifier}`, value: sanitize(isi.elementValue) });
-        }
-      }
-    }
-    return { id, format: "mso_mdoc", type, claims: flat };
+    return disclosedFromResponse(decodeDeviceResponse(str as string), id);
   });
 }
 
-// The payment binding lives in deviceSigned, not issuerSigned. Returns the
-// transaction_data_hash bytes as base64url, or null.
-export function extractTransactionDataHash(
-  vpStr: string | string[],
-  namespace = "urn:eudi:sca:payment:1",
-  element = "transaction_data_hash",
-): string | null {
-  const str = Array.isArray(vpStr) ? vpStr[0] : vpStr;
-  const dr = decode(b64urlToBytes(str)) as any;
-  for (const doc of dr.documents ?? []) {
-    const ns = decodeTagged(doc.deviceSigned?.nameSpaces);
-    const val = ns?.[namespace]?.[element];
-    if (val instanceof Uint8Array) return Buffer.from(val).toString("base64url");
+// The element names the wallet signs the binding under. Multipaz renamed them to
+// camelCase in its #1904 (2026-08-13, "match latest draft"); wallets built before that
+// still send snake_case. Both are read: the value is re-checked against our own hash
+// either way, so accepting the old spelling widens nothing.
+const TX_HASH_ELEMENTS = ["transactionDataHash", "transaction_data_hash"];
+const TX_HASH_ALG_ELEMENTS = ["transactionDataHashAlg", "transaction_data_hash_alg"];
+
+// The first value of the right type under any of `elements`, in `namespace` of any
+// document's deviceSigned — a wrongly-typed value is skipped, not returned.
+function deviceSignedElement<T>(response: DeviceResponse, namespace: string, elements: string[], is: (v: unknown) => v is T): T | null {
+  for (const doc of response.documents ?? []) {
+    const ns = decodeTagged(doc.deviceSigned?.nameSpaces)?.[namespace];
+    for (const element of elements) if (is(ns?.[element])) return ns[element];
   }
   return null;
 }
 
+// The payment binding lives in deviceSigned, not issuerSigned. Returns the
+// transaction data hash bytes as base64url, or null.
+export function extractTransactionDataHash(
+  response: DeviceResponse,
+  namespace = "urn:eudi:sca:payment:1",
+  elements = TX_HASH_ELEMENTS,
+): string | null {
+  const val = deviceSignedElement(response, namespace, elements, (v): v is Uint8Array => v instanceof Uint8Array);
+  return val ? Buffer.from(val).toString("base64url") : null;
+}
+
 // The COSE hash-algorithm id the wallet bound the transaction_data with, read from
-// `transaction_data_hash_alg` in the SAME deviceSigned namespace. Multipaz OMITS this
+// `transactionDataHashAlg` (or the older `transaction_data_hash_alg`) in the SAME
+// deviceSigned namespace. Multipaz OMITS this
 // element when it used its SHA-256 default (mdocPresentment.kt), so `null` means
 // "SHA-256"; otherwise it is the raw COSE integer (e.g. -43 for SHA-384) that verify
 // maps to a hash function.
 export function extractTransactionDataHashAlg(
-  vpStr: string | string[],
+  response: DeviceResponse,
   namespace = "urn:eudi:sca:payment:1",
-  element = "transaction_data_hash_alg",
+  elements = TX_HASH_ALG_ELEMENTS,
 ): number | null {
-  const str = Array.isArray(vpStr) ? vpStr[0] : vpStr;
-  const dr = decode(b64urlToBytes(str)) as any;
-  for (const doc of dr.documents ?? []) {
-    const ns = decodeTagged(doc.deviceSigned?.nameSpaces);
-    const val = ns?.[namespace]?.[element];
-    if (typeof val === "number") return val;
-  }
-  return null;
+  return deviceSignedElement(response, namespace, elements, (v): v is number => typeof v === "number");
 }
 
 export interface AuthBlocks {
@@ -114,10 +146,8 @@ export interface AuthBlocks {
   docType: string | null;
 }
 
-export function inspectAuthBlocks(vpStr: string | string[]): AuthBlocks {
-  const str = Array.isArray(vpStr) ? vpStr[0] : vpStr;
-  const dr = decode(b64urlToBytes(str)) as any;
-  const doc = (dr.documents ?? [])[0] ?? {};
+export function inspectAuthBlocks(response: DeviceResponse): AuthBlocks {
+  const doc = (response.documents ?? [])[0] ?? {};
   const issuerAuth = doc.issuerSigned?.issuerAuth;
   const deviceAuth = doc.deviceSigned?.deviceAuth;
   return {

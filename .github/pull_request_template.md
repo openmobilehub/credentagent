@@ -10,6 +10,25 @@ Write this for a HUMAN who did NOT write the code.
 Delete this comment before you submit.
 -->
 
+## Before and after
+
+<!-- First, before any prose: what a developer (or a user) sees on main and with this change.
+     The few lines they write — public API or documented commands only — then what each version prints:
+
+     ```js
+     const order = await ca.orders.create({ order: { total: 4.9 * 3, … } });
+     ```
+     ❌ Before — main:            ✅ After — this change:
+     completed=false (amount)     completed=true
+
+     A page change: a screenshot of each. Nothing a developer or user sees changes? Say so in one line. -->
+
+## Which ticket
+
+<!-- Past 400 changed lines or 15 files (docs/specs/lockfiles not counted)? Say which ticket of a plan
+     this delivers — "Fixes #123" (a sub-issue of an `epic`) or "specs/016-name/tasks.md T002" — or the
+     scope check fails (CONTRIBUTING.md, "Big changes"). Smaller? Delete this section. -->
+
 ## In plain terms
 
 <!-- One or two sentences a non-specialist understands: what this is and what it does. No jargon. -->

@@ -1,0 +1,93 @@
+name: Bug report
+description: Something works wrong. Every bug must be reproducible through the SDK or the UI.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Write this for a **human who did NOT write the code**: plain language first, technical detail at the bottom.
+
+        **Every issue must be reproducible**, either through the **SDK** (the published `@openmobilehub/credentagent-gate` /
+        `@openmobilehub/credentagent-storefront` packages, or an `examples/` script) or through the **UI** (the storefront
+        widget, the checkout / wallet pages, or the hosted marketplace at `https://credentagent.ai/marketplace/mcp`).
+        An issue nobody can reproduce can't be fixed or verified, and the issue agent can't write a failing test for it.
+
+  - type: textarea
+    id: plain
+    attributes:
+      label: In plain terms
+      description: One or two sentences a non-specialist understands. What goes wrong, and who it affects?
+      placeholder: A shopper buys 3 teas at $4.90 and the payment is refused, though the same order at $5.00 goes through.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Reproduce via
+      description: Where can someone else see this happen?
+      options:
+        - SDK (code against the packages or an examples/ script)
+        - UI (storefront widget, checkout / wallet pages, hosted marketplace)
+        - Both
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: |
+        Steps someone else can follow from a clean checkout or a fresh browser and get the same result.
+        **SDK:** a minimal runnable snippet or command (install, code, run). **UI:** the URL, then each click or input, in order.
+      placeholder: |
+        SDK:
+        1. npm install @openmobilehub/credentagent-gate@0.6.0
+        2. Create an order: ca.orders.create({ order: { total: 4.9 * 3, lines: [{ unitPrice: 4.9, quantity: 3 }] }, policy: [required(payment.in("usd"))] })
+        3. Post the instant-demo payment for 14.70
+        4. See: completed=false, "Amount binding: FAIL"
+
+        UI:
+        1. Add https://credentagent.ai/marketplace-dev/mcp to Claude as a remote connector
+        2. Ask it to buy 3 teas, then open the checkout link
+        3. Click "Complete purchase (demo)"
+        4. See: "amount binding failed"
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happens
+      description: The exact output, error, or screen. Paste logs as text; attach a screenshot for anything visual.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What should happen
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: The package version (`npm ls @openmobilehub/credentagent-gate`), the commit on `main`, or which hosted deploy (marketplace / marketplace-dev).
+      placeholder: "@openmobilehub/credentagent-gate 0.6.0 · main at 54ec604 · marketplace-dev"
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Node version and OS for the SDK; browser, wallet, and agent client (Claude / ChatGPT / Goose) for the UI.
+      placeholder: Node 22.4 on macOS 15 · Chrome 130 + Google Wallet · Claude desktop
+
+  - type: textarea
+    id: details
+    attributes:
+      label: Details
+      description: For reviewers. Suspected cause, file and line references (`orders-serve.ts:~93`), related issues and PRs written out in words, and what a fix and its test look like.

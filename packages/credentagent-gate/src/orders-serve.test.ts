@@ -3,6 +3,8 @@ import { CredentAgent } from "./client.js";
 import { age, payment, membership, required, optional, defineCredential, dcql, gate } from "./credentials.js";
 import type { CompletionInput, CompletionResult } from "./ceremony/types.js";
 import { Orders, MemoryOrderStore, type CompletedOrder } from "./orders.js";
+import * as jose from "jose";
+import { Encoder, Tag } from "cbor-x";
 
 // A minimal dependency-free Express double: capture the registered route handlers so we can
 // invoke the orders page / place / status handlers directly (the rails register too; we don't
@@ -208,8 +210,8 @@ describe("orders.serve — checkout wiring", () => {
 });
 
 // The order proof receipt: orders.serve keeps each proof on the completed order — so the
-// EXISTING status route and orders.retrieve() return it — and never lets credential bytes leave
-// in the order.settled webhook (it goes to ANOTHER service).
+// EXISTING status route and orders.retrieve() return it — but never the wallet's raw answer:
+// not on the stored order, the status route, or the order.settled webhook (#320).
 describe("orders.serve — the order proof receipt", () => {
   it("a payment's proof reaches orders.retrieve() and the existing /credentagent/orders/:id/status", async () => {
     const ca = new CredentAgent({ walletOrigin: "http://localhost:4000" });
@@ -232,18 +234,82 @@ describe("orders.serve — the order proof receipt", () => {
     expect(status._json).toMatchObject({ completed: true, order: { orderId: id, proofs: [{ gate: "Pay (USD)" }] } });
   });
 
-  it("the order.settled webhook carries the proofs WITHOUT credential bytes; the stored order keeps them", async () => {
+  it("REFUSES to serve the wallet's raw answer from the public status route (#320) — the receipt stays, the bytes don't", async () => {
+    // The attack: inspectPresentations is on, the buyer proves their age with a real wallet
+    // answer, the order completes, and then ANYONE who knows the order id reads the status
+    // route (CORS *, no session). Before #320 that answer — personal data from a real ID —
+    // rode on the completed order and came straight back.
+    const ca = new CredentAgent({ walletOrigin: "http://localhost:4000", inspectPresentations: true });
+    const app = fakeApp();
+    ca.orders.serve(app);
+    const { id } = await ca.orders.create({ order: wineOrder(), policy: gatedPolicy() });
+    const req = (extra: Record<string, unknown>) => ({ headers: { host: "localhost:4000" }, protocol: "http", get: () => "localhost:4000", ...extra });
+
+    const rd = fakeRes();
+    await app._get.get("/credentagent/credential/request")!(req({ query: { order: id, cred: "age" } }), rd);
+    const signed = rd._json.requests.find((r: { protocol: string }) => r.protocol === "openid4vp-v1-signed");
+    const jwk = (jose.decodeJwt(signed.data.request) as { client_metadata: { jwks: { keys: jose.JWK[] } } }).client_metadata.jwks.keys[0];
+    const enc = new Encoder({ useRecords: false, variableMapSize: true, useTag259ForMaps: false });
+    const isi = enc.encode({ digestID: 0, random: Buffer.alloc(16), elementIdentifier: "age_over_21", elementValue: true });
+    const dr = Buffer.from(enc.encode({ version: "1.0", documents: [{ docType: "org.iso.18013.5.1.mDL", issuerSigned: { nameSpaces: { "org.iso.18013.5.1": [new Tag(isi, 24)] } } }], status: 0 })).toString("base64url");
+    const response = await new jose.CompactEncrypt(new TextEncoder().encode(JSON.stringify({ vp_token: { mdl: [dr] } })))
+      .setProtectedHeader({ alg: "ECDH-ES", enc: "A128GCM" }).encrypt(await jose.importJWK(jwk, "ECDH-ES"));
+    const verify = fakeRes();
+    await app._post.get("/credentagent/credential/verify")!(req({ query: {}, body: { order: id, cred: "age", readerContextToken: rd._json.readerContextToken, result: { protocol: "openid4vp-v1-signed", data: { response } } } }), verify);
+    expect(verify._json.verified).toBe(true);
+    expect(verify._json.presentation?.deviceResponse).toBe(dr); // the presenting browser still gets it
+
+    const pay = fakeRes();
+    await app._post.get("/credentagent/dc-payment/verify")!(req({ query: {}, body: { order: id, amount: 21, claims: { issuer_name: "Demo Bank", payment_instrument_id: "pi-1", masked_account_reference: "•••• 4242", holder_name: "Demo", expiry_date: "2032-09-01" } } }), pay);
+    expect(pay._json.completed).toBe(true);
+    expect(JSON.stringify(pay._json)).not.toContain(dr); // whoever pays holds only the order id
+
+    const status = fakeRes();
+    await app._get.get("/credentagent/orders/:id/status")!({ params: { id } }, status);
+    expect(status._json.order.proofs.map((p: { gate: string }) => p.gate)).toEqual(["Age 21+", "Pay (USD)"]);
+    for (const p of status._json.order.proofs) expect(p).not.toHaveProperty("presentation");
+    expect(JSON.stringify(status._json)).not.toContain(dr);
+    const done = await ca.orders.retrieve(id);
+    expect(JSON.stringify(done)).not.toContain(dr);
+  });
+
+  it("REFUSES to serve a raw answer an order stored before #320 still holds — every read strips it", async () => {
+    // A persistent completed-order store can hold orders completed before the write side was
+    // fixed. The status route, the paid page and orders.retrieve() all read it by id alone.
+    const completed = new MemoryOrderStore<CompletedOrder>();
+    const ca = new CredentAgent({ walletOrigin: "http://localhost:4000", inspectPresentations: true, completedOrderStore: completed });
+    const app = fakeApp();
+    ca.orders.serve(app);
+    const { id } = await ca.orders.create({ order: stickerOrder(), policy: [required(payment.in("usd"))] });
+    const presentation = { format: "mso_mdoc", deviceResponse: "LEGACY-RAW", inspectUrl: "https://tools.multipaz.org/mdocDeviceResponse#LEGACY-RAW" };
+    const legacy = { gate: "Age 21+", rail: "credential", trust_level: "presence-only-demo", checks: [], presentedAt: "t", presentation };
+    await completed.write(id, { orderId: id, amount: 5, currency: "USD", method: "dc-payment", completedAt: "t", proofs: [legacy as never] });
+
+    const status = fakeRes();
+    await app._get.get("/credentagent/orders/:id/status")!({ params: { id } }, status);
+    expect(status._json.order.proofs.map((p: { gate: string }) => p.gate)).toEqual(["Age 21+"]);
+    expect(JSON.stringify(status._json)).not.toContain("LEGACY-RAW");
+    const page = fakeRes();
+    await app._get.get("/credentagent/orders/:id")!({ params: { id } }, page);
+    expect(page._body).toContain("Age 21+");
+    expect(page._body).not.toContain("LEGACY-RAW");
+    expect(JSON.stringify(await ca.orders.retrieve(id))).not.toContain("LEGACY-RAW");
+  });
+
+  it("the order.settled webhook and the stored order both carry the proofs WITHOUT credential bytes", async () => {
     const delivered: { proofs?: { presentation?: unknown }[] }[] = [];
     const completed = new MemoryOrderStore<CompletedOrder>();
     const orders = new Orders({
       walletOrigin: "http://localhost:4000", requirements: () => [], created: new MemoryOrderStore(), completed,
       emit: () => {}, deliverWebhook: (_type, object) => { delivered.push(object as never); },
     });
+    // An untyped caller hands _complete the bytes anyway.
     const presentation = { format: "mso_mdoc" as const, deviceResponse: "RAW", inspectUrl: "https://tools.multipaz.org/mdocDeviceResponse#RAW" };
-    await orders._complete({ orderId: "O1", proofs: [{ gate: "Age 21+", rail: "credential", trust_level: "presence-only-demo", checks: [], presentedAt: "t", presentation }] });
+    await orders._complete({ orderId: "O1", proofs: [{ gate: "Age 21+", rail: "credential", trust_level: "presence-only-demo", checks: [], presentedAt: "t", presentation } as never] });
 
     expect(delivered[0].proofs).toEqual([{ gate: "Age 21+", rail: "credential", trust_level: "presence-only-demo", checks: [], presentedAt: "t" }]);
     expect(JSON.stringify(delivered[0])).not.toContain("RAW");
-    expect((await completed.read("O1"))?.proofs?.[0].presentation).toEqual(presentation);
+    expect((await completed.read("O1"))?.proofs).toEqual(delivered[0].proofs); // #320: nothing public reads the bytes back
+    expect(JSON.stringify(await completed.read("O1"))).not.toContain("RAW");
   });
 });

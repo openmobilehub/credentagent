@@ -26,6 +26,7 @@ import { checkoutRail } from "../theme.js";
 import { buildBindingFields } from "../mandate.js";
 import type { RequestLike } from "../origin.js";
 import type { CompletionInput } from "../types.js";
+import { delegatedPolicyEntries } from "./dcql.js";
 import { buildDelegatedRequest } from "./request.js";
 import { renderDelegatedPage } from "./page.js";
 import { openReference } from "./referenceToken.js";
@@ -90,7 +91,21 @@ export const registerDelegatedPaymentGate: RailRegistrar = (app: CeremonyApp, ct
     // Order-derived stepper with Pay current: reflects only the gates THIS order has, and
     // shows Age ✓ only when it was ACTUALLY verified (read from the store) — never hardcoded.
     const verified = (await ctx.verificationStore.read(order.id)) ?? {};
-    const rail = checkoutRail(order, "pay", { ageVerified: verified.ageVerified === true });
+    // Frame the page on the SAME signal the settle step below uses (`policyHasPayment`): when it
+    // is false the rail builds no settle step, so the page must not show a Pay step or promise a
+    // payment (see page.ts), and the current step is the identity credential being proven. (A
+    // host-wide `settle` from defineHost/createStorefront still runs in completeOrder.)
+    // Note the signal covers every policy this instance has resolved that applies to the order,
+    // not only this order's own — see issue #353.
+    const hasPayment = policyHasPayment(ctx, order);
+    const identityStep = hasPayment ? undefined : delegatedPolicyEntries(ctx.credentialRegistry, order)[0];
+    const rail = hasPayment
+      ? checkoutRail(order, "pay", { ageVerified: verified.ageVerified === true })
+      : checkoutRail(order, identityStep?.credentialId ?? "verify", {
+          ageVerified: verified.ageVerified === true,
+          currentLabel: identityStep ? (ctx.credentialRegistry?.get(identityStep.credentialId)?.ui.label ?? identityStep.credentialId) : "Verify",
+          includePay: false,
+        });
     res.status(200).type("html").send(
       renderDelegatedPage({
         order: order.id,
@@ -99,6 +114,11 @@ export const registerDelegatedPaymentGate: RailRegistrar = (app: CeremonyApp, ct
         lines: order.lines.map((l) => ({ name: l.name ?? l.id, quantity: l.quantity, lineTotal: l.lineTotal, currency: l.currency ?? order.currency })),
         cart: queryString(req.query.cart),
         rail,
+        hasPayment,
+        // Honor the host's returnUrl seam, exactly as the passkey and dc-payment rails do.
+        // Without it the page fell back to `/checkout`, a route a non-storefront host (an
+        // identity-only gate) never serves — stranding the user on a 404.
+        returnUrl: ctx.returnUrl?.(order.id),
         basePath: ctx.basePath,
       }),
     );
