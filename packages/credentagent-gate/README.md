@@ -515,7 +515,8 @@ function buildServer() {
 }
 
 // viewOf(grantId) and revokeMyGrant(grantId) are yours. viewOf returns a GrantViewData: the grant's
-// plain data (kind: GRANT_VIEW_KIND), with the money already computed on your server.
+// plain data (kind: GRANT_VIEW_KIND), with the money already computed on your server. With the gate's
+// grants, build it from `const grant = await credentagent.grants.retrieve(grantId)`.
 
 app.get("/cards", (_req, res) => res.type("html").send(cards.html)); // your Express app · preview: /cards?view=grant-product
 ```
