@@ -1,6 +1,7 @@
 // Which links a card may open (spec 015 FR-11): an absolute `https:` URL, or `http:` on this machine
-// for local development. A grant result built without the server half's own check still reaches the
-// page, so the page checks too before it hands a link to the host.
+// for local development. Shared by both halves: `grant()` checks a link before it reaches the model's
+// note, and the page checks again before it hands one to the host, since a grant result built without
+// `grant()` still reaches the page. A leaf with no imports, so the page can bundle it.
 
 const LOCAL_HOSTS: ReadonlySet<string> = new Set(["localhost", "127.0.0.1", "[::1]"]);
 

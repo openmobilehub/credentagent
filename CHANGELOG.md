@@ -31,8 +31,20 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
 - `REVOKE_TOOL_META` (`"credentagent/revokeTool"`) from `@openmobilehub/credentagent-gate/cards`: the
   `_meta` key under which a grant tool result names the server's Revoke tool. The card kit's page
   draws a Revoke button only when the result names one, so a server that builds the result by hand
-  imports this rather than typing the string. The page ships in the package, but nothing serves it
-  yet (#434).
+  imports this rather than typing the string (#434).
+- `createCards()` from `@openmobilehub/credentagent-gate/cards`: any MCP server can now show the card
+  kit's grant cards in Claude and ChatGPT. `cards.register(server)` serves the card page,
+  `cards.toolMeta()` links a tool to it, and `cards.grant(view)` returns a grant as a card. A tool
+  linked with `cards.toolMeta()` is called only by the model; `toolMeta({ callableFromCard: true })`
+  lets a card's button call one, such as the Revoke tool you name in
+  `createCards({ tools: { revoke } })`. A tool with no visibility of its own can be called by a card
+  in Claude, so give every tool that spends `_meta: { ui: { visibility: ["model"] } }` and leave
+  `openai/widgetAccessible` unset or `false`. The storefront's own tools don't follow this yet,
+  `spend-from-grant` included: they move onto `cards.toolMeta()` in a later step (#293). The `/cards`
+  entry point now runs on Node: it reads the built page with `node:fs` (#435).
+- `GrantViewData.agentHeld` from `@openmobilehub/credentagent-gate/cards`: `true` for a grant created
+  with `agentKey`, signed or not yet, so a card never says revoking stops what it can't. Set it with
+  `agentHeld: grant.agentKey !== undefined`; `createStorefront()` does (#435).
 
 ### Changed
 
@@ -42,6 +54,22 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
   built from the gate's `walletOrigin`, so a wallet origin on plain `http:` anywhere else (a LAN
   address, a `.local` name, a `*.localhost` subdomain) no longer gets the buttons: serve it over
   `https:` or use `localhost` (#434).
+- A spending-grant card's honesty line, in the storefront widget too, is now one of the card kit's
+  fixed sentences, chosen by the grant's `trustLevel` and worded as the merchant's claim. A
+  click-approved grant now reads "As the merchant reports it: a demo, approved with a click on a page —
+  nothing was signed on a phone. No real money moves." instead of "delegated-demo · limits enforced
+  server-side · consent is dev-sealed, not wallet-signed", which was false for a grant signed on a
+  phone. A grant waiting for approval, or declined, reads "As the merchant reports it: not approved, so
+  this grant can't spend anything.", and a revoked one with nothing spent "As the merchant reports it:
+  revoked." A level the card doesn't know shows "Trust level not recognised by this card; treat it as
+  unverified." (#435).
+- A spending-grant card says what revoking stops only as far as the new `agentHeld` field tells it,
+  since revoking doesn't recall a permission the agent holds itself. With `false`, the closed card
+  keeps "No further purchases will be made." and the approval card keeps "or you revoke it". With
+  `true`, the closed card says "If it was approved before being revoked, the agent keeps its signed
+  copy: revoking doesn't recall it." and the approval card "Once you sign, revoking won't recall it
+  from the agent." Without it, neither card says what revoking stops for sure. The storefront fills it
+  in (#435).
 
 ### Fixed
 

@@ -456,3 +456,58 @@ describe("a device grant will not seal without a signed product list", () => {
     expect((await ca.grants.retrieve(g.id))!.status).toBe("pending");
   });
 });
+
+// A revoke (the card's Revoke button) or a decline can arrive while `/sign/verify` is still saving the
+// person's signature: for a grant the gate spends with its own key, `_authorizeDevice` awaits
+// `preApprove` between its pending check and writing `authorized`. The per-grant lock makes the stop
+// wait for the save, so it is never overwritten. Red with the lock removed from `_authorizeDevice`, from
+// revoke's status flip or from `_deny`, or with `_deny`'s pending check removed.
+//
+// These tests only mean something while the save and the stop overlap. Each test starts the save, yields
+// one microtask so it passes its pending check, then stops the grant, and `whileSaving` checks that the
+// save is still in flight. Today it is, because the save waits on a real async step (the SHA-256 digest
+// in `sealIntent`). A timer in place of that microtask, or a synchronous digest, could let the save
+// finish too early; the check then fails loudly rather than let a missing lock go unnoticed.
+describe("BYPASS: a revoke or decline that arrives while a phone signature is being saved waits for it", () => {
+  const evidence = {
+    boundsHash: "not-checked-here",
+    signedAt: "2026-09-26T00:00:00.000Z",
+    credentialType: "com.emvco.dpc",
+    verifiedBy: "gate",
+    trustLevel: "device-signed" as const,
+    mandates: [{ constraints: [{ type: "checkout.line_items", items: [{ acceptable_items: [{ id: "coffee" }] }] }] }],
+  };
+
+  async function savingSignature(ca: CredentAgent) {
+    const g = await ca.grants.create({ merchant: "utopia", budget: 200, perSpend: 30, allow: { skus: ["coffee"] }, signing: "device" });
+    const saving = ca.grants._authorizeDevice(g.id, evidence);
+    await Promise.resolve(); // the save passes its pending check and waits in preApprove
+    return { g, saving };
+  }
+
+  /** Starts `stop` and checks that it is waiting on a save still in flight, then lets it finish. */
+  async function whileSaving<T>(g: Grant, stop: () => Promise<T>): Promise<T> {
+    const stopping = stop();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(g.status).toBe("pending"); // the save is still in flight, and the stop is waiting for it
+    return stopping;
+  }
+
+  it("a revoke waits for the save, then revokes the grant", async () => {
+    const ca = makeAgent();
+    const { g, saving } = await savingSignature(ca);
+    await whileSaving(g, () => g.revoke());
+    expect(await saving).toBe(true);
+    expect((await ca.grants.retrieve(g.id))!.status).toBe("revoked");
+    expect((await g.spend({ idempotencyKey: "p1", items: [{ sku: "coffee" }] })).ok).toBe(false);
+  });
+
+  it("a decline waits for the save, then is refused: the person already signed", async () => {
+    const ca = makeAgent();
+    const { g, saving } = await savingSignature(ca);
+    expect(await whileSaving(g, () => ca.grants._deny(g.id))).toBe(false);
+    expect(await saving).toBe(true);
+    expect((await ca.grants.retrieve(g.id))!.status).toBe("authorized");
+  });
+});

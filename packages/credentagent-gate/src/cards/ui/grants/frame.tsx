@@ -12,7 +12,7 @@ import type { MouseEvent, ReactNode } from "react";
 import type { GrantSlots, GrantViewData, DefineGrantViewInput, GrantView } from "./types";
 import { useGrantActions } from "./actions";
 import { STATUS_PILL, fullTrustSentence, isTerminal } from "./shared";
-import { isSafeLink } from "../links";
+import { isSafeLink } from "../../links";
 import styles from "./grants.module.css";
 
 /** The ONLY door for adding a view (FR-3). Returns a {@link GrantView}; the frame is applied by
@@ -33,12 +33,12 @@ export function StatusPill({ lifecycle }: { lifecycle: GrantViewData["lifecycle"
   );
 }
 
-/** The immovable trust line (FR-4). Presence/trustLevel ride as data-attributes so BOTH literal
- *  tokens are in the DOM (the honesty bypass test checks them), while the visible copy is the
- *  honest sentence built from presence. */
+/** The immovable trust line (FR-4): the kit's fixed sentence for the grant's `lifecycle` and
+ *  `trustLevel` (spec 015 FR-10). The merchant's own `presence` and `trustLevel` text appear nowhere on
+ *  the card, not even in an attribute. */
 export function TrustLine({ grant }: { grant: GrantViewData }) {
   return (
-    <div className={styles.trust} data-presence={grant.presence} data-trust-level={grant.trustLevel}>
+    <div className={styles.trust}>
       <div className={styles.trustLine}>{fullTrustSentence(grant)}</div>
     </div>
   );

@@ -358,7 +358,7 @@ threshold: **`remaining ≤ 20% of budget`** (color → amber). Independently, w
 | **active** | `● Active` | teal | "$146 of $200 remaining" / "Spends at Utopia while you're away" | Revoke (quiet link) |
 | **active-low-budget** | `⚠ Running low` | amber | "$28 of $200 remaining" / "Running low — less than one full purchase" (when `remaining < perSpend`) | Revoke |
 | **exhausted** | `✓ Budget spent` | red, empty | "Budget spent — $200 of $200 used" / "This grant is closed." | none |
-| **revoked** | `⊘ Revoked` | desaturated, frozen | "Revoked on Jul 28" / "No further purchases will be made." | none |
+| **revoked** | `⊘ Revoked` | desaturated, frozen | "Revoked on Jul 28" / "No further purchases will be made." (an agent-held grant: "If it was approved before being revoked, the agent keeps its signed copy: revoking doesn't recall it."; `agentHeld` unknown: "Spending is refused from now on, unless the agent holds its own signed copy of this permission: revoking doesn't recall that."; spec 015 FR-10) | none |
 | **denied** | `✕ Declined` | — | "Declined" / "This grant was never activated." | none |
 | **loading** | skeleton | skeleton shimmer | — | none (disabled) |
 | **stale** | live pill + `· reconnecting…` | last-known, 60% opacity | "$146 of $200 remaining" + "Reconnecting…" caption | Revoke stays enabled; **Approve disabled** until fresh |

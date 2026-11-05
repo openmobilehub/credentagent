@@ -1,10 +1,11 @@
 // Pure, non-JSX shared bits for the grant gallery: the token role set, money formatting, the
-// status-pill table, and the DATA-DRIVEN trust strings. The trust wording is honest on BOTH axes
-// (design §5): the LIMITS are genuinely enforced server-side; the CONSENT is dev-sealed, not
-// wallet-signed. Built from `presence`/`trustLevel` so it stays truthful if those ever change.
+// status-pill table, and the trust line. The trust line is one of the kit's fixed sentences, picked
+// by `lifecycle` and `trustLevel` (spec 015 FR-10) — never the merchant's own words, which a card
+// can't check.
 
 import type { GrantLifecycle } from "../../../grants.js";
 import type { GrantTokens, GrantViewData } from "./types";
+import { NOT_APPROVED_TRUST, REVOKED_TRUST, trustSentence } from "../trust";
 
 /** The token role set as CSS custom-property references (resolved in grants.module.css). Only
  *  `accent` is host-brandable; `status.*` are the FIXED never-themed status colors. */
@@ -38,15 +39,16 @@ export const STATUS_PILL: Record<GrantLifecycle, { tone: "accent" | "warn" | "mu
   denied: { tone: "muted", icon: "✕", label: "Declined" },
 };
 
-/** The full trust sentence (the frame footer + the dense-list footer). Presence is data-driven. */
-export function fullTrustSentence(grant: Pick<GrantViewData, "presence">): string {
-  return `🔒 ${grant.presence} · limits enforced server-side · consent is dev-sealed, not wallet-signed`;
-}
-
-/** The compact per-row trust token (dense list). Keeps the LITERAL presence token on every row so
- *  the FR-4 bypass test passes per-view, while the full sentence de-duplicates to the container. */
-export function compactTrustToken(grant: Pick<GrantViewData, "presence">): string {
-  return `🔒 ${grant.presence}`;
+/** The trust line (the frame footer + the dense-list footer): the kit's sentence for the grant's level,
+ *  except for a grant nobody approved (pending or declined) and a revoked one with nothing spent, which
+ *  may never have been approved. A revoked grant that spent was approved, so it keeps its level's line. */
+export function fullTrustSentence(grant: Pick<GrantViewData, "trustLevel" | "lifecycle" | "spent">): string {
+  const { lifecycle } = grant;
+  const line =
+    lifecycle === "pending" || lifecycle === "denied" ? NOT_APPROVED_TRUST
+    : lifecycle === "revoked" && !(grant.spent > 0) ? REVOKED_TRUST
+    : trustSentence(grant.trustLevel);
+  return `🔒 ${line}`;
 }
 
 /** The terminal lifecycles — closed objects with no live affordances (design §4.6). */
