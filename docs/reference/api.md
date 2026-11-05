@@ -422,7 +422,8 @@ interface VerificationStore {
   // proofs saved for one order at the same moment can't overwrite each other. The gate only sends
   // slots verificationSlots(requirements) lists. A custom proof the saved requirements don't name is
   // merged into the record through write() instead, as for a store without writePart, so two of
-  // those saved at once can still overwrite each other (doctor() warns about a store without it).
+  // those saved at once can still overwrite each other (doctor() warns about a shared store
+  // without it on a deployment).
   writePart?(orderId: string, slot: VerificationSlot, part: VerificationRecord): void | Promise<void>;
 }
 ```

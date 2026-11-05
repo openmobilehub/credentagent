@@ -234,7 +234,8 @@ export interface VerificationStore {
    * record through `write()` instead, so two of those saved at once can still overwrite each other.
    *
    * A store without it still works: the gate reads, merges and `write()`s the whole record, as
-   * before, and `doctor()` warns that two parts saved at once can overwrite each other.
+   * before, and `doctor()` warns about a shared one on a deployment, since two parts saved at
+   * once can overwrite each other.
    */
   writePart?(orderId: string, slot: VerificationSlot, part: VerificationRecord): void | Promise<void>;
 }
