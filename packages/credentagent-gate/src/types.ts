@@ -187,6 +187,10 @@ export interface SavedRequirement {
   discountPct?: number;
 }
 
+/** Where one part of an order's verification record is saved (#444): its requirements, its age
+ *  proof, its membership proof, or one custom credential's proof (`gate:<credential id>`). */
+export type VerificationSlot = "requirements" | "age" | "membership" | `gate:${string}`;
+
 export interface VerificationRecord {
   /** The order's requirements, saved once by the first page that opens its approve link (#444).
    *  A proof write never changes them. Nothing reads them yet (#445, #446). */
@@ -220,15 +224,16 @@ export interface VerificationStore {
   /**
    * Optional: save ONE part of an order's record (its requirements, or one proof) without
    * reading and rewriting the rest, so two pages saving for one order at the same moment can't
-   * drop each other's part (#444). `slot` names the part: `"requirements"`, `"age"`,
-   * `"membership"`, or `"gate:<credential id>"`. A later write to the same slot replaces it.
-   * Parts sit beside the record `write()` saves: `read()` returns that record with every part
-   * merged in (`mergeVerificationRecord`), and `clear()` removes them all.
+   * drop each other's part (#444). `slot` names the part; a later write to the same slot replaces
+   * it. Parts sit beside the record `write()` saves: `read()` returns that record with every part
+   * merged in (`mergeVerificationRecord`), and `clear()` removes them all. A store that can't list
+   * its keys finds an order's parts with `verificationSlots(requirements)`: the fixed slots, then
+   * one per custom credential the order's saved requirements name.
    *
    * A store without it still works: the gate reads, merges and `write()`s the whole record, as
    * before, and `doctor()` warns that two parts saved at once can overwrite each other.
    */
-  writePart?(orderId: string, slot: string, part: VerificationRecord): void | Promise<void>;
+  writePart?(orderId: string, slot: VerificationSlot, part: VerificationRecord): void | Promise<void>;
 }
 
 /**

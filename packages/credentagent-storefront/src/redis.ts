@@ -14,12 +14,13 @@
 //
 // Keys are `${namespace}:${kind}:${orderId}` — order/verification state is scoped per
 // order id (never process-global; Security Invariant #4) and `namespace` isolates tenants
-// sharing one backend. This layer PERSISTS state only; it is not a trust anchor and never
-// affects `trust_level`.
+// sharing one backend. Each part of a verification record (its requirements, or one proof)
+// has a key of its own: `${namespace}:verification-part:${orderId}:${slot}`. This layer
+// PERSISTS state only; it is not a trust anchor and never affects `trust_level`.
 
 import type { Order } from "./index.js";
 import type { CartStore, OrderStore, StorageProvider, CompletedOrderRecord } from "./server.js";
-import { mergeVerificationRecord, type VerificationRecord, type VerificationStore } from "@openmobilehub/credentagent-gate";
+import { mergeVerificationRecord, verificationSlots, type VerificationRecord, type VerificationSlot, type VerificationStore } from "@openmobilehub/credentagent-gate";
 
 /** The minimal slice of the Upstash client the adapters use (also the injectable test seam). */
 export interface RedisLike {
@@ -108,15 +109,13 @@ class RedisOrderStore<T> implements OrderStore<T> {
   }
 }
 
-// The parts of a verification record this store keeps under keys of their own (#444), so two
-// pages saving them for one order at the same moment can't overwrite each other. `RedisLike` can
-// only GET a key it can name, so a part it can't name in advance (a custom gate's `gate:<id>`)
-// is merged into the record instead, as every write was before.
-const OWN_KEY_SLOTS: readonly string[] = ["requirements", "age", "membership"];
-
 class RedisVerificationStore implements VerificationStore {
-  // The record `write()` saves, plus one key per part `writePart()` saves; `read()` merges them.
-  // Isolation is per-order keying.
+  // The record `write()` saves, plus each part `writePart()` saves under a key of its own (#444),
+  // so two pages saving parts for one order at the same moment can't overwrite each other.
+  // `RedisLike` can only GET a key it can name, so `read()` finds the parts through
+  // `verificationSlots`: the fixed slots, then one per custom credential the order's saved
+  // requirements name. A custom part those requirements don't name (a hand-built link saved
+  // none) is merged into the record instead, as every write was before. Isolation is per-order keying.
   constructor(
     private readonly redis: RedisLike,
     private readonly namespace: string,
@@ -125,22 +124,24 @@ class RedisVerificationStore implements VerificationStore {
     return joinKey(this.namespace, "verification", orderId);
   }
   // Its own kind, so a part key never equals the record key of an order whose id ends in ":age".
-  private partKey(orderId: string, slot: string): string {
+  private partKey(orderId: string, slot: VerificationSlot): string {
     return joinKey(this.namespace, "verification-part", orderId, slot);
   }
+  private async readParts(orderId: string, slots: readonly VerificationSlot[]): Promise<VerificationRecord[]> {
+    const parts = await Promise.all(slots.map((slot) => this.redis.get<VerificationRecord>(this.partKey(orderId, slot))));
+    return parts.filter((p): p is VerificationRecord => p != null);
+  }
   async read(orderId: string): Promise<VerificationRecord | undefined> {
-    const [record, ...parts] = await Promise.all([
-      this.redis.get<VerificationRecord>(this.keyFor(orderId)),
-      ...OWN_KEY_SLOTS.map((slot) => this.redis.get<VerificationRecord>(this.partKey(orderId, slot))),
-    ]);
-    const saved = parts.filter((p): p is VerificationRecord => p != null);
-    return saved.length > 0 ? saved.reduce(mergeVerificationRecord, record ?? {}) : (record ?? undefined);
+    const [record, fixed] = await Promise.all([this.redis.get<VerificationRecord>(this.keyFor(orderId)), this.readParts(orderId, verificationSlots())]);
+    const base = fixed.reduce(mergeVerificationRecord, record ?? {});
+    const custom = await this.readParts(orderId, verificationSlots(base.requirements).filter((slot) => slot.startsWith("gate:")));
+    return record != null || fixed.length > 0 || custom.length > 0 ? custom.reduce(mergeVerificationRecord, base) : undefined;
   }
   async write(orderId: string, record: VerificationRecord): Promise<void> {
     await this.redis.set(this.keyFor(orderId), record);
   }
-  async writePart(orderId: string, slot: string, part: VerificationRecord): Promise<void> {
-    if (OWN_KEY_SLOTS.includes(slot)) {
+  async writePart(orderId: string, slot: VerificationSlot, part: VerificationRecord): Promise<void> {
+    if (!slot.startsWith("gate:") || verificationSlots((await this.read(orderId))?.requirements).includes(slot)) {
       await this.redis.set(this.partKey(orderId, slot), part);
       return;
     }
@@ -148,7 +149,8 @@ class RedisVerificationStore implements VerificationStore {
     await this.redis.set(this.keyFor(orderId), mergeVerificationRecord(prev, part));
   }
   async clear(orderId: string): Promise<void> {
-    await Promise.all([this.keyFor(orderId), ...OWN_KEY_SLOTS.map((slot) => this.partKey(orderId, slot))].map((key) => this.redis.del(key)));
+    const slots = verificationSlots((await this.read(orderId))?.requirements);
+    await Promise.all([this.keyFor(orderId), ...slots.map((slot) => this.partKey(orderId, slot))].map((key) => this.redis.del(key)));
   }
 }
 

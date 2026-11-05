@@ -113,6 +113,22 @@ describe("redisStorage — parts of a verification record (#444)", () => {
     expect(record?.proofs?.map((p) => p.gate).sort()).toEqual(["Age 21+", "Membership"]);
   });
 
+  it("two custom-requirement parts saved at the same moment both survive, under keys of their own", async () => {
+    const client = slowRedis();
+    const s = redisStorage({ client }).verificationStore;
+    const requirements = [{ credential: "rx", required: true, effect: "gate" as const }, { credential: "license", required: true, effect: "gate" as const }];
+    await s.writePart!("ORD-1", "requirements", { requirements });
+    await Promise.all([
+      redisStorage({ client }).verificationStore.writePart!("ORD-1", "gate:rx", { verifiedGates: { rx: true }, proofs: [proofOf("Prescription")] }),
+      redisStorage({ client }).verificationStore.writePart!("ORD-1", "gate:license", { verifiedGates: { license: true }, proofs: [proofOf("License")] }),
+    ]);
+    const record = await s.read("ORD-1");
+    expect(record?.verifiedGates).toEqual({ rx: true, license: true });
+    expect(record?.proofs?.map((p) => p.gate).sort()).toEqual(["License", "Prescription"]);
+    await s.clear("ORD-1");
+    expect([...client.store.keys()]).toEqual([]);
+  });
+
   it("read() merges the parts into the written record, and clear() removes them all", async () => {
     const s = redisStorage({ client: fakeRedis() }).verificationStore;
     await s.write("ORD-1", { verifiedGates: { rx: true } });
