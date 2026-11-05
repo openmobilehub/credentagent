@@ -100,10 +100,12 @@ export async function applyDelegatedPolicy(ctx: CeremonyContext, order: Ceremony
     // save of this same proof that lands between this read and the write is still replaced (its
     // receipt entry with it); closing that needs a conditional write the store contract doesn't
     // have. Against a save of this same proof, this credential's `ageVerified` /
-    // `verifiedGates[id]` ends up true either way. Where a save merges whole records (a store
-    // without writePart, or a custom proof the saved requirements don't name), two different
-    // proofs saved in that moment can drop each other, this one included; completion then
-    // refuses before settlement.
+    // `verifiedGates[id]` ends up true either way. Where both saves merge whole records (on a
+    // store without writePart, or for two custom proofs the saved requirements don't name), two
+    // different proofs saved in that moment can drop each other, this one included. Completion
+    // then refuses before settlement if the lost proof is one it enforces (age on a tagged item,
+    // an applicable custom gate). A lost membership proof doesn't stop it: the order completes
+    // at the undiscounted price, without that receipt entry.
     const held = (await ctx.verificationStore.read(order.id)) ?? {};
     if (credentialId === "age") {
       // A proof saved before `provenOver` existed was made at this same age (the tag's, or 21).
