@@ -159,17 +159,16 @@ export function runDoctor(input: DoctorInput): DoctorReport {
 
   // A shared store that can't save one part of a record on its own (#444): the gate falls back to
   // read-merge-write, so on a deployment two pages saving for one order at once can drop a proof.
-  // A warning: a lost age or custom-gate proof is refused at completion and proven again; a lost
-  // membership proof lets the order complete at full price. The in-memory default is already
-  // reported above.
+  // A warning: the order then goes on as if the lost proof had never been made. The in-memory
+  // default is already reported above.
   if (env.deployment && input.sharedVerificationStore && input.verificationStoreWritesParts === false) {
     findings.push({
       level: "warn",
       code: "verification-store-merges-parts",
       message:
         "The verification store has no writePart(), so each proof is saved by reading, merging and writing the whole " +
-        "record. Two proofs saved for one order at the same moment can overwrite each other: a lost age or custom-gate proof " +
-        "has to be proven again, and a lost membership proof leaves the order at full price.",
+        "record. Two proofs saved for one order at the same moment can overwrite each other, and the order then goes on " +
+        "as if the lost proof had never been made (a lost membership proof leaves it at full price).",
       fix: "Implement writePart(orderId, slot, part) on your VerificationStore (see its doc comment), or use redisStorage() from @openmobilehub/credentagent-storefront/redis.",
     });
   }
