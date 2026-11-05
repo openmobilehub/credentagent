@@ -13,13 +13,14 @@ import { defineHost } from "../host.js";
 import { age, membership, payment, required, optional } from "../credentials.js";
 import { MemoryVerificationStore } from "../store.js";
 import type { CartItemRef, CeremonyCatalog, CeremonyOrder } from "./types.js";
-import type { GateOrder, SavedRequirement, Step, VerificationRecord, VerificationStore } from "../types.js";
+import type { GateOrder, SavedRequirement, Step, VerificationRecord, VerificationSlot, VerificationStore } from "../types.js";
 
 const KEY = "test-gate-secret-0123456789abcdef";
 
 const PRODUCTS: Record<string, { price: number; minimumAge?: number }> = {
   cheese: { price: 8 },
   scotch: { price: 60, minimumAge: 21 },
+  cigar: { price: 30, minimumAge: 25 },
   record: { price: 5 }, // not a product: no minimumAge tag
 };
 
@@ -106,6 +107,16 @@ describe("saved requirements — the first page that opens the approve link save
     ]);
   });
 
+  it("a tagged item still saves a required age when the policy has no age step", async () => {
+    const s = server();
+    const o = s.order("ORD-1", "scotch");
+    await open(s.app, s.approveLink(o, [required(payment.in("usd"))]));
+    expect(await saved(s.host.verificationStore, o.id)).toEqual([
+      { credential: "age", required: true, effect: "gate", minAge: 21 },
+      { credential: "payment", required: true, effect: "authorize" },
+    ]);
+  });
+
   it("leaves requirements() itself unchanged: the manifest still carries the policy's own age", () => {
     const s = server();
     const manifest = s.credentagent.requirements(s.order("ORD-1", "scotch"), [required(age.over(18))]);
@@ -158,6 +169,17 @@ describe("saved requirements — a seal opens only for its own order, from its o
     expect(await saved(s.host.verificationStore, o.id)).toBeUndefined();
   });
 
+  it("REFUSES a seal for an id that extends this one with '|' (the payload must be base64url)", async () => {
+    const s = server();
+    const longer = s.order("ORD-1|", "record");
+    s.order("ORD-1", "record");
+    // Its MAC input reads `ORD-1||<payload>` either way, and Node decodes `|<payload>` as `<payload>`.
+    const seal = sealOf(s.approveLink(longer, [required(age.over(25))]));
+    const res = await request(s.app).get(`/credentagent/credential?order=ORD-1&cred=age&requirements=${encodeURIComponent(`|${seal}`)}`);
+    expect(res.status).toBe(200);
+    expect(await saved(s.host.verificationStore, "ORD-1")).toBeUndefined();
+  });
+
   it("REFUSES a seal signed with another server's key", async () => {
     const created = new Map<string, CeremonyOrder>();
     const store = new MemoryVerificationStore();
@@ -200,32 +222,47 @@ describe("saved requirements — written once (#444 AC5)", () => {
 });
 
 describe("saved requirements — an age proof records the age it was made at (#444 AC3)", () => {
-  it("the credential rail saves provenOver at the order's age beside ageVerified", async () => {
+  // At 25 as well as 21: 21 is also the rail's default, so a rail that always saved 21 would pass alone.
+  it.each([
+    { product: "scotch", minAge: 21 },
+    { product: "cigar", minAge: 25 },
+  ])("the credential rail saves provenOver $minAge beside ageVerified for $product", async ({ product, minAge }) => {
     const s = server();
-    s.order("ORD-1", "scotch");
-    const res = await request(s.app).post("/credentagent/credential/verify").send({ order: "ORD-1", cred: "age", claims: { age_over_21: true } });
+    s.order("ORD-1", product);
+    const res = await request(s.app).post("/credentagent/credential/verify").send({ order: "ORD-1", cred: "age", claims: { [`age_over_${minAge}`]: true } });
     expect(res.body.verified).toBe(true);
     const record = await s.host.verificationStore.read("ORD-1");
     expect(record?.ageVerified).toBe(true);
-    expect(record?.provenOver).toBe(21);
+    expect(record?.provenOver).toBe(minAge);
   });
 });
 
-// A shared store with network latency, like Redis: every call waits, so two pages saving for one
-// order at the same moment interleave the way two instances would. Read-merge-write loses a part
-// here; `writePart` does not.
-class SlowStore implements VerificationStore {
+// A shared store that holds each write until two are waiting, then lets both land: two pages
+// saving for one order at the same moment have each read before either writes, whichever request
+// started first. Read-merge-write loses a part here every time; `writePart` does not.
+class RaceStore implements VerificationStore {
   readonly inner = new MemoryVerificationStore();
-  private readonly wait = () => new Promise<void>((resolve) => setTimeout(resolve, 25));
-  async read(orderId: string): Promise<VerificationRecord | undefined> { await this.wait(); return this.inner.read(orderId); }
-  async write(orderId: string, record: VerificationRecord): Promise<void> { await this.wait(); this.inner.write(orderId, record); }
-  async writePart(orderId: string, slot: string, part: VerificationRecord): Promise<void> { await this.wait(); this.inner.writePart(orderId, slot, part); }
-  async clear(orderId: string): Promise<void> { await this.wait(); this.inner.clear(orderId); }
+  private readonly waiting: (() => void)[] = [];
+  private released = false;
+  private hold(): Promise<void> {
+    if (this.released) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      this.waiting.push(resolve);
+      if (this.waiting.length === 2) {
+        this.released = true;
+        for (const release of this.waiting) release();
+      }
+    });
+  }
+  async read(orderId: string): Promise<VerificationRecord | undefined> { return this.inner.read(orderId); }
+  async write(orderId: string, record: VerificationRecord): Promise<void> { await this.hold(); this.inner.write(orderId, record); }
+  async writePart(orderId: string, slot: VerificationSlot, part: VerificationRecord): Promise<void> { await this.hold(); this.inner.writePart(orderId, slot, part); }
+  async clear(orderId: string): Promise<void> { this.inner.clear(orderId); }
 }
 
 describe("saved requirements — parts saved at the same moment don't overwrite each other (#444 AC4)", () => {
   it("an age proof and a membership proof saved at once both survive", async () => {
-    const store = new SlowStore();
+    const store = new RaceStore();
     const s = server({ store });
     s.order("ORD-1", "scotch");
     const prove = (body: Record<string, unknown>) => request(s.app).post("/credentagent/credential/verify").send({ order: "ORD-1", ...body });
@@ -241,7 +278,7 @@ describe("saved requirements — parts saved at the same moment don't overwrite 
   });
 
   it("the requirements a page saves and an age proof saved at once both survive", async () => {
-    const store = new SlowStore();
+    const store = new RaceStore();
     const s = server({ store });
     const o = s.order("ORD-1", "scotch");
     const link = s.approveLink(o, SCOTCH_POLICY);

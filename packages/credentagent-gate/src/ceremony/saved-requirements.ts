@@ -54,7 +54,9 @@ export function sealRequirements(orderId: string, requirements: readonly SavedRe
  *  or sealed under another key. */
 export function openRequirements(seal: string, orderId: string, key: string): SavedRequirement[] | null {
   const parts = seal.split(".");
-  if (parts.length !== 2) return null;
+  // The payload must be base64url. Node's decoder skips any other character, so `|P` would decode
+  // like `P` while its MAC input reads as the seal of an id ending in "|" (#444 review).
+  if (parts.length !== 2 || !/^[A-Za-z0-9_-]+$/.test(parts[0]!)) return null;
   const [payload, sig] = parts as [string, string];
   const a = Buffer.from(sig);
   const b = Buffer.from(sign(key, orderId, payload));
