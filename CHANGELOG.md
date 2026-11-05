@@ -31,17 +31,22 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
 - Each order's requirements are now saved with its proofs, in the order's verification record
   (`record.requirements`), so a server that never ran `requirements()` can read what the order
   needs. `requirements()` seals them into every mounted approve link (a new `requirements=` query
-  parameter, signed with the rails' signing key and bound to the order id), and the first page the
-  buyer opens saves them, once. An age requirement holds one number: the stricter of the policy's
+  parameter, signed with the rails' signing key and bound to the order id, which makes each link
+  about 150–250 characters longer). The first credential, dc-payment or delegated page opened from
+  such a link saves them, once. Links a host builds by hand, such as the Pay buttons on the
+  `orders.serve()` checkout page and the storefront's, carry no seal yet, so those orders save
+  nothing (#446). An age requirement holds one number: the stricter of the policy's
   `age.over(n)` and the order's highest `minimumAge` tag. An age proof now also saves the age it
   was made at (`provenOver`). Nothing reads either yet, so no order completes or is refused
   differently (#444, the first step of #442).
 - `VerificationStore` has an optional `writePart(orderId, slot, part)`, which saves one proof
   without rewriting the rest of the record, so two proofs saved for one order at the same moment
-  no longer overwrite each other. The in-memory store and `redisStorage()` implement it (Redis
-  keeps the requirements, the age proof and the membership proof under keys of their own). A store
-  without it works as before, and `doctor()` warns about it on a deployment
-  (`verification-store-merges-parts`). `mergeVerificationRecord` is exported for stores that add it.
+  no longer overwrite each other. The in-memory store and `redisStorage()` implement it: Redis
+  keeps each part under a key of its own, and finds a custom requirement's part through the
+  order's saved requirements (when an order has none saved, that part merges into the record as
+  before). A store without `writePart` works as before, and `doctor()` warns about it on a
+  deployment (`verification-store-merges-parts`). `mergeVerificationRecord` and
+  `verificationSlots` are exported for stores that add it.
 
 ### Fixed
 

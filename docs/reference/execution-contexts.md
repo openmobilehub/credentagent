@@ -139,7 +139,7 @@ Each entry is a `VerificationManifestEntry` — pure data:
   "trust_level": "presence-only-demo",
   "label": "Verify you're 21+",
   "minAge": 21,              // present on age gates
-  "approveUrl": "https://shop.example/credentagent/credential?order=ORD-1&cred=age"
+  "approveUrl": "https://shop.example/credentagent/credential?order=ORD-1&cred=age&requirements=<seal>"
 }
 ```
 

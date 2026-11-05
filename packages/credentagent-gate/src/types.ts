@@ -192,8 +192,9 @@ export interface SavedRequirement {
 export type VerificationSlot = "requirements" | "age" | "membership" | `gate:${string}`;
 
 export interface VerificationRecord {
-  /** The order's requirements, saved once by the first page that opens its approve link (#444).
-   *  A proof write never changes them. Nothing reads them yet (#445, #446). */
+  /** The order's requirements, saved once by the first credential, dc-payment or delegated page
+   *  opened from one of its sealed approve links (#444); a link built by hand saves nothing. A proof
+   *  write never changes them. Nothing reads them yet (#445, #446). */
   requirements?: SavedRequirement[];
   ageVerified?: boolean;
   /** The age the age proof was made at (`age_over_<n>` disclosed true), saved beside `ageVerified`. */
