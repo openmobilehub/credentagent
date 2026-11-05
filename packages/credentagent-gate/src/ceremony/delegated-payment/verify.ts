@@ -97,9 +97,10 @@ export async function applyDelegatedPolicy(ctx: CeremonyContext, order: Ceremony
         : evaluateCustom(cred, claims);
     if (!result.verified) continue; // leave state unwritten → completeOrder refuses
     // Read just before writing, so a proof the credential page saved before this point is kept. A
-    // save that lands between this read and the write is still replaced (its receipt entry with
-    // it); closing that needs a conditional write the store contract doesn't have. Completion is
-    // unaffected: `ageVerified` / `verifiedGates[id]` end up true either way.
+    // save of this same proof that lands between this read and the write is still replaced (its
+    // receipt entry with it); closing that needs a conditional write the store contract doesn't
+    // have. This credential's `ageVerified` / `verifiedGates[id]` ends up true either way; on a
+    // store that merges whole records, another proof saved in that moment can still be lost.
     const held = (await ctx.verificationStore.read(order.id)) ?? {};
     if (credentialId === "age") {
       // A proof saved before `provenOver` existed was made at this same age (the tag's, or 21).

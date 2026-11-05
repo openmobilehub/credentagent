@@ -229,8 +229,9 @@ export interface VerificationStore {
    * it. Parts sit beside the record `write()` saves: `read()` returns that record with every part
    * merged in (`mergeVerificationRecord`), and `clear()` removes them all. The gate only sends a
    * slot that `verificationSlots(requirements)` lists for the order: the fixed slots, then one per
-   * custom credential the order's saved requirements name (any other custom part it merges into
-   * the record through `write()`). So a store that can't list its keys finds every part there.
+   * custom credential the order's saved requirements name. So a store that can't list its keys
+   * finds every part there. A custom part the saved requirements don't name is merged into the
+   * record through `write()` instead, so two of those saved at once can still overwrite each other.
    *
    * A store without it still works: the gate reads, merges and `write()`s the whole record, as
    * before, and `doctor()` warns that two parts saved at once can overwrite each other.
