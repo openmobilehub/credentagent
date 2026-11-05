@@ -36,10 +36,11 @@ export function verificationSlots(requirements?: readonly SavedRequirement[]): V
  * finds its parts that way could never read it back. A store only ever gets the slots it can find.
  */
 export async function savePart(store: VerificationStore, orderId: string, slot: VerificationSlot, part: VerificationRecord): Promise<void> {
-  const listed = !slot.startsWith("gate:") || verificationSlots((await store.read(orderId))?.requirements).includes(slot);
-  if (store.writePart && listed) return store.writePart(orderId, slot, part);
-  const prev = (await store.read(orderId)) ?? {};
-  await store.write(orderId, mergeVerificationRecord(prev, part));
+  const custom = slot.startsWith("gate:");
+  // One read, and only when it decides something: which slots are listed, or what to merge into.
+  const held = custom || !store.writePart ? await store.read(orderId) : undefined;
+  if (store.writePart && (!custom || verificationSlots(held?.requirements).includes(slot))) return store.writePart(orderId, slot, part);
+  await store.write(orderId, mergeVerificationRecord(held ?? {}, part));
 }
 
 export class MemoryVerificationStore implements VerificationStore {

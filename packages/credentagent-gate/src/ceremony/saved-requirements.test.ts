@@ -12,7 +12,7 @@ import { CredentAgent } from "../client.js";
 import { defineHost } from "../host.js";
 import { age, membership, payment, required, optional } from "../credentials.js";
 import { MemoryVerificationStore, mergeVerificationRecord, verificationSlots } from "../store.js";
-import { prescription } from "./credential-gate/__fixtures__/customCredential.js";
+import { prescription, professionalLicense } from "./credential-gate/__fixtures__/customCredential.js";
 import type { CartItemRef, CeremonyCatalog, CeremonyOrder } from "./types.js";
 import type { GateOrder, SavedRequirement, Step, VerificationRecord, VerificationSlot, VerificationStore } from "../types.js";
 
@@ -276,6 +276,21 @@ describe("saved requirements — parts saved at the same moment don't overwrite 
     expect(record?.ageVerified).toBe(true);
     expect(record?.loyalty).toEqual({ applied: true, membershipNumber: "M-1" });
     expect(record?.proofs?.map((p) => p.gate).sort()).toEqual(["Age 21+", "Membership"]);
+  });
+
+  it("two custom proofs the saved requirements name, saved at once, both survive", async () => {
+    const store = new RaceStore();
+    const s = server({ store });
+    const o = s.order("ORD-1", "record");
+    s.credentagent.requirements(o, [required(prescription), required(professionalLicense)]); // registers both
+    const requirements: SavedRequirement[] = [
+      { credential: "prescription", required: true, effect: "gate" },
+      { credential: "professional_license", required: true, effect: "gate" },
+    ];
+    store.inner.writePart(o.id, "requirements", { requirements }); // straight to the inner store: not one of the two held writes
+    const prove = (cred: string, claims: Record<string, unknown>) => request(s.app).post("/credentagent/credential/verify").send({ order: o.id, cred, claims });
+    await Promise.all([prove("prescription", { rx_valid: true }), prove("professional_license", { license_active: true })]);
+    expect((await store.read(o.id))?.verifiedGates).toEqual({ prescription: true, professional_license: true });
   });
 
   it("the requirements a page saves and an age proof saved at once both survive", async () => {

@@ -41,10 +41,11 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
   differently (#444, the first step of #442).
 - `VerificationStore` has an optional `writePart(orderId, slot, part)`, which saves one proof
   without rewriting the rest of the record, so two proofs saved for one order at the same moment
-  no longer overwrite each other. The in-memory store and `redisStorage()` implement it: Redis
-  keeps each part under a key of its own, and finds a custom requirement's part through the
-  order's saved requirements (when an order has none saved, that part merges into the record as
-  before). A store without `writePart` works as before, and `doctor()` warns about it on a
+  no longer overwrite each other. The exception is a custom requirement's proof that the order's
+  saved requirements don't name (an order opened from a link without a seal has none saved): the
+  gate still merges that one into the record, as before, so two of those saved at once can still
+  collide, and the buyer proves again. The in-memory store and `redisStorage()` implement it;
+  Redis keeps each part under a key of its own. A store without `writePart` works as before, and `doctor()` warns about it on a
   deployment (`verification-store-merges-parts`). `mergeVerificationRecord` and
   `verificationSlots` are exported for stores that add it.
 - `REVOKE_TOOL_META` (`"credentagent/revokeTool"`) from `@openmobilehub/credentagent-gate/cards`: the

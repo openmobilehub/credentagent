@@ -529,8 +529,9 @@ app.post("/checkout/:id", async (req, res) => {
   each approve link, and the first credential, dc-payment or delegated page opened from one saves
   them (`record.requirements`). A link you build by hand carries no seal, so it saves nothing yet.
   For a store of your own, add the optional `writePart(orderId, slot, part)` so two proofs saved at
-  the same moment don't overwrite each other; `read()` then returns the record with each part merged
-  in by `mergeVerificationRecord`, from the slots `verificationSlots(requirements)` lists.
+  the same moment don't overwrite each other (except a custom proof the order's saved requirements
+  don't name, which the gate still merges into the record); `read()` then returns the record with
+  each part merged in by `mergeVerificationRecord`, from the slots `verificationSlots(requirements)` lists.
 - **Fail-closed like `mount()`:** `defineHost` throws at construction on an incomplete or contradictory
   seam set (missing `catalog`/`orderStore`, both `records` and a `completion`, or neither a `signingKey`
   nor `allowEphemeralKey`).

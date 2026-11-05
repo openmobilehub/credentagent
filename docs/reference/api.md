@@ -419,8 +419,10 @@ interface VerificationStore {
   write(orderId: string, record: VerificationRecord): void | Promise<void>;
   clear(orderId: string): void | Promise<void>;
   // Optional: save one part (the requirements, or one proof) without rewriting the rest, so two
-  // proofs saved for one order at the same moment can't overwrite each other. Without it the gate
-  // reads, merges and writes the whole record, and doctor() warns on a deployment.
+  // proofs saved for one order at the same moment can't overwrite each other. The gate only sends
+  // slots verificationSlots(requirements) lists; a custom proof the saved requirements don't name
+  // it merges into the record through write(), as it does for a store without writePart (and
+  // doctor() warns about that store on a deployment).
   writePart?(orderId: string, slot: VerificationSlot, part: VerificationRecord): void | Promise<void>;
 }
 ```
