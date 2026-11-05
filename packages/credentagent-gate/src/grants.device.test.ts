@@ -460,14 +460,14 @@ describe("a device grant will not seal without a signed product list", () => {
 // A revoke (the card's Revoke button) or a decline can arrive while `/sign/verify` is still saving the
 // person's signature: for a grant the gate spends with its own key, `_authorizeDevice` awaits
 // `preApprove` between its pending check and writing `authorized`. The per-grant lock makes the stop
-// wait for the save, so it is never overwritten. Each test starts the save, gives it one microtask to
-// pass its pending check (a timer could let the save finish first, and a missing save lock would go
-// unnoticed), then stops the grant. Red with the lock removed from `_authorizeDevice`, from revoke's
-// status flip or from `_deny`, or with `_deny`'s pending check removed. The save is still in flight at
-// `whileSaving`'s check only because it waits on a real async step (the SHA-256 digest in `sealIntent`).
-// If that step turns synchronous, the save finishes one job before the check (the second yield is what
-// catches it) and `whileSaving` fails loudly. Without that check, a missing save lock would then go
-// unnoticed.
+// wait for the save, so it is never overwritten. Red with the lock removed from `_authorizeDevice`, from
+// revoke's status flip or from `_deny`, or with `_deny`'s pending check removed.
+//
+// These tests only mean something while the save and the stop overlap. Each test starts the save, yields
+// one microtask so it passes its pending check, then stops the grant, and `whileSaving` checks that the
+// save is still in flight. Today it is, because the save waits on a real async step (the SHA-256 digest
+// in `sealIntent`). A timer in place of that microtask, or a synchronous digest, could let the save
+// finish too early; the check then fails loudly rather than let a missing lock go unnoticed.
 describe("BYPASS: a revoke or decline that arrives while a phone signature is being saved waits for it", () => {
   const evidence = {
     boundsHash: "not-checked-here",
