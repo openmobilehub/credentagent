@@ -66,6 +66,13 @@ built: a spec with the design (`to-spec`, `codebase-design` skills), then tracer
 REVIEW.md §8 refuse a big PR that isn't one ticket of a plan (CONTRIBUTING.md, "Big changes"); the
 issue agent's brief splits a big issue the same way (`ci/issue-agent/README.md`, "Splitting a big issue").
 
+**A second symptom of one root cause gets a design note before another fix** — at any size, for people
+and agents alike. Before fixing, search open issues and PRs for the same symptom or code; if another
+issue or fix for that cause is open, write the design (an `epic` and its tickets, or a design note in
+`specs/` with a `tasks.md`), label the issue `needs-decision`, and don't patch again. REVIEW.md §8 makes
+a second fix PR with no design behind either one ⛔ (`scope:approved` doesn't waive it); the issue
+agent's brief does a best-effort search of recent open work itself (`ci/issue-agent/README.md`, "The brief").
+
 ## Architecture (where things live)
 
 The gate is the security surface; the storefront is a reference consumer.
@@ -308,11 +315,12 @@ hooks control the agents themselves, so a patch touching them is refused. A skil
 (`allowed-tools`, `hooks`) and bundled scripts can grant tools too: review a skill edit as carefully as settings. It never merges; its PRs go through
 the same human review as any other. Media lives on the `agent-evidence` branch — never merge it.
 With an `AGENT_GH_TOKEN` secret, the agent also works through the Claude review on its own PR
-(`.github/workflows/issue-agent-review.yml`): it fixes or answers every thread, pushes, resolves the
-threads, and repeats — labelled `agent:in-review` meanwhile — and **asks for a human review only
-when the review is ✅, or 💬 with nothing open** (`agent:ready-for-human`). After 3 cycles a 💬
-also goes to a human as ready, with the open small notes listed; a ⛔ stops as `agent:needs-human`,
-as does any other stated reason. Before any hand-over as ready it checks the issue's acceptance
+(`.github/workflows/issue-agent-review.yml`), labelled `agent:in-review` meanwhile: it **fixes only
+what blocks** — a ⛔ review's "Fix before merging" items and threads people with write access
+opened — pushes, and adds the `review:again` label to ask for one re-review. A ✅ goes to a human
+as ready (`agent:ready-for-human`), with the reviewer's optional notes listed as no action needed and
+no commit made for them; a second ⛔ stops as `agent:needs-human`, as does any other stated reason.
+The cycle cap is 2. Before any hand-over as ready it checks the issue's acceptance
 criteria on the final code and ticks the PR's checklist. If `main` moves and an agent PR now
 conflicts with it, the loop resolves the conflict itself (a sweep runs on every push to `main`) or
 hands over. Don't review an `agent:in-review` PR yet; you'll be asked.

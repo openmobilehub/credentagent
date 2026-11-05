@@ -47,6 +47,20 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
   before). A store without `writePart` works as before, and `doctor()` warns about it on a
   deployment (`verification-store-merges-parts`). `mergeVerificationRecord` and
   `verificationSlots` are exported for stores that add it.
+- `REVOKE_TOOL_META` (`"credentagent/revokeTool"`) from `@openmobilehub/credentagent-gate/cards`: the
+  `_meta` key under which a grant tool result names the server's Revoke tool. The card kit's page
+  draws a Revoke button only when the result names one, so a server that builds the result by hand
+  imports this rather than typing the string. The page ships in the package, but nothing serves it
+  yet (#434).
+
+### Changed
+
+- The storefront widget's pending spending-grant card shows Approve and Decline only when the
+  approval link is an `https:` address, or `http:` on `localhost`, `127.0.0.1` or `[::1]`. Otherwise
+  it says "The merchant's link isn't a safe web address, so this card doesn't show it." The link is
+  built from the gate's `walletOrigin`, so a wallet origin on plain `http:` anywhere else (a LAN
+  address, a `.local` name, a `*.localhost` subdomain) no longer gets the buttons: serve it over
+  `https:` or use `localhost` (#434).
 
 ### Fixed
 

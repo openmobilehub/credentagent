@@ -99,15 +99,44 @@ export function requestComments(comments, { isTrusted, snapshotAt }) {
   return { comments: kept, dropped };
 }
 
+/** The labels that stop a run. With briefs on, `needs-decision` doesn't: approving the brief is the decision. */
+export const BLOCKING_LABELS = ["needs-decision", "epic", "wontfix", "duplicate", "question"];
+export const blockingLabels = (labels, { pause }) => labels.filter((l) => BLOCKING_LABELS.includes(l) && !(pause && l === "needs-decision"));
+
+/**
+ * The open issues and pull requests the brief agent compares its issue with (README.md, "The brief"),
+ * leaving out the issue itself. `items`: { number, kind: "issue" | "pr", title, author: { login,
+ * __typename }, renames: [{ actor }], files? }. A number and kind are facts; a title and a file path
+ * are someone's words (a git path is free text). A title is kept only when whoever wrote it last has
+ * write access (or is the pipeline); a pull request's paths only when its author does, and then only
+ * paths of plain characters. Each entry stays on one line, so nothing in it can close its list.
+ */
+export const SAFE_PATH = /^[\w./@+-]{1,200}$/;
+export function openWorkList(items, { self, isTrusted }) {
+  const line = (s, n) => String(s ?? "").replace(/[\r\n<>]+/g, " ").trim().slice(0, n);
+  return items.filter((w) => w.number !== self).map((w) => {
+    const titleOk = w.renames?.length ? isTrusted(titleAuthor(w.author?.login, w.renames)) : isLoopAuthor(w.author, isTrusted);
+    const filesOk = isLoopAuthor(w.author, isTrusted);
+    return {
+      number: w.number, kind: w.kind,
+      ...(titleOk && w.title ? { title: line(w.title, 200) } : {}),
+      ...(w.kind === "pr" && filesOk ? { files: (w.files ?? []).filter((f) => SAFE_PATH.test(String(f))).slice(0, 30) } : {}),
+    };
+  });
+}
+
 // ── the review loop ──────────────────────────────────────────────────────────────────────────────
 
 /** The Claude review's GitHub App account: a Bot, never a user who happens to be called "claude". */
 export const isReviewBot = (author) => author?.__typename === "Bot" && author?.login === "claude";
 
-/** "ready" (✅ Ready to merge), "notes" (💬 Ready — small notes), "changes" (⛔ Needs changes), or undefined. */
+/**
+ * "ready" (✅ Ready to merge), "changes" (⛔ Needs changes), or undefined. The review is dropping
+ * 💬 Ready — small notes; for one release a 💬 still reads as ✅.
+ */
 export function parseVerdict(body) {
   const m = String(body ?? "").match(/\*\*Verdict:\s*(✅|💬|⛔)/u);
-  return m ? { "✅": "ready", "💬": "notes", "⛔": "changes" }[m[1]] : undefined;
+  return m ? { "✅": "ready", "💬": "ready", "⛔": "changes" }[m[1]] : undefined;
 }
 
 /** An agent PR's branch → its issue number and run id; anything else is not the agent's to touch. */
@@ -116,20 +145,89 @@ export function agentBranch(ref) {
   return m ? { issue: Number(m[1]), run: m[2] } : undefined;
 }
 
+/** The sign-off threadReplies ends each of the agent's own replies with. */
+const AGENT_REPLY = /\(issue agent(, review cycle \d+)?\)\s*$/;
+
 /**
- * The open review threads the agent must answer: started by the review bot or by someone trusted,
- * with only trusted (or bot) replies kept. Everything else is listed as ignored.
+ * The open review threads, sorted. `answer`: started by someone trusted, so the agent must answer
+ * them. `notes`: started by the review bot. They are context for a ⛔ fix and are listed at
+ * hand-over, but they are never criteria, because what blocks is in the summary's "Fix before
+ * merging" — unless a trusted person replied on one: that reply is their request, so it is answered
+ * like their own thread (the agent's own replies don't count). Only trusted (or bot) replies are
+ * kept. Everything else is listed as ignored.
  */
 export function threadsToAnswer(threads, isTrusted) {
   const ok = (a) => isReviewBot(a) || isTrusted(a?.login);
-  const answer = [], ignored = [];
+  const byPerson = (c) => !isReviewBot(c.author) && isTrusted(c.author?.login) && !AGENT_REPLY.test(String(c.body ?? ""));
+  const answer = [], notes = [], ignored = [];
   for (const t of threads) {
     if (t.isResolved) continue;
     const [root, ...rest] = t.comments;
     if (!root || !ok(root.author)) { ignored.push(`a thread started by ${root?.author?.login ?? "a deleted user"} (no write access)`); continue; }
-    answer.push({ id: t.id, path: t.path, line: t.line, comments: [root, ...rest.filter((c) => ok(c.author))].map((c) => ({ author: c.author?.login, body: c.body, databaseId: c.databaseId })) });
+    const kept = rest.filter((c) => ok(c.author));
+    const asked = isReviewBot(root.author) ? kept.findLast(byPerson) : root; // on a bot note, the person's reply is the request
+    (asked ? answer : notes).push({ id: t.id, path: t.path, line: t.line, ...(asked && { request: asked.body }), comments: [root, ...kept].map((c) => ({ author: c.author?.login, body: c.body, databaseId: c.databaseId })) });
   }
-  return { answer, ignored };
+  return { answer, notes, ignored };
+}
+
+const firstLine = (s, n = 200) => String(s).replace(/[*_`#>]/g, "").split("\n").map((l) => l.trim()).find(Boolean)?.slice(0, n) ?? "";
+
+/**
+ * A review cycle's criteria: on ⛔, every "Fix before merging" item in the summary; and each open
+ * thread a trusted person started or replied on (`threads`, threadsToAnswer's `answer`), quoting the
+ * person's request. A bot note nobody replied on is never one.
+ */
+export function reviewFixCriteria({ verdict, threads, conflict = false }) {
+  const criteria = threads.map((t, i) => ({ id: `T${i + 1}`, text: `Review thread ${t.id} (${t.path ?? "general"}${t.line ? `:${t.line}` : ""}) is fixed, or declined with a concrete reason a reviewer would accept — "${firstLine(t.request ?? t.comments[0].body)}"`, verified_by: "review" }));
+  if (conflict) return criteria.length ? criteria : [{ id: "S1", text: "main is merged in cleanly and every gate still passes", verified_by: "review" }];
+  if (verdict === "changes") criteria.unshift({ id: "S1", text: "Every item under 'Fix before merging' in the review summary is fixed, or declined with a concrete reason", verified_by: "review" });
+  return criteria;
+}
+
+/**
+ * The replies the push job posts after a fix: one to each trusted person's thread (resolved when the
+ * agent answered it), and one to each bot note the agent fixed (resolved). A bot note it declined or
+ * left alone gets nothing: optional notes stay open for the human at hand-over. A conflict cycle
+ * wasn't asked about the threads, so it replies to none.
+ */
+export function threadReplies({ threads, notes = [], responses, sha, cycle, conflict = false, escape = (s) => s }) {
+  if (conflict) return [];
+  const byId = new Map(responses.map((r) => [r.thread_id, r]));
+  const reply = (t, r) => ({
+    thread: t.id, root: t.comments[0].databaseId, resolve: Boolean(r),
+    body: r
+      ? `${escape(r.reply)}\n\n— ${r.action === "fixed" ? (sha ? `fixed in ${sha.slice(0, 7)}` : "fixed") : "declined"} (issue agent, review cycle ${cycle})`
+      : `Not addressed in review cycle ${cycle} — the agent gave no answer for this thread. (issue agent)`,
+  });
+  return [
+    ...threads.map((t) => reply(t, byId.get(t.id))),
+    ...notes.filter((t) => byId.get(t.id)?.action === "fixed").map((t) => reply(t, byId.get(t.id))),
+  ];
+}
+
+/** The label that asks the Claude review for one more review of the PR. */
+export const REVIEW_AGAIN_LABEL = "review:again";
+
+/**
+ * The gh calls that ask for one re-review after a fix cycle pushed a commit: make the label if it is
+ * missing, take it off if an earlier cycle left it on (re-adding a label that's already there makes
+ * no `labeled` event), then add it, once. Nothing when the cycle pushed nothing. Not
+ * agent:in-review, so adding it starts no review-loop run.
+ */
+export const reReviewCalls = ({ sha, url, repo }) => (!sha ? [] : [
+  ["label", "create", REVIEW_AGAIN_LABEL, "-R", repo, "--color", "5319E7", "--description", "Asks the Claude review to review this PR once more", "--force"],
+  ["pr", "edit", url, "-R", repo, "--remove-label", REVIEW_AGAIN_LABEL],
+  ["pr", "edit", url, "-R", repo, "--add-label", REVIEW_AGAIN_LABEL],
+]);
+
+/**
+ * What is still open after a cycle's replies: the trusted people's threads the agent gave no answer
+ * for, and the bot notes it didn't fix (threadReplies resolves the fixed ones).
+ */
+export function stillOpen({ threads, notes = [], responses }) {
+  const byId = new Map(responses.map((r) => [r.thread_id, r]));
+  return { threads: threads.filter((t) => !byId.has(t.id)), notes: notes.filter((t) => byId.get(t.id)?.action !== "fixed") };
 }
 
 /**
@@ -147,12 +245,13 @@ export function latestVerdict({ summaries, headAt, headIsMerge, conclusion }) {
 }
 
 /**
- * What the loop does after a review. It keeps fixing until the reviewer is satisfied (✅, or 💬
- * with nothing left open). At the cycle cap, 💬 counts as ready — the reviewer calls it safe to
- * merge, and each review of a fix tends to find a new, smaller note — so the PR goes to a human
- * with the open notes listed. ⛔ at the cap is never "ready": the loop stops and says why.
+ * What the loop does after a review. `open` counts only the threads a trusted person started (bot
+ * notes never block). ✅ with none open goes to a human at once, the bot's notes listed as needing
+ * no action. ⛔ gets one fix cycle; a ⛔ after a cycle that answered a ⛔ (`changesFixed`, from
+ * changesFixesDone — a conflict or criteria cycle doesn't count) goes to a human as stuck. A trusted
+ * person's open thread is answered, up to the cycle cap; at the cap a ✅ goes over with it listed.
  */
-export function reviewDecision({ verdict, open, cycle, maxCycles, conclusion, loopOn, conflicting = false, verified = false }) {
+export function reviewDecision({ verdict, open, cycle, maxCycles, conclusion, loopOn, conflicting = false, verified = false, changesFixed = 0 }) {
   // Without a token whose pushes start workflows a fix could never be reviewed: spend no fix
   // session, and hand the PR (still marked in review) to a human rather than leave it stranded.
   if (!loopOn) return { action: "give-up", reason: "the review loop is off — there is no AGENT_GH_TOKEN, so a pushed fix would never be reviewed again" };
@@ -162,26 +261,28 @@ export function reviewDecision({ verdict, open, cycle, maxCycles, conclusion, lo
     if (cycle >= maxCycles) return { action: "give-up", reason: `the PR conflicts with main and ${maxCycles} review cycles are done` };
     return { action: "fix", conflict: true, reason: "the PR conflicts with main — merging main in and resolving the conflicts" };
   }
-  const decided = decideOnVerdict({ verdict, open, cycle, maxCycles, conclusion });
+  const decided = decideOnVerdict({ verdict, open, cycle, maxCycles, conclusion, changesFixed });
   // "Done" means the reviewer is satisfied; before a human is asked, the issue's own acceptance
   // criteria are checked on the final code too (once per head).
   if (decided.action === "done" && !verified) return { action: "verify", then: decided, reason: "the review is satisfied — checking the issue's acceptance criteria on the final code before handing over" };
   return decided;
 }
 
-function decideOnVerdict({ verdict, open, cycle, maxCycles, conclusion }) {
+function decideOnVerdict({ verdict, open, cycle, maxCycles, conclusion, changesFixed }) {
   if (!verdict) {
     // No verdict for the head: wait if no review has finished (started by hand), otherwise hand the
     // PR to a human — a failed or verdict-less review would leave it "in review" forever.
     if (!conclusion) return { action: "wait", reason: "there is no Claude review verdict for the PR's latest commit yet" };
     return { action: "give-up", reason: conclusion === "success" ? "the Claude review finished without a verdict for the latest commit (it may be paused)" : `the Claude review ${conclusion === "failure" ? "failed" : `ended as ${conclusion}`} on the latest commit` };
   }
-  if ((verdict === "ready" || verdict === "notes") && open === 0) return { action: "done", reason: verdict === "ready" ? "the review says ✅ Ready to merge and every thread is resolved" : "the review says 💬 Ready — small notes, and every thread is resolved" };
-  if (cycle >= maxCycles) {
-    if (verdict === "ready" || verdict === "notes") return { action: "done", notes: open, reason: `after ${maxCycles} review cycles the review says ${verdict === "ready" ? "✅ Ready to merge" : "💬 Ready — small notes"}, with ${open} small note(s) still open (listed below)` };
-    return { action: "give-up", reason: `${maxCycles} review cycles done and the review still says ⛔ Needs changes` };
+  if (verdict === "changes") {
+    if (changesFixed >= 1) return { action: "give-up", reason: "the review still says ⛔ Needs changes after the agent's fix for the last ⛔" };
+    if (cycle >= maxCycles) return { action: "give-up", reason: `the review says ⛔ Needs changes and ${maxCycles} review cycles are done` };
+    return { action: "fix", reason: "the review says ⛔ Needs changes" };
   }
-  return { action: "fix", reason: verdict === "changes" ? "the review says ⛔ Needs changes" : `${open} review thread(s) still open` };
+  if (open === 0) return { action: "done", reason: "the review says ✅ Ready to merge" };
+  if (cycle >= maxCycles) return { action: "done", open, reason: `after ${maxCycles} review cycles the review says ✅ Ready to merge, with ${open} thread(s) from people with write access still open (listed below)` };
+  return { action: "fix", reason: `${open} thread(s) from people with write access still open` };
 }
 
 // ── the acceptance-criteria checklist in an agent PR's description ──────────────────────────────
@@ -202,6 +303,22 @@ export function tickCriteria(body, verdicts, escape = (s) => s) {
     const text = rest.replace(/ — _[^\n]*_$/, "");
     return `- [${v.met ? "x" : " "}] **${id}** ${text}${v.evidence ? ` — _${escape(noComments(v.evidence).replace(/\s+/g, " ").replace(/_/g, "\\_"))}_` : ""}`;
   });
+}
+
+/**
+ * What the three internal reviews send back to the implementer: only blocking findings and unmet
+ * criteria. Suggestions stay on the draft PR (report.mjs) and never cost another round. Every
+ * criterion needs a "met" verdict from the spec lens; a missing one counts as unmet.
+ */
+export function reviewFeedback({ reviews, criteria }) {
+  const blocking = reviews.flatMap((rv) => rv.findings.filter((f) => f.severity === "blocking").map((f) => ({ lens: rv.lens, ...f })));
+  const verdicts = reviews.find((rv) => rv.lens === "spec")?.criteria ?? [];
+  const unmet = criteria.map((ac) => verdicts.find((c) => c.id === ac.id) ?? { id: ac.id, met: false, evidence: "the spec reviewer gave no verdict for it" }).filter((c) => !c.met);
+  const feedback = [
+    ...unmet.map((c) => `- [spec] ${c.id} is NOT met: ${c.evidence}`),
+    ...blocking.map((f) => `- [${f.lens}] ${f.file ? `${f.file}${f.line ? `:${f.line}` : ""} — ` : ""}${f.summary}${f.fix ? `\n  fix: ${f.fix}` : ""}`),
+  ].join("\n");
+  return { clean: !blocking.length && !unmet.length, blocking, unmet, feedback };
 }
 
 /**
@@ -249,6 +366,28 @@ export const isLoopAuthor = (author, isTrusted) =>
  */
 export const cyclesDone = (comments, isTrusted) =>
   comments.filter((c) => /<!-- issue-agent-review cycle=\d+ /.test(c.body) && isLoopAuthor(c.author, isTrusted)).length;
+
+/**
+ * A pushed cycle's marker. `answeredChanges`: the cycle was the fix for a ⛔ (not a conflict or
+ * criteria cycle), so a ⛔ after it is a second ⛔.
+ */
+export const cycleMark = ({ cycle, sha, answeredChanges }) =>
+  `<!-- issue-agent-review cycle=${cycle} sha=${sha ?? "none"}${answeredChanges ? " answered=changes" : ""} -->`;
+
+/**
+ * What a pushed cycle was, from values the push job checks itself — never the agents' fix.json: the
+ * trusted decision, the review's verdict, and `resolved`, the conflicted files (the push job's
+ * rebuild refuses them unless they are exactly what git reports). A cycle that met a conflict became
+ * a conflict cycle. `answeredChanges`: it was the fix for a ⛔, which cycleMark records.
+ */
+export function pushedCycle({ decision, verdict, resolved = [] }) {
+  const mode = decision?.conflict || resolved.length ? "conflict" : decision?.action === "verify" ? "verify" : "review";
+  return { mode, answeredChanges: mode === "review" && verdict === "changes" };
+}
+
+/** How many of those cycles answered a ⛔ — the count that sends the next ⛔ to a human. */
+export const changesFixesDone = (comments, isTrusted) =>
+  comments.filter((c) => /<!-- issue-agent-review cycle=\d+ [^>]*\banswered=changes\b/.test(c.body) && isLoopAuthor(c.author, isTrusted)).length;
 
 /**
  * Whether the review loop may act on a PR at all: a branch in THIS repository (never a fork — its
@@ -320,7 +459,7 @@ export function requestBody(body) {
 export const sharedChanges = (mainChanged, prChanged) => [...new Set(prChanged)].filter((f) => mainChanged.includes(f)).sort();
 
 /** The review-cycle cap from a setting: a whole number ≥ 1, else the default — never NaN (no cap). */
-export function cycleCap(value, fallback = 3) {
+export function cycleCap(value, fallback = 2) {
   const n = Number(value);
   return Number.isInteger(n) && n >= 1 ? n : fallback;
 }
