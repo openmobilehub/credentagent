@@ -51,6 +51,10 @@ export interface DoctorInput {
    *  from seams doctor only partially sees: the order-store check is skipped (the host owns order
    *  persistence) and a residual secret/store finding is annotated rather than asserted hard. */
   composedWithHost?: boolean;
+  /** Does the EFFECTIVE verification store save each part of a record on its own (`writePart`,
+   *  #444)? `false` ⇒ the gate reads, merges and writes the whole record, so two parts saved for one
+   *  order at the same moment can overwrite each other. Absent ⇒ not checked. */
+  verificationStoreWritesParts?: boolean;
   /** Was the AP2 mandate-signing key generated at boot (no `mandateSigningKey` supplied)? */
   ephemeralMandateKey?: boolean;
   /** Was the merchant's checkout key generated at boot (no `checkoutSigningKey` supplied)? */
@@ -150,6 +154,22 @@ export function runDoctor(input: DoctorInput): DoctorReport {
         `recorded on one instance is invisible to the instance that completes the order.` +
         seamNote,
       fix: "Inject a shared { store } (a VerificationStore backed by Redis/Upstash) for multi-instance deploys.",
+    });
+  }
+
+  // A shared store that can't save one part of a record on its own (#444): the gate falls back to
+  // read-merge-write, so on a deployment two pages saving for one order at once can drop a proof.
+  // A warning: the order then goes on as if the lost proof had never been made. The in-memory
+  // default is already reported above.
+  if (env.deployment && input.sharedVerificationStore && input.verificationStoreWritesParts === false) {
+    findings.push({
+      level: "warn",
+      code: "verification-store-merges-parts",
+      message:
+        "The verification store has no writePart(), so each proof is saved by reading, merging and writing the whole " +
+        "record. Two proofs saved for one order at the same moment can overwrite each other, and the order then goes on " +
+        "as if the lost proof had never been made (a lost membership proof leaves it at full price).",
+      fix: "Implement writePart(orderId, slot, part) on your VerificationStore (see its doc comment), or use redisStorage() from @openmobilehub/credentagent-storefront/redis.",
     });
   }
 

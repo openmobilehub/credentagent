@@ -172,8 +172,33 @@ export interface VerificationManifestEntry {
 
 // ── Store (per order id — never process-global; Security invariant 4) ──────
 
+/**
+ * One requirement as saved for an order (#444): what the order must prove, worked out once by
+ * `requirements()` and kept in the order's verification record, so a step on any server reads it
+ * instead of guessing. The manifest entry's own fields, without the page-facing ones.
+ */
+export interface SavedRequirement {
+  credential: string;
+  required: boolean;
+  effect: "gate" | "discount" | "authorize";
+  /** age only: the stricter of the policy's `age.over(n)` and the order's highest `minimumAge` tag. */
+  minAge?: number;
+  /** discount only. */
+  discountPct?: number;
+}
+
+/** Where one part of an order's verification record is saved (#444): its requirements, its age
+ *  proof, its membership proof, or one custom credential's proof (`gate:<credential id>`). */
+export type VerificationSlot = "requirements" | "age" | "membership" | `gate:${string}`;
+
 export interface VerificationRecord {
+  /** The order's requirements, saved once by the first credential, dc-payment or delegated page
+   *  opened from one of its sealed approve links (#444); a link built by hand saves nothing. A proof
+   *  write never changes them. Nothing reads them yet (#445, #446). */
+  requirements?: SavedRequirement[];
   ageVerified?: boolean;
+  /** The age the age proof was made at (`age_over_<n>` disclosed true), saved beside `ageVerified`. */
+  provenOver?: number;
   loyalty?: { applied: boolean; membershipNumber: string | null };
   /**
    * Custom gate() credentials proven for THIS order, keyed by credential id
@@ -197,6 +222,22 @@ export interface VerificationStore {
   read(orderId: string): VerificationRecord | undefined | Promise<VerificationRecord | undefined>;
   write(orderId: string, record: VerificationRecord): void | Promise<void>;
   clear(orderId: string): void | Promise<void>;
+  /**
+   * Optional: save ONE part of an order's record (its requirements, or one proof) without
+   * reading and rewriting the rest, so two pages saving for one order at the same moment can't
+   * drop each other's part (#444). `slot` names the part; a later write to the same slot replaces
+   * it. Parts sit beside the record `write()` saves: `read()` returns that record with every part
+   * merged in (`mergeVerificationRecord`), and `clear()` removes them all. The gate only sends a
+   * slot that `verificationSlots(requirements)` lists for the order: the fixed slots, then one per
+   * custom credential the order's saved requirements name. So a store that can't list its keys
+   * finds every part there. A custom part the saved requirements don't name is merged into the
+   * record through `write()` instead, so two of those saved at once can still overwrite each other.
+   *
+   * A store without it still works: the gate reads, merges and `write()`s the whole record, as
+   * before, and `doctor()` warns about a shared one on a deployment, since two parts saved at
+   * once can overwrite each other.
+   */
+  writePart?(orderId: string, slot: VerificationSlot, part: VerificationRecord): void | Promise<void>;
 }
 
 /**

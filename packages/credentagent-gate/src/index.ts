@@ -28,7 +28,7 @@ export type { ProofEntry, ProofRail } from "./ceremony/proofs.js";
 export { age, membership, payment, required, optional, defineCredential, dcql, gate, discount, authorize } from "./credentials.js";
 
 // ── Store ────────────────────────────────────────────────────────────────
-export { MemoryVerificationStore } from "./store.js";
+export { MemoryVerificationStore, mergeVerificationRecord, verificationSlots } from "./store.js";
 
 // ── The orders resource (spec 009) ──────────────────────────────────────────
 // `await credentagent.orders.create({ order, policy })` → { id, approveUrl, manifest };
@@ -275,6 +275,8 @@ export type {
   VerificationManifestEntry,
   VerificationStore,
   VerificationRecord,
+  SavedRequirement,
+  VerificationSlot,
   TrustLevel,
   DcqlQuery,
   DcqlClaim,

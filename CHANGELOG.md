@@ -28,6 +28,26 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
 
 ### Added
 
+- Each order's requirements are now saved with its proofs, in the order's verification record
+  (`record.requirements`), so a server that never ran `requirements()` can read what the order
+  needs. `requirements()` seals them into every mounted approve link (a new `requirements=` query
+  parameter, signed with the rails' signing key and bound to the order id, which makes each link
+  about 150–250 characters longer). The first credential, dc-payment or delegated page opened from
+  such a link saves them, once. Links a host builds by hand, such as the Pay buttons on the
+  `orders.serve()` checkout page and the storefront's, carry no seal yet, so those orders save
+  nothing (#446). An age requirement holds one number: the stricter of the policy's
+  `age.over(n)` and the order's highest `minimumAge` tag. An age proof now also saves the age it
+  was made at (`provenOver`). Nothing reads either yet, so no order completes or is refused
+  differently (#444, the first step of #442).
+- `VerificationStore` has an optional `writePart(orderId, slot, part)`, which saves one proof
+  without rewriting the rest of the record, so two proofs saved for one order at the same moment
+  no longer overwrite each other. The exception is a custom requirement's proof that the order's
+  saved requirements don't name (an order opened from a link without a seal has none saved): the
+  gate still merges that one into the record, as before, so two of those saved at once can still
+  collide, and the buyer proves again. The in-memory store and `redisStorage()` implement it;
+  Redis keeps each part under a key of its own. A store without `writePart` works as before, and `doctor()` warns about it on a
+  deployment (`verification-store-merges-parts`). `mergeVerificationRecord` and
+  `verificationSlots` are exported for stores that add it.
 - `REVOKE_TOOL_META` (`"credentagent/revokeTool"`) from `@openmobilehub/credentagent-gate/cards`: the
   `_meta` key under which a grant tool result names the server's Revoke tool. The card kit's page
   draws a Revoke button only when the result names one, so a server that builds the result by hand

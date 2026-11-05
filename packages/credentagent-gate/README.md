@@ -237,6 +237,7 @@ Each finding is `{ level: "error" | "warn", code, message, fix }`. It checks the
 | `ephemeral-gate-secret` | no `gateSecret` on a deployment (serverless ⇒ error, else warn) | set `GATE_SECRET` — `openssl rand -hex 32` — and pass `{ gateSecret }` |
 | `localhost-wallet-origin` | `walletOrigin` is localhost on a deployment | pass your public `https` origin |
 | `in-memory-verification-store` | the default in-memory `store` on a deployment | inject a shared `{ store }` (Redis/Upstash) |
+| `verification-store-merges-parts` | a shared `store` with no `writePart()` on a deployment (**warn**): two proofs saved for one order at the same moment can overwrite each other | implement `writePart(orderId, slot, part)`, or use `redisStorage()` |
 | `in-memory-order-store` | the default in-memory order stores on a deployment | inject `{ orderStore, completedOrderStore }` |
 | `ephemeral-mandate-key` | no `mandateSigningKey` on a deployment — the AP2 key was generated at boot (**error** on any deployment) | pass a stable private P-256 JWK as `{ mandateSigningKey }` |
 | `ephemeral-checkout-key` | no `checkoutSigningKey` on a deployment — the key carts are quoted with was generated at boot (**warn**) | pass a second, different private P-256 JWK as `{ checkoutSigningKey }` — one per store |
@@ -524,7 +525,13 @@ app.post("/checkout/:id", async (req, res) => {
   serve, and the buyer lands on a dead link.
 - **`host.verificationStore`** is the per-order proof store (default in-memory; inject a shared store
   — e.g. Redis — for a multi-instance deploy). The rails write it when the buyer proves; your
-  completion reads it.
+  completion reads it. It also holds the order's requirements: `requirements()` seals them into
+  each approve link, and the first credential, dc-payment or delegated page opened from one saves
+  them (`record.requirements`). A link you build by hand carries no seal, so it saves nothing yet.
+  For a store of your own, add the optional `writePart(orderId, slot, part)` so two proofs saved at
+  the same moment don't overwrite each other (except a custom proof the order's saved requirements
+  don't name, which the gate still merges into the record); `read()` then returns the record with
+  each part merged in by `mergeVerificationRecord`, from the slots `verificationSlots(requirements)` lists.
 - **Fail-closed like `mount()`:** `defineHost` throws at construction on an incomplete or contradictory
   seam set (missing `catalog`/`orderStore`, both `records` and a `completion`, or neither a `signingKey`
   nor `allowEphemeralKey`).
@@ -1010,7 +1017,7 @@ defineCredential({ id, request, verify, effect, appliesTo?, ui })
 dcql({ docType, claims })  ·  gate()  ·  discount({ percent?, amount? })  ·  authorize()
 
 // Stores + host-side composition seam
-MemoryVerificationStore  ·  completeOrder(input, ctx)
+MemoryVerificationStore  ·  mergeVerificationRecord(record, part)  ·  verificationSlots(requirements?)  ·  completeOrder(input, ctx)
 
 // Bring your own host — the typed seam contract (builds completion + publishes the seams)
 defineHost({ catalog, orderStore, records | completion, signingKey | allowEphemeralKey })
@@ -1041,7 +1048,7 @@ gated()  ·  buildVerificationRequired()  ·  isVerificationRequired()  ·  enve
 ageDcql()  ·  ENVELOPE_VERSION  ·  ENVELOPE_SENTINEL
 
 // Types: CredentAgentOptions, GateOrder, OrderLine, Credential, Step, Effect,
-//        VerificationManifestEntry, VerificationStore, VerificationRecord,
+//        VerificationManifestEntry, VerificationStore, VerificationRecord, SavedRequirement, VerificationSlot,
 //        TrustLevel, DcqlQuery, DcqlClaim, DcqlCredentialOption, ExpressApp,
 //        CompletionSeam / SettlementSeam / CeremonyOrder (host composition)
 //        DelegatedVerifier / DelegatedVerdict / DelegatedHandoff / SettlementRecordLike (delegated seam)
