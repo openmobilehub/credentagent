@@ -463,7 +463,9 @@ describe("a device grant will not seal without a signed product list", () => {
 // wait for the save, so it is never overwritten. Each test starts the save, gives it one microtask to
 // pass its pending check (a timer could let the save finish first, and the test would check nothing),
 // then stops the grant. Red with the lock removed from `_authorizeDevice`, from revoke's status flip or
-// from `_deny`, or with `_deny`'s pending check removed.
+// from `_deny`, or with `_deny`'s pending check removed. The save is in flight only because it waits on
+// a real async step (the SHA-256 digest in `sealIntent`); if that step ever turns synchronous, the save
+// finishes first and `whileSaving` fails loudly instead of letting the tests check nothing.
 describe("BYPASS: a revoke or decline that arrives while a phone signature is being saved waits for it", () => {
   const evidence = {
     boundsHash: "not-checked-here",
@@ -481,10 +483,19 @@ describe("BYPASS: a revoke or decline that arrives while a phone signature is be
     return { g, saving };
   }
 
+  /** Starts `stop` and checks that it is waiting on a save still in flight, then lets it finish. */
+  async function whileSaving<T>(g: Grant, stop: () => Promise<T>): Promise<T> {
+    const stopping = stop();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(g.status).toBe("pending"); // the save is still in flight, and the stop is waiting for it
+    return stopping;
+  }
+
   it("a revoke waits for the save, then revokes the grant", async () => {
     const ca = makeAgent();
     const { g, saving } = await savingSignature(ca);
-    await g.revoke();
+    await whileSaving(g, () => g.revoke());
     expect(await saving).toBe(true);
     expect((await ca.grants.retrieve(g.id))!.status).toBe("revoked");
     expect((await g.spend({ idempotencyKey: "p1", items: [{ sku: "coffee" }] })).ok).toBe(false);
@@ -493,7 +504,7 @@ describe("BYPASS: a revoke or decline that arrives while a phone signature is be
   it("a decline waits for the save, then is refused: the person already signed", async () => {
     const ca = makeAgent();
     const { g, saving } = await savingSignature(ca);
-    expect(await ca.grants._deny(g.id)).toBe(false);
+    expect(await whileSaving(g, () => ca.grants._deny(g.id))).toBe(false);
     expect(await saving).toBe(true);
     expect((await ca.grants.retrieve(g.id))!.status).toBe("authorized");
   });
