@@ -27,8 +27,8 @@ const SECRET = "stable-test-secret";
 
 // ── Fixtures ────────────────────────────────────────────────────────────────
 
-const PRICES: Record<string, number> = { "oak-whiskey": 124, "aurora-headphones": 199 };
-const MIN_AGE: Record<string, number> = { "oak-whiskey": 21 };
+const PRICES: Record<string, number> = { "oak-whiskey": 124, "aurora-headphones": 199, "cigar-box": 80 };
+const MIN_AGE: Record<string, number> = { "oak-whiskey": 21, "cigar-box": 25 };
 
 const catalog: CeremonyCatalog = {
   createOrder(items, orderId) {
@@ -320,6 +320,8 @@ const tokenFor = (orderId: string, reference = "ref-1") => sealReference({ refer
 
 interface CompletingHarness {
   verify(body: Record<string, unknown>): Promise<{ code: number; body?: unknown }>;
+  /** POST the credential page's verify on the same app (the two-step flow's first step). */
+  proveOnCredentialPage(body: Record<string, unknown>): Promise<{ code: number; body?: unknown }>;
   records: Map<string, CompletedRecord>;
   verification: MemoryVerificationStore;
   verifier: DelegatedVerifier;
@@ -350,19 +352,20 @@ function harness(
     });
   const app = routeApp();
   mountCeremony(app, { verificationStore: verification, orderStore, catalog, completion, signingKey: SECRET, credentialRegistry: registry, verifier, ...(opts.stateless ? { statelessOrders: true } : {}) });
-  const handler = app.handlers.get("POST /credentagent/delegated/verify")!;
+  const post = async (route: string, body: Record<string, unknown>) => {
+    const { res, out } = resDouble();
+    await (app.handlers.get(route)! as unknown as (req: unknown, res: unknown) => Promise<void>)(
+      { query: {}, headers: { host: "shop.example" }, protocol: "https", body },
+      res,
+    );
+    return out;
+  };
   return {
     records,
     verification,
     verifier,
-    async verify(body) {
-      const { res, out } = resDouble();
-      await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(
-        { query: {}, headers: { host: "shop.example" }, protocol: "https", body },
-        res,
-      );
-      return out;
-    },
+    verify: (body) => post("POST /credentagent/delegated/verify", body),
+    proveOnCredentialPage: (body) => post("POST /credentagent/credential/verify", body),
   };
 }
 
@@ -385,13 +388,42 @@ describe("delegated rail — POST /verify happy path", () => {
   });
 
   it("records the age the proof was re-checked at (provenOver) beside ageVerified (#444)", async () => {
-    // A wrong amount refuses completion, so the order's record is still there to read.
-    const verifier = verifierReturning({ binding: { amount: 1, currency: "USD", payee: { id: "shop.example" } } });
+    // A wrong amount refuses completion, so the order's record is still there to read. Checked at
+    // 25 as well as 21, so a rail that always saved the default 21 would fail.
+    for (const [productId, minAge] of [["oak-whiskey", 21], ["cigar-box", 25]] as const) {
+      const verifier = verifierReturning({ claims: { age_mdl: { [`age_over_${minAge}`]: true } }, binding: { amount: 1, currency: "USD", payee: { id: "shop.example" } } });
+      const h = harness([payment.in("usd"), age.over(21)], verifier, [{ productId, quantity: 1 }]);
+      await h.verify({ order: "ORD-1", referenceToken: tokenFor("ORD-1") });
+      const record = await h.verification.read("ORD-1");
+      expect(record?.ageVerified).toBe(true);
+      expect(record?.provenOver).toBe(minAge);
+    }
+  });
+
+  it("keeps the age proof the credential page saved: proving age there, then paying here, keeps its receipt (#444 review)", async () => {
+    const verifier = verifierReturning();
     const h = harness([payment.in("usd"), age.over(21)], verifier);
-    await h.verify({ order: "ORD-1", referenceToken: tokenFor("ORD-1") });
-    const record = await h.verification.read("ORD-1");
-    expect(record?.ageVerified).toBe(true);
-    expect(record?.provenOver).toBe(21);
+    const proved = await h.proveOnCredentialPage({ order: "ORD-1", cred: "age", claims: { age_over_21: true } });
+    expect((proved.body as { verified: boolean }).verified).toBe(true);
+    const out = await h.verify({ order: "ORD-1", referenceToken: tokenFor("ORD-1") });
+    expect((out.body as { completed: boolean }).completed).toBe(true);
+    // The delegated re-check must not replace the age part the credential page saved, receipt included.
+    expect(h.records.get("ORD-1")?.proofs?.map((p) => p.gate)).toContain("Age 21+");
+  });
+
+  it("keeps a custom gate's receipt the credential page saved, too", async () => {
+    const rx = defineCredential({
+      id: "prescription",
+      request: dcql({ docType: "org.example.rx.1", claims: ["rx_valid"] }),
+      verify: (c) => c.rx_valid === true,
+      effect: gate(),
+      ui: { label: "Prescription", action: "Present your prescription" },
+    });
+    const verifier = verifierReturning({ binding: { amount: 199, currency: "USD", payee: { id: "shop.example" } }, claims: { prescription: { rx_valid: true }, payment: {} } });
+    const h = harness([payment.in("usd"), rx], verifier, [{ productId: "aurora-headphones", quantity: 1 }]);
+    await h.proveOnCredentialPage({ order: "ORD-1", cred: "prescription", claims: { rx_valid: true } });
+    expect((await h.verify({ order: "ORD-1", referenceToken: tokenFor("ORD-1") })).body).toMatchObject({ completed: true });
+    expect(h.records.get("ORD-1")?.proofs?.map((p) => p.gate)).toContain("Prescription");
   });
 });
 

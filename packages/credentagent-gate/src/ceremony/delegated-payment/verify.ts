@@ -63,6 +63,8 @@ function claimsForCredential(policyId: string, idMap: Map<string, string>, verdi
 }
 
 // Each proof is its own part of the order's record (#444), in the slot the credential rail uses.
+// A later write to a slot replaces it, so `applyDelegatedPolicy` writes only what the order
+// doesn't hold yet: an age the credential page already proved keeps its receipt entry.
 async function markAgeVerified(ctx: CeremonyContext, orderId: string, provenOver: number): Promise<void> {
   await savePart(ctx.verificationStore, orderId, "age", { ageVerified: true, provenOver });
 }
@@ -84,6 +86,7 @@ async function markGateVerified(ctx: CeremonyContext, orderId: string, credId: s
 export async function applyDelegatedPolicy(ctx: CeremonyContext, order: CeremonyOrder, verdict: DelegatedVerdict): Promise<void> {
   const entries = delegatedPolicyEntries(ctx.credentialRegistry, order);
   const { idMap } = mergeDelegatedDcql(entries);
+  const held = (await ctx.verificationStore.read(order.id)) ?? {};
   for (const { credentialId } of entries) {
     const cred = ctx.credentialRegistry?.get(credentialId);
     if (!cred || cred.effect.kind !== "gate") continue; // authorize → binding gate; discount → excluded
@@ -94,8 +97,13 @@ export async function applyDelegatedPolicy(ctx: CeremonyContext, order: Ceremony
         ? evaluateCredential("age", claims, { minimumAge })
         : evaluateCustom(cred, claims);
     if (!result.verified) continue; // leave state unwritten → completeOrder refuses
-    if (credentialId === "age") await markAgeVerified(ctx, order.id, minimumAge);
-    else await markGateVerified(ctx, order.id, credentialId);
+    if (credentialId === "age") {
+      // A proof saved before `provenOver` existed was made at this same age (the tag's, or 21).
+      const proven = held.ageVerified === true && (held.provenOver ?? minimumAge) >= minimumAge;
+      if (!proven) await markAgeVerified(ctx, order.id, minimumAge);
+    } else if (held.verifiedGates?.[credentialId] !== true) {
+      await markGateVerified(ctx, order.id, credentialId);
+    }
   }
 }
 
