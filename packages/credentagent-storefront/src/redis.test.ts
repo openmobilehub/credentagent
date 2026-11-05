@@ -140,6 +140,14 @@ describe("redisStorage — parts of a verification record (#444)", () => {
     expect(await s.read("ORD-1")).toBeUndefined();
   });
 
+  it("one order's parts never show on another order whose id and a credential id share colons", async () => {
+    // Joined unescaped, order "A" slot "gate:x:age" and order "A:gate:x" slot "age" are one key.
+    const s = redisStorage({ client: fakeRedis() }).verificationStore;
+    await s.writePart!("A:gate:x", "age", { ageVerified: true, provenOver: 21 });
+    await s.writePart!("A", "requirements", { requirements: [{ credential: "x:age", required: true, effect: "gate" }] });
+    expect((await s.read("A"))?.ageVerified).toBeUndefined();
+  });
+
   it("one order's parts never show on another order, even one whose id ends in the slot name", async () => {
     const s = redisStorage({ client: fakeRedis() }).verificationStore;
     await s.writePart!("ORD-1", "age", { ageVerified: true, provenOver: 21 });

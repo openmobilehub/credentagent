@@ -15,8 +15,8 @@
 // Keys are `${namespace}:${kind}:${orderId}` — order/verification state is scoped per
 // order id (never process-global; Security Invariant #4) and `namespace` isolates tenants
 // sharing one backend. Each part of a verification record (its requirements, or one proof)
-// has a key of its own: `${namespace}:verification-part:${orderId}:${slot}`. This layer
-// PERSISTS state only; it is not a trust anchor and never affects `trust_level`.
+// has a key of its own: `${namespace}:verification-part:${orderId}:${slot}`, both encoded.
+// This layer PERSISTS state only; it is not a trust anchor and never affects `trust_level`.
 
 import type { Order } from "./index.js";
 import type { CartStore, OrderStore, StorageProvider, CompletedOrderRecord } from "./server.js";
@@ -124,8 +124,10 @@ class RedisVerificationStore implements VerificationStore {
     return joinKey(this.namespace, "verification", orderId);
   }
   // Its own kind, so a part key never equals the record key of an order whose id ends in ":age".
+  // The order id and slot are encoded: both may hold ":" (a credential id can), and joined bare,
+  // order "A" slot "gate:x:age" would be the key of order "A:gate:x" slot "age".
   private partKey(orderId: string, slot: VerificationSlot): string {
-    return joinKey(this.namespace, "verification-part", orderId, slot);
+    return joinKey(this.namespace, "verification-part", encodeURIComponent(orderId), encodeURIComponent(slot));
   }
   private async readParts(orderId: string, slots: readonly VerificationSlot[]): Promise<VerificationRecord[]> {
     const parts = await Promise.all(slots.map((slot) => this.redis.get<VerificationRecord>(this.partKey(orderId, slot))));
