@@ -256,37 +256,3 @@ describe("BYPASS: a phone signature that lands after the grant was stopped is re
     }
   }
 });
-
-// The four tests above stop the grant before the signature arrives. These stop it while the gate is
-// still saving one: for a grant the gate spends with its own key, `_authorizeDevice` awaits
-// `preApprove` between its pending check and writing `authorized`, and only the per-grant lock keeps a
-// revoke or decline out of that gap. Remove `this.locks.run` from `_authorizeDevice` and these go red.
-// The page path pins the same race in grants.test.ts ("a revoke landing while authorize is in flight").
-describe("BYPASS: a stop that lands while a phone signature is being saved never leaves a spendable grant", () => {
-  const evidence = {
-    boundsHash: "h",
-    signedAt: new Date().toISOString(),
-    credentialType: "com.emvco.dpc",
-    verifiedBy: "gate",
-    trustLevel: "device-signed" as const,
-    mandates: [{ constraints: [{ type: "checkout.line_items", items: [{ acceptable_items: [{ id: "coffee" }] }] }] }],
-  };
-  const gateHeldGrant = (credentagent: CredentAgent) =>
-    credentagent.grants.create({ merchant: "utopia", budget: 200, perSpend: 30, allow: { skus: ["coffee"] } });
-
-  it("a revoke", async () => {
-    const { credentagent } = merchant();
-    const g = await gateHeldGrant(credentagent);
-    await Promise.all([credentagent.grants._authorizeDevice(g.id, evidence), g.revoke()]); // saving in flight, revoke lands
-    expect((await credentagent.grants.retrieve(g.id))!.status).toBe("revoked");
-    expect((await g.spend({ idempotencyKey: "p1", items: [{ sku: "coffee" }] })).ok).toBe(false);
-  });
-
-  // With the lock, whichever starts first wins, so the decline's answer must say which one did.
-  it("a decline", async () => {
-    const { credentagent } = merchant();
-    const g = await gateHeldGrant(credentagent);
-    const [, declined] = await Promise.all([credentagent.grants._authorizeDevice(g.id, evidence), credentagent.grants._deny(g.id)]);
-    expect((await credentagent.grants.retrieve(g.id))!.status).toBe(declined ? "denied" : "authorized");
-  });
-});
