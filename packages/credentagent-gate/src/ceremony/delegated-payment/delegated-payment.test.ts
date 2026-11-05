@@ -411,6 +411,14 @@ describe("delegated rail — POST /verify happy path", () => {
     expect(h.records.get("ORD-1")?.proofs?.map((p) => p.gate)).toContain("Age 21+");
   });
 
+  it("replaces an age proven LOWER than this order's age, rather than keeping it", async () => {
+    const verifier = verifierReturning({ binding: { amount: 1, currency: "USD", payee: { id: "shop.example" } } });
+    const h = harness([payment.in("usd"), age.over(21)], verifier);
+    h.verification.writePart("ORD-1", "age", { ageVerified: true, provenOver: 18 });
+    await h.verify({ order: "ORD-1", referenceToken: tokenFor("ORD-1") }); // a wrong amount keeps the record
+    expect((await h.verification.read("ORD-1"))?.provenOver).toBe(21);
+  });
+
   it("keeps a custom gate's receipt the credential page saved, too", async () => {
     const rx = defineCredential({
       id: "prescription",

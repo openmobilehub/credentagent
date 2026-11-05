@@ -86,7 +86,6 @@ async function markGateVerified(ctx: CeremonyContext, orderId: string, credId: s
 export async function applyDelegatedPolicy(ctx: CeremonyContext, order: CeremonyOrder, verdict: DelegatedVerdict): Promise<void> {
   const entries = delegatedPolicyEntries(ctx.credentialRegistry, order);
   const { idMap } = mergeDelegatedDcql(entries);
-  const held = (await ctx.verificationStore.read(order.id)) ?? {};
   for (const { credentialId } of entries) {
     const cred = ctx.credentialRegistry?.get(credentialId);
     if (!cred || cred.effect.kind !== "gate") continue; // authorize → binding gate; discount → excluded
@@ -97,6 +96,8 @@ export async function applyDelegatedPolicy(ctx: CeremonyContext, order: Ceremony
         ? evaluateCredential("age", claims, { minimumAge })
         : evaluateCustom(cred, claims);
     if (!result.verified) continue; // leave state unwritten → completeOrder refuses
+    // Read just before writing, so a proof the credential page saved meanwhile is seen and kept.
+    const held = (await ctx.verificationStore.read(order.id)) ?? {};
     if (credentialId === "age") {
       // A proof saved before `provenOver` existed was made at this same age (the tag's, or 21).
       const proven = held.ageVerified === true && (held.provenOver ?? minimumAge) >= minimumAge;
