@@ -28,10 +28,16 @@ export function verificationSlots(requirements?: readonly SavedRequirement[]): V
   return ["requirements", "age", "membership", ...custom.map((id): VerificationSlot => `gate:${id}`)];
 }
 
-/** Save one part of an order's record through `writePart`, or — for a store without it — by
- *  reading, merging and writing the whole record back, as every write did before #444. */
+/**
+ * Save one part of an order's record through `writePart`, or by reading, merging and writing the
+ * whole record back, as every write did before #444. The merge is for a store without `writePart`,
+ * and for a custom credential's part the order's saved requirements don't name (an order opened
+ * from a link without a seal has none): `verificationSlots` doesn't list that slot, so a store that
+ * finds its parts that way could never read it back. A store only ever gets the slots it can find.
+ */
 export async function savePart(store: VerificationStore, orderId: string, slot: VerificationSlot, part: VerificationRecord): Promise<void> {
-  if (store.writePart) return store.writePart(orderId, slot, part);
+  const listed = !slot.startsWith("gate:") || verificationSlots((await store.read(orderId))?.requirements).includes(slot);
+  if (store.writePart && listed) return store.writePart(orderId, slot, part);
   const prev = (await store.read(orderId)) ?? {};
   await store.write(orderId, mergeVerificationRecord(prev, part));
 }

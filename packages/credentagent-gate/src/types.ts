@@ -227,9 +227,10 @@ export interface VerificationStore {
    * reading and rewriting the rest, so two pages saving for one order at the same moment can't
    * drop each other's part (#444). `slot` names the part; a later write to the same slot replaces
    * it. Parts sit beside the record `write()` saves: `read()` returns that record with every part
-   * merged in (`mergeVerificationRecord`), and `clear()` removes them all. A store that can't list
-   * its keys finds an order's parts with `verificationSlots(requirements)`: the fixed slots, then
-   * one per custom credential the order's saved requirements name.
+   * merged in (`mergeVerificationRecord`), and `clear()` removes them all. The gate only sends a
+   * slot that `verificationSlots(requirements)` lists for the order: the fixed slots, then one per
+   * custom credential the order's saved requirements name (any other custom part it merges into
+   * the record through `write()`). So a store that can't list its keys finds every part there.
    *
    * A store without it still works: the gate reads, merges and `write()`s the whole record, as
    * before, and `doctor()` warns that two parts saved at once can overwrite each other.

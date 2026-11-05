@@ -131,13 +131,11 @@ describe("redisStorage — parts of a verification record (#444)", () => {
 
   it("read() merges the parts into the written record, and clear() removes them all", async () => {
     const s = redisStorage({ client: fakeRedis() }).verificationStore;
+    const requirements = [{ credential: "license", required: true, effect: "gate" as const }];
     await s.write("ORD-1", { verifiedGates: { rx: true } });
-    await s.writePart!("ORD-1", "requirements", { requirements: [{ credential: "age", required: true, effect: "gate", minAge: 21 }] });
+    await s.writePart!("ORD-1", "requirements", { requirements });
     await s.writePart!("ORD-1", "gate:license", { verifiedGates: { license: true } });
-    expect(await s.read("ORD-1")).toEqual({
-      verifiedGates: { rx: true, license: true },
-      requirements: [{ credential: "age", required: true, effect: "gate", minAge: 21 }],
-    });
+    expect(await s.read("ORD-1")).toEqual({ verifiedGates: { rx: true, license: true }, requirements });
     await s.clear("ORD-1");
     expect(await s.read("ORD-1")).toBeUndefined();
   });

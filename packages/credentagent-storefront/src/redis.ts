@@ -114,8 +114,8 @@ class RedisVerificationStore implements VerificationStore {
   // so two pages saving parts for one order at the same moment can't overwrite each other.
   // `RedisLike` can only GET a key it can name, so `read()` finds the parts through
   // `verificationSlots`: the fixed slots, then one per custom credential the order's saved
-  // requirements name. A custom part those requirements don't name (a hand-built link saved
-  // none) is merged into the record instead, as every write was before. Isolation is per-order keying.
+  // requirements name. Those are the only slots the gate sends here; it merges any other custom
+  // part into the record itself. Isolation is per-order keying.
   constructor(
     private readonly redis: RedisLike,
     private readonly namespace: string,
@@ -141,12 +141,7 @@ class RedisVerificationStore implements VerificationStore {
     await this.redis.set(this.keyFor(orderId), record);
   }
   async writePart(orderId: string, slot: VerificationSlot, part: VerificationRecord): Promise<void> {
-    if (!slot.startsWith("gate:") || verificationSlots((await this.read(orderId))?.requirements).includes(slot)) {
-      await this.redis.set(this.partKey(orderId, slot), part);
-      return;
-    }
-    const prev = (await this.redis.get<VerificationRecord>(this.keyFor(orderId))) ?? {};
-    await this.redis.set(this.keyFor(orderId), mergeVerificationRecord(prev, part));
+    await this.redis.set(this.partKey(orderId, slot), part);
   }
   async clear(orderId: string): Promise<void> {
     const slots = verificationSlots((await this.read(orderId))?.requirements);

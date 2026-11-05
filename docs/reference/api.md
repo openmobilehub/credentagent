@@ -274,7 +274,7 @@ For a store of your own, two helpers:
 
 ```ts
 mergeVerificationRecord(record, part): VerificationRecord   // how read() merges a part in
-verificationSlots(requirements?): VerificationSlot[]        // every slot an order's parts can be in
+verificationSlots(requirements?): VerificationSlot[]        // every slot the gate saves an order's parts in
 ```
 
 ---

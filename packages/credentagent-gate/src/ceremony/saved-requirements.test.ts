@@ -11,7 +11,8 @@ import { describe, it, expect } from "vitest";
 import { CredentAgent } from "../client.js";
 import { defineHost } from "../host.js";
 import { age, membership, payment, required, optional } from "../credentials.js";
-import { MemoryVerificationStore } from "../store.js";
+import { MemoryVerificationStore, mergeVerificationRecord, verificationSlots } from "../store.js";
+import { prescription } from "./credential-gate/__fixtures__/customCredential.js";
 import type { CartItemRef, CeremonyCatalog, CeremonyOrder } from "./types.js";
 import type { GateOrder, SavedRequirement, Step, VerificationRecord, VerificationSlot, VerificationStore } from "../types.js";
 
@@ -288,5 +289,39 @@ describe("saved requirements — parts saved at the same moment don't overwrite 
     ]);
     expect(await savedAge(store, o.id)).toBe(21);
     expect((await store.read(o.id))?.provenOver).toBe(21);
+  });
+});
+
+// A store written from the `writePart` doc comment alone: each part under a key of its own, and
+// `read()` finds them only through `verificationSlots(requirements)`, as a store that can't list
+// its keys must.
+class RecipeStore implements VerificationStore {
+  private readonly kv = new Map<string, VerificationRecord>();
+  private parts(orderId: string, slots: VerificationSlot[]): VerificationRecord[] {
+    return slots.map((slot) => this.kv.get(`${orderId}|${slot}`)).filter((p): p is VerificationRecord => p !== undefined);
+  }
+  read(orderId: string): VerificationRecord | undefined {
+    const record = this.kv.get(`record|${orderId}`);
+    const fixed = this.parts(orderId, verificationSlots());
+    const base = fixed.reduce(mergeVerificationRecord, record ?? {});
+    const custom = this.parts(orderId, verificationSlots(base.requirements).filter((slot) => slot.startsWith("gate:")));
+    return record || fixed.length > 0 || custom.length > 0 ? custom.reduce(mergeVerificationRecord, base) : undefined;
+  }
+  write(orderId: string, record: VerificationRecord): void { this.kv.set(`record|${orderId}`, record); }
+  writePart(orderId: string, slot: VerificationSlot, part: VerificationRecord): void { this.kv.set(`${orderId}|${slot}`, part); }
+  clear(orderId: string): void {
+    for (const key of [...this.kv.keys()]) if (key === `record|${orderId}` || key.startsWith(`${orderId}|`)) this.kv.delete(key);
+  }
+}
+
+describe("saved requirements — a store built from the writePart recipe (#444 review)", () => {
+  it("still finds a custom proof on an order whose saved requirements don't name it", async () => {
+    const store = new RecipeStore();
+    const s = server({ store });
+    const o = s.order("ORD-1", "record");
+    s.credentagent.requirements(o, [required(prescription)]); // registers it; no sealed link is opened
+    const res = await request(s.app).post("/credentagent/credential/verify").send({ order: o.id, cred: "prescription", claims: { rx_valid: true } });
+    expect(res.body.verified).toBe(true);
+    expect((await store.read(o.id))?.verifiedGates).toEqual({ prescription: true });
   });
 });
