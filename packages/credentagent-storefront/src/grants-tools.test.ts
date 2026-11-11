@@ -13,7 +13,9 @@ import { createStorefront } from "./server.js";
 import type { Product } from "./index.js";
 import { SAMPLE_CATALOG } from "./index.js";
 import { projectGrantView } from "./grant-project.js";
-import { CredentAgent } from "@openmobilehub/credentagent-gate";
+import request from "supertest";
+import { CredentAgent, devSimulateWalletSignature } from "@openmobilehub/credentagent-gate";
+import { AgentKey } from "@openmobilehub/credentagent-gate/agent";
 
 // The gate's priced catalog (dollars): whiskey is age-restricted → non-delegable. Ids/prices match
 // the storefront's SAMPLE_CATALOG so the two agree (the grant tools re-price against the storefront).
@@ -421,5 +423,53 @@ describe("grant tools — merchant config & live-catalog re-pricing (Codex #118)
     await ca.grants._authorize(g.id);
     const s = await c.callTool({ name: "spend-from-grant", arguments: { grantId: g.id, productId: "widget", idempotencyKey: "w1" } });
     expect(door(s)).toMatchObject({ ok: true, amount: 20, remaining: 80 });
+  });
+});
+
+// A store that names the agent's PUBLIC key on every grant it mints, so the agent signs its own
+// Checkout and Payment mandates and the store never holds the spending key (design 2026-11-09).
+describe("a store configured with the agent's public key", () => {
+  const HOST = "shop.example";
+  const ORIGIN = `http://${HOST}`;
+  const agent = () => AgentKey.generate();
+
+  function agentStore(agentKey = agent()) {
+    const ca = new CredentAgent({ walletOrigin: ORIGIN, catalog: GATE_CATALOG, gateSecret: "stable-test-secret" });
+    const store = createStorefront({ grants: ca.grants, baseUrl: ORIGIN, allowEphemeralKey: true, agentKey: agentKey.publicJwk });
+    ca.mount(store.app);
+    ca.grants.serve(store.app);
+    return { ca, store, agentKey };
+  }
+  const signOnPhone = async (app: ReturnType<typeof createStorefront>["app"], id: string) => {
+    const sreq = (await request(app).get(`/credentagent/grants/${id}/sign/request`).set("Host", HOST)).body;
+    const result = await devSimulateWalletSignature({ request: { request: sreq.requests[0].data.request, dcql_query: sreq.dcql_query }, origin: ORIGIN });
+    return request(app).post(`/credentagent/grants/${id}/sign/verify`).set("Host", HOST).send({ readerContextToken: sreq.readerContextToken, result });
+  };
+
+  it("names that key on a grant the MCP tool mints, wallet-signed even when the agent asks for 'page'", async () => {
+    const { ca, store, agentKey } = agentStore();
+    const c = await connect(store);
+    for (const signing of [undefined, "page"]) {
+      const g = sc(await c.callTool({ name: "create-spending-grant", arguments: { budget: 200, perSpend: 60, ...(signing ? { signing } : {}) } }));
+      const rec = (await ca.grants.retrieve(g.id))!;
+      expect(rec.signing, String(signing)).toBe("device"); // a click binds nothing to a key
+      expect(rec.agentKey, String(signing)).toMatchObject({ x: agentKey.publicJwk.x, y: agentKey.publicJwk.y });
+    }
+  });
+
+  it("refuses spend-from-grant on a signed grant with agent-held-key, and the note names the signer's buy tool", async () => {
+    const { store } = agentStore();
+    const c = await connect(store);
+    const g = sc(await c.callTool({ name: "create-spending-grant", arguments: { budget: 200, perSpend: 60, categories: ["Electronics"] } }));
+    expect((await signOnPhone(store.app, g.id)).body).toMatchObject({ ok: true, status: "authorized" });
+    const r = sc(await c.callTool({ name: "spend-from-grant", arguments: { grantId: g.id, productId: "drift-mouse" } }));
+    expect(r.spend).toMatchObject({ ok: false, code: "agent-held-key" });
+    expect(r.note).toContain("buy");
+    expect(r.note).toContain("agent signer");
+  });
+
+  it("rejects a PRIVATE key at createStorefront: the store must never hold the agent's spending key", () => {
+    const k = agent();
+    expect(() => createStorefront({ grants: new CredentAgent({ catalog: GATE_CATALOG }).grants, agentKey: { ...k.publicJwk, d: "private-part" } as never })).toThrow(/private|public/i);
   });
 });

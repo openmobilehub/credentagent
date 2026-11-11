@@ -12,6 +12,8 @@
 //   store.gate((order) => credentagent.requirements(order, [ required(age.over(21).when(hasAlcohol)) ]));
 //   const { url } = await store.listen(3005);   // → add http://localhost:3005/mcp to Claude / ChatGPT
 
+import { renderAp2Order } from "./ap2-order-page.js";
+import type { AgentPublicJwk } from "@openmobilehub/credentagent-gate/agent";
 import { readFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
@@ -84,6 +86,7 @@ import {
   type Credential,
   type Grant,
   type Grants,
+  type Ap2PayloadSource,
   type CeremonyCatalog,
   type CeremonyOrder,
   type CeremonyOrderStore,
@@ -99,6 +102,7 @@ import {
   type VerificationRecord,
   type VerificationStore,
   ageProofCovers,
+  ap2PayloadView,
 } from "@openmobilehub/credentagent-gate";
 
 /** Given a priced order, return the `requires` manifest (or `undefined` = ungated). */
@@ -243,6 +247,14 @@ export interface StorefrontOptions {
    */
   merchant?: string;
   /**
+   * The agent's PUBLIC key. Every grant this store mints names it, so the agent (not this store) signs
+   * the Checkout and Payment mandates of a purchase and this store only verifies them
+   * (`/credentagent/grants/:id/purchases`). A private key is refused at construction: the whole point
+   * is that the spending key never enters this process. Grants are then wallet-signed, never
+   * page-approved, because a click binds nothing to a key. Only meaningful alongside `grants`.
+   */
+  agentKey?: AgentPublicJwk;
+  /**
    * How long a `create-spending-grant` re-check holds its answer open while the grant is still
    * awaiting the human's approval, re-reading the grant store until the tap lands (or the window
    * closes). Default 45 000 ms — measured just under claude.ai's 60 s tool-call kill, so the
@@ -272,6 +284,9 @@ export interface CompletedOrderRecord {
   settlement?: unknown;
   /** What was proven for this order (the gate's order proof receipt) — shown by the widget. */
   proofs?: ProofEntry[];
+  /** An agent-signed order's AP2 payload: the agent's proof and the open mandates it spent. Read only by
+   *  `/checkout/order-payload` and `/checkout/order`; every other reader gets the order without it. */
+  ap2?: Ap2PayloadSource;
 }
 
 /** The completed-order store as every reader gets it (the order-status poll, get-order-status,
@@ -283,8 +298,11 @@ function receiptsOnly(store: OrderStore<CompletedOrderRecord>): OrderStore<Compl
   return {
     read: async (id) => {
       const done = await store.read(id);
-      if (!done?.proofs) return done;
-      return { ...done, proofs: done.proofs.map((p) => { const { presentation: _bytes, ...receipt } = p as ProofEntry & { presentation?: unknown }; return receipt; }) };
+      if (!done) return done;
+      // The agent's signed chains carry the wallet's credential: only the payload routes read them.
+      const { ap2: _chains, ...rest } = done;
+      if (!rest.proofs) return rest;
+      return { ...rest, proofs: rest.proofs.map((p) => { const { presentation: _bytes, ...receipt } = p as ProofEntry & { presentation?: unknown }; return receipt; }) };
     },
     write: (id, value) => store.write(id, value),
     clear: (id) => store.clear(id),
@@ -502,8 +520,9 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
     await cartStore.write(key, new Map());
     await orderCarts.clear(orderId);
   };
-  const orderStore: OrderStore<CompletedOrderRecord> =
-    receiptsOnly(opts.orderStore ?? opts.storage?.orderStore ?? new MemoryOrderStore<CompletedOrderRecord>());
+  const rawOrderStore: OrderStore<CompletedOrderRecord> =
+    opts.orderStore ?? opts.storage?.orderStore ?? new MemoryOrderStore<CompletedOrderRecord>();
+  const orderStore: OrderStore<CompletedOrderRecord> = receiptsOnly(rawOrderStore);
   // Created-but-not-completed orders, for the checkout page + place-order. A store
   // (not a process Map) so it can be shared across serverless instances.
   const createdOrderStore: OrderStore<Order> =
@@ -528,6 +547,9 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
   // (single-process dev / tests) — mirroring the gate's `allowEphemeralKey` escape hatch.
   const statelessOrders = opts.statelessOrders ?? false;
   const statelessMcp = opts.statelessMcp ?? false;
+  if (opts.agentKey && "d" in (opts.agentKey as object)) {
+    throw new Error("[credentagent-storefront] agentKey must be the agent's PUBLIC key: a private key must never enter the store's process.");
+  }
   // The deployment label, kept to the characters semver build metadata allows.
   const build = opts.build ? opts.build.replace(/[^0-9A-Za-z.-]/g, "-") : undefined;
   const serverVersion = build ? `${STOREFRONT_VERSION}+${build}` : STOREFRONT_VERSION;
@@ -637,6 +659,9 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
     });
   app.locals.credentagent = {
     orderStore: ceremonyOrderStore,
+    // Where an agent-signed purchase (the gate's grant routes) records the finished order. The RAW
+    // store: only `/checkout/order-payload` and `/checkout/order` read the chains back.
+    completedOrderStore: rawOrderStore,
     verificationStore,
     catalog: ceremonyCatalog,
     completion,
@@ -1063,6 +1088,10 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
         const structured = { ...view, ...(extra ?? {}) };
         return { content: [{ type: "text", text: JSON.stringify(structured) }], structuredContent: structured };
       };
+      // How a minted grant is authorized. With an agent key configured the grant names it and is ALWAYS
+      // wallet-signed: the result's `signing` says so, so a request for "page" is overridden visibly.
+      const grantSigning = (signing: "page" | "device" | undefined) =>
+        opts.agentKey ? { agentKey: opts.agentKey, signing: "device" as const } : signing ? { signing } : {};
       const unknownGrant = (): CallToolResult =>
         ({ content: [{ type: "text", text: JSON.stringify({ error: "unknown grant" }) }], structuredContent: { error: "unknown grant" }, isError: true });
 
@@ -1118,7 +1147,7 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
               perSpend,
               ...(Object.keys(allow).length ? { allow } : {}),
               ...(description ? { description } : {}),
-              ...(signing ? { signing } : {}),
+              ...grantSigning(signing),
             });
             return grantResult(g, {
               note:
@@ -1267,7 +1296,7 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
             perSpend,
             allow: { skus: [product.id] }, // WHAT it may buy: this product and nothing else (fail-closed)
             description: `Buy ${choice} from ${merchant}${description ? ` — ${description}` : ""}.`,
-            ...(signing ? { signing } : {}),
+            ...grantSigning(signing),
           });
           const extras = {
             item: { productId: product.id, name: product.name, price: product.price, selections },
@@ -1330,7 +1359,13 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
           const qty = quantity ?? 1;
           // The spend outcome (typed door) rides in the result's `spend`; the display projection
           // re-reads the grant's live budget so the returned card reflects the draw-down.
-          const spent = (door: Record<string, unknown>): Promise<CallToolResult> => grantResult(g, { spend: { productId, ...door } });
+          const spent = (door: Record<string, unknown>): Promise<CallToolResult> =>
+            grantResult(g, {
+              spend: { productId, ...door },
+              ...(door.code === "agent-held-key"
+                ? { note: "This grant's spending key is held by the agent, not by this store, so it cannot be spent here. Buy through the agent signer connector's `buy` tool with this grant id and the product id; the store verifies the agent's signed mandates." }
+                : {}),
+            });
 
           // Re-price and re-validate against the storefront's LIVE catalog before delegating
           // (Codex P1 + invariant 2). The grant engine holds its own catalog snapshot, which a
@@ -1628,6 +1663,24 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
     // reload the moment a step is made on another device — not only when payment completes.
     const v = orderId ? (((await verificationStore.read(orderId)) ?? null) as VerificationRecord | null) : null;
     res.json({ completed: !!order, revision: verificationRevision(v), order });
+  });
+
+  // An agent-signed order's AP2 payload (demo-only), decoded to the four mandates and nothing else.
+  const delegatedOrder = async (req: Request) => {
+    const orderId = typeof req.query.orderId === "string" ? req.query.orderId : "";
+    const rec = orderId ? await rawOrderStore.read(orderId) : null;
+    return rec?.ap2 ? { orderId, rec, view: ap2PayloadView(rec.ap2) } : null;
+  };
+  app.get("/checkout/order-payload", async (req: Request, res: Response) => {
+    const found = await delegatedOrder(req);
+    if (!found) return void res.status(404).json({ error: "no AP2 payload for this order" });
+    res.json(found.view);
+  });
+  app.get("/checkout/order", async (req: Request, res: Response) => {
+    const found = await delegatedOrder(req);
+    if (!found) return void res.status(404).type("text").send("No delegated order with this id.");
+    const payloadUrl = `${basePath}/checkout/order-payload?orderId=${encodeURIComponent(found.orderId)}`;
+    res.type("html").send(renderAp2Order(found.orderId, found.view, payloadUrl, found.rec.amount, found.rec.currency));
   });
 
   return {

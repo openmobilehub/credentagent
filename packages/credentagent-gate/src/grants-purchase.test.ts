@@ -51,7 +51,7 @@ async function setup(o: Opts = {}) {
   const orders: Orders = new Map();
   const app = express();
   app.use(express.json());
-  app.locals.credentagent = { orderStore: orderStore(orders) };
+  app.locals.credentagent = { completedOrderStore: orderStore(orders) };
   credentagent.grants.serve(app);
   const created = await credentagent.grants.create({
     merchant: "utopia",

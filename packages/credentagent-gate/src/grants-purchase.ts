@@ -111,7 +111,7 @@ export function registerPurchaseRoutes(app: GrantsApp, grants: Grants): void {
   const quotes = new Map<string, Quoted>();
   const fallbackOrders = new Map<string, unknown>();
   const orderStore = (): OrderStoreLike => {
-    const shared = (app as { locals?: { credentagent?: { orderStore?: OrderStoreLike } } }).locals?.credentagent?.orderStore;
+    const shared = (app as { locals?: { credentagent?: { completedOrderStore?: OrderStoreLike } } }).locals?.credentagent?.completedOrderStore;
     return shared ?? { write: (id, v) => void fallbackOrders.set(id, v) };
   };
 

@@ -162,6 +162,8 @@ export type {
 // nothing the merchant imports holds the agent's private key (FR-5). Chain format:
 // `draft-gco-oauth-delegate-sd-jwt-00`, pinned in DELEGATE_SD_JWT_REVISION. Presence-only (#14).
 export { verifyDelegatedPurchase } from "./ap2/chain/purchase.js";
+export { ap2PayloadView } from "./ap2/payload-view.js";
+export type { Ap2PayloadView, Ap2PayloadSource } from "./ap2/payload-view.js";
 export type { DelegatedPurchaseProof, PurchaseVerdict, PurchaseRefusal, PurchaseRefusalCode, VerifyPurchaseOptions } from "./ap2/chain/purchase.js";
 export type { Spent, Violation } from "./ap2/chain/constraints.js";
 export { DELEGATE_SD_JWT_REVISION } from "./ap2/chain/serialize.js";
