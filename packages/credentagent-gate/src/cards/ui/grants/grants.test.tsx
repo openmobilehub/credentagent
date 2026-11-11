@@ -185,3 +185,24 @@ describe("<BudgetMeter/> — severity (FIXED colors) + accessible value text (FR
     expect(html).toContain("#7c3aed"); // the accent override is applied to the container
   });
 });
+
+describe("trust line for a device-signed grant (a wallet signed it, no issuer is proven)", () => {
+  const signed = g({ presence: "delegated", trustLevel: "device-signed" });
+
+  it("says the consent is wallet-signed, never 'not wallet-signed'", () => {
+    const html = render(<GrantCard grant={signed} />);
+    expect(html).toContain("consent is signed by your wallet");
+    expect(html).not.toContain("not wallet-signed");
+    expect(html).not.toContain("dev-sealed");
+  });
+
+  it("still discloses that no issuer trust anchor exists (no overclaiming)", () => {
+    expect(render(<GrantCard grant={signed} />)).toContain("no issuer trust anchor yet");
+  });
+
+  it("keeps the literal presence and trustLevel tokens in the frame", () => {
+    const html = render(<GrantCard grant={signed} />);
+    expect(html).toContain("delegated");
+    expect(html).toContain("device-signed");
+  });
+});

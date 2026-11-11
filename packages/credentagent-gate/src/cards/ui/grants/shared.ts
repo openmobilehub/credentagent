@@ -39,8 +39,14 @@ export const STATUS_PILL: Record<GrantLifecycle, { tone: "accent" | "warn" | "mu
 };
 
 /** The full trust sentence (the frame footer + the dense-list footer). Presence is data-driven. */
-export function fullTrustSentence(grant: Pick<GrantViewData, "presence">): string {
-  return `🔒 ${grant.presence} · limits enforced server-side · consent is dev-sealed, not wallet-signed`;
+export function fullTrustSentence(grant: Pick<GrantViewData, "presence" | "trustLevel">): string {
+  // A device-signed grant's consent IS a wallet signature, so "not wallet-signed" would be false.
+  // What stays honest is the missing trust anchor: nothing proves the credential's issuer yet.
+  const consent =
+    grant.trustLevel === "device-signed"
+      ? "consent is signed by your wallet, no issuer trust anchor yet"
+      : "consent is dev-sealed, not wallet-signed";
+  return `🔒 ${grant.presence} · limits enforced server-side · ${consent}`;
 }
 
 /** The compact per-row trust token (dense list). Keeps the LITERAL presence token on every row so

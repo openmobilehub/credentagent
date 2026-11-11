@@ -470,6 +470,14 @@ const LIST_PAGE_MAX = 100;
 const LOOKUP_BATCH_MAX = 100;
 const VALID_IDS_SHOWN = 50;
 
+// Appended to every "send approveUrl to the human" note. The grant card already shows the limits and an
+// Approve button, so an agent that also writes its own table and button leaves the human two approve
+// affordances for one grant. The plain link stays because a host that cannot draw the card (a failed
+// widget, a headless client) leaves it as the only way to approve.
+const CARD_ALREADY_SHOWN =
+  " The human already sees a card with these limits and an Approve button, so keep your reply to a sentence or two: " +
+  "include approveUrl as a plain link in case the card does not render, and do not re-list the limits or draw your own approve button.";
+
 /** A plain-data tool result: the same JSON as text (headless agents) and structuredContent. */
 const dataResult = (data: Record<string, unknown>, isError = false): CallToolResult => ({
   content: [{ type: "text", text: JSON.stringify(data) }],
@@ -1047,7 +1055,7 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
               "approves — keep redialing until the status changes, and never mint a new grant while this one is " +
               "pending. Your answer is only a wake-up signal: approval is re-read server-side, never taken from it. " +
               "When it returns, READ `credentials`: if the human proved their age there, age-restricted items in " +
-              "these bounds can be bought unattended — don't tell them otherwise.",
+              "these bounds can be bought unattended — don't tell them otherwise." + CARD_ALREADY_SHOWN,
           },
         );
 
@@ -1123,8 +1131,8 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
             return grantResult(g, {
               note:
                 g.signing === "device"
-                  ? "PENDING — send approveUrl to the human; it opens a WALLET SIGNING ceremony. Spending refuses until their device signs these bounds. On that page they can also present credentials: proving their age unlocks age-restricted items for unattended purchase, and a loyalty card discounts every purchase. Re-read `credentials` afterwards rather than assuming."
-                  : "PENDING — send approveUrl to the human; spending refuses until they approve. On that page they can also present credentials: proving their age unlocks age-restricted items for unattended purchase, and a loyalty card discounts every purchase. Re-read `credentials` afterwards rather than assuming.",
+                  ? "PENDING — send approveUrl to the human; it opens a WALLET SIGNING ceremony. Spending refuses until their device signs these bounds. On that page they can also present credentials: proving their age unlocks age-restricted items for unattended purchase, and a loyalty card discounts every purchase. Re-read `credentials` afterwards rather than assuming." + CARD_ALREADY_SHOWN
+                  : "PENDING — send approveUrl to the human; spending refuses until they approve. On that page they can also present credentials: proving their age unlocks age-restricted items for unattended purchase, and a loyalty card discounts every purchase. Re-read `credentials` afterwards rather than assuming." + CARD_ALREADY_SHOWN,
             });
           }
 
