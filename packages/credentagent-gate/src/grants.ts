@@ -30,6 +30,7 @@ import type { Branding, ReaderIdentity, TrustLevel } from "./types.js";
 import { AmountError, toMinorUnits } from "./ap2/money.js";
 import { importVerifyKey } from "./ap2/keys.js";
 import { KeyedMutex } from "./keyed-mutex.js";
+import type { Ap2Issuer } from "./ap2/issue.js";
 
 /** Why a grant operation refused — a TYPED union (never `string`; #95 review). */
 export type GrantDoorCode =
@@ -224,6 +225,10 @@ export interface SpendItems {
 interface GrantRecord {
   id: string;
   status: GrantStatus;
+  /** What agent-signed purchases have drawn, in minor units. An agent-key grant has no engine, so
+   *  this is its ledger: `usage()` and the purchase verifier both read it. */
+  agentSpentMinor?: number;
+  agentUses?: number;
   opts: CreateGrantOptions;
   /** When the grant was opened (ISO 8601) — part of the signed bounds (spec 012). */
   createdAt: string;
@@ -284,6 +289,9 @@ export interface GrantsDeps {
    *  every grant prices at full catalog price, exactly as before. The rate is SEALED into each
    *  grant when it authorizes, so changing it here never re-prices a grant already authorized. */
   loyaltyDiscountPct?: number;
+  /** This gate's AP2 issuer: the agent-signed purchase routes quote carts with it and verify them
+   *  against its checkout key. Absent ⇒ those routes answer `not-authorized` (nothing to quote with). */
+  ap2?: Ap2Issuer;
 }
 
 const genGrantId = (): string => `grant_${globalThis.crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
@@ -363,6 +371,32 @@ export class Grants {
 
   constructor(private readonly deps: GrantsDeps) {
     this.signingSecret = deps.signingKey ?? globalThis.crypto.randomUUID();
+  }
+
+  /** What the agent-signed purchase routes need: the issuer, this store's origin and the priced catalog. */
+  get purchaseConfig(): { walletOrigin: string; catalog: Record<string, CatalogEntry>; ap2?: Ap2Issuer } {
+    return { walletOrigin: this.deps.walletOrigin, catalog: this.deps.catalog ?? {}, ...(this.deps.ap2 ? { ap2: this.deps.ap2 } : {}) };
+  }
+
+  /** Run `fn` as the only operation on this grant — verify-then-commit for an agent purchase is ONE
+   *  unit, so two concurrent proofs cannot both fit a budget that holds one. */
+  _exclusive<T>(id: string, fn: () => Promise<T>): Promise<T> {
+    return this.locks.run(id, fn);
+  }
+
+  /** Minor units and uses already drawn by agent-signed purchases (what `verifyDelegatedPurchase`
+   *  reads as `spent`). Keyed by the grant, never process-global. */
+  _agentSpent(id: string): { amount: number; uses: number } {
+    const rec = this.records.get(id);
+    return { amount: rec?.agentSpentMinor ?? 0, uses: rec?.agentUses ?? 0 };
+  }
+
+  /** Commit one verified agent purchase. Call only inside {@link _exclusive}, after verification. */
+  _commitAgentDraw(id: string, minor: number): void {
+    const rec = this.records.get(id);
+    if (!rec) return;
+    rec.agentSpentMinor = (rec.agentSpentMinor ?? 0) + minor;
+    rec.agentUses = (rec.agentUses ?? 0) + 1;
   }
 
   /** Config the rails `grants.serve(app)` registers read — the intent-sign rail (spec 012) and
@@ -847,7 +881,10 @@ export class Grants {
         // Before authorize there is no engine ledger yet: nothing has been drawn, so the
         // full budget is available. After authorize (incl. once revoked) the engine's
         // committed-draws ledger is the authority — convert its cents back to dollars.
-        if (!rec.engine) return { budget, spent: 0, remaining: budget };
+        if (!rec.engine) {
+          const spent = (rec.agentSpentMinor ?? 0) / 100;
+          return { budget, spent, remaining: budget - spent };
+        }
         const { spent, remaining } = await rec.engine.usage();
         return { budget, spent: spent / 100, remaining: remaining / 100 };
       },

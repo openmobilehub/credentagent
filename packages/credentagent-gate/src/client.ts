@@ -179,6 +179,7 @@ export class CredentAgent {
     // approve/signing page in to the membership step.
     this.grants = new Grants({
       walletOrigin: this.walletOrigin,
+      ap2: this.ap2,
       ...(opts.catalog ? { catalog: opts.catalog } : {}),
       ...(opts.gateSecret ? { signingKey: opts.gateSecret } : {}),
       ...(opts.readerIdentity ? { readerIdentity: opts.readerIdentity } : {}),
