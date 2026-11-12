@@ -111,6 +111,16 @@ export class Orders {
     const id = order.id && order.id.trim() !== "" ? order.id : genId();
     const withId: GateOrder = { ...order, id };
     const manifest = this.deps.requirements(withId, policy);   // re-priced/resolved server-side (invariant 2)
+    // Fail fast at the developer's desk, not the shopper's checkout: payment refuses an
+    // age-restricted line until age is proven, and the checkout page offers an age step only
+    // when the policy has one for this order — without it the order could never complete.
+    const restricted = withId.lines.find((l) => typeof l.minimumAge === "number" && l.minimumAge > 0);
+    if (restricted && !manifest.some((e) => e.credential === "age")) {
+      throw new Error(
+        `orders.create(): line "${restricted.id}" has minimumAge ${restricted.minimumAge}, but the policy has no age step for this order, ` +
+          `so it could never be paid. Add required(age.over(${restricted.minimumAge})) to the policy.`,
+      );
+    }
     // Await persistence BEFORE handing out approveUrl: with an injected async/shared store
     // (Redis, multi-instance) an unawaited write can still be in flight when the human opens
     // the link on another instance — the page would 404 on an order create() reported.

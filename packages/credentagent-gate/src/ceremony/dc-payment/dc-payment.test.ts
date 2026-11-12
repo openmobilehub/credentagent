@@ -368,6 +368,18 @@ describe("runDcGates — re-derives the binding; no trusted `verified` flag", ()
     const gate = runDcGates(mandate, { rpID: "evil.example", origin: "https://evil.example" }).find((g) => g.gate === "Amount binding");
     expect(gate?.pass).toBe(false); // payee bound to the issuing origin, not the attacker's
   });
+
+  // #360 — the same whole-cents check as the passkey rail, on a host that adds float dollars.
+  it("#360: an unrounded host total of 3 × 4.90 binds to a 14.70 payment; 14.71 is still refused", () => {
+    const order: CeremonyOrder = {
+      id: "ORD-F", lines: [{ id: "tea", unitPrice: 4.9, quantity: 3, lineTotal: 4.9 * 3 }],
+      subtotal: 4.9 * 3, discount: 0, total: 4.9 * 3, currency: "USD",
+    };
+    const binding = (amount: number) =>
+      runDcGates(buildDcMandate({ order, origin: localhost, claims: DEMO_CLAIMS, presentedAmount: amount }), localhost).find((g) => g.gate === "Amount binding");
+    expect(binding(14.7)?.pass).toBe(true);
+    expect(binding(14.71)?.pass).toBe(false);
+  });
 });
 
 // ── statelessOrders — end-to-end over the wire (FR-007), no shared order store ──
