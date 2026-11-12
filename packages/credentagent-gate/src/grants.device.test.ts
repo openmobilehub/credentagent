@@ -99,7 +99,7 @@ describe("device-signed grants — e2e over the served HTTP rail", () => {
     const page = async (id: string) => (await request(app).get(`/credentagent/grants/${id}`).set("Host", HOST)).text;
 
     const signed = await ca.grants.create({ merchant: "utopia", budget: 200, perSpend: 130, signing: "device" });
-    await signOverHttp(app, signed.id);
+    expect((await signOverHttp(app, signed.id)).body.ok).toBe(true); // signed for real, not still pending
     const signedPage = await page(signed.id);
     expect(signedPage).toContain("the device signature is real");
     expect(signedPage).not.toContain("stands in for the wallet ceremony");
@@ -109,6 +109,41 @@ describe("device-signed grants — e2e over the served HTTP rail", () => {
     const revokedPage = await page(revoked.id);
     expect(revokedPage).toContain("nothing was approved or signed on this grant");
     expect(revokedPage).not.toContain("the device signature is real");
+  });
+
+  it("the settled page keeps the 'issuer trust anchor is not' sentence when a credential was presented", async () => {
+    const ca = new CredentAgent({ walletOrigin: ORIGIN, catalog: CATALOG, gateSecret: "stable-test-secret", loyaltyDiscountPct: 10 });
+    const app = serve(ca);
+    const g = await ca.grants.create({ merchant: "utopia", budget: 200, perSpend: 130, signing: "device" });
+    expect(await ca.grants._recordMembershipProof(g.id, { membershipNumber: "M-1" })).toBe(true);
+    expect((await signOverHttp(app, g.id)).body.ok).toBe(true);
+    const html = (await request(app).get(`/credentagent/grants/${g.id}`).set("Host", HOST)).text;
+    expect(html).toContain("the issuer trust anchor is not");
+    const declined = await ca.grants.create({ merchant: "utopia", budget: 200, perSpend: 130, signing: "device" });
+    expect(await ca.grants._recordMembershipProof(declined.id, { membershipNumber: "M-2" })).toBe(true);
+    await ca.grants._deny(declined.id);
+    expect((await request(app).get(`/credentagent/grants/${declined.id}`).set("Host", HOST)).text).toContain("the issuer trust anchor is not");
+  });
+
+  // A click-approved grant is NOT device-signed: its page must never claim a device signature, and a
+  // declined one must not say approving there "stands in" for anything.
+  it("a click-approved grant's settled page keeps the page-mode line; a declined one does not", async () => {
+    const ca = makeAgent();
+    const app = serve(ca);
+    const page = async (id: string) => (await request(app).get(`/credentagent/grants/${id}`).set("Host", HOST)).text;
+
+    const approved = await ca.grants.create({ merchant: "utopia", budget: 200, perSpend: 130, signing: "page" });
+    expect(await ca.grants._authorize(approved.id)).toBe(true);
+    const approvedPage = await page(approved.id);
+    expect(approvedPage).toContain("stands in for the wallet ceremony");
+    expect(approvedPage).not.toContain("device-signed");
+
+    const declined = await ca.grants.create({ merchant: "utopia", budget: 200, perSpend: 130, signing: "page" });
+    await ca.grants._deny(declined.id);
+    const declinedPage = await page(declined.id);
+    expect(declinedPage).toContain("nothing was approved or signed on this grant");
+    expect(declinedPage).not.toContain("stands in for the wallet ceremony");
+    expect(declinedPage).not.toContain("device-signed");
   });
 
   it("refuses a signature made over a DIFFERENT nonce (cross-request replay)", async () => {

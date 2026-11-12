@@ -75,14 +75,23 @@ const trustLine = (g?: Grant) =>
 /**
  * The honesty line for a grant that is no longer pending. The page-mode line says "approving here
  * stands in for the wallet ceremony", which is false once someone signed with a wallet and for a
- * grant nobody approved, so a settled grant's line comes from its state and its level (#429).
+ * declined grant, so a settled grant's line comes from its state (#429). A page-mode grant revoked
+ * while still pending keeps the page-mode line: nothing on the handle tells it from a revoked
+ * approved one. Both branches keep the sentence about an unchecked age or loyalty credential.
  */
 const settledTrustLine = (g: Grant): string => {
-  if (g.status === "denied" || (g.signing === "device" && g.trustLevel === "server-issued-demo")) {
+  const proofNote =
+    g.ageProof || g.membershipProof
+      ? `<div class="trust"><div class="trust-line">The wallet credential is presence-only-demo: the wire crypto is real; the issuer trust anchor is not.</div></div>`
+      : "";
+  // A device grant carries `mandate` only once a device signature was verified, so that, not the
+  // level string, tells a signed grant from one that never was.
+  if (g.signing === "device" && g.mandate) return deviceSignedTrustFooter() + proofNote;
+  if (g.status === "denied" || g.signing === "device") {
     // Declined, or a wallet grant that never got a signature (revoked while pending).
-    return `<div class="trust"><div class="trust-line">🔒 ${esc(g.presence)} — nothing was approved or signed on this grant; no real money moves.</div></div>`;
+    return `<div class="trust"><div class="trust-line">🔒 ${esc(g.presence)} — nothing was approved or signed on this grant; no real money moves.</div></div>${proofNote}`;
   }
-  return g.signing === "device" && g.trustLevel === "device-signed" ? deviceSignedTrustFooter() : trustLine(g);
+  return trustLine(g);
 };
 
 /** What the grant is bounded to, as a plain-English row value. */

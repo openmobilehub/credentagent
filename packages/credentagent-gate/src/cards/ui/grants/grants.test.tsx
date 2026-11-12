@@ -228,7 +228,11 @@ describe("trust line: the grant's state first, then the level the store reports 
   });
 
   it("presence-only-demo says the credential is not checked against its issuer", () => {
-    expect(line(g({ trustLevel: "presence-only-demo" }))).toContain("not checked against its issuer");
+    const text = line(g({ trustLevel: "presence-only-demo" }));
+    expect(text).toBe(
+      `🔒 delegated-demo · ${LIMITS}As the merchant reports it: a demo — the credential is not checked against its issuer, so a made-up one would pass. No real money moves.`,
+    );
+    expect(text).not.toContain("signed on the person's phone");
   });
 
   it("a grant revoked while pending (nothing spent) says revoked, not 'approved with a click'", () => {
