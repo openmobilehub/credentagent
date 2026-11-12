@@ -187,7 +187,7 @@ export function runGates(mandate: PasskeyMandate, opts: { loyaltyDiscountPct?: n
 
 // ────────────────────────────────────────────────────────────────────────────
 // HNP seams (005, Option B): the Intent Mandate BOUNDS model + the deterministic
-// draw gates — productized from spike/intent-mandate/ (13 tests ported alongside).
+// draw gates — productized from an earlier prototype (see git history; 13 tests ported alongside).
 // The user's ceremony seals BOUNDS (caps / window / scope / delegate key); each
 // DRAW (a per-purchase Payment Mandate) is checked in-bounds server-side on every
 // completion path. Honesty: the wire crypto here is REAL (ES256 over the canonical
