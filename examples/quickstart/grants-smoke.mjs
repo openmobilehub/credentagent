@@ -27,7 +27,7 @@ const ok = (label, cond, detail = "") => {
 // The priced catalog the grants resource bounds spends from — derived from the storefront catalog
 // so the grant's allow-bounds and the checkout agree (a single-SKU grant on drift-mouse, $49).
 const grantCatalog = Object.fromEntries(
-  SAMPLE_CATALOG.map((p) => [p.id, { price: p.price, category: p.category, ...(p.minimumAge ? { minAge: p.minimumAge } : {}) }]),
+  SAMPLE_CATALOG.map((p) => [p.id, { price: p.price, category: p.category, ...(p.minimumAge ? { minAge: p.minimumAge } : {}), ...(p.requiresRx ? { requiresRx: true } : {}) }]),
 );
 const credentagent = new CredentAgent({ walletOrigin: BASE, catalog: grantCatalog });
 const store = createStorefront({ grants: credentagent.grants, merchant: "Utopia" });

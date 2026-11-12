@@ -21,9 +21,10 @@ const PUBLIC_URL = (process.env.PUBLIC_URL ?? `http://localhost:${PORT}`).replac
 
 // ── the gate's priced catalog (dollars), derived from the storefront's — ONE price source.
 // `minAge` rides through so the grant page can name what needs an age proof; `category` feeds the
-// allow-bounds; `name` is what that page calls a product instead of its bare sku id.
+// allow-bounds; `name` is what that page calls a product instead of its bare sku id; `requiresRx`
+// is what a prescription gate() reads, so a grant spend checks it like checkout does (#139).
 const gateCatalog = Object.fromEntries(
-  SAMPLE_CATALOG.map((p) => [p.id, { price: p.price, category: p.category, name: p.name, ...(p.minimumAge ? { minAge: p.minimumAge } : {}) }]),
+  SAMPLE_CATALOG.map((p) => [p.id, { price: p.price, category: p.category, name: p.name, ...(p.minimumAge ? { minAge: p.minimumAge } : {}), ...(p.requiresRx ? { requiresRx: true } : {}) }]),
 );
 
 // `loyaltyDiscountPct` opts the grant page in to the membership step (#172): present your loyalty
