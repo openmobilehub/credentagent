@@ -7,7 +7,7 @@
 //   • "I need more information" is a real protocol answer (`input_required`), and the
 //     `requestState` a client echoes back is attacker-controlled — a forged one never counts.
 
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import type { AddressInfo } from "node:net";
 import request from "supertest";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
@@ -283,45 +283,50 @@ describe("the server reports its real version", () => {
 describe("create-spending-grant on 2026-07-28 — a real input_required round trip", () => {
   const ARGS = { budget: 200, perSpend: 120, item: "sneakers", signing: "page" };
   const CHOICES: Record<string, string> = { size: "US 10", colour: "Black" };
-  /**
-   * The client asks "the human" each question the server embeds, then retries by itself. The
-   * last question carries the approve link; `tap` decides whether the human really approves there.
-   */
-  function human(c: Client, ca: CredentAgent, tap: boolean): { asked: string[]; grantIds: string[] } {
-    const seen = { asked: [] as string[], grantIds: [] as string[] };
+  /** The client asks "the human" each product question the server embeds, then retries by itself. */
+  function human(c: Client): { asked: string[] } {
+    const seen = { asked: [] as string[] };
     c.setRequestHandler("elicitation/create", async (req) => {
-      const params = req.params as { message: string; requestedSchema: { properties: object } };
+      const params = req.params as { requestedSchema: { properties: object } };
       const field = Object.keys(params.requestedSchema.properties)[0];
       seen.asked.push(field);
-      if (field !== "approved") return { action: "accept", content: { [field]: CHOICES[field] } };
-      const grantId = /grants\/([^/?\s]+)/.exec(params.message)![1];
-      seen.grantIds.push(grantId);
-      if (tap) await ca.grants._authorize(grantId);
-      return { action: "accept", content: { approved: true } };
+      return { action: "accept", content: { [field]: CHOICES[field] } };
     });
     return seen;
   }
 
-  it("asks through the protocol, pins the grant to the product the human chose, and waits for their tap", async () => {
+  // The questions are the human's to answer, so they go through the protocol. The approval is
+  // not: it happens at approveUrl, and a call held open behind a form shows the human neither
+  // the grant card nor a link they can open. The pending grant comes back as the tool's result.
+  it("asks the product questions through the protocol, then returns the pending grant as a result the host can draw", async () => {
     const ca = agent();
     const c = await modernClient(await serve(grantStore(ca)), { elicitation: {} });
-    const { asked } = human(c, ca, true);
+    const { asked } = human(c);
 
     const v = sc(await c.callTool({ name: "create-spending-grant", arguments: ARGS }));
-    expect(asked).toEqual(expect.arrayContaining(["size", "colour", "approved"]));
-    expect(v.status).toBe("authorized");
+    expect(asked.sort()).toEqual(["colour", "size"]); // never "approved": that is not asked in a form
+    expect(v).toMatchObject({ kind: "credentagent.grant", code: "awaiting-approval", status: "pending" });
+    expect(v.approveUrl).toContain("/credentagent/grants/");
     expect(v.allow).toMatchObject({ skus: ["court-sneakers"] });
     expect(v.item).toMatchObject({ productId: "court-sneakers", selections: { size: "US 10", colour: "Black" } });
+
+    // The human approves at the page; the agent's redial (the state as a tool argument) reports it.
+    await ca.grants._authorize(v.grantId);
+    const done = sc(await c.callTool({ name: "create-spending-grant", arguments: { ...ARGS, requestState: v.requestState } }));
+    expect(done.status).toBe("authorized");
   });
 
-  it("REFUSES to report the grant authorized on the client's say-so — the flow never completes without the tap", async () => {
+  it("REFUSES to report the grant authorized on the client's say-so — status is re-read from the store", async () => {
     const ca = agent();
     const c = await modernClient(await serve(grantStore(ca)), { elicitation: {} });
-    const { grantIds } = human(c, ca, false); // answers "approved: true" every round, but nobody taps
+    human(c);
 
-    await expect(c.callTool({ name: "create-spending-grant", arguments: ARGS })).rejects.toThrow(/still required input/);
-    expect(new Set(grantIds).size).toBe(1); // one grant, re-checked — never a second one minted
-    expect((await ca.grants.retrieve(grantIds[0]))?.status).toBe("pending");
+    const waiting = sc(await c.callTool({ name: "create-spending-grant", arguments: ARGS }));
+    // The attack: the agent redials claiming approval while nobody tapped.
+    const still = sc(await c.callTool({ name: "create-spending-grant", arguments: { ...ARGS, requestState: waiting.requestState, answers: { approved: "true" } } }));
+    expect(still).toMatchObject({ code: "awaiting-approval", status: "pending" });
+    expect(still.grantId).toBe(waiting.grantId); // one grant, re-checked — never a second one minted
+    expect((await ca.grants.retrieve(waiting.grantId))?.status).toBe("pending");
   });
 
   it("gives a client that declared no elicitation the questions as tool output instead", async () => {
@@ -374,14 +379,57 @@ describe("create-spending-grant on 2026-07-28 — requestState is attacker-contr
     expect(typeof r.requestState).toBe("string");
   });
 
-  it("takes the answers from the request-level retry params — then asks for the human's tap", async () => {
+  it("takes the answers from the request-level retry params — then returns the pending grant, not another form", async () => {
     const store = grantStore();
     const { requestState } = (await call(store)).body.result;
     const next = (await call(store, { requestState, inputResponses: ANSWERS })).body.result;
-    // The product is pinned and the grant exists; the only question left is the approval.
-    expect(next.resultType).toBe("input_required");
-    expect(Object.keys(next.inputRequests)).toEqual(["approval"]);
-    expect(next.inputRequests.approval.params.message).toContain("/credentagent/grants/");
+    // The product is pinned and the grant exists. What is left is the human's tap at approveUrl,
+    // which a form cannot take — so the call ends here with the grant the host draws as a card.
+    expect(next.resultType).not.toBe("input_required");
+    expect(next.inputRequests).toBeUndefined();
+    expect(next.structuredContent).toMatchObject({ kind: "credentagent.grant", code: "awaiting-approval", status: "pending" });
+    expect(next.structuredContent.approveUrl).toContain("/credentagent/grants/");
+  });
+
+  // A client re-sends the last requestState it was handed by itself; the agent never sees it and
+  // cannot drop it. Left over from a flow nobody finished, it used to get the next call refused.
+  describe("a requestState the client attached by itself, past its 15 minutes", () => {
+    const LATER = 16 * 60 * 1000;
+    afterEach(() => vi.useRealTimers());
+    const expire = () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(Date.now() + LATER);
+    };
+
+    it("starts the call over instead of refusing it", async () => {
+      const store = grantStore();
+      const { requestState } = (await call(store)).body.result;
+      expire();
+      const r = (await call(store, { requestState })).body.result;
+      expect(r.resultType).toBe("input_required");
+      expect(Object.keys(r.inputRequests).sort()).toEqual(["colour", "size"]);
+    });
+
+    it("BELIEVES NOTHING from it — the answers and the grant it carried are not picked up again", async () => {
+      const ca = agent();
+      const store = grantStore(ca);
+      const { requestState } = (await call(store)).body.result;
+      const waiting = (await call(store, { requestState, inputResponses: ANSWERS })).body.result.structuredContent;
+      await ca.grants._authorize(waiting.grantId); // even an approved grant must not come back through a lapsed state
+      expire();
+      const r = (await call(store, { requestState: waiting.requestState, inputResponses: ANSWERS })).body.result;
+      expect(r.resultType).toBe("input_required"); // asked again from nothing: no size, no colour, no grant
+      expect(Object.keys(r.inputRequests).sort()).toEqual(["colour", "size"]);
+      expect(r.structuredContent).toBeUndefined();
+    });
+
+    it("still REFUSES it as the agent's own argument, which the agent can leave out", async () => {
+      const store = grantStore();
+      const { requestState } = (await call(store)).body.result;
+      expire();
+      const r = (await call(store, {}, { ...ARGS, requestState })).body.result;
+      expect(r.structuredContent).toMatchObject({ ok: false, code: "expired" });
+    });
   });
 
   it("REFUSES a hand-edited requestState — its answers never become a grant", async () => {
