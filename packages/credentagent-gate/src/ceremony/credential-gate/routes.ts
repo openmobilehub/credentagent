@@ -36,7 +36,9 @@ import type { RequestLike } from "../origin.js";
 import { buildCredentialRequest, buildSignedRequestForDcql } from "./request.js";
 import { evaluateCredential, evaluateCustom, requiredAgeForOrder, verifyCredentialPresentation, type CredentialKind, type PresentationResult } from "./verify.js";
 import { inspectionResponse } from "../inspect.js";
-import { upsertProof, type ProofEntry } from "../proofs.js";
+import type { ProofEntry } from "../proofs.js";
+import { savePart } from "../../store.js";
+import { REQUIREMENTS_PARAM, saveSealedRequirements } from "../saved-requirements.js";
 import { verifyMdocPresentation } from "./mdoc-verify.js";
 import { buildMdocRequestParts, sealMdocContext } from "../mdoc/mdoc-iso.js";
 import { mdocDocSpec, mdocDocSpecsFromDcql } from "./doc-spec.js";
@@ -130,27 +132,24 @@ async function readJsonBody(req: RailRequest): Promise<Record<string, unknown>> 
 }
 
 // Persist a successful verification, scoped to THIS order (never process-global —
-// invariant 4). Age writes the positive over-threshold claim; membership marks the
-// loyalty discount, which resolveOrder/completeOrder then re-derive exactly once. The proof
-// itself rides along (the order proof receipt), replacing an earlier proof of the same gate.
-async function recordVerified(ctx: CeremonyContext, orderId: string, kind: CredentialKind, membershipNumber: string | null, proof: ProofEntry): Promise<void> {
-  const prev = (await ctx.verificationStore.read(orderId)) ?? {};
-  const proofs = upsertProof(prev.proofs, proof);
+// invariant 4). Age writes the positive over-threshold claim and the age it was proven at;
+// membership marks the loyalty discount, which resolveOrder/completeOrder then re-derive exactly
+// once. The proof itself rides along (the order proof receipt). Each is its own part of the
+// record (#444), so an age proof and a membership proof saved at once can't drop each other.
+async function recordVerified(ctx: CeremonyContext, orderId: string, kind: CredentialKind, membershipNumber: string | null, proof: ProofEntry, minimumAge: number | undefined): Promise<void> {
   if (kind === "age") {
-    await ctx.verificationStore.write(orderId, { ...prev, ageVerified: true, proofs });
+    await savePart(ctx.verificationStore, orderId, "age", { ageVerified: true, ...(minimumAge != null ? { provenOver: minimumAge } : {}), proofs: [proof] });
   } else {
-    await ctx.verificationStore.write(orderId, { ...prev, loyalty: { applied: true, membershipNumber }, proofs });
+    await savePart(ctx.verificationStore, orderId, "membership", { loyalty: { applied: true, membershipNumber }, proofs: [proof] });
   }
 }
 
 // Persist a successful CUSTOM gate verification, scoped to THIS order (invariant 4).
 // `completeOrder` reads `verifiedGates[credId]` to enforce the gate on every completion
-// path (007). Merges into any existing map so multiple custom gates on one order each
+// path (007). Its own part of the record, so multiple custom gates on one order each
 // record independently.
 async function recordVerifiedGate(ctx: CeremonyContext, orderId: string, credId: string, proof: ProofEntry): Promise<void> {
-  const prev = (await ctx.verificationStore.read(orderId)) ?? {};
-  const verifiedGates = { ...(prev as { verifiedGates?: Record<string, true> }).verifiedGates, [credId]: true as const };
-  await ctx.verificationStore.write(orderId, { ...prev, verifiedGates, proofs: upsertProof(prev.proofs, proof) });
+  await savePart(ctx.verificationStore, orderId, `gate:${credId}`, { verifiedGates: { [credId]: true }, proofs: [proof] });
 }
 
 // The membership discount percent the order applies, re-derived from the re-priced
@@ -172,6 +171,7 @@ export const registerCredentialGate: RailRegistrar = (app: CeremonyApp, ctx: Cer
     if (!resolved) { res.status(404).type("html").send("<!doctype html><h1>Unknown credential</h1>"); return; }
     const order = await resolveOrder(ctx, typeof req.query.order === "string" ? req.query.order : undefined, { cartMandate: decodeCartMandateParam(req.query.cart) });
     if (!order) { res.status(404).type("html").send("<!doctype html><h1>Order not found</h1>"); return; }
+    await saveSealedRequirements(ctx, order.id, req.query[REQUIREMENTS_PARAM]);
     const cart = typeof req.query.cart === "string" ? req.query.cart : undefined;
     // Order-derived stepper with THIS gate current — only the gates the order actually has,
     // Age ✓ only when truly verified (from the store), never a hardcoded Age · Membership · Pay.
@@ -316,7 +316,7 @@ export const registerCredentialGate: RailRegistrar = (app: CeremonyApp, ctx: Cer
           presentedAt: new Date().toISOString(),
         };
         if (credential) await recordVerifiedGate(ctx, order.id, credential.id, proof);
-        else await recordVerified(ctx, order.id, kind, out.membershipNumber, proof);
+        else await recordVerified(ctx, order.id, kind, out.membershipNumber, proof, minimumAge);
       }
       // The wallet's DeviceResponse goes back to this page only when the host opted in
       // (inspectPresentations) — for a refused proof too, the case worth inspecting. This

@@ -14,12 +14,13 @@
 //
 // Keys are `${namespace}:${kind}:${orderId}` — order/verification state is scoped per
 // order id (never process-global; Security Invariant #4) and `namespace` isolates tenants
-// sharing one backend. This layer PERSISTS state only; it is not a trust anchor and never
-// affects `trust_level`.
+// sharing one backend. Each part of a verification record (its requirements, or one proof)
+// has a key of its own: `${namespace}:verification-part:${orderId}:${slot}`, both encoded.
+// This layer PERSISTS state only; it is not a trust anchor and never affects `trust_level`.
 
 import type { Order } from "./index.js";
 import type { CartStore, OrderStore, StorageProvider, CompletedOrderRecord } from "./server.js";
-import type { VerificationRecord, VerificationStore } from "@openmobilehub/credentagent-gate";
+import { mergeVerificationRecord, verificationSlots, type VerificationRecord, type VerificationSlot, type VerificationStore } from "@openmobilehub/credentagent-gate";
 
 /** The minimal slice of the Upstash client the adapters use (also the injectable test seam). */
 export interface RedisLike {
@@ -109,8 +110,12 @@ class RedisOrderStore<T> implements OrderStore<T> {
 }
 
 class RedisVerificationStore implements VerificationStore {
-  // Full-record get/set per order id. The ceremony merges fields at the call site before
-  // writing, so no adapter-level merge is needed; isolation is per-order keying.
+  // The record `write()` saves, plus each part `writePart()` saves under a key of its own (#444),
+  // so two pages saving parts for one order at the same moment can't overwrite each other.
+  // `RedisLike` can only GET a key it can name, so `read()` finds the parts through
+  // `verificationSlots`: the fixed slots, then one per custom credential the order's saved
+  // requirements name. Those are the only slots the gate sends here; it merges any other custom
+  // part into the record itself. Isolation is per-order keying.
   constructor(
     private readonly redis: RedisLike,
     private readonly namespace: string,
@@ -118,14 +123,31 @@ class RedisVerificationStore implements VerificationStore {
   private keyFor(orderId: string): string {
     return joinKey(this.namespace, "verification", orderId);
   }
+  // Its own kind, so a part key never equals the record key of an order whose id ends in ":age".
+  // The order id and slot are encoded: both may hold ":" (a credential id can), and joined bare,
+  // order "A" slot "gate:x:age" would be the key of order "A:gate:x" slot "age".
+  private partKey(orderId: string, slot: VerificationSlot): string {
+    return joinKey(this.namespace, "verification-part", encodeURIComponent(orderId), encodeURIComponent(slot));
+  }
+  private async readParts(orderId: string, slots: readonly VerificationSlot[]): Promise<VerificationRecord[]> {
+    const parts = await Promise.all(slots.map((slot) => this.redis.get<VerificationRecord>(this.partKey(orderId, slot))));
+    return parts.filter((p): p is VerificationRecord => p != null);
+  }
   async read(orderId: string): Promise<VerificationRecord | undefined> {
-    return (await this.redis.get<VerificationRecord>(this.keyFor(orderId))) ?? undefined;
+    const [record, fixed] = await Promise.all([this.redis.get<VerificationRecord>(this.keyFor(orderId)), this.readParts(orderId, verificationSlots())]);
+    const base = fixed.reduce(mergeVerificationRecord, record ?? {});
+    const custom = await this.readParts(orderId, verificationSlots(base.requirements).filter((slot) => slot.startsWith("gate:")));
+    return record != null || fixed.length > 0 || custom.length > 0 ? custom.reduce(mergeVerificationRecord, base) : undefined;
   }
   async write(orderId: string, record: VerificationRecord): Promise<void> {
     await this.redis.set(this.keyFor(orderId), record);
   }
+  async writePart(orderId: string, slot: VerificationSlot, part: VerificationRecord): Promise<void> {
+    await this.redis.set(this.partKey(orderId, slot), part);
+  }
   async clear(orderId: string): Promise<void> {
-    await this.redis.del(this.keyFor(orderId));
+    const slots = verificationSlots((await this.read(orderId))?.requirements);
+    await Promise.all([this.keyFor(orderId), ...slots.map((slot) => this.partKey(orderId, slot))].map((key) => this.redis.del(key)));
   }
 }
 
