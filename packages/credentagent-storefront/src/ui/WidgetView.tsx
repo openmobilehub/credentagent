@@ -1,10 +1,13 @@
 // What the widget shows: nothing until the tool result that opened it arrives, then the grant card
 // for a grant result, or the product picker for anything else (#428). The picker used to paint
 // first, from the bundled catalog, so a grant result flashed the product grid before its card.
+// A widget a GRANT tool opened never shows the picker by itself: with no grant to draw (the call
+// is still open, or it answered with questions or a refusal) it shows a one-line notice instead.
 
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { GrantCard, GRANT_VIEW_KIND, type GrantActions, type GrantViewData } from "../../../credentagent-gate/src/cards/ui/grants";
 import { ShowProducts } from "./ShowProducts";
+import styles from "./app.module.css";
 
 // A grant tool result (create/get/spend/revoke) carries the GrantViewData projection, discriminated
 // by `kind`, on BOTH host channels (Claude's structuredContent / text, ChatGPT's toolOutput). When
@@ -46,21 +49,57 @@ export function useFallback(received: boolean, armed: boolean, markReceived: () 
   useEffect(() => (received || !armed ? undefined : armFallback(markReceived)), [received, armed, markReceived]);
 }
 
+const GRANT_TOOLS = new Set(["create-spending-grant", "get-grant-status", "spend-from-grant", "revoke-grant"]);
+
+/**
+ * Whether a grant tool opened this widget. The host names the tool when it can (MCP Apps'
+ * `toolInfo`); when it doesn't, the call's arguments tell: only `create-spending-grant` takes a
+ * `budget` with a `perSpend`, and only the other three take a `grantId`.
+ */
+export function isGrantToolCall(toolName: string | undefined, toolInput: unknown): boolean {
+  if (toolName) return GRANT_TOOLS.has(toolName);
+  if (!toolInput || typeof toolInput !== "object") return false;
+  const args = toolInput as Record<string, unknown>;
+  return (typeof args.budget === "number" && typeof args.perSpend === "number") || typeof args.grantId === "string";
+}
+
+/**
+ * What a grant tool's widget says while it has no grant to draw: `waiting` — the call is still
+ * open (the server holds a re-check while the human approves); `no-grant` — it answered without
+ * one (questions for the human, or a refusal).
+ */
+export type GrantNotice = "waiting" | "no-grant";
+
+const NOTICE_TEXT: Record<GrantNotice, string> = {
+  waiting: "Setting up the spending grant…",
+  "no-grant": "No spending grant to show yet — the agent continues in the chat.",
+};
+
 export interface WidgetViewProps {
   received: boolean;
   grantView: GrantViewData | null;
+  /** Set when a grant tool opened the widget and there is no grant to draw; the picker never shows in its place. */
+  grantNotice?: GrantNotice | null;
   grantActions: GrantActions;
   itemCount: number;
   onShowProducts: () => void;
   picker: ReactNode;
 }
 
-export function WidgetView({ received, grantView, grantActions, itemCount, onShowProducts, picker }: WidgetViewProps) {
+export function WidgetView({ received, grantView, grantNotice, grantActions, itemCount, onShowProducts, picker }: WidgetViewProps) {
   if (!received) return null;
   if (grantView) {
     return (
       <>
         <GrantCard grant={grantView} actions={grantActions} />
+        <ShowProducts itemCount={itemCount} onShow={onShowProducts} />
+      </>
+    );
+  }
+  if (grantNotice) {
+    return (
+      <>
+        <div className={styles.status} role="status">{NOTICE_TEXT[grantNotice]}</div>
         <ShowProducts itemCount={itemCount} onShow={onShowProducts} />
       </>
     );

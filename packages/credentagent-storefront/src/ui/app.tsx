@@ -18,7 +18,7 @@ import styles from "./app.module.css";
 import { updateQueue } from "./update-queue";
 import { CartFooter } from "./CartFooter";
 import { ProofRows, type WidgetProof } from "./ProofRows";
-import { WidgetView, firstChatGptView, grantViewOf, isResult, useFallback, useFirstResult } from "./WidgetView";
+import { WidgetView, firstChatGptView, grantViewOf, isGrantToolCall, isResult, useFallback, useFirstResult } from "./WidgetView";
 import { formatMoney } from "./money";
 // The grant gallery lives in the gate's card kit (spec 015); this widget compiles it from source.
 import type { GrantViewData, GrantActions } from "../../../credentagent-gate/src/cards/ui/grants";
@@ -273,6 +273,11 @@ function HostApp() {
   const [grantView, setGrantView] = useState<GrantViewData | null>(null);
   // Nothing shows until the tool result that opened the widget arrives (#428).
   const [received, markReceived] = useFirstResult(false);
+  // Whether a grant tool opened this widget, and whether any result has reached it. Together they
+  // pick the notice shown in place of the picker while there is no grant to draw: a held or
+  // unanswered call, or an answer that carries questions or a refusal instead of a grant.
+  const [grantTool, setGrantTool] = useState(false);
+  const [answered, setAnswered] = useState(false);
   const appRef = useRef<Parameters<NonNullable<Parameters<typeof useApp>[0]["onAppCreated"]>>[0] | null>(null);
   // Mirrors `cart` so setQuantity can read the current value synchronously
   // (state is async) and compute the next optimistic cart.
@@ -300,8 +305,12 @@ function HostApp() {
       // Fires for tool results the host routes to this open app — including
       // add-to-cart / set-quantity / get-cart calls the AGENT made in chat.
       // That keeps the cart badge in sync with chat-driven changes.
+      app.ontoolinput = (params) => {
+        if (isGrantToolCall(app.getHostContext()?.toolInfo?.tool.name, params.arguments)) setGrantTool(true);
+      };
       app.ontoolresult = async (result) => {
         markReceived();
+        setAnswered(true);
         // A grant tool result wins: render the grant card. structuredContent carries the projection;
         // fall back to the JSON text block for hosts that only forward content.
         const grant = grantViewOf(result.structuredContent) ?? grantViewOf(parseJsonContent(result));
@@ -315,12 +324,14 @@ function HostApp() {
         const metaCartId = result._meta?.[CART_ID_META_KEY] as string | undefined;
         if (metaCart && Array.isArray(metaCart.lines)) {
           setGrantView(null); // a shopping result flips the widget back to the picker
+          setGrantTool(false);
           applyCart(metaCart, metaCartId);
           return;
         }
         const parsed = parseJsonContent<PricedCart & { cartId?: string }>(result);
         if (parsed && Array.isArray(parsed.lines) && Array.isArray(parsed.unknownIds)) {
           setGrantView(null);
+          setGrantTool(false);
           applyCart(parsed, parsed.cartId);
         }
       };
@@ -413,6 +424,10 @@ function HostApp() {
 
   // The fallback's clock starts once connected: the handshake can take a while, and must not run it out.
   useFallback(received, Boolean(app), markReceived);
+  // The host may name the tool that opened the widget before it sends that tool's arguments.
+  useEffect(() => {
+    if (isGrantToolCall(app?.getHostContext()?.toolInfo?.tool.name, undefined)) setGrantTool(true);
+  }, [app]);
 
   if (error) return <div className={styles.status}><strong>Error:</strong> {error.message}</div>;
   if (!app) return <div className={styles.status}>Connecting…</div>;
@@ -420,9 +435,10 @@ function HostApp() {
     <WidgetView
       received={received}
       grantView={grantView}
+      grantNotice={grantTool ? (answered ? "no-grant" : "waiting") : null}
       grantActions={grantActions}
       itemCount={cart.itemCount}
-      onShowProducts={() => setGrantView(null)}
+      onShowProducts={() => { setGrantView(null); setGrantTool(false); }}
       picker={<Picker products={products} cart={cart} insets={insets} setQuantity={setQuantity} checkout={checkout} openLink={openLink} confirmedOrder={confirmedOrder} pendingCheckoutUrl={pendingCheckoutUrl} />}
     />
   );
@@ -446,27 +462,41 @@ function ChatGptApp() {
   const [grantView, setGrantView] = useState<GrantViewData | null>(first.grantView);
   const [received, markReceived] = useFirstResult(first.received);
   useFallback(received, true, markReceived);
+  // As in HostApp: a grant tool's widget shows a notice, never the picker, while it has no grant.
+  // ChatGPT names no tool, so the call's arguments tell.
+  const [grantTool, setGrantTool] = useState(() => isGrantToolCall(undefined, window.openai?.toolInput));
+  const [answered, setAnswered] = useState(first.received);
 
   // A grant tool's toolOutput is the GrantViewData (kind-marked); browse-products yields
   // { products, cart }; cart tools yield a PricedCart.
   const applyToolOutput = useCallback((output: unknown) => {
-    if (isResult(output)) markReceived();
+    if (isResult(output)) {
+      markReceived();
+      setAnswered(true);
+    }
     const grant = grantViewOf(output);
     if (grant) {
       setGrantView(grant);
       return;
     }
     if (!output || typeof output !== "object") return;
-    setGrantView(null); // a shopping result flips the widget back to the picker
     const o = output as Record<string, unknown>;
-    if (Array.isArray(o.products)) setProducts(o.products as Product[]);
     const maybeCart = (o.cart ?? o) as PricedCart;
+    // Only a shopping result flips the widget back to the picker. A grant tool's other answers
+    // (questions, a refusal) are objects too, and must not.
+    if (!Array.isArray(o.products) && !Array.isArray(maybeCart.lines)) return;
+    setGrantView(null);
+    setGrantTool(false);
+    if (Array.isArray(o.products)) setProducts(o.products as Product[]);
     if (Array.isArray(maybeCart.lines)) setCart(maybeCart);
   }, [markReceived]);
 
   useEffect(() => {
     applyToolOutput(window.openai?.toolOutput);
-    const onGlobals = () => applyToolOutput(window.openai?.toolOutput);
+    const onGlobals = () => {
+      if (isGrantToolCall(undefined, window.openai?.toolInput)) setGrantTool(true);
+      applyToolOutput(window.openai?.toolOutput);
+    };
     window.addEventListener("openai:set_globals", onGlobals);
     return () => window.removeEventListener("openai:set_globals", onGlobals);
   }, [applyToolOutput]);
@@ -524,9 +554,10 @@ function ChatGptApp() {
     <WidgetView
       received={received}
       grantView={grantView}
+      grantNotice={grantTool ? (answered ? "no-grant" : "waiting") : null}
       grantActions={grantActions}
       itemCount={cart.itemCount}
-      onShowProducts={() => setGrantView(null)}
+      onShowProducts={() => { setGrantView(null); setGrantTool(false); }}
       picker={<Picker products={products} cart={cart} setQuantity={setQuantity} checkout={checkout} openLink={openLink} confirmedOrder={confirmedOrder} pendingCheckoutUrl={pendingCheckoutUrl} />}
     />
   );

@@ -72,6 +72,21 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
 
 ### Fixed
 
+- Creating a spending grant from claude.ai no longer hangs with a product grid where the grant card
+  should be. Three causes, fixed together:
+  - On a client that can ask the person questions itself (MCP 2026-07-28 with `elicitation`, which
+    claude.ai's connectors now are), `create-spending-grant` asked for the approval in a form. The
+    call stayed open behind it, so the host got no result to draw the card from, the approve link
+    was text inside the form, and the client retried the form up to 10 times, each one holding
+    `approvalHoldMs` (45 s). The pending grant is now the tool's result on every client; only the
+    product questions (size, colour) still use `input_required`.
+  - The storefront widget fell back to the product picker whenever a grant tool's answer carried no
+    grant (questions, a refusal) or had not arrived within two seconds. A widget a grant tool opened
+    now shows a one-line notice instead, with "Show products" as the way to the picker.
+  - A client re-sends the last request-level `requestState` by itself. One left over from an
+    unfinished flow, past its 15 minutes, got the next call refused as `expired` although the agent
+    had sent none. It is now dropped and the call starts over, believing nothing from it. A forged
+    or re-bound state, and a lapsed one passed as the tool's own argument, are still refused.
 - The storefront widget no longer flashes the product grid before a spending-grant card. It now
   shows nothing until the tool result that opened it arrives, then the card for that result; a host
   that never sends one still gets the product picker after two seconds (#428).

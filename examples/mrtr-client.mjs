@@ -7,7 +7,8 @@
 //
 //   1. pin the 2026-07-28 revision and declare `elicitation` — what earns it `inputRequests`;
 //   2. answer each question (from you, or from a scripted map);
-//   3. make ONE `callTool` — the SDK drives every round until the store has a final answer.
+//   3. make ONE `callTool` — the SDK drives every round of questions; the call ends with the
+//      pending grant and the link the human approves at.
 //
 //   node examples/hnp-on-claude/serve.mjs                    # terminal 1: the store
 //   node examples/mrtr-client.mjs                            # terminal 2: this client (asks you)
@@ -41,11 +42,8 @@ client.setRequestHandler("elicitation/create", (request) => (turn = turn.then(()
 
 async function answer({ message, requestedSchema }) {
   const fields = Object.entries(requestedSchema.properties);
-  // The LAST round is the human's tap at the approve page. Unattended, there is no human to
-  // tap it — decline, and the store answers with the pending grant and its link. (Interactively,
-  // open the link, approve, then answer: the reply is only a doorbell — the store re-reads its
-  // own record before saying "authorized".)
-  if (SCRIPTED && fields.some(([field]) => field === "approved")) return { action: "decline" };
+  // Only the product questions arrive here. The human's approval is not a question: it happens
+  // at the approve page, so the call ends with the pending grant and its link (printed below).
 
   console.log(`\n── the store asks ──`);
   const content = {};

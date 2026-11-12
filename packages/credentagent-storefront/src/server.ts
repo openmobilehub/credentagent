@@ -992,7 +992,8 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
        * MCP's real `input_required` result — it asks the human and retries with the answers. Every
        * other client gets the same questions as ordinary tool output, for its agent to relay.
        */
-      const askResult = (ctx: ServerContext, asked: InputRequiredResult, overrides: Record<string, unknown> = {}): CallToolResult => {
+      /** The questions as ordinary tool output, for the agent to relay and the host to draw. */
+      const askOutput = (asked: InputRequiredResult, overrides: Record<string, unknown> = {}): CallToolResult => {
         const questions = Object.entries(asked.inputRequests).map(([key, req]) => ({
           key,
           message: req.params.message,
@@ -1008,6 +1009,9 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
           questions,
           requestState: asked.requestState,
         };
+        return { content: [{ type: "text", text: JSON.stringify(view) }], structuredContent: view };
+      };
+      const askResult = (ctx: ServerContext, asked: InputRequiredResult): CallToolResult => {
         // MRTR server requirement 7: NEVER send `inputRequests` a client hasn't declared support
         // for. A client that didn't advertise `elicitation` cannot put these questions to anyone,
         // and answering it with a bare `input_required` would only invite an immediate, useless
@@ -1022,7 +1026,7 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
           const inputRequests = asked.inputRequests as unknown as InputRequests;
           return inputRequired({ inputRequests, requestState: asked.requestState }) as unknown as CallToolResult;
         }
-        return { content: [{ type: "text", text: JSON.stringify(view) }], structuredContent: view };
+        return askOutput(asked);
       };
       const plain = (view: Record<string, unknown>): CallToolResult =>
         ({ content: [{ type: "text", text: JSON.stringify(view) }], structuredContent: view });
@@ -1030,10 +1034,15 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
        * The wait round: the grant is minted (view carries approveUrl) but the flow stays open
        * until the human's tap. The grantId rides the sealed state as a server-attested carried
        * fact — the client can present it, never choose it.
+       *
+       * Always tool output, on every client — never `input_required`. The human approves at
+       * approveUrl, not in a form, and a client that can elicit keeps the call open behind that
+       * form: no result reaches the host, so it draws no grant card, the link sits in the form as
+       * text nobody can open, and the client retries the form (with the hold below each time)
+       * until it gives up. claude.ai is such a client.
        */
-      const awaitApproval = (ctx: ServerContext, round: Extract<Round, { ok: true }>, view: Record<string, unknown>, extras: Record<string, unknown>): CallToolResult =>
-        askResult(
-          ctx,
+      const awaitApproval = (round: Extract<Round, { ok: true }>, view: Record<string, unknown>, extras: Record<string, unknown>): CallToolResult =>
+        askOutput(
           round.ask(
             {
               approval: {
@@ -1142,14 +1151,19 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
           // answer inside it is believed. It arrives either as a tool argument (any client) or
           // as MRTR's request-level param, which the SDK lifts onto `ctx.mcpReq` — no verify hook
           // is configured, so `requestState()` hands back the raw string for the engine to check.
-          const round = rounds.open({
+          const bound = {
             request: "create-spending-grant",
             params: { budget, perSpend, item, products: products ?? null, categories: categories ?? null, signing: signing ?? null },
             principal: ctx.sessionId ?? "",
-            state: requestState ?? ctx.mcpReq.requestState<string>(),
-            responses: ctx.mcpReq.inputResponses,
-            answers,
-          });
+          };
+          let round = rounds.open({ ...bound, state: requestState ?? ctx.mcpReq.requestState<string>(), responses: ctx.mcpReq.inputResponses, answers });
+          // A client re-sends the last request-level state it was handed by itself — the agent
+          // never sees it and cannot leave it out. One left over from a flow nobody finished
+          // lapses, and refusing it refused a call the agent made from nothing (claude.ai did
+          // this). So a lapsed one is dropped and the call starts over, believing nothing from
+          // it: no state, no answers, no carried grant. Only a lapsed one: a forged, re-bound or
+          // re-presented state is still refused, and so is a lapsed one the agent passed itself.
+          if (!round.ok && round.code === "expired" && requestState === undefined) round = rounds.open(bound);
           if (!round.ok) {
             return plain({
               ok: false,
@@ -1200,7 +1214,7 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
             }
             await source.load();
             const view = { ...(await projectGrantView(g, { catalog: source.current() })), grantId: g.id, ...extras };
-            return awaitApproval(ctx, round, view, extras);
+            return awaitApproval(round, view, extras);
           }
 
           // The human is allowed to say no. A declined question ends the flow honestly instead of
@@ -1286,7 +1300,7 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
           // Minted, but not finished: the flow stays open (one more round) until the human taps.
           await source.load();
           const view = { ...(await projectGrantView(g, { catalog: source.current() })), grantId: g.id, ...extras };
-          return awaitApproval(ctx, round, view, extras);
+          return awaitApproval(round, view, extras);
         },
       );
       registerAppTool(

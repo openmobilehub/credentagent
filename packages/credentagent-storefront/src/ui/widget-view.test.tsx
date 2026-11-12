@@ -3,7 +3,7 @@
 
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { FIRST_RESULT_WAIT_MS, WidgetView, armFallback, firstChatGptView, isResult, useFirstResult } from "./WidgetView";
+import { FIRST_RESULT_WAIT_MS, WidgetView, armFallback, firstChatGptView, isGrantToolCall, isResult, useFirstResult, type GrantNotice } from "./WidgetView";
 import type { GrantViewData } from "../../../credentagent-gate/src/cards/ui/grants";
 
 const grant: GrantViewData = {
@@ -22,10 +22,62 @@ const grant: GrantViewData = {
   trustLevel: "server-issued-demo",
 };
 const picker = <p>PRODUCT GRID</p>;
-const view = (received: boolean, grantView: GrantViewData | null): string =>
+const view = (received: boolean, grantView: GrantViewData | null, grantNotice: GrantNotice | null = null): string =>
   renderToStaticMarkup(
-    <WidgetView received={received} grantView={grantView} grantActions={{}} itemCount={0} onShowProducts={() => {}} picker={picker} />,
+    <WidgetView received={received} grantView={grantView} grantNotice={grantNotice} grantActions={{}} itemCount={0} onShowProducts={() => {}} picker={picker} />,
   );
+
+// A grant tool does not always answer with a grant: it asks which size, refuses a stale state, or
+// is still held open while the human approves. The widget it opened used to fall back to the
+// product grid for all of those, so a person asking for a spending grant got a shop instead.
+describe("WidgetView — a widget a grant tool opened never falls back to the product grid", () => {
+  it("still waiting on the call: says so, and the product grid never", () => {
+    const html = view(true, null, "waiting");
+    expect(html).toContain("Setting up the spending grant");
+    expect(html).not.toContain("PRODUCT GRID");
+  });
+
+  it("an answer with no grant in it (questions, a refusal): says there is none yet, and the product grid never", () => {
+    const html = view(true, null, "no-grant");
+    expect(html).toContain("No spending grant to show yet");
+    expect(html).not.toContain("PRODUCT GRID");
+  });
+
+  it("keeps the way back to the products, as the grant card does", () => {
+    expect(view(true, null, "no-grant")).toContain("Show products");
+  });
+
+  it("a grant result still wins: the card, not the notice", () => {
+    const html = view(true, grant, "no-grant");
+    expect(html).toContain("Approve a spending grant");
+    expect(html).not.toContain("No spending grant to show yet");
+  });
+
+  it("still paints nothing before the wait is up — no flash of a notice before a fast result", () => {
+    expect(view(false, null, "waiting")).toBe("");
+  });
+});
+
+describe("isGrantToolCall — which tool opened the widget", () => {
+  it("knows the four grant tools by name", () => {
+    for (const name of ["create-spending-grant", "get-grant-status", "spend-from-grant", "revoke-grant"]) {
+      expect(isGrantToolCall(name, undefined)).toBe(true);
+    }
+  });
+
+  it("a shopping tool is not one, whatever its arguments look like", () => {
+    expect(isGrantToolCall("browse-products", { budget: 300, perSpend: 95 })).toBe(false);
+    expect(isGrantToolCall("checkout", undefined)).toBe(false);
+  });
+
+  it("with no tool name from the host, tells by the arguments only a grant tool takes", () => {
+    expect(isGrantToolCall(undefined, { budget: 300, perSpend: 95, item: "sneakers" })).toBe(true);
+    expect(isGrantToolCall(undefined, { grantId: "grant_1" })).toBe(true);
+    expect(isGrantToolCall(undefined, { productId: "court-sneakers", quantity: 1 })).toBe(false);
+    expect(isGrantToolCall(undefined, undefined)).toBe(false);
+    expect(isGrantToolCall(undefined, null)).toBe(false);
+  });
+});
 
 describe("WidgetView — no product grid before the result that opened the widget (#428)", () => {
   it("shows nothing at all before a result arrives", () => {
