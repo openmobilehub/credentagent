@@ -82,7 +82,10 @@ export function GrantList({ grants, accent }: GrantListProps) {
             <div className={styles.mLock}>{compactTrustToken(grant)}</div>
           </div>
         ))}
-        {grants.length > 0 && <div className={styles.listTrust}>{fullTrustSentence(grants[0])}</div>}
+        {/* One line per distinct sentence: a list can mix grants approved in different ways. */}
+        {[...new Set(grants.map(fullTrustSentence))].map((line) => (
+          <div key={line} className={styles.listTrust}>{line}</div>
+        ))}
       </div>
     </div>
   );

@@ -36,6 +36,13 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
 
 ### Changed
 
+- The spending-grant card's trust line no longer says "not wallet-signed" for every grant. A grant still
+  waiting for approval (or declined) says "not approved"; a grant the store reports as signed on the
+  person's phone says so, attributed to the store ("as the store reports it"), and that the card did not
+  check the signature or the credential's issuer. An unknown or missing level says "not recognised". A list
+  of grants shows one line per distinct sentence. The grant's own page, after the wallet signs or the
+  grant is declined, no longer says approving there "stands in for the wallet ceremony". The agent note on a pending spending grant
+  now asks for a short reply only when the human already sees the card (#429).
 - The storefront widget's pending spending-grant card shows Approve and Decline only when the
   approval link is an `https:` address, or `http:` on `localhost`, `127.0.0.1` or `[::1]`. Otherwise
   it says "The merchant's link isn't a safe web address, so this card doesn't show it." The link is

@@ -1,7 +1,7 @@
 // Pure, non-JSX shared bits for the grant gallery: the token role set, money formatting, the
 // status-pill table, and the DATA-DRIVEN trust strings. The trust wording is honest on BOTH axes
-// (design §5): the LIMITS are genuinely enforced server-side; the CONSENT is dev-sealed, not
-// wallet-signed. Built from `presence`/`trustLevel` so it stays truthful if those ever change.
+// (design §5): the LIMITS are genuinely enforced server-side; the CONSENT depends on the grant's
+// state and on the level the store reports (spec 015 FR-10), so it is built from those.
 
 import type { GrantLifecycle } from "../../../grants.js";
 import type { GrantTokens, GrantViewData } from "./types";
@@ -38,15 +38,31 @@ export const STATUS_PILL: Record<GrantLifecycle, { tone: "accent" | "warn" | "mu
   denied: { tone: "muted", icon: "✕", label: "Declined" },
 };
 
+/** What the card says about the consent, by the grant's state first, then by the level the merchant
+ *  reports (spec 015 FR-10). The level is the merchant's claim — the card cannot check it — so every
+ *  sentence says so. A grant nobody approved has no consent to describe, whatever level it carries:
+ *  a grant waiting for the phone reports `server-issued-demo` until it is signed. */
+function consentClause(grant: Pick<GrantViewData, "lifecycle" | "trustLevel" | "spent">): string {
+  if (grant.lifecycle === "pending" || grant.lifecycle === "denied") {
+    return "As the merchant reports it: not approved, so this grant can't spend anything.";
+  }
+  // Revoked with nothing spent: it may never have been approved, so its level says nothing true.
+  if (grant.lifecycle === "revoked" && grant.spent === 0) return "As the merchant reports it: revoked.";
+  switch (grant.trustLevel) {
+    case "device-signed":
+      return "As the merchant reports it: signed on the person's phone. This card did not check that signature, and the credential is not checked against its issuer yet.";
+    case "server-issued-demo":
+      return "As the merchant reports it: a demo, approved with a click on a page — nothing was signed on a phone. No real money moves.";
+    case "presence-only-demo":
+      return "As the merchant reports it: a demo — the credential is not checked against its issuer, so a made-up one would pass. No real money moves.";
+    default:
+      return "Trust level not recognised by this card; treat it as unverified.";
+  }
+}
+
 /** The full trust sentence (the frame footer + the dense-list footer). Presence is data-driven. */
-export function fullTrustSentence(grant: Pick<GrantViewData, "presence" | "trustLevel">): string {
-  // A device-signed grant's consent IS a wallet signature, so "not wallet-signed" would be false.
-  // What stays honest is the missing trust anchor: nothing proves the credential's issuer yet.
-  const consent =
-    grant.trustLevel === "device-signed"
-      ? "consent is signed by your wallet, no issuer trust anchor yet"
-      : "consent is dev-sealed, not wallet-signed";
-  return `🔒 ${grant.presence} · limits enforced server-side · ${consent}`;
+export function fullTrustSentence(grant: Pick<GrantViewData, "presence" | "lifecycle" | "trustLevel" | "spent">): string {
+  return `🔒 ${grant.presence} · limits enforced server-side · ${consentClause(grant)}`;
 }
 
 /** The compact per-row trust token (dense list). Keeps the LITERAL presence token on every row so

@@ -94,14 +94,14 @@ describe("grant tools over MCP (human-not-present)", () => {
   // The card already carries the limits and an Approve button. An agent that also writes its own
   // limits table and button leaves the human two approve affordances for one grant — so the note
   // asks for a short reply, but keeps the plain link as the only way to approve if the card fails.
-  it("tells the agent the card is already shown, and keeps the approve link as the fallback", async () => {
+  it("tells the agent to keep its reply short only if the card shows, and keeps the approve link either way", async () => {
     const ca = new CredentAgent({ walletOrigin: "http://localhost:3005", catalog: GATE_CATALOG });
     const c = await client(ca);
     for (const signing of ["device", "page"]) {
       const g = sc(await c.callTool({ name: "create-spending-grant", arguments: { budget: 200, perSpend: 60, signing } }));
-      expect(g.note, signing).toContain("already sees a card");
+      expect(g.note, signing).toContain("If the human already sees a card");
       expect(g.note, signing).toContain("do not re-list the limits");
-      expect(g.note, signing).toContain("approveUrl as a plain link"); // the fallback must survive
+      expect(g.note, signing).toContain("either way, include approveUrl as a plain link"); // the fallback must survive
     }
   });
 

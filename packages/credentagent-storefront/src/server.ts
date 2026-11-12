@@ -470,13 +470,13 @@ const LIST_PAGE_MAX = 100;
 const LOOKUP_BATCH_MAX = 100;
 const VALID_IDS_SHOWN = 50;
 
-// Appended to every "send approveUrl to the human" note. The grant card already shows the limits and an
+// Appended to every "send approveUrl to the human" note. When the host draws the grant card, it shows the limits and an
 // Approve button, so an agent that also writes its own table and button leaves the human two approve
 // affordances for one grant. The plain link stays because a host that cannot draw the card (a failed
 // widget, a headless client) leaves it as the only way to approve.
 const CARD_ALREADY_SHOWN =
-  " The human already sees a card with these limits and an Approve button, so keep your reply to a sentence or two: " +
-  "include approveUrl as a plain link in case the card does not render, and do not re-list the limits or draw your own approve button.";
+  " If the human already sees a card with these limits and an Approve button, keep your reply to a sentence or two " +
+  "and do not re-list the limits or draw your own approve button; either way, include approveUrl as a plain link.";
 
 /** A plain-data tool result: the same JSON as text (headless agents) and structuredContent. */
 const dataResult = (data: Record<string, unknown>, isError = false): CallToolResult => ({
