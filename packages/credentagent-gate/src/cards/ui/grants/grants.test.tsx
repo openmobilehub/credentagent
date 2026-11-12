@@ -15,7 +15,14 @@ import { UNSAFE_LINKS } from "../__fixtures__/links";
 const render = (el: ReactElement): string => renderToStaticMarkup(el);
 const count = (haystack: string, needle: string): number => haystack.split(needle).length - 1;
 
-const FULL_TRUST = "limits enforced server-side · consent is dev-sealed, not wallet-signed";
+const LIMITS = "limits enforced server-side · ";
+// What the card says about consent, for each state and level (spec 015 FR-10).
+const FULL_TRUST = LIMITS + "As the merchant reports it: a demo, approved with a click on a page — nothing was signed on a phone. No real money moves.";
+const NOT_APPROVED = LIMITS + "As the merchant reports it: not approved, so this grant can't spend anything.";
+const REVOKED_UNUSED = LIMITS + "As the merchant reports it: revoked.";
+const DEVICE_SIGNED =
+  LIMITS + "As the merchant reports it: signed on the person's phone. This card did not check that signature, and the credential is not checked against its issuer yet.";
+const NOT_RECOGNISED = LIMITS + "Trust level not recognised by this card; treat it as unverified.";
 
 const base: GrantViewData = {
   kind: "credentagent.grant",
@@ -39,7 +46,7 @@ const product = g({ allow: { skus: ["oak-whiskey"], categories: [] }, product: {
 const category = g({ allow: { skus: ["drift-mouse"], categories: ["Beverages", "Electronics"] } });
 const open = g({ allow: { skus: [], categories: [] } });
 const pending = g({ status: "pending", lifecycle: "pending" });
-const revoked = g({ status: "revoked", lifecycle: "revoked", remaining: 62 });
+const revoked = g({ status: "revoked", lifecycle: "revoked", remaining: 62 }); // spent 54: it was approved
 const exhausted = g({ lifecycle: "exhausted", remaining: 0, spent: 200 });
 
 describe("honesty frame — the non-omittable trust line (FR-4, bypass-tested)", () => {
@@ -56,8 +63,9 @@ describe("honesty frame — the non-omittable trust line (FR-4, bypass-tested)",
   ];
   for (const [label, grant, views] of cases) {
     it(`${label} renders the trust line + presence/trustLevel tokens`, () => {
-      const html = render(<GrantCard grant={grant} views={views} />);
-      expect(html).toContain(FULL_TRUST);
+      const html = render(<GrantCard grant={grant} views={views} />).replace(/&#x27;/g, "'");
+      // A grant nobody approved yet has no consent to describe, whatever level it carries.
+      expect(html).toContain(grant.lifecycle === "pending" ? NOT_APPROVED : FULL_TRUST);
       expect(html).toContain("delegated-demo");
       expect(html).toContain("server-issued-demo");
     });
@@ -183,5 +191,58 @@ describe("<BudgetMeter/> — severity (FIXED colors) + accessible value text (FR
     const html = render(<GrantCard grant={g({ lifecycle: "low", remaining: 28 })} accent="#7c3aed" />);
     expect(html).toContain(styles.meterFillLow);
     expect(html).toContain("#7c3aed"); // the accent override is applied to the container
+  });
+});
+
+describe("trust line: the grant's state first, then the level the store reports (FR-10)", () => {
+  // Read the visible sentence, not the data-* attributes that carry the same tokens.
+  const line = (grant: GrantViewData): string => {
+    const m = render(<GrantCard grant={grant} />).match(/<div class="[^"]*trustLine[^"]*">([^<]*)<\/div>/);
+    return m ? m[1].replace(/&#x27;/g, "'") : "";
+  };
+
+  it("a device-signed grant is attributed to the store, never 'your wallet signed'", () => {
+    const text = line(g({ presence: "delegated", trustLevel: "device-signed" }));
+    expect(text).toBe(`🔒 delegated · ${DEVICE_SIGNED}`);
+    expect(text).not.toContain("not wallet-signed");
+    expect(text).not.toContain("your wallet");
+  });
+
+  it("a pending device-mode grant says not approved, not 'not wallet-signed' (the card before signing)", () => {
+    const text = line(g({ status: "pending", lifecycle: "pending", presence: "delegated-demo", trustLevel: "server-issued-demo" }));
+    expect(text).toBe(`🔒 delegated-demo · ${NOT_APPROVED}`);
+    expect(text).not.toContain("wallet-signed");
+  });
+
+  it("a declined grant says not approved, even if it carries a signed level", () => {
+    expect(line(g({ status: "denied", lifecycle: "denied", trustLevel: "device-signed" }))).toContain(NOT_APPROVED);
+  });
+
+  it("only the exact device-signed level gets the phone sentence", () => {
+    for (const trustLevel of ["", "issuer-verified", "device-signed-ish", "DEVICE-SIGNED"]) {
+      const text = line(g({ trustLevel }));
+      expect(text, trustLevel).toContain(NOT_RECOGNISED);
+      expect(text, trustLevel).not.toContain("signed on the person's phone");
+    }
+    expect(line(g({ trustLevel: undefined as unknown as string }))).toContain(NOT_RECOGNISED);
+  });
+
+  it("presence-only-demo says the credential is not checked against its issuer", () => {
+    expect(line(g({ trustLevel: "presence-only-demo" }))).toContain("not checked against its issuer");
+  });
+
+  it("a grant revoked while pending (nothing spent) says revoked, not 'approved with a click'", () => {
+    const text = line(g({ status: "revoked", lifecycle: "revoked", spent: 0, remaining: 200 }));
+    expect(text).toBe(`🔒 delegated-demo · ${REVOKED_UNUSED}`);
+  });
+
+  it("a revoked grant that spent keeps its level's sentence (it was approved)", () => {
+    expect(line(g({ status: "revoked", lifecycle: "revoked", spent: 54 }))).toContain("approved with a click on a page");
+  });
+
+  it("a mixed list shows one line per distinct sentence, not the first grant's for all", () => {
+    const html = render(<GrantList grants={[g({ id: "a" }), g({ id: "b", presence: "delegated", trustLevel: "device-signed" })]} />);
+    expect(count(html, "a demo, approved with a click on a page")).toBe(1);
+    expect(count(html, "signed on the person&#x27;s phone")).toBe(1);
   });
 });
