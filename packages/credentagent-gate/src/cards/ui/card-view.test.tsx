@@ -17,7 +17,7 @@ describe("CardView", () => {
   it("renders a grant result as the gallery's card", () => {
     const html = render(previewResult("grant-product"));
     expect(html).toContain("Oak Reserve Whiskey");
-    expect(html).toContain("limits enforced server-side");
+    expect(html).toContain("🔒 As the merchant reports it:");
   });
 
   it("shows nothing for a kind it does not know", () => {
@@ -28,8 +28,10 @@ describe("CardView", () => {
     expect(previewViews().length).toBe(8);
     for (const view of previewViews()) {
       const html = render(previewResult(view));
-      expect(html, view).toContain("limits enforced server-side");
-      expect(html, view).toContain("delegated-demo");
+      // The pending and declined samples were never approved, so their line says so (spec 015 FR-10).
+      // The revoked sample spent, so it was approved and keeps its level's line.
+      const line = view === "grant-pending" || view === "grant-declined" ? "not approved, so this grant can" : "a demo, approved with a click on a page";
+      expect(html, view).toContain(`🔒 As the merchant reports it: ${line}`);
     }
   });
 

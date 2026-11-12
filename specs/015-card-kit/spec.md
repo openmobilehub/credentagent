@@ -323,12 +323,15 @@ These throw only for the developer's own mistakes (a missing page, `permissions`
 **FR-7 — One page, two resources.** The same HTML is registered as the MCP Apps resource
 (`ui://credentagent-cards/cards-<hash>.html`, `text/html;profile=mcp-app`) for Claude and the Apps SDK
 resource (`ui://credentagent-cards/cards-<hash>.skybridge.html`, `text/html+skybridge`) for ChatGPT.
-The URI carries the content hash, so a host never serves a stale copy. Both declare a CSP that allows
-`data:` images (the QR) and no network origins. The page is served exactly as built — no serve-time
-string substitution.
+The URI carries the content hash, so a host never serves a stale copy. Both carry the MCP Apps
+`_meta.ui.csp` with no network origins and no bare `data:` — the MCP Apps default view CSP already
+allows `data:` images (the QR), and scanners refuse a bare scheme there (#372); the skybridge copy adds
+ChatGPT's own `openai/widgetCSP`, which allows `data:`. The page is served exactly as built — no
+serve-time string substitution.
 
 `toolMeta()` builds every key both hosts need in one place (`ui.resourceUri`, `ui/resourceUri`,
-`ui.visibility`, `openai/outputTemplate`, `openai/widgetAccessible`, `openai/toolInvocation`), and
+`ui.visibility`, `openai/outputTemplate`, `openai/widgetAccessible`, and the two flat status keys
+`openai/toolInvocation/invoking` and `openai/toolInvocation/invoked`), and
 **by default the card cannot call the tool**: `ui.visibility: ["model"]` (MCP Apps' default is
 `["model", "app"]`) and `openai/widgetAccessible: false` (in ChatGPT, `true` lets script in the card
 call the tool with `window.openai.callTool`, with no model turn).
@@ -337,8 +340,10 @@ call the tool with `window.openai.callTool`, with no model turn).
   — for a tool a card's own button calls, such as a cart stepper or Revoke; never for one that spends.
 - The kit's own tools: the card's status tool is `["app"]` with `widgetAccessible: true`; the model's
   wait tool is `["model"]` with `widgetAccessible: false`.
-- This is the one helper: the storefront's `appToolMeta` (`tool-meta.ts`) is replaced by it, and the
-  storefront marks its cart tools `callableFromCard: true`.
+- This is the one helper: when the storefront moves onto the kit (#293), its `appToolMeta`
+  (`tool-meta.ts`) is replaced by it, and the storefront marks its cart tools `callableFromCard: true`.
+  Until then the storefront serves its own page, which `toolMeta()` does not link to, and every
+  storefront tool stays card-callable, `spend-from-grant` included.
 
 **FR-8 — Results, and what is written by whom.** Every builder returns a `CallToolResult`:
 `structuredContent` is the card's data, marked with a `kind` (`credentagent.grant` — unchanged —,
@@ -373,11 +378,31 @@ check it today — so every sentence says so:
 
 | Level | Produced by | The honesty line says |
 | --- | --- | --- |
-| `presence-only-demo` | a payment credential with no issuer trust anchor yet | "As the store reports it: a demo — the signatures are real, but the payment credential is not checked against its issuer yet. No real money moves." |
-| `device-signed` | a grant the person signed with their phone's wallet | "As the store reports it: signed on the person's phone. This card did not check that signature, and the credential is not checked against its issuer yet." |
-| `server-issued-demo` | a grant approved with a click on a page | "As the store reports it: a demo, approved with a click on a page — nothing was signed on a phone. No real money moves." |
+| `presence-only-demo` | a payment credential with no issuer trust anchor yet | "As the merchant reports it: a demo — the credential is not checked against its issuer, so a made-up one would pass. No real money moves." |
+| `device-signed` | a grant the person signed with their phone's wallet | "As the merchant reports it: signed on the person's phone. This card did not check that signature, and the credential is not checked against its issuer yet." |
+| `server-issued-demo` | a grant approved with a click on a page | "As the merchant reports it: a demo, approved with a click on a page — nothing was signed on a phone. No real money moves." |
+| any level, on a grant that is `pending` or `denied` | a grant nobody approved | "As the merchant reports it: not approved, so this grant can't spend anything." |
+| any level, on a `revoked` grant with nothing spent | a grant withdrawn, approved or not before it was | "As the merchant reports it: revoked." |
 | anything else, or missing | — | "Trust level not recognised by this card; treat it as unverified." |
 
+- The sentences call the store "the merchant", the glossary's word for the seller.
+- A grant waiting for approval, declined, or revoked with nothing spent gets its row's sentence
+  whatever its level, and none says how it was approved: a grant waiting for the phone reports
+  `server-issued-demo` until it is signed, and `revoke()` works on a grant nobody approved, so a line
+  picked by level alone would tell a person who never approved that they approved with a click. A
+  revoked grant that spent was approved (only an approved grant spends), so it keeps its level's line.
+- What revoking stops is never in the honesty line, and the rest of the card says it only as far as
+  `GrantViewData.agentHeld` tells it: `revoke()` doesn't recall a grant whose signed permission the
+  agent holds (GLOSSARY.md, Revoke).
+  - `false` (the server spends the grant): the closed card's "No further purchases will be made." and
+    the approval card's "or you revoke it".
+  - `true` (an agent-held key, set from how the grant was created, signed or not yet): "If it was
+    approved before being revoked, the agent keeps its signed copy: revoking doesn't recall it." and
+    "Once you sign, revoking won't recall it from the agent." The first is conditional because a grant
+    revoked before it was approved left nothing in the agent's hands, even when the person was signing
+    at that moment.
+  - Anything else: "Spending is refused from now on, unless the agent holds its own signed copy of this
+    permission: revoking doesn't recall that.", and the approval card says nothing about revoking.
 - A store's own text is never shown as a trust level — not in the honesty line, not in a status
   label. `issuer-verified` from a store's word is "not recognised": the gate never claims it itself,
   and the kit has no verified channel for it yet (issuer-verified trust is #14).
@@ -538,7 +563,7 @@ spec first. The steps already open, and what each takes from this spec:
 | 1 | #258 — the gallery moves into the gate | (as is) |
 | 2 | #294 — this spec | — |
 | 3 | #259 — the card page | FR-9 |
-| 4 | #272 — `createCards()` serves it | FR-6, FR-7 (`toolMeta()` model-only by default; the storefront switches to it); FR-10 and FR-11 for `grant()` (the list's sentence, the link check) |
+| 4 | #272 — `createCards()` serves it | FR-6, FR-7 (`toolMeta()` model-only by default; the storefront switches to it with #293, when it moves onto the kit); FR-10 and FR-11 for `grant()` (the list's sentence, the link check) |
 | 5 | #273 — becomes `createPermissions()` in `/agent` | FR-1 to FR-3: `trackingId`, async memory with compare-and-set, final statuses, expiry, the shared read, the wait and its limits |
 | 6 | #274 — `cards.permission()` and the wait tool | FR-11, FR-12 (status tool), FR-13 |
 | 7 | #275 — the permission card | FR-10 (honesty line, label), `perSpend` / `budget`, currency formatting |

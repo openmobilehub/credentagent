@@ -33,6 +33,8 @@ export async function projectGrantView(grant: Grant, opts: { catalog: Product[] 
     approveUrl: grant.approveUrl,
     presence: grant.presence,
     trustLevel: grant.trustLevel,
+    // Whether revoking recalls it: a permission the agent holds itself stays spendable (GLOSSARY.md, Revoke).
+    agentHeld: grant.agentKey !== undefined,
     // ALWAYS present, both fields always set (null when unproved) — an agent must be able to read
     // "no age proof" as a fact, not infer it from a missing key (#172).
     credentials: {

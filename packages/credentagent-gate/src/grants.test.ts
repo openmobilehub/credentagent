@@ -569,8 +569,9 @@ describe("credentagent.grants — concurrency + money boundary (#104 port-forwar
   // (its async key-gen not yet resolved) must never leave a spendable grant. Without the lock the
   // revoke sees no engine yet (skips the ledger) and sets status "revoked", then the in-flight
   // authorize resolves and overwrites it back to "authorized" with a live, un-revoked engine — a
-  // spendable grant the human tried to kill. Remove the lock on _authorize / revoke and this goes
-  // red (status "authorized", spend ok). Order matters: authorize is started first so it is mid-flight.
+  // spendable grant the human tried to kill. Remove the lock on _authorize and this goes red (status
+  // "authorized", spend ok). Both calls start in the same tick, so this pins the authorize side only:
+  // revoke's own lock is pinned in grants.device.test.ts, where the save is already in flight.
   it("BYPASS: a revoke landing while authorize is in flight never leaves a spendable grant", async () => {
     const ca = client();
     const gc = await ca.grants.create({ merchant: "utopia", budget: 100, perSpend: 30 , signing: "page" });
