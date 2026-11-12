@@ -308,6 +308,11 @@ function HostApp() {
       app.ontoolinput = (params) => {
         if (isGrantToolCall(app.getHostContext()?.toolInfo?.tool.name, params.arguments)) setGrantTool(true);
       };
+      // A cancelled call never sends a result: stop saying the grant is being set up.
+      app.ontoolcancelled = () => {
+        markReceived();
+        setAnswered(true);
+      };
       app.ontoolresult = async (result) => {
         markReceived();
         setAnswered(true);

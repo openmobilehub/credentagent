@@ -1161,8 +1161,9 @@ export function createStorefront(opts: StorefrontOptions = {}): Storefront {
           // never sees it and cannot leave it out. One left over from a flow nobody finished
           // lapses, and refusing it refused a call the agent made from nothing (claude.ai did
           // this). So a lapsed one is dropped and the call starts over, believing nothing from
-          // it: no state, no answers, no carried grant. Only a lapsed one: a forged, re-bound or
-          // re-presented state is still refused, and so is a lapsed one the agent passed itself.
+          // it: no state, no answers, no carried grant. Only a lapsed one: a forged or edited
+          // state is still refused, so is a fresh one minted for another call or session, and so
+          // is a lapsed one the agent passed itself.
           if (!round.ok && round.code === "expired" && requestState === undefined) round = rounds.open(bound);
           if (!round.ok) {
             return plain({

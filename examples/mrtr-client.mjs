@@ -60,11 +60,7 @@ await client.connect(new StreamableHTTPClientTransport(new URL(MCP_URL)));
 const result = await client.callTool({ name: "create-spending-grant", arguments: { budget: 200, perSpend: 120, item: ITEM } });
 
 const view = result.structuredContent ?? {};
-if (view.status === "authorized") {
-  console.log(`\n✅ AUTHORIZED — ${view.item?.name} ${JSON.stringify(view.item?.selections ?? {})}`);
-  console.log(`   it may buy: ${JSON.stringify(view.allow)}  ·  budget $${view.budget}, $${view.perSpend} per purchase`);
-  console.log(`   the agent can now spend-from-grant while the human is away.`);
-} else if (view.approveUrl) {
+if (view.approveUrl) {
   console.log(`\n⏳ grant pinned to: ${view.item?.name} ${JSON.stringify(view.item?.selections ?? {})} — status ${view.status}`);
   console.log(`   it may buy: ${JSON.stringify(view.allow)}  ·  budget $${view.budget}, $${view.perSpend} per purchase`);
   console.log(`   send this to the human — nothing spends until they approve:\n   ${view.approveUrl}`);

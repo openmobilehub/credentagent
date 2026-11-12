@@ -19,8 +19,9 @@ export function grantViewOf(value: unknown): GrantViewData | null {
   return null;
 }
 
-/** How long the widget waits for the result that opened it before showing the picker anyway, so a
- *  host that never delivers one still gets today's behaviour instead of an empty widget. */
+/** How long the widget waits for the result that opened it before showing something anyway, so a
+ *  host that never delivers one gets the picker (or, for a grant tool, the notice) instead of an
+ *  empty widget. */
 export const FIRST_RESULT_WAIT_MS = 2000;
 
 /** Whether the host has handed over a tool result (anything but null / undefined). */
@@ -43,7 +44,7 @@ export function armFallback(onTimeout: () => void): () => void {
   return () => clearTimeout(timer);
 }
 
-/** Shows the picker anyway when no result arrived within {@link FIRST_RESULT_WAIT_MS} of `armed` —
+/** Stops waiting when no result arrived within {@link FIRST_RESULT_WAIT_MS} of `armed` —
  *  Claude arms it once connected, so a slow handshake cannot run the clock out before the result. */
 export function useFallback(received: boolean, armed: boolean, markReceived: () => void): void {
   useEffect(() => (received || !armed ? undefined : armFallback(markReceived)), [received, armed, markReceived]);

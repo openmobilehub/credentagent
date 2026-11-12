@@ -280,8 +280,9 @@ host never receives a result to draw the grant card from, and the link is text n
 
 A client re-sends the last request-level `requestState` by itself. If one is left over from a flow
 nobody finished and has **lapsed** (15 minutes), the call starts over as if it carried none —
-nothing in it is believed. A forged, re-bound or re-presented state is still refused, and so is a
-lapsed one the agent passed as the tool's `requestState` argument.
+nothing in it is believed. A forged or hand-edited state is still refused; a fresh state minted for
+a different call or session is still refused; and so is a lapsed one the agent passed as the tool's
+`requestState` argument. (A state is not single-use: the same fresh one is accepted again.)
 
 ## The three execution contexts
 

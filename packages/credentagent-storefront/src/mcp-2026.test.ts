@@ -283,21 +283,14 @@ describe("the server reports its real version", () => {
 describe("create-spending-grant on 2026-07-28 — a real input_required round trip", () => {
   const ARGS = { budget: 200, perSpend: 120, item: "sneakers", signing: "page" };
   const CHOICES: Record<string, string> = { size: "US 10", colour: "Black" };
-  /**
-   * The client asks "the human" each question the server embeds, then retries by itself. The
-   * last question carries the approve link; `tap` decides whether the human really approves there.
-   */
-  function human(c: Client, ca: CredentAgent, tap: boolean): { asked: string[]; grantIds: string[] } {
-    const seen = { asked: [] as string[], grantIds: [] as string[] };
+  /** The client asks "the human" each product question the server embeds, then retries by itself. */
+  function human(c: Client): { asked: string[] } {
+    const seen = { asked: [] as string[] };
     c.setRequestHandler("elicitation/create", async (req) => {
-      const params = req.params as { message: string; requestedSchema: { properties: object } };
+      const params = req.params as { requestedSchema: { properties: object } };
       const field = Object.keys(params.requestedSchema.properties)[0];
       seen.asked.push(field);
-      if (field !== "approved") return { action: "accept", content: { [field]: CHOICES[field] } };
-      const grantId = /grants\/([^/?\s]+)/.exec(params.message)![1];
-      seen.grantIds.push(grantId);
-      if (tap) await ca.grants._authorize(grantId);
-      return { action: "accept", content: { approved: true } };
+      return { action: "accept", content: { [field]: CHOICES[field] } };
     });
     return seen;
   }
@@ -308,7 +301,7 @@ describe("create-spending-grant on 2026-07-28 — a real input_required round tr
   it("asks the product questions through the protocol, then returns the pending grant as a result the host can draw", async () => {
     const ca = agent();
     const c = await modernClient(await serve(grantStore(ca)), { elicitation: {} });
-    const { asked } = human(c, ca, true);
+    const { asked } = human(c);
 
     const v = sc(await c.callTool({ name: "create-spending-grant", arguments: ARGS }));
     expect(asked.sort()).toEqual(["colour", "size"]); // never "approved": that is not asked in a form
@@ -326,7 +319,7 @@ describe("create-spending-grant on 2026-07-28 — a real input_required round tr
   it("REFUSES to report the grant authorized on the client's say-so — status is re-read from the store", async () => {
     const ca = agent();
     const c = await modernClient(await serve(grantStore(ca)), { elicitation: {} });
-    human(c, ca, false);
+    human(c);
 
     const waiting = sc(await c.callTool({ name: "create-spending-grant", arguments: ARGS }));
     // The attack: the agent redials claiming approval while nobody tapped.
