@@ -28,6 +28,26 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
 
 ### Added
 
+- Each order's requirements are now saved with its proofs, in the order's verification record
+  (`record.requirements`), so a server that never ran `requirements()` can read what the order
+  needs. `requirements()` seals them into every mounted approve link (a new `requirements=` query
+  parameter, signed with the rails' signing key and bound to the order id, which makes each link
+  about 150–250 characters longer). The first credential, dc-payment or delegated page opened from
+  such a link saves them, once. Links a host builds by hand, such as the Pay buttons on the
+  `orders.serve()` checkout page and the storefront's, carry no seal yet, so those orders save
+  nothing (#446). An age requirement holds one number: the stricter of the policy's
+  `age.over(n)` and the order's highest `minimumAge` tag. An age proof now also saves the age it
+  was made at (`provenOver`). Nothing reads either yet, so no order completes or is refused
+  differently (#444, the first step of #442).
+- `VerificationStore` has an optional `writePart(orderId, slot, part)`, which saves one proof
+  without rewriting the rest of the record, so two proofs saved for one order at the same moment
+  no longer overwrite each other. The exception is a custom requirement's proof that the order's
+  saved requirements don't name (an order opened from a link without a seal has none saved): the
+  gate still merges that one into the record, as before, so two of those saved at once can still
+  collide, and the buyer proves again. The in-memory store and `redisStorage()` implement it;
+  Redis keeps each part under a key of its own. A store without `writePart` works as before, and `doctor()` warns about it on a
+  deployment (`verification-store-merges-parts`). `mergeVerificationRecord` and
+  `verificationSlots` are exported for stores that add it.
 - `REVOKE_TOOL_META` (`"credentagent/revokeTool"`) from `@openmobilehub/credentagent-gate/cards`: the
   `_meta` key under which a grant tool result names the server's Revoke tool. The card kit's page
   draws a Revoke button only when the result names one, so a server that builds the result by hand
@@ -48,6 +68,13 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
 
 ### Changed
 
+- The spending-grant card's trust line no longer says "not wallet-signed" for every grant. A grant still
+  waiting for approval (or declined) says "not approved"; a grant the store reports as signed on the
+  person's phone says so, attributed to the store ("as the store reports it"), and that the card did not
+  check the signature or the credential's issuer. An unknown or missing level says "not recognised". A list
+  of grants shows one line per distinct sentence. The grant's own page, after the wallet signs or the
+  grant is declined, no longer says approving there "stands in for the wallet ceremony". The agent note on a pending spending grant
+  now asks for a short reply only when the human already sees the card (#429).
 - The storefront widget's pending spending-grant card shows Approve and Decline only when the
   approval link is an `https:` address, or `http:` on `localhost`, `127.0.0.1` or `[::1]`. Otherwise
   it says "The merchant's link isn't a safe web address, so this card doesn't show it." The link is

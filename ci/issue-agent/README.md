@@ -25,7 +25,8 @@ issue labelled `agent` (by someone with write access)
   ├─ root test   once per round: the authoritative root `npm test`                         (script)
   ├─ review      spec · security · DX, in parallel, adversarial, on REVIEW.md              (3 agents)
   │                └─ any red above → back to the SAME implement session (≤3 review rounds;
-  │                   mechanical failures get up to 3 fixes inside a round)
+  │                   mechanical failures get up to 3 fixes inside a round). Only blocking
+  │                   findings and unmet criteria go back; suggestions go on the draft PR
   ├─ freeze      the reviewed change is saved as a patch — the only thing ever published   (script)
   ├─ evidence    anything browser-visible: before (main) vs after, screenshots + video     (agent)
   │              every change: a recorded test-proof page                                  (script)
@@ -66,7 +67,15 @@ different agent before it reaches the PR:
 - **Reviewers check what the Claude review on GitHub checks.** Every lens carries `REVIEW.md`'s
   rules — the bypass-test question ("which test fails if this line is reverted?"), "fix it or flag
   it", and "stale docs, callers and examples are findings" — so a round on GitHub isn't spent on what
-  the internal round could have caught. They get the diff (capped) and the pipeline's measured facts
+  the internal round could have caught. A finding blocks only in the classes the default review rules
+  (`DEFAULT_REVIEW_RULES` in `roles.mjs`) list — a broken security invariant, a missing bypass test for
+  a new or changed control, a correctness bug, a release or README claim the code doesn't back, an
+  overclaim of trust (REVIEW.md §4, honesty fencing), a regression against the DX rubric, or a change
+  too big or outside its ticket. Comment wording, doc phrasing that claims no extra trust, and an edge
+  case that needs a host to break its declared types (never input an attacker controls) are suggestions
+  at most: they are reported on the draft pull request but never sent back to the implementer. An unmet
+  acceptance criterion does go back, and the spec reviewer's verdict is then "request changes". A
+  repo's own `reviewRules` replaces that list. The reviewers get the diff (capped) and the pipeline's measured facts
   in the prompt, rather than spending turns finding them.
 - **Two models.** The spec agent and the three reviewers run on `ISSUE_AGENT_REVIEW_MODEL` (faster);
   the implementer — every attempt, and the review loop's fixes — and the evidence agent on
@@ -156,6 +165,20 @@ scope, and the agents' plan.
   never reaches the job's public console — a failed run prints only which agent failed and how. The
   stop is decided where the brief is written and again before anything is posted (`briefOutcome`). A
   brief run that fails part-way uploads nothing at all.
+- **A second symptom of one root cause gets a design, not another patch.** The snapshot job (with the
+  token) lists the other open issues and pull requests — number and kind, plus a title and a pull
+  request's changed files only when their author has write access (and only paths of plain
+  characters) — and the brief agent reads it as data in an `<open_work>` tag (the agent itself still
+  has no GitHub access). The search is best effort: the 100 most recently updated open issues and 50
+  pull requests, 30 files each; if the list can't be read, the brief says so and carries on as usual.
+  A ticket of an approved plan is not compared (its epic and sibling tickets share its design). When
+  an open issue or pull request shares the symptom or the code, the brief comes back split (a design
+  and tickets, see "Splitting a big issue") and names it under **Same root cause as**, with a link.
+  Publishing re-reads the open list itself and keeps only numbers on it, since the run's output is
+  untrusted; a split brief with at least one such match adds `needs-decision` to the issue (created
+  if the repo lacks it). Approving the brief is that decision: the label comes off when its tickets
+  are opened, or when a later version drops the design. A false match costs one reply asking for a
+  plain fix.
 - `needs-decision` doesn't stop a brief: approving it *is* the decision.
 - Re-adding `agent` starts over: a fresh brief, and a fresh count of versions.
 
