@@ -228,9 +228,10 @@ describe("intent-sign REAL device-signed presentation", () => {
   });
 
   // The official Multipaz Payment card (`payment_sca_sd_jwt`) carries `credential_id`, not
-  // `payment_instrument_id`. These tests use `cardShape: "official"`, whose claim names are read
-  // from Multipaz `main` — a phone run (#464, #466) is what confirms them on a real card.
-  it("verifies the official Multipaz card: credential_id disclosed, no payment_instrument_id", async () => {
+  // `payment_instrument_id`. These tests use `cardShape: "official"`, which copies that card's
+  // claim names; the simulator signs the card itself, so none of this says the card is genuine.
+  // A phone run (2026-11-13) matched the real card on `credential_id`.
+  it("verifies a card with the official Multipaz card's layout: credential_id disclosed, no payment_instrument_id", async () => {
     const b = bounds();
     const { req, result } = await signFor(b, { cardShape: "official" });
     const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantUrl: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });

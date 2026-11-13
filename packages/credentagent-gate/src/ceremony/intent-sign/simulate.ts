@@ -39,10 +39,11 @@ export interface SimulateOptions {
   request: Pick<SignedIntentRequest, "request" | "dcql_query">;
   /** The web origin the wallet addresses the key binding to (must match the gate's). */
   origin: string;
-  /** Which payment card the wallet holds. `"official"` is the SD-JWT Payment card from
-   *  `issuer.multipaz.org` as read from Multipaz `main` (`credential_id`, `network`,
-   *  `last_four`, and NO `payment_instrument_id`); `"custom"` is the card
-   *  `tools/demo-pki/mint/` mints. Default `"custom"`. */
+  /** Which card LAYOUT the simulated wallet mints. `"official"` copies the claim names of the
+   *  SD-JWT Payment card at `issuer.multipaz.org`, as read from Multipaz `main` (`credential_id`,
+   *  `network`, `last_four`, and NO `payment_instrument_id`). Either way the card is signed by
+   *  this simulator's own demo issuer, never by Multipaz. `"custom"` carries
+   *  `payment_instrument_id`, like the test card `tools/demo-pki/mint/` mints. Default `"custom"`. */
   cardShape?: "official" | "custom";
   /** The id the credential discloses in its accepted claim (default the demo fixture's):
    *  `payment_instrument_id` on the custom card, `credential_id` on the official one. */
