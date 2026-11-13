@@ -53,7 +53,7 @@ export interface SimulateOptions {
   overrideVct?: string;
   /** TEST-ONLY: omit the card's accepted claim (missing-claim refusal) — `payment_instrument_id`
    *  or `credential_id`, whichever the chosen `cardShape` carries. */
-  omitPaymentClaim?: boolean;
+  omitInstrumentId?: boolean;
   /** TEST-ONLY: sign DIFFERENT mandates than the gate asked for. The single most important
    *  bypass: a wallet that returns terms other than the ones requested must be refused. */
   overrideMandates?: MandateContent[];
@@ -142,7 +142,7 @@ export async function devSimulateWalletSignature(
       : { issuer_name: "Bank of Utopia", masked_account_reference: "•••• 4444" };
   // `forgeRevealedClaim` leaves the real claim OUT of what the issuer signs, so the forged
   // disclosure appended below has no `_sd` digest behind it — the whole point of the bypass.
-  if (!opts.omitPaymentClaim && opts.forgeRevealedClaim === undefined) claims[acceptedClaim] = instrumentId;
+  if (!opts.omitInstrumentId && opts.forgeRevealedClaim === undefined) claims[acceptedClaim] = instrumentId;
 
   const iat = Math.floor(Date.now() / 1000);
   const issuerInstance = new SDJwtInstance<Record<string, unknown>>({

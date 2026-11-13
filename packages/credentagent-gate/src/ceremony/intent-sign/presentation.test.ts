@@ -221,7 +221,7 @@ describe("intent-sign REAL device-signed presentation", () => {
 
   it("refuses when the payment credential discloses no instrument id", async () => {
     const b = bounds();
-    const { req, result } = await signFor(b, { omitPaymentClaim: true });
+    const { req, result } = await signFor(b, { omitInstrumentId: true });
     const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantUrl: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
     expect(out.ok).toBe(false);
     if (!out.ok) expect(out.reason).toMatch(/payment_instrument_id/);
@@ -245,7 +245,7 @@ describe("intent-sign REAL device-signed presentation", () => {
   // about itself would authorize the grant.
   it("BYPASS: the official card discloses none of the accepted claims → refused", async () => {
     const b = bounds();
-    const { req, result } = await signFor(b, { cardShape: "official", omitPaymentClaim: true });
+    const { req, result } = await signFor(b, { cardShape: "official", omitInstrumentId: true });
     const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantUrl: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
     expect(out.ok).toBe(false);
     if (!out.ok) expect(out.reason).toMatch(/did not disclose any of: credential_id, payment_instrument_id/);
