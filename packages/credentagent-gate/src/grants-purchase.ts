@@ -43,6 +43,8 @@ export const MAX_OPEN_QUOTES_PER_GRANT = 5;
 /** How long a used quote (and the receipt it holds) is kept after it expires, so an agent whose
  *  connection dropped can post the same proof again and get its receipt instead of buying twice. */
 export const RECEIPT_RETENTION_MS = 10 * 60_000;
+/** Most quotes (open or used, with their receipts) held at once per registration; the oldest go first. */
+export const MAX_RETAINED_QUOTES = 10_000;
 
 /** What the host wires in when it opts in: the shared completion path, and the state it reads. */
 export interface AgentPurchaseDeps {
@@ -154,7 +156,10 @@ function agentCatalog(items: Record<string, CatalogEntry>, discountPct: number):
         listedMinor += lineMinor;
         chargedTotal += chargedMinor(price, quantity, discountPct);
         const minimumAge = minAgeOf(entry);
-        return { id: productId, unitPrice: price, quantity, lineTotal: lineMinor / 100, currency: "USD", ...(minimumAge ? { minimumAge } : {}) };
+        // Carry EVERY catalog attribute (category, requiresRx, …) onto the line, so a gate's `appliesTo` sees
+        // what a person's checkout shows it. Without them a category-scoped gate would never apply here.
+        const { price: _p, minAge: _m, ...details } = typeof entry === "number" ? ({} as Record<string, unknown>) : (entry as unknown as Record<string, unknown>);
+        return { ...details, id: productId, unitPrice: price, quantity, lineTotal: lineMinor / 100, currency: "USD", ...(minimumAge ? { minimumAge } : {}) };
       });
       return { id: orderId, lines, itemCount: refs.length, subtotal: listedMinor / 100, discount: (listedMinor - chargedTotal) / 100, total: chargedTotal / 100, currency: "USD" };
     },
@@ -235,6 +240,7 @@ export function registerPurchaseRoutes(app: GrantsApp, grants: Grants, deps: Age
       return send(res, refuse("invalid-request", "the store could not quote this cart")); // a typed refusal, never a bare 500
     }
     const nonce = randomUUID();
+    while (quotes.size >= MAX_RETAINED_QUOTES) quotes.delete(quotes.keys().next().value as string); // oldest first: bounded memory
     quotes.set(nonce, { grantId: g.id, cartId: cart.id, sku, qty, amountMinor, expiresAtMs: now + QUOTE_TTL_MS, used: false });
     const quote: PurchaseQuote = {
       nonce,
@@ -268,7 +274,7 @@ export function registerPurchaseRoutes(app: GrantsApp, grants: Grants, deps: Age
     // cannot both pass, and the second one can wait for the first one's answer.
     q.used = true;
     q.proofKey = proofKey;
-    q.outcome = settle(grantId, req.params.nonce, q, proof);
+    q.outcome = settle(grantId, req.params.nonce, q, proof).catch(() => refuse("not-recorded", "the purchase could not be completed; ask for a new quote"));
     return send(res, await q.outcome);
   });
 
@@ -316,12 +322,12 @@ export function registerPurchaseRoutes(app: GrantsApp, grants: Grants, deps: Age
       const catalog = agentCatalog(cfg.catalog, pct);
       const order = catalog.createOrder([{ productId: q.sku, quantity: q.qty }], orderId);
       const requiredAge = Math.max(0, ...order.lines.map((l) => (typeof l.minimumAge === "number" ? l.minimumAge : 0)));
-      if (requiredAge > 0 && ageProofCovers(live.ageProof, requiredAge)) deps.verificationStore.write(orderId, { ageVerified: true });
       const total = verdict.checkout.totals.find((t) => t.type === "total")?.amount ?? q.amountMinor;
       // One number on every side (invariant 3): what completion re-derived from the catalog must be what the
       // verifier priced and the agent signed. They share chargedMinor, so a drift here is a bug, never a price.
       if (Math.round(order.total * 100) !== total) return refuse("price", "the catalog prices this cart differently now");
       let drawn = false;
+      let recorded = false;
       const records: CompletedOrderStore = {
         read: () => undefined, // every order id is minted per quote; replay is the nonce's concern, above
         write: async (rec) => {
@@ -329,10 +335,19 @@ export function registerPurchaseRoutes(app: GrantsApp, grants: Grants, deps: Age
           // record cannot be written, give the budget back — never a draw without an order.
           grants._commitAgentDraw(grantId, total);
           drawn = true;
-          await deps.complete({ orderId, amount: rec.amount, currency: rec.currency, method: rec.method, completedAt: rec.completedAt });
+          await deps.complete({
+            orderId, amount: rec.amount, currency: rec.currency, method: rec.method, completedAt: rec.completedAt,
+            authorization: "delegated", grantId, permissionId: verdict.permissionId,
+            lines: order.lines.map((l) => ({ id: l.id, quantity: l.quantity, unitPrice: l.unitPrice })),
+          });
+          recorded = true; // from here the order exists and is announced: the draw must stay
         },
       };
       try {
+        // The age proof is the one sealed into THIS grant and counts only if it covers the threshold the
+        // catalog demands now. Awaited, and inside the try: a slow shared store must not lose the race with
+        // the clear below, and a failing one must not leave the flag behind.
+        if (requiredAge > 0 && ageProofCovers(live.ageProof, requiredAge)) await deps.verificationStore.write(orderId, { ageVerified: true });
         const done = await completeOrder(
           { order, mandateId: verdict.permissionId, amount: total / 100, currency: "USD", method: "delegated-agent", gates: [], trustLevel: verdict.trust_level },
           { catalog, verificationStore: deps.verificationStore, records, credentialRegistry: deps.credentialRegistry },
@@ -344,10 +359,15 @@ export function registerPurchaseRoutes(app: GrantsApp, grants: Grants, deps: Age
           return refuse("not-recorded", `the order could not be completed (${reason ?? "refused"})`);
         }
       } catch {
-        if (drawn) grants._releaseAgentDraw(grantId, total);
-        return refuse("not-recorded", "the order could not be recorded, so nothing was drawn; ask for a new quote");
+        // Something failed. If the order was already recorded and announced, it exists: keep the draw and
+        // answer with its receipt. Only a failure BEFORE that gives the budget back.
+        if (!recorded) {
+          if (drawn) grants._releaseAgentDraw(grantId, total);
+          return refuse("not-recorded", "the order could not be recorded, so nothing was drawn; ask for a new quote");
+        }
       } finally {
-        await deps.verificationStore.clear(orderId);
+        // Cleanup never replaces the result.
+        try { await deps.verificationStore.clear(orderId); } catch { /* the flag is per order id and unreachable */ }
       }
       const usage = await live.usage();
       return { ok: true, receipt: { orderId, amount: total / 100, remaining: usage.remaining, trustLevel: verdict.trust_level, checkout: proof.checkout, payment: proof.payment } };

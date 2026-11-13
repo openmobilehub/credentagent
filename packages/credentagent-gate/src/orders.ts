@@ -34,6 +34,14 @@ export interface CompletedOrder {
   mandateBundle?: unknown;
   /** What was proven for this order (the order proof receipt) — each with its own trust_level. */
   proofs?: ProofEntry[];
+  /** `"delegated"` when an agent bought it under a spending grant while the person was away; absent
+   *  means a person was present (`"direct"`). `orders.retrieve` reports it (spec 009 HR-002). */
+  authorization?: "direct" | "delegated";
+  /** What was bought — sku, quantity and unit price — so a handler of `order.settled` can ship it. */
+  lines?: { id: string; quantity: number; unitPrice: number }[];
+  /** The spending grant that paid, and the permission it rests on, for a delegated order. */
+  grantId?: string;
+  permissionId?: string;
 }
 
 /** Minimal per-order KV, mirroring VerificationStore. In-memory default; inject for prod. */
@@ -78,7 +86,7 @@ export type OrderDoorCode = "not-found";
 
 /** The one result shape every consent path shares (spec 009 FR-003). */
 export type OrderDoor =
-  | { ok: true; mandateBundle?: unknown; authorization: "direct"; trustLevel: TrustLevel; completion: Omit<CompletedOrder, "orderId" | "mandateBundle"> }
+  | { ok: true; mandateBundle?: unknown; authorization: "direct" | "delegated"; trustLevel: TrustLevel; completion: Omit<CompletedOrder, "orderId" | "mandateBundle" | "authorization"> }
   | { ok: false; pending: true; approveUrl: string; trustLevel: TrustLevel }
   | { ok: false; code: OrderDoorCode; credential?: string; trustLevel: TrustLevel };
 
@@ -122,8 +130,8 @@ export class Orders {
   async retrieve(id: string): Promise<OrderDoor> {
     const done = await this.deps.completed.read(id);
     if (done) {
-      const { orderId: _o, mandateBundle, ...completion } = done;
-      return { ok: true, authorization: "direct", trustLevel: TRUST, ...(mandateBundle !== undefined ? { mandateBundle } : {}), completion };
+      const { orderId: _o, mandateBundle, authorization, ...completion } = done;
+      return { ok: true, authorization: authorization ?? "direct", trustLevel: TRUST, ...(mandateBundle !== undefined ? { mandateBundle } : {}), completion };
     }
     const created = await this.deps.created.read(id);
     if (created) return { ok: false, pending: true, approveUrl: `${this.deps.walletOrigin}/credentagent/orders/${id}`, trustLevel: TRUST };

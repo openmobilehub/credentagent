@@ -512,3 +512,78 @@ describe("edges that must answer with a typed refusal, not a crash", () => {
     expect(await remaining(c)).toBe(91.96);
   });
 });
+
+describe("completion sees what a person's checkout sees", () => {
+  const scoped = (appliesTo: (o: { lines: { category?: string; requiresRx?: boolean }[] }) => boolean) =>
+    defineCredential({
+      id: "prescription",
+      request: dcql({ docType: "org.hl7.prescription.1", claims: ["rx_valid"] }),
+      verify: (cl) => cl.rx_valid === true,
+      effect: gate(),
+      appliesTo: appliesTo as never,
+      ui: { label: "Prescription", action: "Verify prescription" },
+    });
+
+  it("a gate scoped by category applies to an agent's purchase of that category (step-up)", async () => {
+    const c = await setup({ credentials: [scoped((o) => o.lines.some((l) => l.category === "Beverages"))] });
+    const q = await quote(c, { sku: "coffee" });
+    expect((await submit(c, q.body.quote.nonce, await signQuote(c, q.body.quote))).body).toMatchObject({ ok: false, code: "step-up" });
+    expect(c.orders.size).toBe(0);
+    expect(await remaining(c)).toBe(100);
+  });
+
+  it("a gate scoped by a custom catalog attribute applies too, and leaves other items alone", async () => {
+    const c = await setup({ credentials: [scoped((o) => o.lines.some((l) => l.requiresRx === true))] });
+    (c.catalog as Record<string, unknown>).tea = { ...c.catalog.tea, requiresRx: true };
+    const rx = await quote(c, { sku: "tea" });
+    expect((await submit(c, rx.body.quote.nonce, await signQuote(c, rx.body.quote))).body).toMatchObject({ ok: false, code: "step-up" });
+    expect((await buy(c, "coffee")).proof).toMatchObject({ ok: true }); // no requiresRx: the gate does not apply
+  });
+});
+
+describe("the age proof sealed in the grant must cover the limit the catalog sets NOW", () => {
+  it("an 18+ proof does not open an item raised to 21+ after the quote", async () => {
+    const c = await setup({ age: 18 });
+    const q = await quote(c, { sku: "coffee" });
+    const proof = await signQuote(c, q.body.quote);
+    c.catalog.coffee = { ...c.catalog.coffee, minAge: 21 };
+    expect((await submit(c, q.body.quote.nonce, proof)).body).toMatchObject({ ok: false, code: "step-up" });
+    expect(c.orders.size).toBe(0);
+    expect(await remaining(c)).toBe(100);
+  });
+
+  it("a covering proof still works when the shared store's write lands a moment later", async () => {
+    const c = await setup({ age: 21, perSpend: 50 });
+    const write = c.credentagent.store.write.bind(c.credentagent.store);
+    c.credentagent.store.write = (async (id: string, rec: never) => { await new Promise((r) => setTimeout(r, 15)); return write(id, rec); }) as never;
+    expect((await buy(c, "whiskey")).proof).toMatchObject({ ok: true, receipt: { amount: 40 } });
+  });
+});
+
+describe("what is recorded, and what survives a late failure", () => {
+  it("records what was bought and which grant paid, and says the order was delegated", async () => {
+    const c = await setup();
+    const { proof } = await buy(c, "coffee");
+    expect(await c.credentagent.orders.retrieve(proof.receipt.orderId)).toMatchObject({
+      ok: true,
+      authorization: "delegated",
+      completion: { grantId: c.grantId, lines: [{ id: "coffee", quantity: 1, unitPrice: 18 }], permissionId: expect.any(String) },
+    });
+  });
+
+  it("keeps the draw and answers with the receipt when only the cleanup after recording fails", async () => {
+    const c = await setup({ budget: 30, perSpend: 30 });
+    c.credentagent.store.clear = () => { throw new Error("redis down"); };
+    const { proof } = await buy(c, "coffee");
+    expect(proof).toMatchObject({ ok: true, receipt: { remaining: 12 } });
+    expect(c.orders.size).toBe(1);
+    expect(await remaining(c)).toBe(12); // the order exists, so the budget stays drawn
+    expect((await buy(c, "coffee")).proof?.ok ?? (await buy(c, "coffee")).quote.ok).toBe(false); // 12 left: no second 18
+  });
+});
+
+describe("opting in wrongly fails fast", () => {
+  it.each([[true], ["presence-only-demo"], [{ trust: "real" }], [{}]])("rejects agents: %j at construction", (agents) => {
+    expect(() => new CredentAgent({ walletOrigin: ORIGIN, agents: agents as never })).toThrow(/agents/);
+  });
+});

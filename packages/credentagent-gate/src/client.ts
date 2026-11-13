@@ -107,6 +107,10 @@ export class CredentAgent {
   private mountedStore?: VerificationStore;
 
   constructor(opts: CredentAgentOptions = {}) {
+    if (opts.agents !== undefined && opts.agents?.trust !== "presence-only-demo") {
+      // A misspelt opt-in would otherwise leave every agent call with a bare 404.
+      throw new Error(`[credentagent] agents: { trust: "presence-only-demo" } is the only supported setting; got ${JSON.stringify(opts.agents)}.`);
+    }
     let origin = opts.walletOrigin?.trim();
     if (!origin) {
       // Zero-config: default to localhost so the getting-started example just runs.

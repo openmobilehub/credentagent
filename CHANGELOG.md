@@ -33,7 +33,8 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
   permission, a quote, and a proof route (`/credentagent/grants/:id/delegation`, `/purchases`,
   `/purchases/:nonce/proof`). The gate prices from your catalog, keeps the budget on the grant, consumes the
   one-time code, and finishes the order through the shared completion path (`order.settled`, webhooks,
-  `orders.retrieve`). A retry of the same proof gets the same receipt back (`replayed: true`). Without
+  `orders.retrieve`). A retry of the same proof gets the same receipt back (`replayed: true`), from the same process and for
+  about 12 minutes. The saved order says `authorization: "delegated"` and lists the lines and the grant. Without
   `agents`, nothing changes. The signatures are real; nothing proves who issued the credential (#14) (#263).
 - Each order's requirements are now saved with its proofs, in the order's verification record
   (`record.requirements`), so a server that never ran `requirements()` can read what the order

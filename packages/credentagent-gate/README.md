@@ -408,7 +408,10 @@ and `credentagent.grants.serve(app)` also serves the store's side of the purchas
 catalog, keeps the budget on the grant (`grant.usage()` reads it), consumes the nonce, and finishes the order the
 way a person's checkout finishes: through `completeOrder`, so age and custom `gate()` checks hold and
 `order.settled`, webhooks and `orders.retrieve(receipt.orderId)` work. A retry of the same proof after a dropped
-connection gets the same receipt back (`replayed: true`), never a second purchase. **Choose one:** a store that
+connection gets the same receipt back (`replayed: true`), never a second purchase — from the same server
+process, for about 12 minutes after the quote (the one-time codes live in memory); after a restart, on another
+instance, or later, it answers `nonce-used`, and the agent should check `orders.retrieve` before buying again. The
+order `orders.retrieve` returns says `authorization: "delegated"` and carries the lines bought and the grant that paid. **Choose one:** a store that
 keeps its own ledger as above must leave `agents` out — two ledgers on one grant would each accept the whole budget.
 The routes are off unless you opt in.
 
