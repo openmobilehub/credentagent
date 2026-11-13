@@ -68,10 +68,16 @@ describe("intent-sign DCQL matches the credential a wallet actually holds", () =
       credentials: { claims: { id: string; path: string[] }[]; claim_sets?: string[][] }[];
     }).credentials[0];
     expect(cred.claim_sets).toBeDefined();
+    // The exact options, official card first. Spelled as literals so a change here is deliberate.
+    expect(cred.claim_sets).toEqual([["credential_id"], ["payment_instrument_id"]]);
     const leafOf = new Map(cred.claims.map((c) => [c.id, c.path.at(-1)]));
     const options = cred.claim_sets!.map((set) => set.map((id) => leafOf.get(id)));
-    // Every option names a claim that exists in `claims` ...
-    for (const option of options) expect(option).not.toContain(undefined);
+    // Every option names a claim that exists in `claims`, and none is empty (`every` below is
+    // vacuously true for an empty option, which no card could ever match) ...
+    for (const option of options) {
+      expect(option.length).toBeGreaterThan(0);
+      expect(option).not.toContain(undefined);
+    }
     // ... one option is answerable by the official card alone ...
     expect(options.some((o) => o.every((l) => OFFICIAL_CARD_CLAIMS.includes(l!)))).toBe(true);
     // ... and one by the test card alone.
