@@ -226,6 +226,60 @@ describe("intent-sign REAL device-signed presentation", () => {
     expect(out.ok).toBe(false);
     if (!out.ok) expect(out.reason).toMatch(/payment_instrument_id/);
   });
+
+  // The official Multipaz Payment card (`payment_sca_sd_jwt`) carries `credential_id`, not
+  // `payment_instrument_id`. These tests use `cardShape: "official"`, which copies that card's
+  // claim names; the simulator signs the card itself, so none of this says the card is genuine.
+  // A phone run (2026-11-13) matched the real card on `credential_id`.
+  it("verifies a card with the official Multipaz card's layout: credential_id disclosed, no payment_instrument_id", async () => {
+    const b = bounds();
+    const { req, result } = await signFor(b, { cardShape: "official" });
+    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantUrl: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
+    expect(out.ok).toBe(true);
+    if (out.ok) {
+      expect(out.trustLevel).toBe("device-signed");
+      expect(out.credentialType).toBe("urn:emvco:dpc:card:1");
+    }
+  });
+
+  // Delete the `hasClaim` check in verify.ts and this FAILS: a card that proves nothing
+  // about itself would authorize the grant.
+  it("BYPASS: the official card discloses none of the accepted claims → refused", async () => {
+    const b = bounds();
+    const { req, result } = await signFor(b, { cardShape: "official", omitInstrumentId: true });
+    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantUrl: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
+    expect(out.ok).toBe(false);
+    if (!out.ok) expect(out.reason).toMatch(/did not disclose any of: credential_id, payment_instrument_id/);
+  });
+
+  // A claim that is disclosed but EMPTY proves nothing about the card. Remove the empty-string
+  // clause from the `hasClaim` check in verify.ts and this fails: only that clause refuses it.
+  it("BYPASS: the official card discloses an EMPTY credential_id → refused", async () => {
+    const b = bounds();
+    const { req, result } = await signFor(b, { cardShape: "official", instrumentId: "" });
+    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantUrl: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
+    expect(out.ok).toBe(false);
+    if (!out.ok) expect(out.reason).toMatch(/did not disclose any of/);
+  });
+
+  // Same attack as the `payment_instrument_id` one above, on the new claim: a credential_id the
+  // issuer never signed a digest for. Only the `_sd` digest check can refuse it.
+  it("BYPASS: a credential_id the ISSUER never signed, on the official card → refused", async () => {
+    const b = bounds();
+    const { req, result } = await signFor(b, { cardShape: "official", forgeRevealedClaim: "attacker-card" });
+    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantUrl: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
+    expect(out.ok).toBe(false);
+    if (!out.ok) expect(out.reason).toMatch(/Unreferenced disclosure/i);
+  });
+
+  // Carrying an accepted claim is not enough: the card must also be the right TYPE.
+  it("BYPASS: the official card's claims under a DIFFERENT credential type → refused", async () => {
+    const b = bounds();
+    const { req, result } = await signFor(b, { cardShape: "official", overrideVct: "org.iso.18013.5.1.mDL" });
+    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantUrl: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
+    expect(out.ok).toBe(false);
+    if (!out.ok) expect(out.reason).toMatch(/wrong credential/);
+  });
 });
 
 // FR-4 — the verify SEAM: honesty is whatever the BACKEND attests, recorded with provenance.

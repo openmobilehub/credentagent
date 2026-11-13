@@ -28,6 +28,20 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
 
 ### Added
 
+- The grant signing page now accepts the SD-JWT Payment card from Multipaz's issuer
+  (`payment_sca_sd_jwt` at `issuer.multipaz.org`), as well as the test card `tools/demo-pki/mint/`
+  mints. The request asks the wallet for either `credential_id` (the official card) or
+  `payment_instrument_id` (the test card), as DCQL `claim_sets`, and `/verify` requires one of them
+  to be disclosed, non-empty and signed by the key in the card's own certificate. The gate does not
+  check who issued the card: a card anyone mints with these claim names passes too, so a grant it
+  verifies itself stays `device-signed`, not `issuer-verified`. Before, the request asked only for
+  `payment_instrument_id`, which the official card does not carry, so the phone showed "Your info
+  wasn't found". Checked once on a phone, for the official card only, with a development wallet
+  build against a local server; the test card is covered by tests but has not been tried on a phone
+  with the new request. Signing a grant still needs a wallet that supports AP2's `delegate`
+  request; no released wallet does yet. The issuer lists two cards both named "Payment card": a
+  grant needs the SD-JWT one, not the mdoc one. `SimulateOptions` gains `cardShape: "official"` for
+  tests; the simulator signs that card itself (#465, part of #464).
 - Each order's requirements are now saved with its proofs, in the order's verification record
   (`record.requirements`), so a server that never ran `requirements()` can read what the order
   needs. `requirements()` seals them into every mounted approve link (a new `requirements=` query
