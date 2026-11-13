@@ -251,6 +251,16 @@ describe("intent-sign REAL device-signed presentation", () => {
     if (!out.ok) expect(out.reason).toMatch(/did not disclose any of: credential_id, payment_instrument_id/);
   });
 
+  // A claim that is disclosed but EMPTY proves nothing about the card. Remove the empty-string
+  // clause from the `hasClaim` check in verify.ts and this fails: only that clause refuses it.
+  it("BYPASS: the official card discloses an EMPTY credential_id → refused", async () => {
+    const b = bounds();
+    const { req, result } = await signFor(b, { cardShape: "official", instrumentId: "" });
+    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantUrl: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
+    expect(out.ok).toBe(false);
+    if (!out.ok) expect(out.reason).toMatch(/did not disclose any of/);
+  });
+
   // Same attack as the `payment_instrument_id` one above, on the new claim: a credential_id the
   // issuer never signed a digest for. Only the `_sd` digest check can refuse it.
   it("BYPASS: a credential_id the ISSUER never signed, on the official card → refused", async () => {
