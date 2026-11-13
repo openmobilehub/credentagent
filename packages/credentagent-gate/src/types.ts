@@ -375,4 +375,16 @@ export interface CredentAgentOptions {
    * it, so changing this never re-prices a grant that is already approved.
    */
   loyaltyDiscountPct?: number;
+  /**
+   * Opt in to agent-signed purchases: `grants.serve(app)` then also serves the routes an AI agent that
+   * holds its own key uses to read its permission, get a quote and post its proof
+   * (`/credentagent/grants/:id/delegation`, `/purchases`, `/purchases/:nonce/proof`). A verified purchase
+   * finishes through the same path as a person's checkout — `order.settled`, webhooks and
+   * `orders.retrieve()` — and draws on the grant's budget, which this gate then keeps. Omit ⇒ none of
+   * those routes exist, and a store that keeps its own ledger is unchanged.
+   *
+   * `trust` names what you are getting: `"presence-only-demo"` — the signatures are real, but nothing
+   * proves who issued the credential (#14), so never use it as a real safety control.
+   */
+  agents?: { trust: "presence-only-demo" };
 }

@@ -31,6 +31,7 @@ import { AmountError, toMinorUnits } from "./ap2/money.js";
 import { importVerifyKey } from "./ap2/keys.js";
 import { KeyedMutex } from "./keyed-mutex.js";
 import type { Ap2Issuer } from "./ap2/issue.js";
+import type { AgentPurchaseDeps } from "./grants-purchase.js";
 
 /** Why a grant operation refused — a TYPED union (never `string`; #95 review). */
 export type GrantDoorCode =
@@ -292,6 +293,9 @@ export interface GrantsDeps {
   /** This gate's AP2 issuer: the agent-signed purchase routes quote carts with it and verify them
    *  against its checkout key. Absent ⇒ those routes answer `not-authorized` (nothing to quote with). */
   ap2?: Ap2Issuer;
+  /** Present ⇒ the host opted in to agent-signed purchase routes (`agents: { trust }`) and this is the
+   *  shared completion path they finish through. Absent ⇒ `grants.serve(app)` registers none of them. */
+  agentPurchases?: AgentPurchaseDeps;
 }
 
 const genGrantId = (): string => `grant_${globalThis.crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
@@ -374,8 +378,13 @@ export class Grants {
   }
 
   /** What the agent-signed purchase routes need: the issuer, this store's origin and the priced catalog. */
-  get purchaseConfig(): { walletOrigin: string; catalog: Record<string, CatalogEntry>; ap2?: Ap2Issuer } {
-    return { walletOrigin: this.deps.walletOrigin, catalog: this.deps.catalog ?? {}, ...(this.deps.ap2 ? { ap2: this.deps.ap2 } : {}) };
+  get purchaseConfig(): { walletOrigin: string; catalog: Record<string, CatalogEntry>; ap2?: Ap2Issuer; agentPurchases?: AgentPurchaseDeps } {
+    return {
+      walletOrigin: this.deps.walletOrigin,
+      catalog: this.deps.catalog ?? {},
+      ...(this.deps.ap2 ? { ap2: this.deps.ap2 } : {}),
+      ...(this.deps.agentPurchases ? { agentPurchases: this.deps.agentPurchases } : {}),
+    };
   }
 
   /** Run `fn` as the only operation on this grant — verify-then-commit for an agent purchase is ONE
@@ -397,6 +406,14 @@ export class Grants {
     if (!rec) return;
     rec.agentSpentMinor = (rec.agentSpentMinor ?? 0) + minor;
     rec.agentUses = (rec.agentUses ?? 0) + 1;
+  }
+
+  /** Give back a draw whose order could not be recorded. Call only inside {@link _exclusive}. */
+  _releaseAgentDraw(id: string, minor: number): void {
+    const rec = this.records.get(id);
+    if (!rec) return;
+    rec.agentSpentMinor = Math.max(0, (rec.agentSpentMinor ?? 0) - minor);
+    rec.agentUses = Math.max(0, (rec.agentUses ?? 0) - 1);
   }
 
   /** Config the rails `grants.serve(app)` registers read — the intent-sign rail (spec 012) and
@@ -880,10 +897,12 @@ export class Grants {
         const budget = rec.opts.budget;
         // Before authorize there is no engine ledger yet: nothing has been drawn, so the
         // full budget is available. After authorize (incl. once revoked) the engine's
-        // committed-draws ledger is the authority — convert its cents back to dollars.
+        // committed-draws ledger is the authority — convert its cents back to dollars. A grant
+        // whose key the agent holds has no engine: its ledger is `agentSpentMinor`, in cents, so
+        // subtract in cents (dollars would give 91.96000000000001).
         if (!rec.engine) {
-          const spent = (rec.agentSpentMinor ?? 0) / 100;
-          return { budget, spent, remaining: budget - spent };
+          const spentMinor = rec.agentSpentMinor ?? 0;
+          return { budget, spent: spentMinor / 100, remaining: (toCents(budget) - spentMinor) / 100 };
         }
         const { spent, remaining } = await rec.engine.usage();
         return { budget, spent: spent / 100, remaining: remaining / 100 };

@@ -1,7 +1,8 @@
-// Agent-signed purchases over HTTP (design: 2026-11-09-agent-signed-purchase). The agent holds its
-// own key; the store exposes three grant-scoped routes (permission, quote, proof) and runs
-// `verifyDelegatedPurchase` with ITS audience, nonce, ledger and catalog price. Every refusal below
-// leaves the budget and the order store exactly as they were.
+// Agent-signed purchases over HTTP (opt-in: `agents: { trust: "presence-only-demo" }`). The agent holds
+// its own key; the store exposes three grant-scoped routes (permission, quote, proof) and runs
+// `verifyDelegatedPurchase` with ITS audience, nonce, ledger and catalog price. A verified purchase
+// finishes through the shared completion path (`orders.retrieve`, `order.settled`). Every refusal
+// below leaves the budget and the set of settled orders exactly as they were.
 import { describe, it, expect, vi } from "vitest";
 import express, { type Express } from "express";
 import request from "supertest";
@@ -13,6 +14,9 @@ import { appendAgentHop } from "./ap2/chain/hop.js";
 import { walletChain } from "./ap2/chain/serialize.js";
 import { digestToken } from "./ap2/sdjwt.js";
 import { VCT } from "./ap2/types.js";
+import { defineCredential, dcql, gate } from "./credentials.js";
+import { MemoryOrderStore, type CompletedOrder } from "./orders.js";
+import type { Credential } from "./types.js";
 
 const HOST = "shop.example";
 const ORIGIN = `http://${HOST}`;
@@ -24,13 +28,6 @@ const CATALOG = {
 };
 const INSTRUMENT = { id: "demo-instrument-0001", type: "card" } as const;
 
-type Orders = Map<string, unknown>;
-const orderStore = (m: Orders) => ({
-  read: async (id: string) => (m.get(id) as never) ?? null,
-  write: async (id: string, v: unknown) => void m.set(id, v),
-  clear: async (id: string) => void m.delete(id),
-});
-
 async function signOnPhone(app: Express, id: string) {
   const req = await request(app).get(`/credentagent/grants/${id}/sign/request`).set("Host", HOST);
   const oid = req.body as { requests: { data: { request: string } }[]; dcql_query: unknown; readerContextToken: string };
@@ -41,17 +38,30 @@ async function signOnPhone(app: Express, id: string) {
   return request(app).post(`/credentagent/grants/${id}/sign/verify`).set("Host", HOST).send({ readerContextToken: oid.readerContextToken, result });
 }
 
-interface Opts { budget?: number; perSpend?: number; allow?: { skus?: string[]; categories?: string[] }; age?: number; sign?: boolean }
+interface Opts {
+  budget?: number; perSpend?: number; allow?: { skus?: string[]; categories?: string[] }; age?: number; sign?: boolean;
+  optIn?: boolean; credentials?: Credential[];
+  completedOrderStore?: MemoryOrderStore<CompletedOrder>; membership?: boolean; loyaltyDiscountPct?: number;
+}
 
 /** A store, an agent with its own key, and a grant the person signed (or left pending). */
 async function setup(o: Opts = {}) {
   const agentKey = AgentKey.generate();
   const catalog = structuredClone(CATALOG) as Record<string, { price: number; category?: string; minAge?: number }>;
-  const credentagent = new CredentAgent({ walletOrigin: ORIGIN, catalog, gateSecret: "stable-test-secret" });
-  const orders: Orders = new Map();
+  const credentagent = new CredentAgent({
+    walletOrigin: ORIGIN,
+    catalog,
+    gateSecret: "stable-test-secret",
+    ...(o.optIn === false ? {} : { agents: { trust: "presence-only-demo" as const } }),
+    ...(o.credentials ? { credentials: o.credentials } : {}),
+    ...(o.completedOrderStore ? { completedOrderStore: o.completedOrderStore } : {}),
+    ...(o.loyaltyDiscountPct ? { loyaltyDiscountPct: o.loyaltyDiscountPct } : {}),
+  });
+  // The orders the host HEARD about: what `order.settled` fired for, through the shared completion path.
+  const orders = new Set<string>();
+  credentagent.on("order.settled", ({ id }) => orders.add(id));
   const app = express();
   app.use(express.json());
-  app.locals.credentagent = { orderStore: orderStore(orders) };
   credentagent.grants.serve(app);
   const created = await credentagent.grants.create({
     merchant: "utopia",
@@ -61,6 +71,7 @@ async function setup(o: Opts = {}) {
     agentKey: agentKey.publicJwk,
   });
   if (o.age) expect(await credentagent.grants._recordAgeProof(created.id, { provenAge: o.age })).toBe(true);
+  if (o.membership) expect(await credentagent.grants._recordMembershipProof(created.id, { membershipNumber: "GOLD-0001" })).toBe(true);
   if (o.sign !== false) expect((await signOnPhone(app, created.id)).body).toMatchObject({ ok: true, status: "authorized" });
   return { app, agentKey, credentagent, orders, catalog, grantId: created.id };
 }
@@ -101,6 +112,22 @@ describe("a valid agent-signed purchase", () => {
     expect(c.orders.size).toBe(1);
     expect(await remaining(c)).toBe(82);
   });
+
+  it("finishes through the shared completion path: orders.retrieve finds it and order.settled fired once", async () => {
+    const c = await setup();
+    const { proof } = await buy(c, "coffee");
+    const found = await c.credentagent.orders.retrieve(proof.receipt.orderId);
+    expect(found).toMatchObject({ ok: true, trustLevel: "presence-only-demo", completion: { amount: 18, currency: "USD", method: "delegated-agent" } });
+    expect([...c.orders]).toEqual([proof.receipt.orderId]);
+  });
+
+  it("works next to orders.serve (whose order store is read-only): no 500, one order, one draw", async () => {
+    const c = await setup();
+    c.credentagent.orders.serve(c.app);
+    const { proof } = await buy(c, "coffee");
+    expect(proof).toMatchObject({ ok: true, receipt: { remaining: 82 } });
+    expect(c.orders.size).toBe(1);
+  });
 });
 
 describe("the proof is checked against the key the grant names", () => {
@@ -127,13 +154,40 @@ describe("the proof is checked against the key the grant names", () => {
 });
 
 describe("the nonce is single-use, bound to one grant, and short-lived", () => {
-  it("refuses a replayed proof (nonce-used) and records no second order or draw", async () => {
+  it("answers the same proof posted again with the SAME receipt (replayed), and buys nothing twice", async () => {
     const c = await setup();
     const q = await quote(c, { sku: "coffee" });
     const proof = await signQuote(c, q.body.quote);
-    expect((await submit(c, q.body.quote.nonce, proof)).body.ok).toBe(true);
-    const again = await submit(c, q.body.quote.nonce, proof);
-    expect(again.body).toMatchObject({ ok: false, code: "nonce-used" });
+    const first = (await submit(c, q.body.quote.nonce, proof)).body;
+    expect(first.ok).toBe(true);
+    const again = (await submit(c, q.body.quote.nonce, proof)).body;
+    expect(again).toMatchObject({ ok: true, receipt: { orderId: first.receipt.orderId, amount: 18, replayed: true } });
+    expect(first.receipt.replayed).toBeUndefined();
+    expect(c.orders.size).toBe(1);
+    expect(await remaining(c)).toBe(82);
+  });
+
+  it("refuses a DIFFERENT proof on a used nonce (nonce-used) and records no second order or draw", async () => {
+    const c = await setup();
+    const q = await quote(c, { sku: "coffee" });
+    expect((await submit(c, q.body.quote.nonce, await signQuote(c, q.body.quote))).body.ok).toBe(true);
+    const other = await signQuote(c, q.body.quote); // a fresh signature: not the proof that used the nonce
+    expect((await submit(c, q.body.quote.nonce, other)).body).toMatchObject({ ok: false, code: "nonce-used" });
+    expect(c.orders.size).toBe(1);
+    expect(await remaining(c)).toBe(82);
+  });
+
+  it("lets only one of two CONCURRENT submissions of one nonce buy: the other waits and gets the same receipt", async () => {
+    const c = await setup();
+    const q = await quote(c, { sku: "coffee" });
+    const proof = await signQuote(c, q.body.quote);
+    // A shared grant store answers on a later turn of the event loop. Model that: if the nonce were only
+    // consumed AFTER a read like this one, both requests would see it unused.
+    const retrieve = c.credentagent.grants.retrieve.bind(c.credentagent.grants);
+    c.credentagent.grants.retrieve = async (id: string) => { await new Promise((r) => setTimeout(r, 20)); return retrieve(id); };
+    const [a, b] = await Promise.all([submit(c, q.body.quote.nonce, proof), submit(c, q.body.quote.nonce, proof)]);
+    expect([a.body.ok, b.body.ok]).toEqual([true, true]);
+    expect(a.body.receipt.orderId).toBe(b.body.receipt.orderId);
     expect(c.orders.size).toBe(1);
     expect(await remaining(c)).toBe(82);
   });
@@ -170,6 +224,17 @@ describe("the nonce is single-use, bound to one grant, and short-lived", () => {
     expect(a.orders.size).toBe(0);
   });
 
+  it("refuses grant A's nonce when the proof is signed with grant B's own permission and submitted under B", async () => {
+    const a = await setup();
+    const bCreated = await a.credentagent.grants.create({ merchant: "utopia", budget: 100, perSpend: 30, allow: { categories: ["Beverages"] }, agentKey: a.agentKey.publicJwk });
+    expect((await signOnPhone(a.app, bCreated.id)).body).toMatchObject({ ok: true });
+    const q = await quote(a, { sku: "coffee" }); // quoted under A
+    const proof = await signQuote(a, q.body.quote, a.agentKey, bCreated.id); // B's permission over A's cart: B's permission check passes
+    expect((await submit(a, q.body.quote.nonce, proof, bCreated.id)).body).toMatchObject({ ok: false, code: "nonce-used" });
+    expect((await (await a.credentagent.grants.retrieve(bCreated.id))!.usage()).remaining).toBe(100);
+    expect(a.orders.size).toBe(0);
+  });
+
   it("refuses an expired nonce", async () => {
     const c = await setup();
     const q = await quote(c, { sku: "coffee" });
@@ -191,7 +256,7 @@ describe("the nonce is single-use, bound to one grant, and short-lived", () => {
   });
 });
 
-describe("a proof rests on THIS grant's permission and on the cart this nonce quoted (final review C1)", () => {
+describe("a proof rests on THIS grant's permission and on the cart this nonce quoted", () => {
   it("refuses a proof built on ANOTHER grant's permission under this grant's nonce, and draws nothing from either", async () => {
     const a = await setup({ budget: 20, perSpend: 20 });
     // A second, far larger grant in the same store, naming the same agent key (the store names ONE key).
@@ -217,7 +282,7 @@ describe("a proof rests on THIS grant's permission and on the cart this nonce qu
   });
 });
 
-describe("the quote only offers what the signed mandate can hold (final review I1, I2)", () => {
+describe("the quote only offers what the signed mandate can hold", () => {
   it("refuses qty above 1 at quote time: the signed mandate holds one of each item per purchase", async () => {
     const c = await setup();
     const r = await quote(c, { sku: "coffee", qty: 2 });
@@ -261,6 +326,8 @@ describe("the catalog is the price authority and the grant's bounds hold", () =>
     const c = await setup({ perSpend: 15 });
     const { quote: q, proof } = await buy(c, "coffee"); // 18 > 15
     expect(q.ok === false || proof?.ok === false).toBe(true);
+    // The refusal says WHICH limit, in a field the agent can switch on (not only in prose).
+    expect((q.ok === false ? q : proof)?.violations?.map((v: { constraint?: string }) => v.constraint)).toEqual(["payment.amount_range"]);
     expect(c.orders.size).toBe(0);
   });
 
@@ -285,6 +352,12 @@ describe("the catalog is the price authority and the grant's bounds hold", () =>
 });
 
 describe("only an authorized grant sells", () => {
+  it("answers a revoked grant with `revoked` at quote time, not `not-authorized`", async () => {
+    const c = await setup();
+    await (await c.credentagent.grants.retrieve(c.grantId))!.revoke();
+    expect((await quote(c, { sku: "coffee" })).body).toMatchObject({ ok: false, code: "revoked" });
+  });
+
   it("refuses a pending grant at quote time", async () => {
     const c = await setup({ sign: false });
     expect((await quote(c, { sku: "coffee" })).body).toMatchObject({ ok: false, code: "not-authorized" });
@@ -295,7 +368,7 @@ describe("only an authorized grant sells", () => {
     const q = await quote(c, { sku: "coffee" });
     const proof = await signQuote(c, q.body.quote);
     await (await c.credentagent.grants.retrieve(c.grantId))!.revoke();
-    expect((await submit(c, q.body.quote.nonce, proof)).body).toMatchObject({ ok: false, code: "not-authorized" });
+    expect((await submit(c, q.body.quote.nonce, proof)).body).toMatchObject({ ok: false, code: "revoked" });
     expect(c.orders.size).toBe(0);
   });
 
@@ -308,6 +381,11 @@ describe("only an authorized grant sells", () => {
 describe("concurrency and malformed input", () => {
   it("lets exactly one of two concurrent proofs through when the budget fits one", async () => {
     const c = await setup({ budget: 20, perSpend: 20 });
+    // In memory every await is a microtask, so two requests never interleave and the lock is never
+    // tested. Make the completion's own read really wait on the event loop: without the per-grant lock
+    // BOTH proofs read the ledger (18 fits 20) before either commits.
+    const read = c.credentagent.store.read.bind(c.credentagent.store);
+    c.credentagent.store.read = async (id: string) => { await new Promise((r) => setTimeout(r, 20)); return read(id); };
     const q1 = (await quote(c, { sku: "coffee" })).body.quote;
     const q2 = (await quote(c, { sku: "coffee" })).body.quote;
     const [p1, p2] = await Promise.all([signQuote(c, q1), signQuote(c, q2)]);
@@ -342,5 +420,95 @@ describe("the agent's private key never reaches the store", () => {
     const hasPrivate = (v: unknown): boolean =>
       !!v && typeof v === "object" && ("d" in (v as object) || Object.values(v as object).some(hasPrivate));
     expect(bodies.some(hasPrivate)).toBe(false);
+  });
+});
+
+describe("opt-in: nothing is served unless the host asked for agents", () => {
+  it("without `agents`, the delegation, quote and proof routes do not exist", async () => {
+    const c = await setup({ optIn: false });
+    expect((await request(c.app).get(`${base(c)}/delegation`).set("Host", HOST)).status).toBe(404);
+    expect((await quote(c, { sku: "coffee" })).status).toBe(404);
+    expect((await submit(c, "any", {})).status).toBe(404);
+  });
+
+  it("a store keeping its own ledger (the README pattern) cannot be spent past the grant by these routes", async () => {
+    const c = await setup({ optIn: false, budget: 30, perSpend: 30 });
+    // The routes a README-style store would have to hand-build are absent, so the budget the person
+    // signed is the one ledger the store keeps: 36 can never be accepted against 30.
+    expect((await quote(c, { sku: "coffee" })).status).toBe(404);
+    expect(await remaining(c)).toBe(30);
+  });
+});
+
+describe("completion re-derives what a quote could not know", () => {
+  it("refuses (step-up) when an age restriction appeared on the item AFTER it was quoted, and draws nothing", async () => {
+    const c = await setup();
+    const q = await quote(c, { sku: "coffee" }); // not age-restricted when quoted
+    const proof = await signQuote(c, q.body.quote);
+    c.catalog.coffee = { ...c.catalog.coffee, minAge: 21 }; // price unchanged, so only the age gate can stop it
+    expect((await submit(c, q.body.quote.nonce, proof)).body).toMatchObject({ ok: false, code: "step-up" });
+    expect(c.orders.size).toBe(0);
+    expect(await remaining(c)).toBe(100);
+  });
+
+  it("refuses (step-up) while a custom gate() credential applies, as the draw path does", async () => {
+    const prescription = defineCredential({
+      id: "prescription",
+      request: dcql({ docType: "org.hl7.prescription.1", claims: ["rx_valid"] }),
+      verify: (cl) => cl.rx_valid === true,
+      effect: gate(),
+      ui: { label: "Prescription", action: "Verify prescription" },
+    });
+    const c = await setup({ credentials: [prescription] });
+    const q = await quote(c, { sku: "coffee" });
+    const proof = await signQuote(c, q.body.quote);
+    expect((await submit(c, q.body.quote.nonce, proof)).body).toMatchObject({ ok: false, code: "step-up" });
+    expect(c.orders.size).toBe(0);
+    expect(await remaining(c)).toBe(100);
+  });
+
+  it("gives the budget back when the order cannot be recorded: no draw without an order", async () => {
+    const store = new MemoryOrderStore<CompletedOrder>();
+    const c = await setup({ completedOrderStore: store });
+    store.write = () => { throw new Error("disk full"); };
+    const { proof } = await buy(c, "coffee");
+    expect(proof).toMatchObject({ ok: false, code: "not-recorded" });
+    expect(c.orders.size).toBe(0);
+    expect(await remaining(c)).toBe(100);
+  });
+});
+
+describe("a loyalty member pays the discounted price on every step (invariant 3)", () => {
+  it("quotes, verifies, records and draws the SAME discounted amount", async () => {
+    const c = await setup({ membership: true, loyaltyDiscountPct: 10 });
+    const { quote: q, proof } = await buy(c, "coffee"); // 18 less 10% = 16.20
+    expect(q.quote.amount).toBe(16.2);
+    expect(proof).toMatchObject({ ok: true, receipt: { amount: 16.2, remaining: 83.8 } });
+    expect(await c.credentagent.orders.retrieve(proof.receipt.orderId)).toMatchObject({ ok: true, completion: { amount: 16.2 } });
+    expect(await remaining(c)).toBe(83.8);
+  });
+});
+
+describe("edges that must answer with a typed refusal, not a crash", () => {
+  it("a sub-cent catalog price is refused at quote time, never a 500", async () => {
+    const c = await setup();
+    c.catalog.coffee = { ...c.catalog.coffee, price: 18.005 };
+    const r = await quote(c, { sku: "coffee" });
+    expect(r.status).toBe(400);
+    expect(r.body).toMatchObject({ ok: false, code: "invalid-request" });
+  });
+
+  it("an item with minAge 0 (no limit) is sold without an age proof", async () => {
+    const c = await setup();
+    c.catalog.coffee = { ...c.catalog.coffee, minAge: 0 };
+    expect((await buy(c, "coffee")).proof).toMatchObject({ ok: true });
+  });
+
+  it("reports the remaining budget in whole cents (100 less 8.04 is 91.96, not 91.96000000000001)", async () => {
+    const c = await setup();
+    c.catalog.coffee = { ...c.catalog.coffee, price: 8.04 };
+    const { proof } = await buy(c, "coffee");
+    expect(proof.receipt.remaining).toBe(91.96);
+    expect(await remaining(c)).toBe(91.96);
   });
 });

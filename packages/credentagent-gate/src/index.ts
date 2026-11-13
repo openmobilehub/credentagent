@@ -44,6 +44,7 @@ export { Grants, grantLifecycle } from "./grants.js";
 export type { Grant, GrantStatus, GrantLifecycle, GrantUsage, GrantDoorCode, GrantAllow, CreateGrantOptions, GrantSigning, GrantMandateEvidence, SpendDoor, SpendItems } from "./grants.js";
 // `grant.ageScope` — the age-restricted products a grant's bounds NAME, so the page can say so
 // before the human authorizes (#172). Read straight from the catalog; disclosure, not enforcement.
+export type { PurchaseCode, PurchaseDoor, PurchaseQuote, PurchaseReceipt } from "./grants-purchase.js";
 export { ageScopeFor } from "./grants-age.js";
 export type { GrantAgeScope, AgeRestrictedItem } from "./grants-age.js";
 

@@ -28,6 +28,13 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
 
 ### Added
 
+- Agent-signed purchases, opt-in: `new CredentAgent({ agents: { trust: "presence-only-demo" } })` makes
+  `grants.serve(app)` also serve the store's side of a purchase by an agent that holds its own key — the
+  permission, a quote, and a proof route (`/credentagent/grants/:id/delegation`, `/purchases`,
+  `/purchases/:nonce/proof`). The gate prices from your catalog, keeps the budget on the grant, consumes the
+  one-time code, and finishes the order through the shared completion path (`order.settled`, webhooks,
+  `orders.retrieve`). A retry of the same proof gets the same receipt back (`replayed: true`). Without
+  `agents`, nothing changes. The signatures are real; nothing proves who issued the credential (#14) (#263).
 - `REVOKE_TOOL_META` (`"credentagent/revokeTool"`) from `@openmobilehub/credentagent-gate/cards`: the
   `_meta` key under which a grant tool result names the server's Revoke tool. The card kit's page
   draws a Revoke button only when the result names one, so a server that builds the result by hand

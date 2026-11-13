@@ -180,6 +180,11 @@ export class CredentAgent {
     this.grants = new Grants({
       walletOrigin: this.walletOrigin,
       ap2: this.ap2,
+      // Opt-in (`agents`): the routes finish an agent's order through the SAME path as a person's —
+      // lazily, since `orders` is built just below.
+      ...(opts.agents?.trust === "presence-only-demo"
+        ? { agentPurchases: { complete: (order) => this.orders._complete(order), verificationStore: this.store, credentialRegistry: this.registry } }
+        : {}),
       ...(opts.catalog ? { catalog: opts.catalog } : {}),
       ...(opts.gateSecret ? { signingKey: opts.gateSecret } : {}),
       ...(opts.readerIdentity ? { readerIdentity: opts.readerIdentity } : {}),
