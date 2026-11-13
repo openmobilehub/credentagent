@@ -242,7 +242,7 @@ describe("intent-sign REAL device-signed presentation", () => {
     }
   });
 
-  // Delete the `hasClaim` check in verify.ts and this goes green: a card that proves nothing
+  // Delete the `hasClaim` check in verify.ts and this FAILS: a card that proves nothing
   // about itself would authorize the grant.
   it("BYPASS: the official card discloses none of the accepted claims → refused", async () => {
     const b = bounds();

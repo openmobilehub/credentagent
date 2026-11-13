@@ -1,10 +1,10 @@
 // The rail's DCQL pinned to what a REAL wallet will actually answer.
 //
 // This is the test the rail was missing before, and it matters more since spec 014, not less.
-// `simulate.ts` mints its credential from the same constants `dcql.ts` exports, so every
-// in-process test agrees with itself no matter what those constants say — only a phone can
-// show a mismatch. These assertions therefore use LITERALS, and they pin the two shapes that
-// were found to fail silently on a device.
+// `simulate.ts` mints a credential that discloses every claim whatever the query asks for, so the
+// in-process presentation tests cannot see a query a phone would not match — only a phone can
+// show that. These assertions therefore use LITERALS, and they pin the shapes that were found to
+// fail silently on a device.
 import { describe, it, expect } from "vitest";
 import { buildIntentSignDcql, PAYMENT_CREDENTIAL_ID, PAYMENT_CREDENTIAL_VCTS } from "./dcql.js";
 
