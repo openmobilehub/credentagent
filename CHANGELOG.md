@@ -35,6 +35,26 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
   one-time code, and finishes the order through the shared completion path (`order.settled`, webhooks,
   `orders.retrieve`). A retry of the same proof gets the same receipt back (`replayed: true`). Without
   `agents`, nothing changes. The signatures are real; nothing proves who issued the credential (#14) (#263).
+- Each order's requirements are now saved with its proofs, in the order's verification record
+  (`record.requirements`), so a server that never ran `requirements()` can read what the order
+  needs. `requirements()` seals them into every mounted approve link (a new `requirements=` query
+  parameter, signed with the rails' signing key and bound to the order id, which makes each link
+  about 150–250 characters longer). The first credential, dc-payment or delegated page opened from
+  such a link saves them, once. Links a host builds by hand, such as the Pay buttons on the
+  `orders.serve()` checkout page and the storefront's, carry no seal yet, so those orders save
+  nothing (#446). An age requirement holds one number: the stricter of the policy's
+  `age.over(n)` and the order's highest `minimumAge` tag. An age proof now also saves the age it
+  was made at (`provenOver`). Nothing reads either yet, so no order completes or is refused
+  differently (#444, the first step of #442).
+- `VerificationStore` has an optional `writePart(orderId, slot, part)`, which saves one proof
+  without rewriting the rest of the record, so two proofs saved for one order at the same moment
+  no longer overwrite each other. The exception is a custom requirement's proof that the order's
+  saved requirements don't name (an order opened from a link without a seal has none saved): the
+  gate still merges that one into the record, as before, so two of those saved at once can still
+  collide, and the buyer proves again. The in-memory store and `redisStorage()` implement it;
+  Redis keeps each part under a key of its own. A store without `writePart` works as before, and `doctor()` warns about it on a
+  deployment (`verification-store-merges-parts`). `mergeVerificationRecord` and
+  `verificationSlots` are exported for stores that add it.
 - `REVOKE_TOOL_META` (`"credentagent/revokeTool"`) from `@openmobilehub/credentagent-gate/cards`: the
   `_meta` key under which a grant tool result names the server's Revoke tool. The card kit's page
   draws a Revoke button only when the result names one, so a server that builds the result by hand
@@ -43,6 +63,13 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
 
 ### Changed
 
+- The spending-grant card's trust line no longer says "not wallet-signed" for every grant. A grant still
+  waiting for approval (or declined) says "not approved"; a grant the store reports as signed on the
+  person's phone says so, attributed to the store ("as the store reports it"), and that the card did not
+  check the signature or the credential's issuer. An unknown or missing level says "not recognised". A list
+  of grants shows one line per distinct sentence. The grant's own page, after the wallet signs or the
+  grant is declined, no longer says approving there "stands in for the wallet ceremony". The agent note on a pending spending grant
+  now asks for a short reply only when the human already sees the card (#429).
 - The storefront widget's pending spending-grant card shows Approve and Decline only when the
   approval link is an `https:` address, or `http:` on `localhost`, `127.0.0.1` or `[::1]`. Otherwise
   it says "The merchant's link isn't a safe web address, so this card doesn't show it." The link is
@@ -52,9 +79,26 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
 
 ### Fixed
 
+- Creating a spending grant from claude.ai no longer hangs with a product grid where the grant card
+  should be. Three causes, fixed together:
+  - On a client that can ask the person questions itself (MCP 2026-07-28 with `elicitation`, which
+    claude.ai's connectors now are), `create-spending-grant` asked for the approval in a form. The
+    call stayed open behind it, so the host got no result to draw the card from, the approve link
+    was text inside the form, and the client retried the form up to 10 times, each one holding
+    `approvalHoldMs` (45 s). The pending grant is now the tool's result on every client; only the
+    product questions (size, colour) still use `input_required`.
+  - The storefront widget fell back to the product picker whenever a grant tool's answer carried no
+    grant (questions, a refusal) or had not arrived within two seconds. A widget a grant tool opened
+    now shows a one-line notice instead, with "Show products" as the way to the picker.
+  - A client re-sends the last request-level `requestState` by itself. One left over from an
+    unfinished flow, past its 15 minutes, got the next call refused as `expired` although the agent
+    had sent none. It is now dropped and the call starts over, believing nothing from it. Still
+    refused: a forged or edited state, a fresh one minted for another call or session, and a lapsed
+    one passed as the tool's own argument.
 - The storefront widget no longer flashes the product grid before a spending-grant card. It now
   shows nothing until the tool result that opened it arrives, then the card for that result; a host
-  that never sends one still gets the product picker after two seconds (#428).
+  that never sends one still gets the product picker after two seconds, or the notice above when a
+  grant tool opened the widget (#428).
 - Paying with a current Multipaz wallet no longer fails with "this wallet signed no
   transaction_data_hash … (update the wallet app)". Multipaz renamed the signed amount fields to
   `transactionDataHash` / `transactionDataHashAlg` in August 2026, and the gate only read the old

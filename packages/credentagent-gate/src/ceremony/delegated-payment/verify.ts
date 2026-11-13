@@ -19,6 +19,7 @@ import type { CeremonyOrder, DelegatedVerdict, GateOutcome } from "../types.js";
 import type { Origin } from "../origin.js";
 import { evaluateCredential, evaluateCustom, requiredAgeForOrder } from "../credential-gate/verify.js";
 import { delegatedPolicyEntries, mergeDelegatedDcql } from "./dcql.js";
+import { savePart } from "../../store.js";
 
 /**
  * The two gates the gate itself owns on this rail (the rest of the presentment's trust is
@@ -61,15 +62,15 @@ function claimsForCredential(policyId: string, idMap: Map<string, string>, verdi
   return flat;
 }
 
-async function markAgeVerified(ctx: CeremonyContext, orderId: string): Promise<void> {
-  const prev = (await ctx.verificationStore.read(orderId)) ?? {};
-  await ctx.verificationStore.write(orderId, { ...prev, ageVerified: true });
+// Each proof is its own part of the order's record (#444), in the slot the credential rail uses.
+// A later write to a slot replaces it, so `applyDelegatedPolicy` writes only what the order
+// doesn't hold yet: an age the credential page already proved keeps its receipt entry.
+async function markAgeVerified(ctx: CeremonyContext, orderId: string, provenOver: number): Promise<void> {
+  await savePart(ctx.verificationStore, orderId, "age", { ageVerified: true, provenOver });
 }
 
 async function markGateVerified(ctx: CeremonyContext, orderId: string, credId: string): Promise<void> {
-  const prev = (await ctx.verificationStore.read(orderId)) ?? {};
-  const verifiedGates = { ...(prev as { verifiedGates?: Record<string, true> }).verifiedGates, [credId]: true as const };
-  await ctx.verificationStore.write(orderId, { ...prev, verifiedGates });
+  await savePart(ctx.verificationStore, orderId, `gate:${credId}`, { verifiedGates: { [credId]: true } });
 }
 
 /**
@@ -89,13 +90,30 @@ export async function applyDelegatedPolicy(ctx: CeremonyContext, order: Ceremony
     const cred = ctx.credentialRegistry?.get(credentialId);
     if (!cred || cred.effect.kind !== "gate") continue; // authorize → binding gate; discount → excluded
     const claims = claimsForCredential(credentialId, idMap, verdict.claims);
+    const minimumAge = requiredAgeForOrder(order) ?? 21;
     const result =
       credentialId === "age"
-        ? evaluateCredential("age", claims, { minimumAge: requiredAgeForOrder(order) ?? 21 })
+        ? evaluateCredential("age", claims, { minimumAge })
         : evaluateCustom(cred, claims);
     if (!result.verified) continue; // leave state unwritten → completeOrder refuses
-    if (credentialId === "age") await markAgeVerified(ctx, order.id);
-    else await markGateVerified(ctx, order.id, credentialId);
+    // Read just before writing, so a proof the credential page saved before this point is kept. A
+    // save of this same proof that lands between this read and the write is still replaced (its
+    // receipt entry with it); closing that needs a conditional write the store contract doesn't
+    // have. Against a save of this same proof, this credential's `ageVerified` /
+    // `verifiedGates[id]` ends up true either way. Where both saves merge whole records (on a
+    // store without writePart, or for two custom proofs the saved requirements don't name), two
+    // different proofs saved in that moment can drop each other, this one included. Completion
+    // then refuses before settlement if the lost proof is one it enforces (age on a tagged item,
+    // an applicable custom gate). A lost membership proof doesn't stop it: the order completes
+    // at the undiscounted price, without that receipt entry.
+    const held = (await ctx.verificationStore.read(order.id)) ?? {};
+    if (credentialId === "age") {
+      // A proof saved before `provenOver` existed was made at this same age (the tag's, or 21).
+      const proven = held.ageVerified === true && (held.provenOver ?? minimumAge) >= minimumAge;
+      if (!proven) await markAgeVerified(ctx, order.id, minimumAge);
+    } else if (held.verifiedGates?.[credentialId] !== true) {
+      await markGateVerified(ctx, order.id, credentialId);
+    }
   }
 }
 

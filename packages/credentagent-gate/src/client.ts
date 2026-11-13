@@ -100,6 +100,11 @@ export class CredentAgent {
   private mountSigningKey = false;
   private mountSharedStore = false;
   private composedWithHost = false;
+  // The mounted rails' signing key, captured from the context mountCeremony resolved, so
+  // requirements() seals each order's requirements under the key its pages open them with (#444).
+  private sealKey?: string;
+  // The verification store the mounted rails write (a composed host may supply its own), for doctor().
+  private mountedStore?: VerificationStore;
 
   constructor(opts: CredentAgentOptions = {}) {
     let origin = opts.walletOrigin?.trim();
@@ -201,7 +206,7 @@ export class CredentAgent {
       deliverWebhook: (type, object) => { void this.webhooks.deliver(type, object); },
       serve: (app) => {
         if (this.ordersServed) return; // idempotent
-        serveOrders(app as CeremonyApp, {
+        this.sealKey = serveOrders(app as CeremonyApp, {
           walletOrigin: this.walletOrigin,
           created: createdStore,
           completed: completedStore,
@@ -276,7 +281,7 @@ export class CredentAgent {
     // — from the developer's policy, never the token. Single-process only: a multi-instance completing
     // instance that never ran this falls back to the registry-wide sweep (fail-closed), same as before.
     this.rememberOrderPolicy(order.id, policy.map((step) => step.credential.id));
-    return resolveRequirements(order, policy, { walletOrigin: this.walletOrigin, mountedRoutes: this.mountedRoutes, delegated: this.delegated });
+    return resolveRequirements(order, policy, { walletOrigin: this.walletOrigin, mountedRoutes: this.mountedRoutes, delegated: this.delegated, ...(this.sealKey ? { sealKey: this.sealKey } : {}) });
   }
 
   /**
@@ -305,6 +310,7 @@ export class CredentAgent {
       hasGateSecret: this.hasGateSecret || this.mountSigningKey,
       sharedVerificationStore: this.sharedVerificationStore || this.mountSharedStore,
       sharedOrderStores: this.sharedOrderStores,
+      verificationStoreWritesParts: typeof (this.mountedStore ?? this.store).writePart === "function",
       composedWithHost: this.composedWithHost,
       ephemeralMandateKey: this.mandateKey.ephemeral,
       ephemeralCheckoutKey: this.checkoutKey.ephemeral,
@@ -347,7 +353,7 @@ export class CredentAgent {
     // fetch on the other two, and every mandate this gate signed would be uncheckable there.
     this.publishSigningKey(app);
     if (ceremony) {
-      mountCeremony(app as CeremonyApp, { ...this.basePathSeam(), ...ceremony, verificationStore: this.store, readerIdentity: this.readerIdentity, credentialRegistry: this.registry, orderPolicies: this.orderPolicies, ...(this.branding ? { branding: this.branding } : {}), ...(this.inspectPresentations ? { inspectPresentations: true } : {}) });
+      this.sealKey = mountCeremony(app as CeremonyApp, { ...this.basePathSeam(), ...ceremony, verificationStore: this.store, readerIdentity: this.readerIdentity, credentialRegistry: this.registry, orderPolicies: this.orderPolicies, ...(this.branding ? { branding: this.branding } : {}), ...(this.inspectPresentations ? { inspectPresentations: true } : {}) }).signingKey;
       this.mountedRoutes = true;
       if (ceremony.verifier) this.delegated = true;
       // #25 doctor(): a host owns the serving surface here; capture the signing key it supplied via
@@ -363,7 +369,9 @@ export class CredentAgent {
     // rails write (invariant 4). Falls back to CredentAgent's own store otherwise.
     const locals = (app.locals.credentagent ?? {}) as Partial<CeremonySeams>;
     if (locals.orderStore && locals.catalog && locals.completion) {
-      mountCeremony(app as CeremonyApp, { ...this.basePathSeam(), readerIdentity: this.readerIdentity, credentialRegistry: this.registry, orderPolicies: this.orderPolicies, ...(this.branding ? { branding: this.branding } : {}), ...(this.inspectPresentations ? { inspectPresentations: true } : {}), ...(locals.verificationStore ? {} : { verificationStore: this.store }) });
+      const mounted = mountCeremony(app as CeremonyApp, { ...this.basePathSeam(), readerIdentity: this.readerIdentity, credentialRegistry: this.registry, orderPolicies: this.orderPolicies, ...(this.branding ? { branding: this.branding } : {}), ...(this.inspectPresentations ? { inspectPresentations: true } : {}), ...(locals.verificationStore ? {} : { verificationStore: this.store }) });
+      this.sealKey = mounted.signingKey;
+      this.mountedStore = mounted.verificationStore;
       this.mountedRoutes = true;
       // The host published a verifier on app.locals (createStorefront({ verifier })): route the
       // manifest's gate/authorize links to the delegated ceremony (008).
