@@ -22,7 +22,7 @@
 // HONESTY: a verified purchase proves the holder key the credential names signed the permission and
 // the agent's key signed this cart. A self-minted credential passes, so it proves nothing about who
 // issued it (#14): `trust_level` says so.
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { DelegatedIntent, verifyDelegatedPurchase, type DelegatedPurchaseProof, type PurchaseRefusal, type PurchaseRefusalCode } from "./ap2/chain/purchase.js";
 import { toMinorUnits } from "./ap2/money.js";
 import type { UcpCheckout } from "./ap2/types.js";
@@ -111,6 +111,8 @@ interface Quoted {
   amountMinor: number;
   expiresAtMs: number;
   used: boolean;
+  /** A purchase this quote made. Bought quotes do not count toward the per-grant retention cap: the budget bounds them. */
+  bought?: boolean;
   /** The proof that used this nonce, and what came of it — so an identical retry gets the same answer. */
   proofKey?: string;
   outcome?: Promise<PurchaseDoor<{ receipt: PurchaseReceipt }>>;
@@ -169,6 +171,18 @@ function agentCatalog(items: Record<string, CatalogEntry>, discountPct: number):
   };
 }
 
+/** Make room for one more entry under `cap`: expired entries go first, then the oldest live ones. */
+export function makeRoom(held: Map<string, { expiresAtMs: number }>, cap: number, now: number): void {
+  if (held.size < cap) return;
+  for (const [key, entry] of held) {
+    if (now > entry.expiresAtMs) { held.delete(key); if (held.size < cap) return; }
+  }
+  while (held.size >= cap) held.delete(held.keys().next().value as string);
+}
+
+/** What a delegated order records of its grant: a hash, never the id (the id is a capability). */
+export const grantRefOf = (grantId: string): string => createHash("sha256").update(grantId).digest("hex").slice(0, 16);
+
 export function registerPurchaseRoutes(app: GrantsApp, grants: Grants, deps: AgentPurchaseDeps): void {
   const get = app.get!.bind(app);
   const post = app.post!.bind(app);
@@ -182,7 +196,7 @@ export function registerPurchaseRoutes(app: GrantsApp, grants: Grants, deps: Age
     for (const [nonce, q] of quotes) {
       if (now > q.expiresAtMs + RECEIPT_RETENTION_MS) quotes.delete(nonce); // nothing can use it, and no retry wants its receipt
       else if (q.grantId === grantId) {
-        retained++;
+        if (!q.bought) retained++;
         if (!q.used && q.expiresAtMs >= now) open++;
       }
     }
@@ -227,7 +241,7 @@ export function registerPurchaseRoutes(app: GrantsApp, grants: Grants, deps: Age
     const now = Date.now();
     const held = heldQuotes(g.id, now);
     if (held.open >= MAX_OPEN_QUOTES_PER_GRANT || held.retained >= MAX_RETAINED_QUOTES_PER_GRANT) {
-      return send(res, refuse("too-many-quotes", "too many open quotes for this grant"));
+      return send(res, refuse("too-many-quotes", "too many open or refused quotes for this grant; wait a few minutes, or buy with the quotes you hold"));
     }
 
     let amountMinor: number;
@@ -252,8 +266,7 @@ export function registerPurchaseRoutes(app: GrantsApp, grants: Grants, deps: Age
     }
     const nonce = randomUUID();
     // Bounded memory: past the cap, expired quotes go before any live one (oldest first within each).
-    if (quotes.size >= MAX_RETAINED_QUOTES) for (const [n, q] of quotes) if (now > q.expiresAtMs) { quotes.delete(n); if (quotes.size < MAX_RETAINED_QUOTES) break; }
-    while (quotes.size >= MAX_RETAINED_QUOTES) quotes.delete(quotes.keys().next().value as string);
+    makeRoom(quotes, MAX_RETAINED_QUOTES, now);
     quotes.set(nonce, { grantId: g.id, cartId: cart.id, sku, qty, amountMinor, expiresAtMs: now + QUOTE_TTL_MS, used: false });
     const quote: PurchaseQuote = {
       nonce,
@@ -288,7 +301,9 @@ export function registerPurchaseRoutes(app: GrantsApp, grants: Grants, deps: Age
     q.used = true;
     q.proofKey = proofKey;
     q.outcome = settle(grantId, req.params.nonce, q, proof).catch(() => refuse("not-recorded", "the purchase could not be completed; ask for a new quote"));
-    return send(res, await q.outcome);
+    const answer = await q.outcome;
+    if (answer.ok) q.bought = true;
+    return send(res, answer);
   });
 
   /** Verify, finish through the shared completion path, and take the budget — one unit per grant. */
@@ -350,7 +365,7 @@ export function registerPurchaseRoutes(app: GrantsApp, grants: Grants, deps: Age
           drawn = true;
           await deps.complete({
             orderId, amount: rec.amount, currency: rec.currency, method: rec.method, completedAt: rec.completedAt,
-            authorization: "delegated", grantId, permissionId: verdict.permissionId,
+            authorization: "delegated", grantRef: grantRefOf(grantId),
             lines: order.lines.map((l) => ({ id: l.id, quantity: l.quantity, unitPrice: l.unitPrice })),
             ...(order.discount ? { discount: order.discount } : {}), // lines are list prices: this is what explains amount
           });

@@ -17,7 +17,7 @@ import { VCT } from "./ap2/types.js";
 import { defineCredential, dcql, gate } from "./credentials.js";
 import { MemoryOrderStore, type CompletedOrder } from "./orders.js";
 import type { Credential } from "./types.js";
-import { MAX_RETAINED_QUOTES_PER_GRANT } from "./grants-purchase.js";
+import { MAX_RETAINED_QUOTES_PER_GRANT, grantRefOf, makeRoom } from "./grants-purchase.js";
 
 const HOST = "shop.example";
 const ORIGIN = `http://${HOST}`;
@@ -48,7 +48,7 @@ interface Opts {
 /** A store, an agent with its own key, and a grant the person signed (or left pending). */
 async function setup(o: Opts = {}) {
   const agentKey = AgentKey.generate();
-  const catalog = structuredClone(CATALOG) as Record<string, { price: number; category?: string; minAge?: number; requiresRx?: boolean }>;
+  const catalog = structuredClone(CATALOG) as Record<string, { price: number; category?: string; minAge?: number }>;
   const credentagent = new CredentAgent({
     walletOrigin: ORIGIN,
     catalog,
@@ -259,6 +259,19 @@ describe("the nonce is single-use, bound to one grant, and short-lived", () => {
       await submit(c, q.body.quote.nonce, { checkout: "x", payment: "y" }); // uses the nonce, never buys
     }
     expect(refused).toMatchObject({ ok: false, code: "too-many-quotes" });
+  });
+
+  it("makeRoom drops expired entries before live ones, then the oldest live", () => {
+    const held = new Map([["live-old", { expiresAtMs: 100 }], ["dead", { expiresAtMs: 5 }], ["live-new", { expiresAtMs: 100 }]]);
+    makeRoom(held, 3, 10);
+    expect([...held.keys()]).toEqual(["live-old", "live-new"]);
+    makeRoom(held, 2, 10); // none expired now: the oldest live goes
+    expect([...held.keys()]).toEqual(["live-new"]);
+  });
+
+  it("does not count purchases made against the per-grant cap: an honest agent keeps buying", async () => {
+    const c = await setup({ budget: 1000, perSpend: 30 });
+    for (let i = 0; i < MAX_RETAINED_QUOTES_PER_GRANT + 2; i++) expect((await buy(c, "tea")).proof).toMatchObject({ ok: true });
   });
 
   it("caps open quotes per grant (too-many-quotes)", async () => {
@@ -552,7 +565,7 @@ describe("completion sees what a person's checkout sees", () => {
 
   it("a gate scoped by a custom catalog attribute applies too, and leaves other items alone", async () => {
     const c = await setup({ credentials: [scoped((o) => o.lines.some((l) => l.requiresRx === true))] });
-    c.catalog.tea = { ...c.catalog.tea, requiresRx: true };
+    (c.catalog as Record<string, unknown>).tea = { ...c.catalog.tea, requiresRx: true };
     const rx = await quote(c, { sku: "tea" });
     expect((await submit(c, rx.body.quote.nonce, await signQuote(c, rx.body.quote))).body).toMatchObject({ ok: false, code: "step-up" });
     expect((await buy(c, "coffee")).proof).toMatchObject({ ok: true }); // no requiresRx: the gate does not apply
@@ -585,19 +598,24 @@ describe("what is recorded, and what survives a late failure", () => {
     expect(await c.credentagent.orders.retrieve(proof.receipt.orderId)).toMatchObject({
       ok: true,
       authorization: "delegated",
-      completion: { grantId: c.grantId, lines: [{ id: "coffee", quantity: 1, unitPrice: 18 }], permissionId: expect.any(String) },
+      completion: { grantRef: grantRefOf(c.grantId), lines: [{ id: "coffee", quantity: 1, unitPrice: 18 }] },
     });
   });
 
-  it("BYPASS: the public status route never shows the grant that paid, while orders.retrieve still does", async () => {
+  it("BYPASS: nothing an order id reveals (status route, retrieve) holds the grant id or permission id", async () => {
     const c = await setup();
     c.credentagent.orders.serve(c.app);
     const { proof } = await buy(c, "coffee");
-    const status = await request(c.app).get(`/credentagent/orders/${proof.receipt.orderId}/status`).set("Host", HOST);
-    expect(status.body.completed).toBe(true);
-    expect(status.text).not.toContain(c.grantId);
-    expect(status.body.order).not.toHaveProperty("permissionId");
-    expect(await c.credentagent.orders.retrieve(proof.receipt.orderId)).toMatchObject({ completion: { grantId: c.grantId } });
+    const id = proof.receipt.orderId;
+    const status = await request(c.app).get(`/credentagent/orders/${id}/status`).set("Host", HOST);
+    const retrieved = JSON.stringify(await c.credentagent.orders.retrieve(id));
+    const deleg = (await request(c.app).get(`${base(c)}/delegation`).set("Host", HOST)).body.intent;
+    const permissionId = DelegatedIntent.fromWalletPresentation(deleg).permissionId;
+    for (const shown of [status.text, retrieved]) {
+      expect(shown).not.toContain(c.grantId);
+      expect(shown).not.toContain(permissionId);
+    }
+    expect(status.body.order.grantRef).toBe(grantRefOf(c.grantId)); // still enough to tell which grant paid
   });
 
   it("keeps the draw and answers with the receipt when only the cleanup after recording fails", async () => {

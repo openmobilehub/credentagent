@@ -41,9 +41,10 @@ export interface CompletedOrder {
   lines?: { id: string; quantity: number; unitPrice: number }[];
   /** Dollars taken off the lines' list prices (a loyalty discount): lines total minus `discount` is `amount`. */
   discount?: number;
-  /** The spending grant that paid, and the permission it rests on, for a delegated order. */
-  grantId?: string;
-  permissionId?: string;
+  /** Which spending grant paid, for a delegated order: a one-way hash of the grant id, so the same grant
+   *  always gives the same value but the value opens nothing. This record is served by order id (status
+   *  route, `orders.retrieve`, `order.settled`, webhooks); a grant id itself would open the grant's routes. */
+  grantRef?: string;
 }
 
 /** Minimal per-order KV, mirroring VerificationStore. In-memory default; inject for prod. */

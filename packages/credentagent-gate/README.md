@@ -410,8 +410,8 @@ way a person's checkout finishes: through `completeOrder`, so age and custom `ga
 `order.settled`, webhooks and `orders.retrieve(receipt.orderId)` work. A retry of the same proof after a dropped
 connection gets the same receipt back (`replayed: true`), never a second purchase — from the same server
 process, for about 12 minutes after the quote (the one-time codes live in memory); after a restart, on another
-instance, or later, it answers `nonce-used`, and the store should check `orders.retrieve(orderId)` before letting the agent buy again (the order id is the cart id inside the quoted `checkoutJwt`). `GET /credentagent/orders/:id/status` leaves the grant id out of what it returns. The
-order `orders.retrieve` returns says `authorization: "delegated"` and carries the lines bought and the grant that paid. **Choose one:** a store that
+instance, or later, it answers `nonce-used`, and the store should check `orders.retrieve(orderId)` before letting the agent buy again (the order id is the cart id inside the quoted `checkoutJwt`). Quotes are capped per grant: at most 5 open at a time, and at most 50 open-or-refused ones held for about 12 minutes (completed purchases do not count); past either, the quote route answers `too-many-quotes`. The
+order `orders.retrieve` returns says `authorization: "delegated"` and carries the lines bought, the discount if any, and `grantRef` (a hash of the grant id: it says which grant paid, and opens nothing). **Choose one:** a store that
 keeps its own ledger as above must leave `agents` out — two ledgers on one grant would each accept the whole budget.
 The routes are off unless you opt in.
 
