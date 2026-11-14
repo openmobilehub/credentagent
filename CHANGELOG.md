@@ -28,6 +28,16 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
 
 ### Added
 
+- Agent-signed purchases, opt-in: `new CredentAgent({ agents: { trust: "presence-only-demo" } })` makes
+  `grants.serve(app)` also serve the store's side of a purchase by an agent that holds its own key — the
+  permission, a quote, and a proof route (`/credentagent/grants/:id/delegation`, `/purchases`,
+  `/purchases/:nonce/proof`). The gate prices from your catalog, keeps the budget on the grant, consumes the
+  one-time code, and finishes the order through the shared completion path (`order.settled`, webhooks,
+  `orders.retrieve`). A retry of the same proof gets the same receipt back (`replayed: true`), from the same process and for
+  about 12 minutes. The saved order says `authorization: "delegated"`, lists the lines and any discount, and carries
+  `grantRef` (match it to `grant.ref`; a keyed hash, so it never exposes the grant id). Each grant may hold 5 open
+  quotes and 50 that bought nothing for about 12 minutes; past either, the quote route answers `too-many-quotes`
+  (HTTP 429). Without `agents`, nothing changes. The signatures are real; nothing proves who issued the credential (#14) (#263).
 - Each order's requirements are now saved with its proofs, in the order's verification record
   (`record.requirements`), so a server that never ran `requirements()` can read what the order
   needs. `requirements()` seals them into every mounted approve link (a new `requirements=` query

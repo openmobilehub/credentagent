@@ -400,6 +400,21 @@ if (verdict.ok) ledger.record(verdict.permissionId, verdict.payment.payment_amou
 else console.error(verdict.code, verdict.violations);   // "constraint" | "price" | "payee" | "malformed" | …
 ```
 
+**Rather not keep the ledger and the nonce yourself?** Opt in with `new CredentAgent({ …, agents: { trust: "presence-only-demo" } })`
+and `credentagent.grants.serve(app)` also serves the store's side of the purchase above:
+`GET /credentagent/grants/:id/delegation` (the permission the agent spends),
+`POST /credentagent/grants/:id/purchases` (`{ sku }` → a quote: `checkoutJwt`, `nonce`, `audience`) and
+`POST /credentagent/grants/:id/purchases/:nonce/proof` (`{ proof }` → a receipt). The gate prices from your
+catalog, keeps the budget on the grant (`grant.usage()` reads it), consumes the nonce, and finishes the order the
+way a person's checkout finishes: through `completeOrder`, so age and custom `gate()` checks hold and
+`order.settled`, webhooks and `orders.retrieve(receipt.orderId)` work. A retry of the same proof after a dropped
+connection gets the same receipt back (`replayed: true`), never a second purchase — from the same server
+process, for about 12 minutes after the quote (the one-time codes live in memory); after a restart, on another
+instance, or later, it answers `nonce-used`, and the store should check `orders.retrieve(orderId)` before letting the agent buy again (the order id is the cart id inside the quoted `checkoutJwt`). Quotes are capped per grant: at most 5 open at a time, and at most 50 held for about 12 minutes that did not buy anything (open, or used by a refused proof); past either, the quote route answers `too-many-quotes`. The
+order `orders.retrieve` returns says `authorization: "delegated"` and carries the lines bought, the discount if any, and `grantRef` (match it to `grant.ref` to find which grant paid; it is a keyed hash of the grant id, so it opens nothing and cannot be turned back into the id). **Choose one:** a store that
+keeps its own ledger as above must leave `agents` out — two ledgers on one grant would each accept the whole budget.
+The routes are off unless you opt in.
+
 **`trust: "presence-only-demo"` is required, and it means what it says.** The credential at the root of
 the chain is checked against the certificate it carries itself; nothing anchors that certificate to a
 real issuer yet ([#14](https://github.com/openmobilehub/credentagent/issues/14)). So an agent can mint
@@ -411,10 +426,11 @@ A grant created with `agentKey` is spent this way, **at any merchant its permiss
 checking a cart its own checkout key signed — see `checkoutSigningKey`, above) — not
 through `grant.spend()`, which refuses it with `agent-held-key`: the gate has no key to spend it with,
 which is the point. Leave `agentKey` out and the gate generates the key and spends server-side, as below.
-**Revoking such a grant does not recall it.** The agent already holds the signed permission, and
+**Revoking such a grant does not recall it on the hand-built path.** The agent already holds the signed permission, and
 `verifyDelegatedPurchase` does not consult the grant, so the permission stays spendable until the
 expiry it was signed with — today a year from creation, because a grant does not yet take its own
-expiry. Bound it with `budget` and `perSpend`, which every merchant enforces.
+expiry. Bound it with `budget` and `perSpend`, which every merchant enforces. (With `agents` opted in, the gate
+does check the grant on each purchase: a revoked grant answers `revoked`.)
 
 **Every cart line must be a real purchase:** a quantity that is a whole number of at least 1, an item
 price that is a whole number of minor units above 0 (so a free item can't be quoted), and a line `total`

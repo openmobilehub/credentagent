@@ -186,6 +186,7 @@ the passkey, credential, and dc-payment rails above, plus:
 | `/credentagent/grants/:id` (+ `/approve`, `/deny`) | grant approval page |
 | `/credentagent/grants/:id/sign/request`, `/credentagent/grants/:id/sign/verify` | phone-signed spending grants: the wallet signs the grant terms (reports `"device-signed"`) |
 | `/credentagent/grants/:id/age`, `/credentagent/grants/:id/membership` (+ `/request`, `/verify`) | credential proof attached to a spending grant (OpenID4VP) |
+| `/credentagent/grants/:id/delegation`, `/credentagent/grants/:id/purchases`, `/credentagent/grants/:id/purchases/:nonce/proof` | agent-signed purchases (opt-in: `agents: { trust: "presence-only-demo" }`): the permission, a quote, and the proof an agent that holds its own key posts |
 
 ### Honesty — what the gate does and does not prove
 

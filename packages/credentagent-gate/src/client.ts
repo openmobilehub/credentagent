@@ -107,6 +107,10 @@ export class CredentAgent {
   private mountedStore?: VerificationStore;
 
   constructor(opts: CredentAgentOptions = {}) {
+    if (opts.agents !== undefined && opts.agents?.trust !== "presence-only-demo") {
+      // A misspelt opt-in would otherwise leave every agent call with a bare 404.
+      throw new Error(`[credentagent] agents: { trust: "presence-only-demo" } is the only supported setting; got ${JSON.stringify(opts.agents)}.`);
+    }
     let origin = opts.walletOrigin?.trim();
     if (!origin) {
       // Zero-config: default to localhost so the getting-started example just runs.
@@ -184,6 +188,12 @@ export class CredentAgent {
     // approve/signing page in to the membership step.
     this.grants = new Grants({
       walletOrigin: this.walletOrigin,
+      ap2: this.ap2,
+      // Opt-in (`agents`): the routes finish an agent's order through the SAME path as a person's —
+      // lazily, since `orders` is built just below.
+      ...(opts.agents?.trust === "presence-only-demo"
+        ? { agentPurchases: { complete: (order) => this.orders._complete(order), verificationStore: this.store, credentialRegistry: this.registry } }
+        : {}),
       ...(opts.catalog ? { catalog: opts.catalog } : {}),
       ...(opts.gateSecret ? { signingKey: opts.gateSecret } : {}),
       ...(opts.readerIdentity ? { readerIdentity: opts.readerIdentity } : {}),

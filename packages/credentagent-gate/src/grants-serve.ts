@@ -20,6 +20,7 @@
 // demo credential until issuer verification lands (#14). Wallet credentials presented on the way
 // are "presence-only-demo" on the same footing.
 
+import { registerPurchaseRoutes } from "./grants-purchase.js";
 import type { Grant, Grants } from "./grants.js";
 import type { GrantAgeScope } from "./grants-age.js";
 import type { Branding } from "./types.js";
@@ -236,6 +237,10 @@ export function serveGrants(app: GrantsApp, grants: Grants): void {
   registerIntentSignRail(app, grants);
   // The wallet credentials a human may present before authorizing (#172): /age, /membership.
   registerGrantCredentialGate(app, grants);
+  // Agent-signed purchases for a grant whose key the agent holds: permission, quote, proof. Opt-in:
+  // only when the host set `agents: { trust }`, so a store with its own ledger gains no second one.
+  const agentPurchases = grants.purchaseConfig.agentPurchases;
+  if (agentPurchases) registerPurchaseRoutes(app, grants, agentPurchases);
 
   const branding = grants.railConfig.branding;
   // Browser-visible path prefix: a walletOrigin with a path (https://shop.example/store) means a

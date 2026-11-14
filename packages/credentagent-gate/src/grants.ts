@@ -30,6 +30,9 @@ import type { Branding, ReaderIdentity, TrustLevel } from "./types.js";
 import { AmountError, toMinorUnits } from "./ap2/money.js";
 import { importVerifyKey } from "./ap2/keys.js";
 import { KeyedMutex } from "./keyed-mutex.js";
+import type { Ap2Issuer } from "./ap2/issue.js";
+import type { AgentPurchaseDeps } from "./grants-purchase.js";
+import { createHmac } from "node:crypto";
 
 /** Why a grant operation refused — a TYPED union (never `string`; #95 review). */
 export type GrantDoorCode =
@@ -224,6 +227,10 @@ export interface SpendItems {
 interface GrantRecord {
   id: string;
   status: GrantStatus;
+  /** What agent-signed purchases have drawn, in minor units. An agent-key grant has no engine, so
+   *  this is its ledger: `usage()` and the purchase verifier both read it. */
+  agentSpentMinor?: number;
+  agentUses?: number;
   opts: CreateGrantOptions;
   /** When the grant was opened (ISO 8601) — part of the signed bounds (spec 012). */
   createdAt: string;
@@ -284,6 +291,12 @@ export interface GrantsDeps {
    *  every grant prices at full catalog price, exactly as before. The rate is SEALED into each
    *  grant when it authorizes, so changing it here never re-prices a grant already authorized. */
   loyaltyDiscountPct?: number;
+  /** This gate's AP2 issuer: the agent-signed purchase routes quote carts with it and verify them
+   *  against its checkout key. Absent ⇒ those routes answer `not-authorized` (nothing to quote with). */
+  ap2?: Ap2Issuer;
+  /** Present ⇒ the host opted in to agent-signed purchase routes (`agents: { trust }`) and this is the
+   *  shared completion path they finish through. Absent ⇒ `grants.serve(app)` registers none of them. */
+  agentPurchases?: AgentPurchaseDeps;
 }
 
 const genGrantId = (): string => `grant_${globalThis.crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
@@ -363,6 +376,52 @@ export class Grants {
 
   constructor(private readonly deps: GrantsDeps) {
     this.signingSecret = deps.signingKey ?? globalThis.crypto.randomUUID();
+  }
+
+  /** What the agent-signed purchase routes need: the issuer, this store's origin and the priced catalog. */
+  /** What a delegated order records of its grant (`CompletedOrder.grantRef`, and `grant.ref`): a keyed hash
+   *  of the grant id. The id is a capability (it opens the grant's routes), so the record that is served by
+   *  order id must not hold it; without this store's secret the value cannot be turned back into an id. */
+  _refOf(grantId: string): string {
+    return createHmac("sha256", this.signingSecret).update(`grant-ref:${grantId}`).digest("hex").slice(0, 24);
+  }
+
+  get purchaseConfig(): { walletOrigin: string; catalog: Record<string, CatalogEntry>; ap2?: Ap2Issuer; agentPurchases?: AgentPurchaseDeps } {
+    return {
+      walletOrigin: this.deps.walletOrigin,
+      catalog: this.deps.catalog ?? {},
+      ...(this.deps.ap2 ? { ap2: this.deps.ap2 } : {}),
+      ...(this.deps.agentPurchases ? { agentPurchases: this.deps.agentPurchases } : {}),
+    };
+  }
+
+  /** Run `fn` as the only operation on this grant — verify-then-commit for an agent purchase is ONE
+   *  unit, so two concurrent proofs cannot both fit a budget that holds one. */
+  _exclusive<T>(id: string, fn: () => Promise<T>): Promise<T> {
+    return this.locks.run(id, fn);
+  }
+
+  /** Minor units and uses already drawn by agent-signed purchases (what `verifyDelegatedPurchase`
+   *  reads as `spent`). Keyed by the grant, never process-global. */
+  _agentSpent(id: string): { amount: number; uses: number } {
+    const rec = this.records.get(id);
+    return { amount: rec?.agentSpentMinor ?? 0, uses: rec?.agentUses ?? 0 };
+  }
+
+  /** Commit one verified agent purchase. Call only inside {@link _exclusive}, after verification. */
+  _commitAgentDraw(id: string, minor: number): void {
+    const rec = this.records.get(id);
+    if (!rec) return;
+    rec.agentSpentMinor = (rec.agentSpentMinor ?? 0) + minor;
+    rec.agentUses = (rec.agentUses ?? 0) + 1;
+  }
+
+  /** Give back a draw whose order could not be recorded. Call only inside {@link _exclusive}. */
+  _releaseAgentDraw(id: string, minor: number): void {
+    const rec = this.records.get(id);
+    if (!rec) return;
+    rec.agentSpentMinor = Math.max(0, (rec.agentSpentMinor ?? 0) - minor);
+    rec.agentUses = Math.max(0, (rec.agentUses ?? 0) - 1);
   }
 
   /** Config the rails `grants.serve(app)` registers read — the intent-sign rail (spec 012) and
@@ -800,6 +859,7 @@ export class Grants {
 
     return {
       id: rec.id,
+      ref: this._refOf(rec.id),
       get status() {
         return rec.status;
       },
@@ -846,8 +906,13 @@ export class Grants {
         const budget = rec.opts.budget;
         // Before authorize there is no engine ledger yet: nothing has been drawn, so the
         // full budget is available. After authorize (incl. once revoked) the engine's
-        // committed-draws ledger is the authority — convert its cents back to dollars.
-        if (!rec.engine) return { budget, spent: 0, remaining: budget };
+        // committed-draws ledger is the authority — convert its cents back to dollars. A grant
+        // whose key the agent holds has no engine: its ledger is `agentSpentMinor`, in cents, so
+        // subtract in cents (dollars would give 91.96000000000001).
+        if (!rec.engine) {
+          const spentMinor = rec.agentSpentMinor ?? 0;
+          return { budget, spent: spentMinor / 100, remaining: (toCents(budget) - spentMinor) / 100 };
+        }
         const { spent, remaining } = await rec.engine.usage();
         return { budget, spent: spent / 100, remaining: remaining / 100 };
       },
@@ -873,6 +938,9 @@ export class Grants {
 /** The grant handle `create()`/`retrieve()` return — status + the two verbs. */
 export interface Grant {
   id: string;
+  /** What a delegated order records of this grant (`order.completion.grantRef`): match it to find "which
+   *  grant paid this order". Unlike `id` it opens nothing, so it is safe in a record served by order id. */
+  readonly ref: string;
   readonly status: GrantStatus;
   /** Where the human approves ONCE. Today a demo page the host serves; the wallet ceremony later. */
   approveUrl: string;
