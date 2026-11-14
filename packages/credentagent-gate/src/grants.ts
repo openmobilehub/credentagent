@@ -32,6 +32,7 @@ import { importVerifyKey } from "./ap2/keys.js";
 import { KeyedMutex } from "./keyed-mutex.js";
 import type { Ap2Issuer } from "./ap2/issue.js";
 import type { AgentPurchaseDeps } from "./grants-purchase.js";
+import { createHmac } from "node:crypto";
 
 /** Why a grant operation refused — a TYPED union (never `string`; #95 review). */
 export type GrantDoorCode =
@@ -378,6 +379,13 @@ export class Grants {
   }
 
   /** What the agent-signed purchase routes need: the issuer, this store's origin and the priced catalog. */
+  /** What a delegated order records of its grant (`CompletedOrder.grantRef`, and `grant.ref`): a keyed hash
+   *  of the grant id. The id is a capability (it opens the grant's routes), so the record that is served by
+   *  order id must not hold it; without this store's secret the value cannot be turned back into an id. */
+  _refOf(grantId: string): string {
+    return createHmac("sha256", this.signingSecret).update(`grant-ref:${grantId}`).digest("hex").slice(0, 24);
+  }
+
   get purchaseConfig(): { walletOrigin: string; catalog: Record<string, CatalogEntry>; ap2?: Ap2Issuer; agentPurchases?: AgentPurchaseDeps } {
     return {
       walletOrigin: this.deps.walletOrigin,
@@ -851,6 +859,7 @@ export class Grants {
 
     return {
       id: rec.id,
+      ref: this._refOf(rec.id),
       get status() {
         return rec.status;
       },
@@ -929,6 +938,9 @@ export class Grants {
 /** The grant handle `create()`/`retrieve()` return — status + the two verbs. */
 export interface Grant {
   id: string;
+  /** What a delegated order records of this grant (`order.completion.grantRef`): match it to find "which
+   *  grant paid this order". Unlike `id` it opens nothing, so it is safe in a record served by order id. */
+  readonly ref: string;
   readonly status: GrantStatus;
   /** Where the human approves ONCE. Today a demo page the host serves; the wallet ceremony later. */
   approveUrl: string;

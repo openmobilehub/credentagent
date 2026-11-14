@@ -22,7 +22,7 @@
 // HONESTY: a verified purchase proves the holder key the credential names signed the permission and
 // the agent's key signed this cart. A self-minted credential passes, so it proves nothing about who
 // issued it (#14): `trust_level` says so.
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { DelegatedIntent, verifyDelegatedPurchase, type DelegatedPurchaseProof, type PurchaseRefusal, type PurchaseRefusalCode } from "./ap2/chain/purchase.js";
 import { toMinorUnits } from "./ap2/money.js";
 import type { UcpCheckout } from "./ap2/types.js";
@@ -43,10 +43,10 @@ export const MAX_OPEN_QUOTES_PER_GRANT = 5;
 /** How long a used quote (and the receipt it holds) is kept after it expires, so an agent whose
  *  connection dropped can post the same proof again and get its receipt instead of buying twice. */
 export const RECEIPT_RETENTION_MS = 10 * 60_000;
-/** Most quotes (open or used, with their receipts) held at once per registration; expired ones go first, then the oldest. */
+/** Most quotes (open or used, with their receipts; shared by every grant) held at once per registration; expired ones go first, then the oldest. */
 export const MAX_RETAINED_QUOTES = 10_000;
-/** Most quotes ONE grant may keep retained, used or not: a caller holding one grant id cannot push another
- *  grant's live quote or saved receipt out of the shared table. Counts used quotes (a garbage proof uses one). */
+/** Most quotes ONE grant may keep retained that did not buy anything (open, or used by a refused proof). A
+ *  completed purchase is not counted: it is bounded by the grant's budget, not by this. */
 export const MAX_RETAINED_QUOTES_PER_GRANT = 50;
 
 /** What the host wires in when it opts in: the shared completion path, and the state it reads. */
@@ -111,7 +111,7 @@ interface Quoted {
   amountMinor: number;
   expiresAtMs: number;
   used: boolean;
-  /** A purchase this quote made. Bought quotes do not count toward the per-grant retention cap: the budget bounds them. */
+  /** A purchase this quote made. Bought quotes do not count toward the per-grant retention cap; the grant's budget bounds them (budget ÷ cheapest price). */
   bought?: boolean;
   /** The proof that used this nonce, and what came of it — so an identical retry gets the same answer. */
   proofKey?: string;
@@ -180,16 +180,13 @@ export function makeRoom(held: Map<string, { expiresAtMs: number }>, cap: number
   while (held.size >= cap) held.delete(held.keys().next().value as string);
 }
 
-/** What a delegated order records of its grant: a hash, never the id (the id is a capability). */
-export const grantRefOf = (grantId: string): string => createHash("sha256").update(grantId).digest("hex").slice(0, 16);
-
 export function registerPurchaseRoutes(app: GrantsApp, grants: Grants, deps: AgentPurchaseDeps): void {
   const get = app.get!.bind(app);
   const post = app.post!.bind(app);
   const cfg = grants.purchaseConfig;
   const quotes = new Map<string, Quoted>();
 
-  /** This grant's quotes still held: `open` (unused, unexpired) and `retained` (every one, used or not). */
+  /** This grant's quotes still held: `open` (unused, unexpired) and `retained` (every one that has not bought). */
   const heldQuotes = (grantId: string, now: number) => {
     let open = 0;
     let retained = 0;
@@ -365,7 +362,7 @@ export function registerPurchaseRoutes(app: GrantsApp, grants: Grants, deps: Age
           drawn = true;
           await deps.complete({
             orderId, amount: rec.amount, currency: rec.currency, method: rec.method, completedAt: rec.completedAt,
-            authorization: "delegated", grantRef: grantRefOf(grantId),
+            authorization: "delegated", grantRef: grants._refOf(grantId),
             lines: order.lines.map((l) => ({ id: l.id, quantity: l.quantity, unitPrice: l.unitPrice })),
             ...(order.discount ? { discount: order.discount } : {}), // lines are list prices: this is what explains amount
           });

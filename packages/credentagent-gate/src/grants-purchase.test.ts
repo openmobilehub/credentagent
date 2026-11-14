@@ -17,7 +17,7 @@ import { VCT } from "./ap2/types.js";
 import { defineCredential, dcql, gate } from "./credentials.js";
 import { MemoryOrderStore, type CompletedOrder } from "./orders.js";
 import type { Credential } from "./types.js";
-import { MAX_RETAINED_QUOTES_PER_GRANT, grantRefOf, makeRoom } from "./grants-purchase.js";
+import { MAX_RETAINED_QUOTES_PER_GRANT, makeRoom } from "./grants-purchase.js";
 
 const HOST = "shop.example";
 const ORIGIN = `http://${HOST}`;
@@ -598,7 +598,7 @@ describe("what is recorded, and what survives a late failure", () => {
     expect(await c.credentagent.orders.retrieve(proof.receipt.orderId)).toMatchObject({
       ok: true,
       authorization: "delegated",
-      completion: { grantRef: grantRefOf(c.grantId), lines: [{ id: "coffee", quantity: 1, unitPrice: 18 }] },
+      completion: { grantRef: (await c.credentagent.grants.retrieve(c.grantId))!.ref, lines: [{ id: "coffee", quantity: 1, unitPrice: 18 }] },
     });
   });
 
@@ -615,7 +615,7 @@ describe("what is recorded, and what survives a late failure", () => {
       expect(shown).not.toContain(c.grantId);
       expect(shown).not.toContain(permissionId);
     }
-    expect(status.body.order.grantRef).toBe(grantRefOf(c.grantId)); // still enough to tell which grant paid
+    expect(status.body.order.grantRef).toBe((await c.credentagent.grants.retrieve(c.grantId))!.ref); // still enough to tell which grant paid
   });
 
   it("keeps the draw and answers with the receipt when only the cleanup after recording fails", async () => {
