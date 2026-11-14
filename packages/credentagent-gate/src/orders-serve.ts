@@ -295,7 +295,10 @@ export function serveOrders(app: CeremonyApp, deps: ServeOrdersDeps): string {
   const status: OrdersHandler = async (req, res) => {
     res.setHeader?.("Access-Control-Allow-Origin", "*");
     const done = await deps.completed.read(req.params.id);
-    res.json({ completed: !!done, order: done ?? null });
+    // Public by order id, with CORS open: never hand out the spending grant behind an agent's purchase. A grant
+    // id opens that grant's other routes (its signed permission, its quotes). `orders.retrieve` keeps both.
+    const { grantId: _grant, permissionId: _permission, ...shown } = done ?? ({} as NonNullable<typeof done>);
+    res.json({ completed: !!done, order: done ? shown : null });
   };
 
   get("/credentagent/orders/:id", page);

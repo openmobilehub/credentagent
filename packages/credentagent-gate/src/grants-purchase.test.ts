@@ -17,6 +17,7 @@ import { VCT } from "./ap2/types.js";
 import { defineCredential, dcql, gate } from "./credentials.js";
 import { MemoryOrderStore, type CompletedOrder } from "./orders.js";
 import type { Credential } from "./types.js";
+import { MAX_RETAINED_QUOTES_PER_GRANT } from "./grants-purchase.js";
 
 const HOST = "shop.example";
 const ORIGIN = `http://${HOST}`;
@@ -47,7 +48,7 @@ interface Opts {
 /** A store, an agent with its own key, and a grant the person signed (or left pending). */
 async function setup(o: Opts = {}) {
   const agentKey = AgentKey.generate();
-  const catalog = structuredClone(CATALOG) as Record<string, { price: number; category?: string; minAge?: number }>;
+  const catalog = structuredClone(CATALOG) as Record<string, { price: number; category?: string; minAge?: number; requiresRx?: boolean }>;
   const credentagent = new CredentAgent({
     walletOrigin: ORIGIN,
     catalog,
@@ -247,6 +248,17 @@ describe("the nonce is single-use, bound to one grant, and short-lived", () => {
       Date.now = realNow;
     }
     expect(c.orders.size).toBe(0);
+  });
+
+  it("BYPASS: used quotes count toward a per-grant cap, so garbage proofs cannot flood the shared table", async () => {
+    const c = await setup();
+    let refused: unknown;
+    for (let i = 0; i < MAX_RETAINED_QUOTES_PER_GRANT + 1 && !refused; i++) {
+      const q = await quote(c, { sku: "coffee" });
+      if (!q.body.ok) { refused = q.body; break; }
+      await submit(c, q.body.quote.nonce, { checkout: "x", payment: "y" }); // uses the nonce, never buys
+    }
+    expect(refused).toMatchObject({ ok: false, code: "too-many-quotes" });
   });
 
   it("caps open quotes per grant (too-many-quotes)", async () => {
@@ -487,6 +499,12 @@ describe("a loyalty member pays the discounted price on every step (invariant 3)
     expect(await c.credentagent.orders.retrieve(proof.receipt.orderId)).toMatchObject({ ok: true, completion: { amount: 16.2 } });
     expect(await remaining(c)).toBe(83.8);
   });
+
+  it("records the discount, so the lines' list prices explain the amount charged", async () => {
+    const c = await setup({ membership: true, loyaltyDiscountPct: 10 });
+    const { proof } = await buy(c, "coffee");
+    expect(await c.credentagent.orders.retrieve(proof.receipt.orderId)).toMatchObject({ completion: { amount: 16.2, discount: 1.8, lines: [{ unitPrice: 18 }] } });
+  });
 });
 
 describe("edges that must answer with a typed refusal, not a crash", () => {
@@ -534,7 +552,7 @@ describe("completion sees what a person's checkout sees", () => {
 
   it("a gate scoped by a custom catalog attribute applies too, and leaves other items alone", async () => {
     const c = await setup({ credentials: [scoped((o) => o.lines.some((l) => l.requiresRx === true))] });
-    (c.catalog as Record<string, unknown>).tea = { ...c.catalog.tea, requiresRx: true };
+    c.catalog.tea = { ...c.catalog.tea, requiresRx: true };
     const rx = await quote(c, { sku: "tea" });
     expect((await submit(c, rx.body.quote.nonce, await signQuote(c, rx.body.quote))).body).toMatchObject({ ok: false, code: "step-up" });
     expect((await buy(c, "coffee")).proof).toMatchObject({ ok: true }); // no requiresRx: the gate does not apply
@@ -569,6 +587,17 @@ describe("what is recorded, and what survives a late failure", () => {
       authorization: "delegated",
       completion: { grantId: c.grantId, lines: [{ id: "coffee", quantity: 1, unitPrice: 18 }], permissionId: expect.any(String) },
     });
+  });
+
+  it("BYPASS: the public status route never shows the grant that paid, while orders.retrieve still does", async () => {
+    const c = await setup();
+    c.credentagent.orders.serve(c.app);
+    const { proof } = await buy(c, "coffee");
+    const status = await request(c.app).get(`/credentagent/orders/${proof.receipt.orderId}/status`).set("Host", HOST);
+    expect(status.body.completed).toBe(true);
+    expect(status.text).not.toContain(c.grantId);
+    expect(status.body.order).not.toHaveProperty("permissionId");
+    expect(await c.credentagent.orders.retrieve(proof.receipt.orderId)).toMatchObject({ completion: { grantId: c.grantId } });
   });
 
   it("keeps the draw and answers with the receipt when only the cleanup after recording fails", async () => {

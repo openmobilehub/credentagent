@@ -39,6 +39,8 @@ export interface CompletedOrder {
   authorization?: "direct" | "delegated";
   /** What was bought — sku, quantity and unit price — so a handler of `order.settled` can ship it. */
   lines?: { id: string; quantity: number; unitPrice: number }[];
+  /** Dollars taken off the lines' list prices (a loyalty discount): lines total minus `discount` is `amount`. */
+  discount?: number;
   /** The spending grant that paid, and the permission it rests on, for a delegated order. */
   grantId?: string;
   permissionId?: string;

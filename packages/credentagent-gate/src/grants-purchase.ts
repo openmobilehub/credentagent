@@ -43,8 +43,11 @@ export const MAX_OPEN_QUOTES_PER_GRANT = 5;
 /** How long a used quote (and the receipt it holds) is kept after it expires, so an agent whose
  *  connection dropped can post the same proof again and get its receipt instead of buying twice. */
 export const RECEIPT_RETENTION_MS = 10 * 60_000;
-/** Most quotes (open or used, with their receipts) held at once per registration; the oldest go first. */
+/** Most quotes (open or used, with their receipts) held at once per registration; expired ones go first, then the oldest. */
 export const MAX_RETAINED_QUOTES = 10_000;
+/** Most quotes ONE grant may keep retained, used or not: a caller holding one grant id cannot push another
+ *  grant's live quote or saved receipt out of the shared table. Counts used quotes (a garbage proof uses one). */
+export const MAX_RETAINED_QUOTES_PER_GRANT = 50;
 
 /** What the host wires in when it opts in: the shared completion path, and the state it reads. */
 export interface AgentPurchaseDeps {
@@ -172,13 +175,18 @@ export function registerPurchaseRoutes(app: GrantsApp, grants: Grants, deps: Age
   const cfg = grants.purchaseConfig;
   const quotes = new Map<string, Quoted>();
 
-  const openQuotes = (grantId: string, now: number) => {
-    let n = 0;
+  /** This grant's quotes still held: `open` (unused, unexpired) and `retained` (every one, used or not). */
+  const heldQuotes = (grantId: string, now: number) => {
+    let open = 0;
+    let retained = 0;
     for (const [nonce, q] of quotes) {
       if (now > q.expiresAtMs + RECEIPT_RETENTION_MS) quotes.delete(nonce); // nothing can use it, and no retry wants its receipt
-      else if (!q.used && q.expiresAtMs >= now && q.grantId === grantId) n++;
+      else if (q.grantId === grantId) {
+        retained++;
+        if (!q.used && q.expiresAtMs >= now) open++;
+      }
     }
-    return n;
+    return { open, retained };
   };
 
   get("/credentagent/grants/:id/delegation", async (req: Req, res: Res) => {
@@ -217,7 +225,10 @@ export function registerPurchaseRoutes(app: GrantsApp, grants: Grants, deps: Age
     }
 
     const now = Date.now();
-    if (openQuotes(g.id, now) >= MAX_OPEN_QUOTES_PER_GRANT) return send(res, refuse("too-many-quotes", "too many open quotes for this grant"));
+    const held = heldQuotes(g.id, now);
+    if (held.open >= MAX_OPEN_QUOTES_PER_GRANT || held.retained >= MAX_RETAINED_QUOTES_PER_GRANT) {
+      return send(res, refuse("too-many-quotes", "too many open quotes for this grant"));
+    }
 
     let amountMinor: number;
     try {
@@ -240,7 +251,9 @@ export function registerPurchaseRoutes(app: GrantsApp, grants: Grants, deps: Age
       return send(res, refuse("invalid-request", "the store could not quote this cart")); // a typed refusal, never a bare 500
     }
     const nonce = randomUUID();
-    while (quotes.size >= MAX_RETAINED_QUOTES) quotes.delete(quotes.keys().next().value as string); // oldest first: bounded memory
+    // Bounded memory: past the cap, expired quotes go before any live one (oldest first within each).
+    if (quotes.size >= MAX_RETAINED_QUOTES) for (const [n, q] of quotes) if (now > q.expiresAtMs) { quotes.delete(n); if (quotes.size < MAX_RETAINED_QUOTES) break; }
+    while (quotes.size >= MAX_RETAINED_QUOTES) quotes.delete(quotes.keys().next().value as string);
     quotes.set(nonce, { grantId: g.id, cartId: cart.id, sku, qty, amountMinor, expiresAtMs: now + QUOTE_TTL_MS, used: false });
     const quote: PurchaseQuote = {
       nonce,
@@ -339,6 +352,7 @@ export function registerPurchaseRoutes(app: GrantsApp, grants: Grants, deps: Age
             orderId, amount: rec.amount, currency: rec.currency, method: rec.method, completedAt: rec.completedAt,
             authorization: "delegated", grantId, permissionId: verdict.permissionId,
             lines: order.lines.map((l) => ({ id: l.id, quantity: l.quantity, unitPrice: l.unitPrice })),
+            ...(order.discount ? { discount: order.discount } : {}), // lines are list prices: this is what explains amount
           });
           recorded = true; // from here the order exists and is announced: the draw must stay
         },

@@ -26,7 +26,7 @@ type DelegateKey = Awaited<ReturnType<typeof generateDelegate>>["privateKey"];
 /** A catalog entry: a bare price, or a price plus an age restriction, a category and/or a
  *  display name (categories feed the grants `allow` bounds — what a delegated agent may buy;
  *  `name` is what the approve page calls the product instead of its bare sku id — #172). */
-export type CatalogEntry = number | { price: number; minAge?: number; category?: string; name?: string };
+export type CatalogEntry = number | { price: number; minAge?: number; category?: string; name?: string; [attribute: string]: unknown };
 
 export interface DelegatedGateOptions {
   /** Your priced catalog: item id → price, or → { price, minAge }. */
