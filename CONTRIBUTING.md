@@ -117,6 +117,14 @@ your diff will be held against.
   growing a file past its single responsibility, and match the style, naming, and comment density of
   the surrounding code. A big change is planned and split first: see *Big changes*.
 
+### Show the example first
+
+For a new or changed public API, post the caller-side example — the code a sample app would need to
+use it — in the issue or a draft pull request, and get a maintainer's OK **before** you implement. It
+should fit on one screen (about 30 lines for one feature) and read top to bottom as what the developer
+is trying to do. If you can't get it there, that is the conversation to have before any code is
+written: the API isn't finished (REVIEW.md §3, Principle 12).
+
 ### Big changes
 
 A pull request past **400 changed lines or 15 files** (docs, `specs/` and lockfiles don't count) fails
@@ -146,6 +154,24 @@ stop: write the design that fixes the cause once (step 1 above — an `epic`, or
 label the issue `needs-decision`, and build it as tickets. Two fix pull requests on one cause, with no
 design behind either, are sent back in review (REVIEW.md §8). For an issue the agents build, the brief
 runs this search over recent open work (`ci/issue-agent/README.md`, "The brief").
+
+## The same bar outside this repo
+
+Work done for this project often lands elsewhere: the Multipaz SDK, the Multipaz Wallet,
+`multipaz-utopia`. Hold it to this repo's bar **before** asking anyone there to review it — the DX
+rubric and the sample-app rule (REVIEW.md §3), the honesty rules (§4), and the size rule (§8, *Big
+changes* above). The rules follow the work, not the repository. Those projects' own contribution
+rules still apply; this is the check we run on ourselves first.
+
+- Open the pull request description with the same **Before and after**: the few lines a developer
+  writes, and what they see.
+- A claim that something was verified ("X's SDK accepts our output") links to the script, test or CI
+  job that shows it, so anyone can run it again.
+- On the project board, a card moves to **In review** only when the above holds. Until then it stays
+  **In progress**, and a reviewer sends it back without a deep read.
+- No review bot runs in those repositories, so run the check yourself before you ask.
+  [`review-to-the-bar`](https://github.com/openmobilehub/review-to-the-bar) is a Claude Code skill
+  that walks through it in any checkout; its findings go in the description.
 
 ## Tests must exercise the bypass paths
 
@@ -208,6 +234,7 @@ turns up something off, fix it or flag it.
 - [ ] `npm run lint` passes — a new `eslint-disable` needs a one-line justification.
 - [ ] `npm run test` passes, and new tests cover the security-critical / bypass paths.
 - [ ] For any UI/flow change: you drove the real UI end-to-end and confirmed **every screen tells the truth** — not just that the happy path completes (no stale/locked page for a paid order, no step or label claiming something that didn't happen).
+- [ ] For a new or changed public API: the caller-side example was agreed before you built it, fits on one screen, and reads without explanation.
 - [ ] Every commit is signed off (`git commit -s`); the DCO check will be green.
 - [ ] You pushed a branch to this repo (not a fork) so the automated review can run.
 - [ ] No presence-only gate is presented as a real safety control.
