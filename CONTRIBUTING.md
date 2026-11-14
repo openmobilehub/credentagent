@@ -169,9 +169,9 @@ rules still apply; this is the check we run on ourselves first.
   job that shows it, so anyone can run it again.
 - On the project board, a card moves to **In review** only when the above holds. Until then it stays
   **In progress**, and a reviewer sends it back without a deep read.
-- No review bot runs in those repositories, so run the check yourself before you ask: the
-  `review-to-our-bar` skill in `.claude/skills/` walks through it, and its findings go in the
-  description.
+- No review bot runs in those repositories, so run the check yourself before you ask.
+  [`review-to-the-bar`](https://github.com/openmobilehub/review-to-the-bar) is a Claude Code skill
+  that walks through it in any checkout; its findings go in the description.
 
 ## Tests must exercise the bypass paths
 
