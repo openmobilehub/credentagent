@@ -501,7 +501,7 @@ model can't reword:
 - **It is honest about what isn't checked.** A demo grant says it was approved with a click and no
   real money moves; a grant not yet approved says it can't spend anything.
 - **The person can revoke without asking the agent.** Revoke is a button on the card, not a request
-  the agent may or may not honor. It doesn't take back a permission the agent signed and holds itself.
+  the agent may or may not honor. It doesn't take back a signed permission the agent already holds.
 - **It only shows, it never decides.** Every limit stays enforced on your server.
 
 ### What you write
