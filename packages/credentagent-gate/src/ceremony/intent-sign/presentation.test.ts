@@ -231,7 +231,7 @@ describe("intent-sign REAL device-signed presentation", () => {
   // `payment_instrument_id`. These tests use `cardShape: "multipaz-dpc"`, which copies that card's
   // claim names; the simulator signs the card itself, so none of this says the card is genuine.
   // A phone run (2026-11-13) matched the real card on `credential_id`.
-  it("verifies a card with the official Multipaz card's layout: credential_id disclosed, no payment_instrument_id", async () => {
+  it("verifies a card with the Multipaz card's layout: credential_id disclosed, no payment_instrument_id", async () => {
     const b = bounds();
     const { req, result } = await signFor(b, { cardShape: "multipaz-dpc" });
     const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantUrl: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
@@ -239,12 +239,17 @@ describe("intent-sign REAL device-signed presentation", () => {
     if (out.ok) {
       expect(out.trustLevel).toBe("device-signed");
       expect(out.credentialType).toBe("urn:emvco:dpc:card:1");
+      // Prove the Multipaz layout really ran: an unknown `cardShape` silently mints the other card.
+      const disclosed = out.intent.presentation.split("~").slice(1, -1)
+        .map((d) => JSON.parse(Buffer.from(d, "base64url").toString("utf8"))[1]);
+      expect(disclosed).toContain("credential_id");
+      expect(disclosed).not.toContain("payment_instrument_id");
     }
   });
 
   // Delete the `hasClaim` check in verify.ts and this FAILS: a card that proves nothing
   // about itself would authorize the grant.
-  it("BYPASS: the official card discloses none of the accepted claims → refused", async () => {
+  it("BYPASS: the multipaz-dpc card discloses none of the accepted claims → refused", async () => {
     const b = bounds();
     const { req, result } = await signFor(b, { cardShape: "multipaz-dpc", omitInstrumentId: true });
     const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantUrl: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
@@ -254,7 +259,7 @@ describe("intent-sign REAL device-signed presentation", () => {
 
   // A claim that is disclosed but EMPTY proves nothing about the card. Remove the empty-string
   // clause from the `hasClaim` check in verify.ts and this fails: only that clause refuses it.
-  it("BYPASS: the official card discloses an EMPTY credential_id → refused", async () => {
+  it("BYPASS: the multipaz-dpc card discloses an EMPTY credential_id → refused", async () => {
     const b = bounds();
     const { req, result } = await signFor(b, { cardShape: "multipaz-dpc", instrumentId: "" });
     const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantUrl: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
@@ -264,7 +269,7 @@ describe("intent-sign REAL device-signed presentation", () => {
 
   // Same attack as the `payment_instrument_id` one above, on the new claim: a credential_id the
   // issuer never signed a digest for. Only the `_sd` digest check can refuse it.
-  it("BYPASS: a credential_id the ISSUER never signed, on the official card → refused", async () => {
+  it("BYPASS: a credential_id the ISSUER never signed, on the multipaz-dpc card → refused", async () => {
     const b = bounds();
     const { req, result } = await signFor(b, { cardShape: "multipaz-dpc", forgeRevealedClaim: "attacker-card" });
     const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantUrl: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
@@ -273,7 +278,7 @@ describe("intent-sign REAL device-signed presentation", () => {
   });
 
   // Carrying an accepted claim is not enough: the card must also be the right TYPE.
-  it("BYPASS: the official card's claims under a DIFFERENT credential type → refused", async () => {
+  it("BYPASS: the multipaz-dpc card's claims under a DIFFERENT credential type → refused", async () => {
     const b = bounds();
     const { req, result } = await signFor(b, { cardShape: "multipaz-dpc", overrideVct: "org.iso.18013.5.1.mDL" });
     const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantUrl: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });

@@ -46,7 +46,7 @@ export interface SimulateOptions {
    *  `payment_instrument_id`, like the test card `tools/demo-pki/mint/` mints. Default `"demo-dpc"`. */
   cardShape?: "multipaz-dpc" | "demo-dpc";
   /** The id the credential discloses in its accepted claim (default the demo fixture's):
-   *  `payment_instrument_id` on the custom card, `credential_id` on the official one. */
+   *  `payment_instrument_id` on the `"demo-dpc"` card, `credential_id` on the `"multipaz-dpc"` one. */
   instrumentId?: string;
   /** TEST-ONLY: bind to a different nonce than the request asked for (replay/tamper). */
   overrideNonce?: string;
@@ -135,7 +135,7 @@ export async function devSimulateWalletSignature(
   const holder = p256();
   const x5c = await selfSignedCert(issuer, "CredentAgent Simulated Wallet Issuer");
 
-  // The official card's other claims are placeholders: only their NAMES are read from Multipaz
+  // The `multipaz-dpc` card's other claims are placeholders: only their NAMES are read from Multipaz
   // `main`, and a phone run (#466) is what confirms them.
   const claims: Record<string, unknown> =
     opts.cardShape === "multipaz-dpc"
