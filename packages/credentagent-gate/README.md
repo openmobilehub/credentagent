@@ -500,8 +500,8 @@ model can't reword:
   nor the model writes it.
 - **It is honest about what isn't checked.** A demo grant says it was approved with a click and no
   real money moves; a grant not yet approved says it can't spend anything.
-- **The person can act without the agent.** Revoke is a button on the card, not a request the agent
-  may or may not honor.
+- **The person can revoke without asking the agent.** Revoke is a button on the card, not a request
+  the agent may or may not honor. It doesn't take back a permission the agent signed and holds itself.
 - **It only shows, it never decides.** Every limit stays enforced on your server.
 
 ### What you write
@@ -518,10 +518,6 @@ server.registerTool("get-grant", { inputSchema, _meta: cards.toolMeta() }, // 3.
 To draw the card's Revoke button, name your revoke tool in
 `createCards({ tools: { revoke: "revoke-grant" } })` and register it with
 `cards.toolMeta({ callableFromCard: true })`, as in the full example below.
-
-Today the kit shows a grant your server already has. The permission card with a QR code, the offers
-card and the receipt card follow on the same pattern
-([#256](https://github.com/openmobilehub/credentagent/issues/256)).
 
 ### Full example
 
