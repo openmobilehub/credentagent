@@ -485,8 +485,42 @@ redirects are never followed, and each attempt is bounded by a timeout (`timeout
 
 ## Cards — show the moment in the chat (`/cards`)
 
-Claude and ChatGPT can show a small interactive card inside the conversation instead of a wall of
-text. `@openmobilehub/credentagent-gate/cards` is one card page that **any** MCP server serves — a
+### The problem cards solve
+
+When an agent shops across several merchants, each merchant is its own MCP server. Everything the
+agent knows about a spending grant ("up to $200", "approved", "no real money moves") comes from a
+merchant, not from the agent. In plain chat text the model paraphrases it, and the person can't tell
+whose words they're reading: the merchant's claim, or the model's summary of it.
+
+A card fixes that. Your server returns plain data, and Claude or ChatGPT draws it as a panel the
+model can't reword:
+
+- **It names the source.** The trust line is a sentence fixed by the kit, always worded "As the
+  merchant reports it: …". Neither the merchant nor the model writes it.
+- **It is honest about what isn't checked.** A demo grant says it was approved with a click and no
+  real money moves; a grant not yet approved says it can't spend anything.
+- **The person can act without the agent.** Revoke is a button on the card, not a request the agent
+  may or may not honor.
+- **It only shows, it never decides.** Every limit stays enforced on your server.
+
+### What you write
+
+Four lines, once per server:
+
+```js
+const cards = createCards({ tools: { revoke: "revoke-grant" } });          // 1. once per process
+cards.register(server);                                                    // 2. serves the card page
+server.registerTool("get-grant", { inputSchema, _meta: cards.toolMeta() }, // 3. links the tool to the card (only the model calls it)
+  async ({ grantId }) => cards.grant(await viewOf(grantId)));              // 4. returns the result as a card
+```
+
+Today the kit shows a grant your server already has. The permission card with a QR code, the offers
+card and the receipt card follow on the same pattern
+([#256](https://github.com/openmobilehub/credentagent/issues/256)).
+
+### Full example
+
+`@openmobilehub/credentagent-gate/cards` is one card page that **any** MCP server serves — a
 storefront or an agent — with no widget code of its own:
 
 ```js
