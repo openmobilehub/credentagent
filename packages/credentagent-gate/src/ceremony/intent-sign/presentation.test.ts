@@ -249,7 +249,9 @@ describe("intent-sign REAL device-signed presentation", () => {
 
   // A typo must not quietly mint the demo card: the multipaz-dpc refusal tests below would still pass on it, testing the wrong layout.
   it("the simulated wallet throws on an unknown cardShape instead of minting the demo card", async () => {
-    await expect(signFor(bounds(), { cardShape: "multipaz" as never })).rejects.toThrow(/unknown cardShape "multipaz"/);
+    await expect(signFor(bounds(), { cardShape: "multipaz" as never })).rejects.toThrow(/unknown cardShape "multipaz"; use "multipaz-dpc" or "demo-dpc"/);
+    // The message tells callers to pass "demo-dpc", so passing it by name must work.
+    await expect(signFor(bounds(), { cardShape: "demo-dpc" })).resolves.toBeDefined();
   });
 
   // Delete the `hasClaim` check in verify.ts and this FAILS: a card that proves nothing
