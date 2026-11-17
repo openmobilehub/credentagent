@@ -247,6 +247,11 @@ describe("intent-sign REAL device-signed presentation", () => {
     }
   });
 
+  // A typo must not quietly mint the other card, or the tests above would stop testing this layout.
+  it("refuses an unknown cardShape instead of minting the demo card", async () => {
+    await expect(signFor(bounds(), { cardShape: "multipaz" as never })).rejects.toThrow(/unknown cardShape multipaz/);
+  });
+
   // Delete the `hasClaim` check in verify.ts and this FAILS: a card that proves nothing
   // about itself would authorize the grant.
   it("BYPASS: the multipaz-dpc card discloses none of the accepted claims → refused", async () => {

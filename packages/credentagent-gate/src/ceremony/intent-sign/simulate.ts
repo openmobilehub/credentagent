@@ -43,7 +43,7 @@ export interface SimulateOptions {
    *  SD-JWT Payment card at `issuer.multipaz.org`, as read from Multipaz `main` (`credential_id`,
    *  `network`, `last_four`, and NO `payment_instrument_id`). Either way the card is signed by
    *  this simulator's own demo issuer, never by Multipaz. `"demo-dpc"` carries
-   *  `payment_instrument_id`, like the test card `tools/demo-pki/mint/` mints. Default `"demo-dpc"`. */
+   *  `payment_instrument_id`, like the test card `tools/demo-pki/mint/` mints. Default `"demo-dpc"`. Any other value throws. */
   cardShape?: "multipaz-dpc" | "demo-dpc";
   /** The id the credential discloses in its accepted claim (default the demo fixture's):
    *  `payment_instrument_id` on the `"demo-dpc"` card, `credential_id` on the `"multipaz-dpc"` one. */
@@ -95,6 +95,9 @@ export async function devSimulateWalletSignature(
   const { request, origin } = opts;
   const vct = opts.overrideVct ?? PAYMENT_CREDENTIAL_VCTS[0];
   const instrumentId = opts.instrumentId ?? "demo-instrument-0001";
+  if (opts.cardShape !== undefined && opts.cardShape !== "multipaz-dpc" && opts.cardShape !== "demo-dpc") {
+    throw new Error(`devSimulateWalletSignature: unknown cardShape ${String(opts.cardShape)}`);
+  }
   // The one claim the gate accepts as proof of the card, which depends on the card's shape.
   const acceptedClaim = opts.cardShape === "multipaz-dpc" ? "credential_id" : "payment_instrument_id";
 
