@@ -250,8 +250,23 @@ describe("intent-sign REAL device-signed presentation", () => {
   // A typo must not quietly mint the demo card: the multipaz-dpc refusal tests below would still pass on it, testing the wrong layout.
   it("the simulated wallet throws on an unknown cardShape instead of minting the demo card", async () => {
     await expect(signFor(bounds(), { cardShape: "multipaz" as never })).rejects.toThrow(/unknown cardShape "multipaz"; use "multipaz-dpc" or "demo-dpc"/);
-    // The message tells callers to pass "demo-dpc", so passing it by name must work.
-    await expect(signFor(bounds(), { cardShape: "demo-dpc" })).resolves.toBeDefined();
+  });
+
+  // The error calls "demo-dpc" the default, so naming it must make the same card as leaving it out:
+  // the test card, which carries payment_instrument_id. If either one changes, this fails.
+  it("cardShape \"demo-dpc\" makes the default card: payment_instrument_id disclosed, no credential_id", async () => {
+    for (const over of [{}, { cardShape: "demo-dpc" as const }]) {
+      const b = bounds();
+      const { req, result } = await signFor(b, over);
+      const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantUrl: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
+      expect(out.ok).toBe(true);
+      if (out.ok) {
+        const disclosed = out.intent.presentation.split("~").slice(1, -1)
+          .map((d) => JSON.parse(Buffer.from(d, "base64url").toString("utf8"))[1]);
+        expect(disclosed).toContain("payment_instrument_id");
+        expect(disclosed).not.toContain("credential_id");
+      }
+    }
   });
 
   // Delete the `hasClaim` check in verify.ts and this FAILS: a card that proves nothing
