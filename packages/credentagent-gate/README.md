@@ -495,8 +495,9 @@ whose words they're reading: the merchant's claim, or the model's summary of it.
 A card fixes that. Your server returns plain data, and Claude or ChatGPT draws it as a panel the
 model can't reword:
 
-- **It names the source.** The trust line is a sentence fixed by the kit, always worded "As the
-  merchant reports it: …". Neither the merchant nor the model writes it.
+- **It names the source.** The trust line is a sentence fixed by the kit, worded "As the merchant
+  reports it: …" (a level the card doesn't know says to treat it as unverified). Neither the merchant
+  nor the model writes it.
 - **It is honest about what isn't checked.** A demo grant says it was approved with a click and no
   real money moves; a grant not yet approved says it can't spend anything.
 - **The person can act without the agent.** Revoke is a button on the card, not a request the agent
@@ -505,14 +506,18 @@ model can't reword:
 
 ### What you write
 
-Four lines, once per server:
+`createCards` once per process, the rest once per server:
 
 ```js
-const cards = createCards({ tools: { revoke: "revoke-grant" } });          // 1. once per process
+const cards = createCards();                                               // 1. once per process
 cards.register(server);                                                    // 2. serves the card page
 server.registerTool("get-grant", { inputSchema, _meta: cards.toolMeta() }, // 3. links the tool to the card (only the model calls it)
   async ({ grantId }) => cards.grant(await viewOf(grantId)));              // 4. returns the result as a card
 ```
+
+To draw the card's Revoke button, name your revoke tool in
+`createCards({ tools: { revoke: "revoke-grant" } })` and register it with
+`cards.toolMeta({ callableFromCard: true })`, as in the full example below.
 
 Today the kit shows a grant your server already has. The permission card with a QR code, the offers
 card and the receipt card follow on the same pattern
