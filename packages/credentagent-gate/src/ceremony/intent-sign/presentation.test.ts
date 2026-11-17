@@ -239,7 +239,7 @@ describe("intent-sign REAL device-signed presentation", () => {
     if (out.ok) {
       expect(out.trustLevel).toBe("device-signed");
       expect(out.credentialType).toBe("urn:emvco:dpc:card:1");
-      // Prove the Multipaz layout really ran: an unknown `cardShape` silently mints the other card.
+      // Prove the Multipaz layout really ran: the card discloses credential_id and no payment_instrument_id.
       const disclosed = out.intent.presentation.split("~").slice(1, -1)
         .map((d) => JSON.parse(Buffer.from(d, "base64url").toString("utf8"))[1]);
       expect(disclosed).toContain("credential_id");
@@ -247,9 +247,9 @@ describe("intent-sign REAL device-signed presentation", () => {
     }
   });
 
-  // A typo must not quietly mint the other card, or the tests above would stop testing this layout.
-  it("refuses an unknown cardShape instead of minting the demo card", async () => {
-    await expect(signFor(bounds(), { cardShape: "multipaz" as never })).rejects.toThrow(/unknown cardShape multipaz/);
+  // A typo must not quietly mint the demo card: the multipaz-dpc refusal tests below would still pass on it, testing the wrong layout.
+  it("the simulated wallet throws on an unknown cardShape instead of minting the demo card", async () => {
+    await expect(signFor(bounds(), { cardShape: "multipaz" as never })).rejects.toThrow(/unknown cardShape "multipaz"/);
   });
 
   // Delete the `hasClaim` check in verify.ts and this FAILS: a card that proves nothing

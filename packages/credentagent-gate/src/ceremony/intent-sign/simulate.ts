@@ -96,7 +96,7 @@ export async function devSimulateWalletSignature(
   const vct = opts.overrideVct ?? PAYMENT_CREDENTIAL_VCTS[0];
   const instrumentId = opts.instrumentId ?? "demo-instrument-0001";
   if (opts.cardShape !== undefined && opts.cardShape !== "multipaz-dpc" && opts.cardShape !== "demo-dpc") {
-    throw new Error(`devSimulateWalletSignature: unknown cardShape ${String(opts.cardShape)}`);
+    throw new Error(`devSimulateWalletSignature: unknown cardShape "${String(opts.cardShape)}"; use "multipaz-dpc" or "demo-dpc" (the default)`);
   }
   // The one claim the gate accepts as proof of the card, which depends on the card's shape.
   const acceptedClaim = opts.cardShape === "multipaz-dpc" ? "credential_id" : "payment_instrument_id";
