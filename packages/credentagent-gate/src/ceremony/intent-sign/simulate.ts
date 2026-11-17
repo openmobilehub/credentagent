@@ -39,12 +39,12 @@ export interface SimulateOptions {
   request: Pick<SignedIntentRequest, "request" | "dcql_query">;
   /** The web origin the wallet addresses the key binding to (must match the gate's). */
   origin: string;
-  /** Which card LAYOUT the simulated wallet mints. `"official"` copies the claim names of the
+  /** Which card LAYOUT the simulated wallet mints. `"multipaz-dpc"` copies the claim names of the
    *  SD-JWT Payment card at `issuer.multipaz.org`, as read from Multipaz `main` (`credential_id`,
    *  `network`, `last_four`, and NO `payment_instrument_id`). Either way the card is signed by
-   *  this simulator's own demo issuer, never by Multipaz. `"custom"` carries
-   *  `payment_instrument_id`, like the test card `tools/demo-pki/mint/` mints. Default `"custom"`. */
-  cardShape?: "official" | "custom";
+   *  this simulator's own demo issuer, never by Multipaz. `"demo-dpc"` carries
+   *  `payment_instrument_id`, like the test card `tools/demo-pki/mint/` mints. Default `"demo-dpc"`. */
+  cardShape?: "multipaz-dpc" | "demo-dpc";
   /** The id the credential discloses in its accepted claim (default the demo fixture's):
    *  `payment_instrument_id` on the custom card, `credential_id` on the official one. */
   instrumentId?: string;
@@ -96,7 +96,7 @@ export async function devSimulateWalletSignature(
   const vct = opts.overrideVct ?? PAYMENT_CREDENTIAL_VCTS[0];
   const instrumentId = opts.instrumentId ?? "demo-instrument-0001";
   // The one claim the gate accepts as proof of the card, which depends on the card's shape.
-  const acceptedClaim = opts.cardShape === "official" ? "credential_id" : "payment_instrument_id";
+  const acceptedClaim = opts.cardShape === "multipaz-dpc" ? "credential_id" : "payment_instrument_id";
 
   const payload = jose.decodeJwt(request.request) as {
     nonce: string;
@@ -138,7 +138,7 @@ export async function devSimulateWalletSignature(
   // The official card's other claims are placeholders: only their NAMES are read from Multipaz
   // `main`, and a phone run (#466) is what confirms them.
   const claims: Record<string, unknown> =
-    opts.cardShape === "official"
+    opts.cardShape === "multipaz-dpc"
       ? { network: "visa", last_four: "4242" }
       : { issuer_name: "Bank of Utopia", masked_account_reference: "•••• 4444" };
   // `forgeRevealedClaim` leaves the real claim OUT of what the issuer signs, so the forged

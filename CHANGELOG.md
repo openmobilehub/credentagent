@@ -40,7 +40,7 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
   build against a local server; the test card is covered by tests but has not been tried on a phone
   with the new request. Signing a grant still needs a wallet that supports AP2's `delegate`
   request; no released wallet does yet. The issuer lists two cards both named "Payment card": a
-  grant needs the SD-JWT one, not the mdoc one. `SimulateOptions` gains `cardShape: "official"` for
+  grant needs the SD-JWT one, not the mdoc one. `SimulateOptions` gains `cardShape: "multipaz-dpc"` for
   tests; the simulator signs that card itself (#465, part of #464).
 - Each order's requirements are now saved with its proofs, in the order's verification record
   (`record.requirements`), so a server that never ran `requirements()` can read what the order

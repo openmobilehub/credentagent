@@ -228,12 +228,12 @@ describe("intent-sign REAL device-signed presentation", () => {
   });
 
   // The official Multipaz Payment card (`payment_sca_sd_jwt`) carries `credential_id`, not
-  // `payment_instrument_id`. These tests use `cardShape: "official"`, which copies that card's
+  // `payment_instrument_id`. These tests use `cardShape: "multipaz-dpc"`, which copies that card's
   // claim names; the simulator signs the card itself, so none of this says the card is genuine.
   // A phone run (2026-11-13) matched the real card on `credential_id`.
   it("verifies a card with the official Multipaz card's layout: credential_id disclosed, no payment_instrument_id", async () => {
     const b = bounds();
-    const { req, result } = await signFor(b, { cardShape: "official" });
+    const { req, result } = await signFor(b, { cardShape: "multipaz-dpc" });
     const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantUrl: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
     expect(out.ok).toBe(true);
     if (out.ok) {
@@ -246,7 +246,7 @@ describe("intent-sign REAL device-signed presentation", () => {
   // about itself would authorize the grant.
   it("BYPASS: the official card discloses none of the accepted claims → refused", async () => {
     const b = bounds();
-    const { req, result } = await signFor(b, { cardShape: "official", omitInstrumentId: true });
+    const { req, result } = await signFor(b, { cardShape: "multipaz-dpc", omitInstrumentId: true });
     const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantUrl: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
     expect(out.ok).toBe(false);
     if (!out.ok) expect(out.reason).toMatch(/did not disclose any of: credential_id, payment_instrument_id/);
@@ -256,7 +256,7 @@ describe("intent-sign REAL device-signed presentation", () => {
   // clause from the `hasClaim` check in verify.ts and this fails: only that clause refuses it.
   it("BYPASS: the official card discloses an EMPTY credential_id → refused", async () => {
     const b = bounds();
-    const { req, result } = await signFor(b, { cardShape: "official", instrumentId: "" });
+    const { req, result } = await signFor(b, { cardShape: "multipaz-dpc", instrumentId: "" });
     const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantUrl: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
     expect(out.ok).toBe(false);
     if (!out.ok) expect(out.reason).toMatch(/did not disclose any of/);
@@ -266,7 +266,7 @@ describe("intent-sign REAL device-signed presentation", () => {
   // issuer never signed a digest for. Only the `_sd` digest check can refuse it.
   it("BYPASS: a credential_id the ISSUER never signed, on the official card → refused", async () => {
     const b = bounds();
-    const { req, result } = await signFor(b, { cardShape: "official", forgeRevealedClaim: "attacker-card" });
+    const { req, result } = await signFor(b, { cardShape: "multipaz-dpc", forgeRevealedClaim: "attacker-card" });
     const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantUrl: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
     expect(out.ok).toBe(false);
     if (!out.ok) expect(out.reason).toMatch(/Unreferenced disclosure/i);
@@ -275,7 +275,7 @@ describe("intent-sign REAL device-signed presentation", () => {
   // Carrying an accepted claim is not enough: the card must also be the right TYPE.
   it("BYPASS: the official card's claims under a DIFFERENT credential type → refused", async () => {
     const b = bounds();
-    const { req, result } = await signFor(b, { cardShape: "official", overrideVct: "org.iso.18013.5.1.mDL" });
+    const { req, result } = await signFor(b, { cardShape: "multipaz-dpc", overrideVct: "org.iso.18013.5.1.mDL" });
     const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantUrl: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
     expect(out.ok).toBe(false);
     if (!out.ok) expect(out.reason).toMatch(/wrong credential/);
