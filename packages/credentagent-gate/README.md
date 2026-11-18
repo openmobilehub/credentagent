@@ -906,7 +906,8 @@ for a real card). **That is the way to test in CI.**
    release yet. Download the [debug APK](https://drive.google.com/file/d/13NRT4uTDY4DZT6NMYmq-x2ABMY9eOR5j/view?usp=share_link)
    that signed the grant in [issue #466](https://github.com/openmobilehub/credentagent/issues/466)
    (a debug build that reports the version `2026.W46.0-pr-48-176-git-55db8c2-dirty`, SHA-256
-   `fc36639981b13b74ececdc156253811f516f365c45dd7467270c7c3e1d9bcc8d`: check it before you install). It is an earlier version of multipaz-wallet#48 plus one fix, built from the branch
+   `fc36639981b13b74ececdc156253811f516f365c45dd7467270c7c3e1d9bcc8d`: check it before you install, with `shasum -a 256 <file>` on macOS, `sha256sum <file>` on Linux or
+   `certutil -hashfile <file> SHA256` on Windows). It is an earlier version of multipaz-wallet#48 plus one fix, built from the branch
    [`build/466-recorded-wallet`](https://github.com/TheBlackBit/multipaz-wallet/tree/build/466-recorded-wallet).
    **No released wallet signs a grant yet**; a released one rejects the request. When a release
    includes those changes, this link is replaced by it (tracked in issue #472).
