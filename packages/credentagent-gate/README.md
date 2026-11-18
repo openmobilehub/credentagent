@@ -901,22 +901,26 @@ for a real card). **That is the way to test in CI.**
 
 1. Install a Multipaz Wallet **development build** that supports AP2's `delegate` request: the
    wallet from [multipaz-wallet#48](https://github.com/openwallet-foundation/multipaz-wallet/pull/48),
-   built on [multipaz#2178](https://github.com/openwallet-foundation/multipaz/pull/2178) (both
-   still open). **No released wallet signs a grant yet**; a released one rejects the request.
-   Once a release includes those changes, install the release instead.
+   built on [multipaz#2178](https://github.com/openwallet-foundation/multipaz/pull/2178) and
+   [multipaz#2196](https://github.com/openwallet-foundation/multipaz/pull/2196) (all still open, so
+   there is no download yet: build the wallet from that branch). **No released wallet signs a grant
+   yet**; a released one rejects the request. Once a release includes those changes, install the
+   release instead.
 2. In the wallet, add the **Payment card** from the official issuer at
    [`issuer.multipaz.org`](https://issuer.multipaz.org/issuer/?config_id=payment_sca_sd_jwt)
    (credential configuration `payment_sca_sd_jwt`). The issuer lists **two** cards both named
    "Payment card"; the grant needs the **SD-JWT** one, because AP2's `delegate` request exists only
-   for SD-JWT. The mdoc one (`payment_sca_mdoc`) won't match, and the phone says "Your info wasn't found".
+   for SD-JWT. The mdoc one (`payment_sca_mdoc`), like the repo's mdoc `payment.mpzpass`, won't match, and the
+   phone says "Your info wasn't found" (seen on a phone, [issue #466](https://github.com/openmobilehub/credentagent/issues/466)).
 3. Open the approve link, press "Sign with your wallet", scan the QR code, and approve.
 
 The grant asks for an SD-JWT payment credential (`vct` `urn:emvco:dpc:card:1` or `com.emvco.dpc`)
 that discloses `credential_id` (the official card) or `payment_instrument_id` (the repo's test
 card, below). This was run on an Android phone against the hosted dev store and ended with the
 grant `authorized` ([issue #466](https://github.com/openmobilehub/credentagent/issues/466)). The
-wallet shows the requester as unknown, because the server does not sign its request with a verifier
-identity. The gate does **not** check who issued the card, so a grant it verifies stays
+wallet shows the requester as unknown: unless the host passes a `readerIdentity`, the server signs
+its request with a self-signed certificate that no reader trust list (RICAL) in the wallet lists (see
+[Presenting a stable reader identity](#presenting-a-stable-reader-identity-optional)). The gate does **not** check who issued the card, so a grant it verifies stays
 `device-signed`, not `issuer-verified`.
 
 The repo's own test card, `node tools/demo-pki/mint/mint-dpc-sdjwt.mjs --mpzpass`, is a **test
