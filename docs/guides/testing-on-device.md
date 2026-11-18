@@ -8,6 +8,12 @@ Digital Credentials API needs it), the demo credentials + trust lists from
 **[Trusted demo credentials](trusted-demo-credentials.md)**, and a phone on USB with
 `adb devices` showing it authorized.
 
+> **Signing a spending grant?** That uses a different card than the sections below: the
+> SD-JWT "Payment card" from the official issuer, and a Multipaz Wallet development build (no
+> released wallet signs a grant yet). Follow the three steps in the
+> [gate README, "Device-signed grants"](../../packages/credentagent-gate/README.md#device-signed-grants--the-wallet-signs-the-grant-first-spec-012).
+> The `.mpzpass` import below is for the age, loyalty and checkout ceremonies.
+
 ## 1. Import trust first (VICAL + RICAL)
 
 Do this **before** importing credentials, so cards land already-trusted.

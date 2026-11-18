@@ -895,15 +895,29 @@ is the fast-follow, and the gate **relays** that level verbatim with the attesto
 Test the whole flow **with no phone** using the exported simulated wallet — see
 [`examples/device-signed-grants.mjs`](https://github.com/openmobilehub/credentagent/blob/main/examples/device-signed-grants.mjs)
 (`devSimulateWalletSignature` produces a real device signature the way Stripe's test cards stand in
-for a real card). **That is the way to test today.** Signing on a real phone needs a wallet that
-supports AP2's `delegate` request, and **no released wallet does yet**: the Multipaz change
-([openwallet-foundation/multipaz#2011](https://github.com/openwallet-foundation/multipaz/pull/2011))
-was closed without merging, and a released Multipaz wallet rejects the request. With a patched
-wallet build, the grant asks for an **SD-JWT** payment credential (`vct` `urn:emvco:dpc:card:1` or
-`com.emvco.dpc`); from a clone of this repo, mint one with
-[`node tools/demo-pki/mint/mint-dpc-sdjwt.mjs --mpzpass`](https://github.com/openmobilehub/credentagent/blob/main/tools/demo-pki/mint/mint-dpc-sdjwt.mjs),
-which writes `tools/demo-pki/keys/dpc.mpzpass` to import into that build. The mdoc
-`payment.mpzpass` from the demo set no longer matches.
+for a real card). **That is the way to test in CI.**
+
+**Sign a grant on your phone, in three steps:**
+
+1. Install a Multipaz Wallet **development build** that supports AP2's `delegate` request: one
+   built from [openwallet-foundation/multipaz#2178](https://github.com/openwallet-foundation/multipaz/pull/2178)
+   (still a draft). **No released wallet signs a grant yet**; a released one rejects the request.
+   Once a release includes that change, install the release instead.
+2. In the wallet, add the **Payment card** from the official issuer at
+   [`issuer.multipaz.org`](https://issuer.multipaz.org/issuer/?config_id=payment_sca_sd_jwt)
+   (credential configuration `payment_sca_sd_jwt`). The issuer lists **two** cards both named
+   "Payment card"; the grant needs the **SD-JWT** one, because AP2's `delegate` request exists only
+   for SD-JWT. The mdoc one (`payment_sca_mdoc`) won't match, and the phone says "Your info wasn't found".
+3. Open the approve link, press "Sign with your wallet", scan the QR code, and approve.
+
+The grant asks for an SD-JWT payment credential (`vct` `urn:emvco:dpc:card:1` or `com.emvco.dpc`)
+that discloses `credential_id` (the official card) or `payment_instrument_id` (the test card).
+This was run once on an Android phone against a local server; a run against the hosted dev store
+is tracked in issue #466. The gate does **not** check who issued the card, so a grant it verifies
+stays `device-signed`, not `issuer-verified`.
+
+The repo's own test card, `node tools/demo-pki/mint/mint-dpc-sdjwt.mjs --mpzpass`, is a **test
+fixture** for this repo's tests, not the way to try the product.
 
 ### Credentials on a grant — presented before you authorize, or not at all
 

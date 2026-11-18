@@ -65,6 +65,10 @@ that is the device step (#51).
 
 ## The SD-JWT payment credential (`mint-dpc-sdjwt.mjs`)
 
+> **A test fixture for this repo's own tests, not the way to try the product.** To sign a
+> spending grant on a phone, add the Payment card the official Multipaz issuer offers (see the
+> gate README, "Device-signed grants"). Nothing here is issued by Multipaz or checked against it.
+
 Everything above mints **ISO mdoc** credentials. `mint-dpc-sdjwt.mjs` mints the payment
 credential in the **other** format — an SD-JWT VC (`dc+sd-jwt`) — because AP2's delegation
 mechanism is specified for SD-JWT only. Its chain serialization is SD-JWT syntax, and mdoc
