@@ -628,8 +628,8 @@ Honesty is carried in the **types**, not prose (Principle VII):
   signing: "device" })`, below). Here the gate **does** verify the wallet's signature over the
   grant's exact bounds — an SD-JWT VC Key Binding JWT carrying the AP2 Mandate Content, checked
   against the key the credential names in `cnf`, with every revealed claim checked against the
-  issuer-signed `_sd` digests — a real holder-of-key binding, one step past presence-only. What is still demo is only the trust **anchor**: the payment credential is a
-  self-minted demo credential with no issuer/VICAL check (that is the roadmap `issuer-verified`
+  issuer-signed `_sd` digests — a real holder-of-key binding, one step past presence-only. What is still demo is only the trust **anchor**: the gate does not
+  check who issued the payment credential (no issuer/VICAL check; that is the roadmap `issuer-verified`
   line, issue #14), so a self-crafted device key would still pass. The signature is real; the
   anchor is not — the page and the type both say exactly that, and the gate never claims
   `issuer-verified` for the in-gate check.
@@ -885,7 +885,7 @@ that was never device-signed can never spend; a spend always traces to the exact
 **real** — the gate verifies the holder's Key Binding JWT against the key the credential names in
 `cnf`, checks the `sd_hash` that binds it to the disclosures presented, and rebuilds the Mandate
 Content from its own grant record to require the wallet signed those exact terms. What is **still
-demo** is the trust **anchor**: the payment credential is self-minted with **no issuer check** (that
+demo** is the trust **anchor**: the gate does **not** check who issued the payment credential (that
 hardening is issue #14), so a self-crafted credential would pass. The
 verify runs through a **seam** — the in-gate backend attests `device-signed` / `verifiedBy: "gate"`;
 wiring an external verifier (the `DelegatedVerifier` seam) that reports a stronger, issuer-backed level
@@ -910,9 +910,11 @@ for a real card). **That is the way to test in CI.**
    [`issuer.multipaz.org`](https://issuer.multipaz.org/issuer/?config_id=payment_sca_sd_jwt)
    (credential configuration `payment_sca_sd_jwt`). The issuer lists **two** cards both named
    "Payment card"; the grant needs the **SD-JWT** one, because AP2's `delegate` request exists only
-   for SD-JWT. The mdoc one (`payment_sca_mdoc`), like the repo's mdoc `payment.mpzpass`, won't match, and the
-   phone says "Your info wasn't found" (seen on a phone, [issue #466](https://github.com/openmobilehub/credentagent/issues/466)).
-3. Open the approve link, press "Sign with your wallet", scan the QR code, and approve.
+   for SD-JWT. The mdoc one (`payment_sca_mdoc`) won't match, and the phone says "Your info wasn't found" (seen
+   on a phone, [issue #466](https://github.com/openmobilehub/credentagent/issues/466)). Nor will the
+   repo's mdoc `payment.mpzpass`: the request is SD-JWT only.
+3. Open the approve link and press "Sign with your wallet". On a computer, scan the QR code with the
+   phone. Then approve in the wallet.
 
 The grant asks for an SD-JWT payment credential (`vct` `urn:emvco:dpc:card:1` or `com.emvco.dpc`)
 that discloses `credential_id` (the official card) or `payment_instrument_id` (the repo's test
