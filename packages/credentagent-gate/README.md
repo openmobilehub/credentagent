@@ -899,13 +899,16 @@ for a real card). **That is the way to test in CI.**
 
 **Sign a grant on your phone, in three steps:**
 
-1. Install a Multipaz Wallet **development build** that supports AP2's `delegate` request: the
-   wallet from [multipaz-wallet#48](https://github.com/openwallet-foundation/multipaz-wallet/pull/48),
-   built on [multipaz#2178](https://github.com/openwallet-foundation/multipaz/pull/2178) and
-   [multipaz#2196](https://github.com/openwallet-foundation/multipaz/pull/2196) (all still open, so
-   there is no download yet: build the wallet from that branch). **No released wallet signs a grant
-   yet**; a released one rejects the request. Once a release includes those changes, install the
-   release instead.
+1. Install a Multipaz Wallet **development build** that supports AP2's `delegate` request. It comes
+   from pull requests that are still open ([multipaz-wallet#48](https://github.com/openwallet-foundation/multipaz-wallet/pull/48),
+   [multipaz#2178](https://github.com/openwallet-foundation/multipaz/pull/2178) and
+   [multipaz#2196](https://github.com/openwallet-foundation/multipaz/pull/2196)), so there is no
+   release yet. Download the [debug APK](https://drive.google.com/file/d/13NRT4uTDY4DZT6NMYmq-x2ABMY9eOR5j/view?usp=share_link)
+   that signed the grant in [issue #466](https://github.com/openmobilehub/credentagent/issues/466).
+   It is an earlier version of multipaz-wallet#48 plus one fix, built from the branch
+   [`build/466-recorded-wallet`](https://github.com/TheBlackBit/multipaz-wallet/tree/build/466-recorded-wallet).
+   **No released wallet signs a grant yet**; a released one rejects the request. When a release
+   includes those changes, this link is replaced by it (tracked in issue #472).
 2. In the wallet, add the **Payment card** from the official issuer at
    [`issuer.multipaz.org`](https://issuer.multipaz.org/issuer/?config_id=payment_sca_sd_jwt)
    (credential configuration `payment_sca_sd_jwt`). The issuer lists **two** cards both named
