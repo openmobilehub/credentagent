@@ -114,7 +114,7 @@ lands ([roadmap](../../ROADMAP.md)).
 supports yet**. A wallet set up for 0.5.0's mdoc `org.multipaz.payment.sca.1` can't sign one. So on
 this quickstart and on the hosted demo (`credentagent.ai/marketplace`), `create-spending-grant`
 returns an approve page, but phone approval only completes with a Multipaz Wallet development
-build (from [multipaz#2178](https://github.com/openwallet-foundation/multipaz/pull/2178)) holding
+build (from [multipaz-wallet#48](https://github.com/openwallet-foundation/multipaz-wallet/pull/48)) holding
 the SD-JWT "Payment card" from the official issuer. The steps are in the
 [gate README](../../packages/credentagent-gate/README.md#device-signed-grants--the-wallet-signs-the-grant-first-spec-012).
 To demo a grant without a wallet, pass `signing: "page"` to `create-spending-grant`: the human

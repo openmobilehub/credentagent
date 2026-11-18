@@ -142,6 +142,5 @@ name is refused. That last one is verified load-bearing — deleting the key-bin
 fails it. Run it with the **root** `npm test` (this file is outside both workspaces, #184).
 
 **Unverified:** whether the installed Multipaz app can *provision* an SD-JWT credential as
-easily as it imports an mdoc `.mpzpass`. The Multipaz library supports SD-JWT VC
-presentation (spec 012 `research.md`); the app's import path has not been checked. That is
-the first thing to establish on the device.
+easily as it imports an mdoc `.mpzpass`, and whether this card matches the grant request as it
+is today. A grant was signed on a phone with the official issuer's card, not with this one.
