@@ -210,6 +210,25 @@ describe("typ and disclosure rules (§5.1.4, §6)", () => {
     expect(await verify(chain)).toMatchObject({ ok: false, code: "typ", detail: expect.stringMatching(/^link 2/) });
   });
 
+  // The other half of the same rule: a hop that names no further key ends the chain, so it must be
+  // typed terminal. A delegable type on it claims a next hop that does not exist. Deleting the
+  // no-`cnf` arm of the `typ` check leaves every other test green; this one fails (#474 review).
+  it.each(["kb+sd-jwt+kb", "kb-sd-jwt+kb", "kb+jwt"])("refuses an agent hop with no further key typed `%s` (bypass)", async (wrongTyp) => {
+    const { prefix, g } = await chainFor();
+    const hop = await sdJwtInstance({ privateKey: g.agent.privateKey }).issue(
+      {
+        iat: Math.floor(Date.now() / 1000),
+        aud: MERCHANT,
+        nonce: "n-1",
+        sd_hash: bindingHash(splitChain(prefix)!.at(-1)!),
+        delegate_payload: [closedCheckout],
+      } as never,
+      { delegate_payload: { _sd: [0] } } as never,
+      { header: { typ: wrongTyp } },
+    );
+    expect(await verify(joinChain([prefix, hop]))).toMatchObject({ ok: false, code: "typ", detail: expect.stringMatching(/^link 2/) });
+  });
+
   // §5.1.4: "exactly one of these MUST be disclosed". Disclosing both open mandates would let the
   // agent's single closed hop sit under whichever one a verifier happened to read.
   it("refuses a wallet hop that discloses both open mandates (bypass)", async () => {
