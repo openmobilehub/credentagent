@@ -87,13 +87,23 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
 ### Fixed
 
 - Signing a spending grant with the updated Multipaz Wallet no longer ends in "presentation carries
-  no key-binding JWT". That wallet sends its signature in the middle of the answer, followed by the
-  mandate disclosures (the Delegated SD-JWT layout of the Delegate SD-JWT draft, §5.1.1), where the
-  signing page looked for it at the end. The page reads both layouts and refuses everything it
-  refused before. It also accepts the draft's newer spelling of the key-binding type for a signature
-  that names the agent's key, `kb-sd-jwt+kb`, in the signing page and in the merchant's chain
-  verifier; the gate still sends `kb+sd-jwt+kb`. Checked against a real answer captured from the
-  updated wallet on a phone, which is replayed as a test.
+  no key-binding JWT" (#473). That wallet sends its signature in the middle of the answer, followed
+  by the mandate disclosures (the Delegated SD-JWT layout of the Delegate SD-JWT draft, §5.1.1),
+  where the signing page looked for it at the end. The page reads both layouts and refuses
+  everything it refused before. Checked against a real answer captured from the wallet on a phone,
+  which is replayed as a test.
+  - The wallet also types its signature `kb-sd-jwt+kb`, the draft's newer spelling of the type for
+    a signature that names the agent's key. The signing page and the merchant's chain verifier
+    (`verifyDelegatedPurchase`) now accept either spelling. The gate does not choose the type; the
+    wallet does.
+  - **Update stores and merchants together.** A merchant still on 0.6.0 accepts only
+    `kb+sd-jwt+kb`, so it refuses a permission this wallet signed with `code: "typ"` when the agent
+    spends it, after the person has left.
+  - `verifyIntentPresentation` now returns `intent.presentation` re-serialized for the new layout,
+    in the earlier shape (`<credential>~<disclosures>~<key binding>`), so the code that spends it
+    is unchanged.
+  - New test-only options on the simulated wallet, `devSimulateWalletSignature`:
+    `delegatedLayout` and `kbDisclosureOverride`.
 
 - Creating a spending grant from claude.ai no longer hangs with a product grid where the grant card
   should be. Three causes, fixed together:
