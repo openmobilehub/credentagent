@@ -26,8 +26,9 @@ export const DELEGATE_KB_TYP = { delegable: "kb+sd-jwt+kb", terminal: "kb+sd-jwt
  * pick one, and AP2's Python SDK accepts both (as reported there; this repo never runs it). The gate
  * accepts either, so a wallet on one spelling is not refused for a difference the draft itself contains.
  *
- * The terminal hop is `kb+sd-jwt` here. §6 step 4.2 writes it `kb-sd-jwt`, which this gate still
- * refuses: nothing sends it yet, and accepting it needs its own decision (#473).
+ * The terminal hop is `kb+sd-jwt` here. §6 step 4.2 writes it `kb-sd-jwt`, which this gate refuses:
+ * nothing sends it, and the chain verifier (`chain/verify.ts`) accepts only `kb+sd-jwt` for a hop
+ * that names no further key, so accepting the other spelling would be a change to that verifier.
  */
 export const DELEGABLE_KB_TYPS: readonly string[] = [DELEGATE_KB_TYP.delegable, "kb-sd-jwt+kb"];
 

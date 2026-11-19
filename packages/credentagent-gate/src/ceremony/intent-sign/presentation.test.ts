@@ -727,6 +727,13 @@ describe("splitPresentation", () => {
     expect(splitPresentation(`${C}H.B`)).toBeUndefined();
   });
 
+  // Three parts is not enough: the signature is decoded leniently, so `S==` would verify and be
+  // stored, then be refused by `walletChain` when the agent spends it.
+  it("a three-part key binding with characters outside base64url is refused, in both layouts", () => {
+    expect(splitPresentation(`${C}${KB}==`)).toBeUndefined();
+    expect(splitPresentation(`${C}~${KB}=~M1~`)).toBeUndefined();
+  });
+
   it("a non-string is refused", () => {
     expect(splitPresentation(undefined as never)).toBeUndefined();
   });
