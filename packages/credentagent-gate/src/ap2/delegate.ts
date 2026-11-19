@@ -20,11 +20,14 @@ export const DELEGATE_PAYLOAD_CLAIM = "delegate_payload";
 export const DELEGATE_KB_TYP = { delegable: "kb+sd-jwt+kb", terminal: "kb+sd-jwt" } as const;
 
 /**
- * Both spellings of the delegable `typ` a verifier accepts. The draft's text moved from
- * `kb+sd-jwt+kb` to `kb-sd-jwt+kb` (its changelog: "change kb+sd-jwt+kb to kb-sd-jwt+kb"), and
- * Multipaz, CMWallet and AP2's Python SDK each pick one; AP2's SDK accepts both. This gate emits
- * `DELEGATE_KB_TYP.delegable` and accepts either, so a wallet on the newer spelling is not refused
- * for a difference the draft itself changed (#473).
+ * Both spellings of the delegable `typ` a verifier accepts. Draft -00 itself uses both: §2.2, §5.1.4
+ * and its IANA section say `kb+sd-jwt+kb`, and §6 (steps 1.1, 3.e and 4.2) says `kb-sd-jwt+kb`. A
+ * review of multipaz#2178 reports that a later draft settled on the `-`. Multipaz and CMWallet each
+ * pick one, and AP2's Python SDK accepts both (as reported there; this repo never runs it). The gate
+ * accepts either, so a wallet on one spelling is not refused for a difference the draft itself contains.
+ *
+ * The terminal hop is `kb+sd-jwt` here. §6 step 4.2 writes it `kb-sd-jwt`, which this gate still
+ * refuses: nothing sends it yet, and accepting it needs its own decision (#473).
  */
 export const DELEGABLE_KB_TYPS: readonly string[] = [DELEGATE_KB_TYP.delegable, "kb-sd-jwt+kb"];
 

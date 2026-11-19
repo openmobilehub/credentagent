@@ -8,7 +8,8 @@
 //   • the credential was signed by the key in its own `x5c` certificate,
 //   • the KB-JWT was signed by the key that credential commits to in `cnf`,
 //   • that KB-JWT names THIS verifier (`aud`) and THIS ceremony (`nonce`),
-//   • it is typed `kb+sd-jwt` and carries a `delegate_payload` (Delegate SD-JWT §5.1.4, §7.1).
+//   • it is typed `kb+sd-jwt` (ends the chain) or a delegable `kb+sd-jwt+kb` / `kb-sd-jwt+kb`, and
+//     carries a `delegate_payload` (Delegate SD-JWT §5.1.4, §7.1).
 //
 // It does NOT mean the certificate chains to anyone we trust. The demo credential is
 // self-signed by `tools/demo-pki/mint/`, and checking a chain we minted against a root we
@@ -190,7 +191,8 @@ export async function verifyDelegatedPresentation(args: {
   if (kb.aud !== args.audience) return { ok: false, reason: `key binding is addressed to ${String(kb.aud)}, not this verifier` };
   if (kb.nonce !== args.nonce) return { ok: false, reason: "key-binding nonce is not the one this ceremony issued" };
 
-  // Delegate SD-JWT §5.1.4: a Delegate KB-JWT is typed `kb+sd-jwt` (or `kb+sd-jwt+kb`), not the
+  // Delegate SD-JWT §5.1.4: a Delegate KB-JWT is typed `kb+sd-jwt` or a delegable type (either
+  // spelling, see `DELEGABLE_KB_TYPS`), not the
   // plain `kb+jwt` of an ordinary key binding. A wallet that emits `kb+jwt` here has treated the
   // delegation as a normal presentation, which is the shape this rail shipped before #192 — so
   // accepting it would let the old, non-conformant output keep passing unnoticed.
@@ -207,9 +209,13 @@ export async function verifyDelegatedPresentation(args: {
 
   // ── A revealed field is only a CLAIM if the issuer signed a digest of it ────────────────
   //
-  // `sd_hash` first (RFC 9901 §4.3): the digest of the presentation up to the KB-JWT, so the
-  // holder's signature covers WHICH disclosures were presented and in what form. Everything
-  // after the last `~` is the KB-JWT; everything up to and including it is what is hashed.
+  // `sd_hash` first (RFC 9901 §4.3): the digest of the credential and its disclosures, so the
+  // holder's signature covers WHICH disclosures were presented and in what form. That is
+  // `parts.chain`, up to and including its closing `~` — in the Delegated layout, before the gap.
+  //
+  // The mandate disclosures BEHIND the key binding are not hashed: a key binding cannot hash its
+  // own disclosures. What binds them is `delegate_payload`, which carries their digests, and
+  // `verify.ts` requires each of them to be one the gate asked for. Do not drop that check.
   const withoutKb = parts.chain;
   let sdHash: string;
   try {
