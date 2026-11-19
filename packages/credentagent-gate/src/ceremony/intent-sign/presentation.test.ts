@@ -637,9 +637,13 @@ describe("the Delegated SD-JWT layout (#473)", () => {
 
   it("BYPASS: a disclosure behind the key binding that delegate_payload does not commit to → refused", async () => {
     const forged = arrayDisclosure("forged-salt", { type: "payment.open", forged: true } as never);
-    const out = await verifyLayout({ kbDisclosureOverride: forged });
+    const out = await verifyLayout({ overrideKbDisclosure: forged });
     expect(out.ok).toBe(false);
     if (!out.ok) expect(out.reason).toMatch(/disclosure/);
+  });
+
+  it("the simulated wallet throws on overrideKbDisclosure without delegatedLayout instead of ignoring it", async () => {
+    await expect(signFor(bounds(), { overrideKbDisclosure: "x" })).rejects.toThrow(/delegatedLayout/);
   });
 
   it("BYPASS: mandates in delegate_payload that are not the grant's → refused", async () => {

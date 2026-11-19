@@ -87,9 +87,10 @@ export interface SimulateOptions {
   /** Answer in the Delegated SD-JWT layout the updated Multipaz wallet sends: the credential's
    *  chain, an empty part, the key binding, then the mandate disclosures behind it (#473). */
   delegatedLayout?: boolean;
-  /** TEST-ONLY, with `delegatedLayout`: put this disclosure behind the key binding in place of the
-   *  mandates' own — a disclosure the key binding's `delegate_payload` does not commit to. */
-  kbDisclosureOverride?: string;
+  /** TEST-ONLY, only with `delegatedLayout` (it throws without): replace the FIRST disclosure behind
+   *  the key binding with this one — a disclosure the key binding's `delegate_payload` does not
+   *  commit to. The others stay the mandates' own. */
+  overrideKbDisclosure?: string;
 }
 
 /**
@@ -103,6 +104,9 @@ export async function devSimulateWalletSignature(
   const instrumentId = opts.instrumentId ?? "demo-instrument-0001";
   if (opts.cardShape !== undefined && opts.cardShape !== "multipaz-dpc" && opts.cardShape !== "demo-dpc") {
     throw new Error(`devSimulateWalletSignature: unknown cardShape "${String(opts.cardShape)}"; use "multipaz-dpc" or "demo-dpc" (the default)`);
+  }
+  if (opts.overrideKbDisclosure !== undefined && !opts.delegatedLayout) {
+    throw new Error("devSimulateWalletSignature: overrideKbDisclosure only applies with delegatedLayout");
   }
   // The one claim the gate accepts as proof of the card, which depends on the card's shape.
   const acceptedClaim = opts.cardShape === "multipaz-dpc" ? "credential_id" : "payment_instrument_id";
@@ -217,7 +221,7 @@ export async function devSimulateWalletSignature(
       // Delegate SD-JWT §7.1: the KB-JWT carries the DIGEST of the delegate payload.
       delegatePayload,
       ...(opts.overrideKbTyp ? { typ: opts.overrideKbTyp } : {}),
-      ...(opts.delegatedLayout ? { kbDisclosures: [opts.kbDisclosureOverride ?? disclosures[0] ?? "", ...disclosures.slice(1)] } : {}),
+      ...(opts.delegatedLayout ? { kbDisclosures: [opts.overrideKbDisclosure ?? disclosures[0] ?? "", ...disclosures.slice(1)] } : {}),
       ...(opts.breakSdHash ? { sdHashOver: `${disclosed}tampered` } : {}),
     });
   }

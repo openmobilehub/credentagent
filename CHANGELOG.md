@@ -103,7 +103,7 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
     in the earlier shape (`<credential>~<disclosures>~<key binding>`), so the code that spends it
     is unchanged.
   - New test-only options on the simulated wallet, `devSimulateWalletSignature`:
-    `delegatedLayout` and `kbDisclosureOverride`.
+    `delegatedLayout` and `overrideKbDisclosure`.
 
 - Creating a spending grant from claude.ai no longer hangs with a product grid where the grant card
   should be. Three causes, fixed together:
