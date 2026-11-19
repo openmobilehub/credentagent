@@ -10,9 +10,11 @@
 // "device-signed", never "issuer-verified") is the issuer trust anchor: the credential is
 // self-certified, exactly as the demo minter makes it (#14).
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { peekJwtHeader } from "../../ap2/jwt.js";
 import { buildIntentSignRequest } from "./request.js";
 import { verifyIntentPresentation, memoryNonceGuard, inGateBackend, type IntentVerifyBackend } from "./verify.js";
-import { dcApiAudience, splitPresentation } from "./presentation.js";
+import { dcApiAudience, splitPresentation, verifyDelegatedPresentation } from "./presentation.js";
 import { devSimulateWalletSignature } from "./simulate.js";
 import { boundsHash, type IntentBoundsInput } from "./bounds.js";
 import type { Origin } from "../origin.js";
@@ -717,5 +719,43 @@ describe("splitPresentation", () => {
 
   it("a non-string is refused", () => {
     expect(splitPresentation(undefined as never)).toBeUndefined();
+  });
+});
+
+// Everything above builds its answers with this repo's own simulated wallet, which hashes the same
+// bytes the page does — so those tests alone cannot tell whether the page and a real wallet agree
+// on what `sd_hash` covers. This one answer came off a phone: the updated Multipaz Wallet signing a
+// spending grant on 2026-11-19 (#473). Replayed, it pins the range, the layout and the type.
+describe("a real Multipaz Wallet answer, replayed (#473)", () => {
+  const real = JSON.parse(readFileSync(new URL("./fixtures/multipaz-delegated-presentation.json", import.meta.url), "utf8")) as { sdjwt: string; audience: string; nonce: string };
+  const nowMs = Date.parse("2026-11-19T19:31:00Z"); // the credential expires later; fixed so the test never ages out
+  const replay = (over: Partial<Parameters<typeof verifyDelegatedPresentation>[0]> = {}) =>
+    verifyDelegatedPresentation({ sdjwt: real.sdjwt, audience: real.audience, nonce: real.nonce, nowMs, ...over });
+
+  it("is in the Delegated layout, typed `kb-sd-jwt+kb`", () => {
+    const parts = splitPresentation(real.sdjwt)!;
+    expect(parts.kbDisclosures).toHaveLength(2);
+    expect(peekJwtHeader(parts.kbJwt!)?.typ).toBe("kb-sd-jwt+kb");
+  });
+
+  it("verifies: the wallet's sd_hash covers the credential's chain, as the page computes it", async () => {
+    const out = await replay();
+    expect(out).toMatchObject({ ok: true, vct: "urn:emvco:dpc:card:1" });
+    if (out.ok) {
+      expect(out.delegatePayload).toHaveLength(2);
+      expect(Object.keys(out.disclosed)).toEqual(["credential_id"]);
+    }
+  });
+
+  it("BYPASS: the same answer with the credential's disclosure dropped → refused (sd_hash)", async () => {
+    const [jwt, , ...behind] = real.sdjwt.split("~"); // drops the credential_id disclosure
+    const out = await replay({ sdjwt: [jwt, ...behind].join("~") });
+    expect(out.ok).toBe(false);
+    if (!out.ok) expect(out.reason).toMatch(/sd_hash/);
+  });
+
+  it("BYPASS: the same answer for another nonce or another audience → refused", async () => {
+    expect((await replay({ nonce: "another-nonce" })).ok).toBe(false);
+    expect((await replay({ audience: "origin:https://evil.example" })).ok).toBe(false);
   });
 });

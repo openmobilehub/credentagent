@@ -92,7 +92,8 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
   signing page looked for it at the end. The page reads both layouts and refuses everything it
   refused before. It also accepts the draft's newer spelling of the key-binding type for a signature
   that names the agent's key, `kb-sd-jwt+kb`, in the signing page and in the merchant's chain
-  verifier; the gate still sends `kb+sd-jwt+kb`.
+  verifier; the gate still sends `kb+sd-jwt+kb`. Checked against a real answer captured from the
+  updated wallet on a phone, which is replayed as a test.
 
 - Creating a spending grant from claude.ai no longer hangs with a product grid where the grant card
   should be. Three causes, fixed together:
