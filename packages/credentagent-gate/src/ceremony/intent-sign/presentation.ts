@@ -86,8 +86,10 @@ export function splitPresentation(sdjwt: string): SplitPresentation | undefined 
     if (rest.pop() !== "" || rest.some((p, i) => i > 0 && p === "")) return undefined;
     const [kbJwt, ...kbDisclosures] = rest;
     if (!kbJwt) return { chain, kbJwt: undefined, kbDisclosures: [], normalized: undefined };
-    // A key binding with more or fewer than three parts would verify on its first three and then
-    // be stored, authorized and refused when the agent spends it. Refuse it where it is read.
+    // A key binding that is not three base64url parts is refused where it is read. One with a
+    // fourth part, or with `=`, `+` or `/` in its signature, would still verify (the signature is
+    // decoded leniently), then be stored, authorized and refused when the agent spends it. One with
+    // fewer than three parts fails the signature check, but gets the same refusal here.
     if (!isCompactJwt(kbJwt)) return undefined;
     return { chain, kbJwt, kbDisclosures, normalized: `${chain}${kbJwt}` };
   }

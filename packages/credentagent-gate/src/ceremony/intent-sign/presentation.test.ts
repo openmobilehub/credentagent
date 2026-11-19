@@ -732,6 +732,9 @@ describe("splitPresentation", () => {
   it("a three-part key binding with characters outside base64url is refused, in both layouts", () => {
     expect(splitPresentation(`${C}${KB}==`)).toBeUndefined();
     expect(splitPresentation(`${C}~${KB}=~M1~`)).toBeUndefined();
+    // Standard base64's `+` and `/` decode leniently too, and `walletChain` refuses them.
+    expect(splitPresentation(`${C}H.B.S+/`)).toBeUndefined();
+    expect(splitPresentation(`${C}~H.B.S+/~M1~`)).toBeUndefined();
   });
 
   it("a non-string is refused", () => {
