@@ -27,7 +27,7 @@ import { importVerifyKey, type PublicJwkP256 } from "../../ap2/keys.js";
 import { es256Verify, hasher } from "../../ap2/sdjwt.js";
 import { decodeSdJwt, getClaims } from "@sd-jwt/core";
 import { peekJson } from "../../ap2/jwt.js";
-import { DELEGATE_KB_TYP, DELEGATE_PAYLOAD_CLAIM, DELEGABLE_KB_TYPS } from "../../ap2/delegate.js";
+import { DELEGATE_PAYLOAD_CLAIM, DELEGABLE_KB_TYPS, TERMINAL_KB_TYPS } from "../../ap2/delegate.js";
 import { isCompactJwt } from "../../ap2/chain/serialize.js";
 import type { MandateContent } from "./mandates.js";
 
@@ -199,7 +199,7 @@ export async function verifyDelegatedPresentation(args: {
   // delegation as a normal presentation, which is the shape this rail shipped before #192 — so
   // accepting it would let the old, non-conformant output keep passing unnoticed.
   const kbTyp = segment<{ typ?: string }>(parts.kbJwt, 0)?.typ;
-  const allowedTyps = [...DELEGABLE_KB_TYPS, DELEGATE_KB_TYP.terminal];
+  const allowedTyps = [...DELEGABLE_KB_TYPS, ...TERMINAL_KB_TYPS];
   if (!kbTyp || !allowedTyps.includes(kbTyp)) {
     return { ok: false, reason: `key binding is typed ${kbTyp ?? "∅"}, not ${allowedTyps.join(" or ")}` };
   }

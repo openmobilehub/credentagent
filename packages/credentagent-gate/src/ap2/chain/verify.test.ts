@@ -173,8 +173,8 @@ describe("typ and disclosure rules (§5.1.4, §6)", () => {
 
   // A wallet hop that names the agent's key in `cnf` is one that may be delegated again, so it
   // must say so. `kb+sd-jwt` means "the end of the chain" — and the AP2 Python SDK refuses it.
-  it("refuses a wallet hop typed as terminal while naming a next key (bypass)", async () => {
-    const { chain } = await chainFor({ walletTyp: "kb+sd-jwt" });
+  it.each(["kb+sd-jwt", "kb-sd-jwt"])("refuses a wallet hop typed as terminal (`%s`) while naming a next key (bypass)", async (walletTyp) => {
+    const { chain } = await chainFor({ walletTyp });
     expect(await verify(chain)).toMatchObject({ ok: false, code: "typ", detail: expect.stringMatching(/^link 1/) });
   });
 
@@ -208,6 +208,24 @@ describe("typ and disclosure rules (§5.1.4, §6)", () => {
       nonce: "n-1",
     });
     expect(await verify(chain)).toMatchObject({ ok: false, code: "typ", detail: expect.stringMatching(/^link 2/) });
+  });
+
+  // AP2's Python SDK accepts `kb-sd-jwt` for a hop that ends the chain, and draft -00 §6 writes it
+  // that way, so a merchant on this gate must not refuse the last hop AP2's verifier accepts.
+  it("accepts an agent hop with no further key typed `kb-sd-jwt`, the draft's other spelling", async () => {
+    const { prefix, g } = await chainFor();
+    const hop = await sdJwtInstance({ privateKey: g.agent.privateKey }).issue(
+      {
+        iat: Math.floor(Date.now() / 1000),
+        aud: MERCHANT,
+        nonce: "n-1",
+        sd_hash: bindingHash(splitChain(prefix)!.at(-1)!),
+        delegate_payload: [closedCheckout],
+      } as never,
+      { delegate_payload: { _sd: [0] } } as never,
+      { header: { typ: "kb-sd-jwt" } },
+    );
+    expect(await verify(joinChain([prefix, hop]))).toMatchObject({ ok: true });
   });
 
   // The other half of the same rule: a hop that names no further key ends the chain, so it must be

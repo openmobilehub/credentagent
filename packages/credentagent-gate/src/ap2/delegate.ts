@@ -25,12 +25,22 @@ export const DELEGATE_KB_TYP = { delegable: "kb+sd-jwt+kb", terminal: "kb+sd-jwt
  * review of multipaz#2178 reports that a later draft settled on the `-`. Multipaz and CMWallet each
  * pick one, and AP2's Python SDK accepts both (as reported there; this repo never runs it). The gate
  * accepts either, so a wallet on one spelling is not refused for a difference the draft itself contains.
- *
- * The terminal hop is `kb+sd-jwt` here. §6 step 4.2 writes it `kb-sd-jwt`, which this gate refuses:
- * nothing sends it, and the chain verifier (`chain/verify.ts`) accepts only `kb+sd-jwt` for a hop
- * that names no further key, so accepting the other spelling would be a change to that verifier.
  */
 export const DELEGABLE_KB_TYPS: readonly string[] = [DELEGATE_KB_TYP.delegable, "kb-sd-jwt+kb"];
+
+/**
+ * Both spellings of the terminal `typ`, for a hop that ends the chain. The same difference sits
+ * here: §5.1.4 says `kb+sd-jwt`, §6 step 4.2 says `kb-sd-jwt`, and AP2's Python SDK accepts both
+ * (`TYP_TERMINAL` in `kb_sd_jwt.py`, read at google-agentic-commerce/AP2@b4587ac). A merchant on
+ * this gate would otherwise refuse a last hop that AP2's own verifier accepts. The gate emits
+ * `DELEGATE_KB_TYP.terminal`.
+ */
+export const TERMINAL_KB_TYPS: readonly string[] = [DELEGATE_KB_TYP.terminal, "kb-sd-jwt"];
+
+/** Whether `typ` marks a hop that ends the chain — the terminal `typ`, either spelling. */
+export function isTerminalKbTyp(typ: unknown): boolean {
+  return typeof typ === "string" && TERMINAL_KB_TYPS.includes(typ);
+}
 
 /** Whether `typ` marks a hop whose payload names a further key — the delegable `typ`, either spelling. */
 export function isDelegableKbTyp(typ: unknown): boolean {

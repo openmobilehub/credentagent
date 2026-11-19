@@ -94,8 +94,9 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
   development build of that wallet, which is replayed as a test.
   - The wallet also types its signature `kb-sd-jwt+kb`, the draft's newer spelling of the type for
     a signature that names the agent's key. The signing page and the merchant's chain verifier
-    (`verifyDelegatedPurchase`) now accept either spelling. The gate does not choose the type; the
-    wallet does.
+    (`verifyDelegatedPurchase`) now accept either spelling, and for the agent's last hop, which
+    ends the chain, both `kb+sd-jwt` and `kb-sd-jwt` (AP2's own verifier accepts both). The gate
+    does not choose the wallet's type; the wallet does.
   - **Update stores and merchants together.** A merchant still on 0.6.0 accepts only
     `kb+sd-jwt+kb`, so it refuses a permission this wallet signed with `code: "typ"` when the agent
     spends it, after the person has left.
