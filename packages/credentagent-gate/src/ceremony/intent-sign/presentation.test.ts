@@ -717,6 +717,12 @@ describe("splitPresentation", () => {
     expect(splitPresentation(`${C}~${KB}~~M1~`)).toBeUndefined();
   });
 
+  it("a key binding that is not three parts is refused, in both layouts", () => {
+    expect(splitPresentation(`${C}${KB}.x`)).toBeUndefined();
+    expect(splitPresentation(`${C}~${KB}.x~M1~`)).toBeUndefined();
+    expect(splitPresentation(`${C}H.B`)).toBeUndefined();
+  });
+
   it("a non-string is refused", () => {
     expect(splitPresentation(undefined as never)).toBeUndefined();
   });
@@ -752,6 +758,15 @@ describe("a real Multipaz Wallet answer, replayed (#473)", () => {
     const out = await replay({ sdjwt: [jwt, ...behind].join("~") });
     expect(out.ok).toBe(false);
     if (!out.ok) expect(out.reason).toMatch(/sd_hash/);
+  });
+
+  // The signature is checked on the key binding's first three parts, so a fourth leaves it valid.
+  // Such an answer used to be authorized and then refused when the agent spent it (#474 review).
+  it("BYPASS: the key binding with a fourth part → refused at signing, not at the purchase", async () => {
+    const parts = real.sdjwt.split("~");
+    parts[3] = `${parts[3]}.extra`;
+    const out = await replay({ sdjwt: parts.join("~") });
+    expect(out).toEqual({ ok: false, reason: "not a compact SD-JWT presentation" });
   });
 
   it("BYPASS: the same answer for another nonce or another audience → refused", async () => {

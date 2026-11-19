@@ -27,6 +27,7 @@ import { es256Verify, hasher } from "../../ap2/sdjwt.js";
 import { decodeSdJwt, getClaims } from "@sd-jwt/core";
 import { peekJson } from "../../ap2/jwt.js";
 import { DELEGATE_KB_TYP, DELEGATE_PAYLOAD_CLAIM, DELEGABLE_KB_TYPS } from "../../ap2/delegate.js";
+import { isCompactJwt } from "../../ap2/chain/serialize.js";
 import type { MandateContent } from "./mandates.js";
 
 /** Re-exported for the in-process wallet, which must hash the way this verifier does. */
@@ -84,11 +85,15 @@ export function splitPresentation(sdjwt: string): SplitPresentation | undefined 
     if (rest.pop() !== "" || rest.some((p, i) => i > 0 && p === "")) return undefined;
     const [kbJwt, ...kbDisclosures] = rest;
     if (!kbJwt) return { chain, kbJwt: undefined, kbDisclosures: [], normalized: undefined };
+    // A key binding with more or fewer than three parts would verify on its first three and then
+    // be stored, authorized and refused when the agent spends it. Refuse it where it is read.
+    if (!isCompactJwt(kbJwt)) return undefined;
     return { chain, kbJwt, kbDisclosures, normalized: `${chain}${kbJwt}` };
   }
   const cut = sdjwt.lastIndexOf("~");
   if (cut < 0) return undefined;
   const kbJwt = sdjwt.slice(cut + 1) || undefined;
+  if (kbJwt !== undefined && !isCompactJwt(kbJwt)) return undefined;
   const chain = sdjwt.slice(0, cut + 1);
   return { chain, kbJwt, kbDisclosures: [], normalized: kbJwt ? sdjwt : undefined };
 }

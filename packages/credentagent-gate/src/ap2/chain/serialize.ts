@@ -20,7 +20,8 @@ export interface ChainLink {
   disclosures: string[];
 }
 
-const isCompactJwt = (s: string): boolean => /^[\w-]+\.[\w-]+\.[\w-]+$/.test(s);
+/** Exactly three dot-separated base64url parts — what the chain code can split, spend and re-serialize. */
+export const isCompactJwt = (s: string): boolean => /^[\w-]+\.[\w-]+\.[\w-]+$/.test(s);
 
 /**
  * Join links, each an SD-JWT serialization ending in `~`, into one dSD-JWT.
