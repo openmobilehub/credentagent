@@ -57,7 +57,7 @@ const coffeeCart = (): UcpCheckout => ({
 });
 
 /** A signed grant whose key the agent holds — merchant side and agent side, apart. */
-async function signedAgentGrant() {
+async function signedAgentGrant(wallet: Parameters<typeof signOnPhone>[2] = {}) {
   const agentKey = AgentKey.generate(); // AGENT process
   const { credentagent, app } = merchant(); // MERCHANT process — it receives only the public key
   const created = await credentagent.grants.create({
@@ -67,39 +67,50 @@ async function signedAgentGrant() {
     allow: { skus: ["coffee"] },
     agentKey: agentKey.publicJwk,
   });
-  const signed = await signOnPhone(app, created.id);
+  const signed = await signOnPhone(app, created.id, wallet);
   expect(signed.body).toMatchObject({ ok: true, status: "authorized" });
   const grant = (await credentagent.grants.retrieve(created.id))!;
   return { agentKey, credentagent, grant };
 }
 
+/** The agent spends a signed grant on one coffee, and the merchant verifies the result. */
+async function spendAndVerify({ agentKey, credentagent, grant }: Awaited<ReturnType<typeof signedAgentGrant>>) {
+  // AGENT — keeps the permission, spends it on one purchase.
+  const intent = DelegatedIntent.fromWalletPresentation(grant.mandate!.intent!);
+  const quote = credentagent.ap2.signCheckout(coffeeCart()); // the merchant's quote, as the agent receives it
+  const proof = await intent.spend({
+    agentKey,
+    checkoutJwt: quote,
+    instrument: { id: "demo-instrument-0001", type: "card" },
+    audience: ORIGIN,
+    nonce: "merchant-nonce",
+  });
+
+  // MERCHANT — one call.
+  return verifyDelegatedPurchase(proof, {
+    trust: "presence-only-demo",
+    audience: ORIGIN,
+    nonce: "merchant-nonce",
+    checkoutKey: credentagent.ap2.checkoutPublicJwk,
+    spent: { amount: 0, uses: 0 },
+    price: (cart) => cart.line_items.reduce((sum, l) => sum + CATALOG[l.item.id as keyof typeof CATALOG].price * 100 * l.quantity, 0),
+  });
+}
+
 describe("a grant whose key the agent holds (FR-5)", () => {
   it("is signed on the phone, spent by the agent, and verified by the merchant", async () => {
-    const { agentKey, credentagent, grant } = await signedAgentGrant();
-    expect(grant.status).toBe("authorized");
-    expect(grant.presence).toBe("delegated");
+    const signed = await signedAgentGrant();
+    expect(signed.grant.status).toBe("authorized");
+    expect(signed.grant.presence).toBe("delegated");
+    expect(await spendAndVerify(signed)).toMatchObject({ ok: true, trust_level: "presence-only-demo" });
+  });
 
-    // AGENT — keeps the permission, spends it on one purchase.
-    const intent = DelegatedIntent.fromWalletPresentation(grant.mandate!.intent!);
-    const quote = credentagent.ap2.signCheckout(coffeeCart()); // the merchant's quote, as the agent receives it
-    const proof = await intent.spend({
-      agentKey,
-      checkoutJwt: quote,
-      instrument: { id: "demo-instrument-0001", type: "card" },
-      audience: ORIGIN,
-      nonce: "merchant-nonce",
-    });
-
-    // MERCHANT — one call.
-    const verdict = await verifyDelegatedPurchase(proof, {
-      trust: "presence-only-demo",
-      audience: ORIGIN,
-      nonce: "merchant-nonce",
-      checkoutKey: credentagent.ap2.checkoutPublicJwk,
-      spent: { amount: 0, uses: 0 },
-      price: (cart) => cart.line_items.reduce((sum, l) => sum + CATALOG[l.item.id as keyof typeof CATALOG].price * 100 * l.quantity, 0),
-    });
-    expect(verdict).toMatchObject({ ok: true, trust_level: "presence-only-demo" });
+  // What the updated Multipaz Wallet sends: the Delegated layout and `kb-sd-jwt+kb` (#473). The page
+  // authorizing it is only half the claim — the person has left by the time the agent spends it, so
+  // the stored permission must also be one a merchant's `verifyDelegatedPurchase` accepts.
+  it("spends and verifies a grant signed in the Delegated layout, typed `kb-sd-jwt+kb`", async () => {
+    const signed = await signedAgentGrant({ delegatedLayout: true, overrideKbTyp: "kb-sd-jwt+kb" });
+    expect(await spendAndVerify(signed)).toMatchObject({ ok: true, trust_level: "presence-only-demo" });
   });
 
   it("the phone signs a permission naming the AGENT's key — the gate makes none of its own (bypass)", async () => {
@@ -196,8 +207,9 @@ describe("a grant whose key the agent holds (FR-5)", () => {
     expect(after.mandate?.intent).toBeUndefined();
   });
 
-  // The other half: what the check spares. The same grant, typed `kb+sd-jwt+kb`, authorizes — and
-  // the permission it hands the agent is one a merchant's `verifyDelegatedPurchase` accepts.
+  // The other half: what the check spares. The same grant, typed `kb+sd-jwt+kb`, authorizes. (That
+  // the permission it hands the agent is then one a merchant accepts is pinned by the spend tests
+  // at the top of this file.)
   it("authorizes the same grant when the wallet types its hop `kb-sd-jwt+kb`, the draft's newer spelling (#473)", async () => {
     const { credentagent, app } = merchant();
     const g = await credentagent.grants.create({
