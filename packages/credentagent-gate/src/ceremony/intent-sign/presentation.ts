@@ -24,9 +24,9 @@ import { importVerifyKey, type PublicJwkP256 } from "../../ap2/keys.js";
 // primitives are the package's: one copy of each, so the `ieee-p1363` detail and the hash names
 // cannot drift between them.
 import { es256Verify, hasher } from "../../ap2/sdjwt.js";
-import { decodeSdJwt, getClaims, splitSdJwt } from "@sd-jwt/core";
+import { decodeSdJwt, getClaims } from "@sd-jwt/core";
 import { peekJson } from "../../ap2/jwt.js";
-import { DELEGATE_KB_TYP, DELEGATE_PAYLOAD_CLAIM } from "../../ap2/delegate.js";
+import { DELEGATE_KB_TYP, DELEGATE_PAYLOAD_CLAIM, DELEGABLE_KB_TYPS } from "../../ap2/delegate.js";
 import type { MandateContent } from "./mandates.js";
 
 /** Re-exported for the in-process wallet, which must hash the way this verifier does. */
@@ -52,6 +52,45 @@ function segment<T>(token: string, index: 0 | 1): T | undefined {
  */
 export function dcApiAudience(origin: string): string {
   return `origin:${origin}`;
+}
+
+/**
+ * A presentation cut into its parts, whichever layout the wallet used.
+ *
+ *  • Earlier layout: `<credential>~<disclosure>~…~<KB-JWT>`. The key binding is last.
+ *  • Delegated SD-JWT (draft §5.1.1, what Multipaz's `presentWithKbDisclosures` sends):
+ *    `<credential>~<disclosure>~…~` + `~` + `<KB-JWT>~<KB disclosure>~…~`. The key binding is in
+ *    the middle, behind an empty part, and the string ends in `~`.
+ *
+ * `chain` is the credential and its disclosures with the closing `~` — in both layouts the bytes
+ * `sd_hash` covers (the SDK hashes `compactSerialization`, before adding the extra `~`).
+ */
+export interface SplitPresentation {
+  chain: string;
+  kbJwt: string | undefined;
+  /** Disclosures behind the key binding (Delegated layout only). */
+  kbDisclosures: string[];
+  /** The presentation in the earlier layout, `<chain><KB-JWT>`; what the chain code stores and spends. */
+  normalized: string | undefined;
+}
+
+export function splitPresentation(sdjwt: string): SplitPresentation | undefined {
+  if (typeof sdjwt !== "string") return undefined;
+  const gap = sdjwt.indexOf("~~");
+  if (gap >= 0) {
+    // `<chain>~` + `<KB-JWT>~<d>~…~`: the key binding and its disclosures, closed by a `~`.
+    const chain = sdjwt.slice(0, gap + 1);
+    const rest = sdjwt.slice(gap + 2).split("~");
+    if (rest.pop() !== "" || rest.some((p, i) => i > 0 && p === "")) return undefined;
+    const [kbJwt, ...kbDisclosures] = rest;
+    if (!kbJwt) return { chain, kbJwt: undefined, kbDisclosures: [], normalized: undefined };
+    return { chain, kbJwt, kbDisclosures, normalized: `${chain}${kbJwt}` };
+  }
+  const cut = sdjwt.lastIndexOf("~");
+  if (cut < 0) return undefined;
+  const kbJwt = sdjwt.slice(cut + 1) || undefined;
+  const chain = sdjwt.slice(0, cut + 1);
+  return { chain, kbJwt, kbDisclosures: [], normalized: kbJwt ? sdjwt : undefined };
 }
 
 export type PresentationResult =
@@ -85,12 +124,8 @@ export async function verifyDelegatedPresentation(args: {
 }): Promise<PresentationResult> {
   const nowSec = Math.floor((args.nowMs ?? Date.now()) / 1000);
 
-  let parts: ReturnType<typeof splitSdJwt>;
-  try {
-    parts = splitSdJwt(args.sdjwt);
-  } catch {
-    return { ok: false, reason: "not a compact SD-JWT presentation" };
-  }
+  const parts = splitPresentation(args.sdjwt);
+  if (!parts) return { ok: false, reason: "not a compact SD-JWT presentation" };
   // Read key binding off the TOKEN, never from what the caller remembered to ask for. A
   // presentation whose KB-JWT is simply absent must be refused, not treated as an ordinary
   // credential that happens to carry no delegation.
@@ -98,7 +133,7 @@ export async function verifyDelegatedPresentation(args: {
 
   // The issuer key comes from the credential's own certificate. Multipaz will not even export
   // a credential without one, so its absence here means the wallet returned something else.
-  const header = segment<{ x5c?: string[] }>(parts.jwt, 0);
+  const header = segment<{ x5c?: string[] }>(parts.chain, 0);
   const leaf = header?.x5c?.[0];
   if (!leaf) return { ok: false, reason: "credential has no x5c certificate chain" };
 
@@ -111,7 +146,7 @@ export async function verifyDelegatedPresentation(args: {
     return { ok: false, reason: `x5c: ${(err as Error).message}` };
   }
 
-  const [issuerHeader, issuerBody, issuerSig] = parts.jwt.split(".");
+  const [issuerHeader, issuerBody, issuerSig] = parts.chain.split("~")[0]!.split(".");
   if (!es256Verify(issuerKey, `${issuerHeader}.${issuerBody}`, issuerSig ?? "")) {
     return { ok: false, reason: "credential signature does not verify against its own certificate" };
   }
@@ -124,7 +159,7 @@ export async function verifyDelegatedPresentation(args: {
     exp?: number;
     /** RFC 9901 §4.1.1. Absent means sha-256; `sd_hash` MUST be computed with the token's own. */
     _sd_alg?: string;
-  }>(parts.jwt, 1);
+  }>(parts.chain, 1);
   const cnfJwk = claims?.cnf?.jwk;
   if (!cnfJwk || cnfJwk.kty !== "EC" || cnfJwk.crv !== "P-256") {
     return { ok: false, reason: "credential has no P-256 cnf key to bind to" };
@@ -155,8 +190,9 @@ export async function verifyDelegatedPresentation(args: {
   // delegation as a normal presentation, which is the shape this rail shipped before #192 — so
   // accepting it would let the old, non-conformant output keep passing unnoticed.
   const kbTyp = segment<{ typ?: string }>(parts.kbJwt, 0)?.typ;
-  if (!kbTyp || !(Object.values(DELEGATE_KB_TYP) as string[]).includes(kbTyp)) {
-    return { ok: false, reason: `key binding is typed ${kbTyp ?? "∅"}, not ${Object.values(DELEGATE_KB_TYP).join(" or ")}` };
+  const allowedTyps = [...DELEGABLE_KB_TYPS, DELEGATE_KB_TYP.terminal];
+  if (!kbTyp || !allowedTyps.includes(kbTyp)) {
+    return { ok: false, reason: `key binding is typed ${kbTyp ?? "∅"}, not ${allowedTyps.join(" or ")}` };
   }
 
   const delegatePayload = kb[DELEGATE_PAYLOAD_CLAIM];
@@ -169,7 +205,7 @@ export async function verifyDelegatedPresentation(args: {
   // `sd_hash` first (RFC 9901 §4.3): the digest of the presentation up to the KB-JWT, so the
   // holder's signature covers WHICH disclosures were presented and in what form. Everything
   // after the last `~` is the KB-JWT; everything up to and including it is what is hashed.
-  const withoutKb = args.sdjwt.slice(0, args.sdjwt.lastIndexOf("~") + 1);
+  const withoutKb = parts.chain;
   let sdHash: string;
   try {
     sdHash = Buffer.from(hasher(withoutKb, claims?._sd_alg ?? "sha-256")).toString("base64url");
@@ -195,7 +231,7 @@ export async function verifyDelegatedPresentation(args: {
   // is the property that has to hold before real issuer trust can mean anything.
   const disclosed: Record<string, unknown> = {};
   try {
-    const decoded = await decodeSdJwt(args.sdjwt, hasher);
+    const decoded = await decodeSdJwt(parts.chain, hasher);
     await getClaims(decoded.jwt.payload, decoded.disclosures, hasher);
     // Past `getClaims`, every disclosure is one the issuer committed to, so its key/value is
     // the issuer's. Only the SELECTIVELY disclosed names are reported: the caller asks "did the

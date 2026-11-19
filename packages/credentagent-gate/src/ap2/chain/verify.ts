@@ -14,7 +14,7 @@ import { X509Certificate, type KeyObject } from "node:crypto";
 import { importVerifyKey, type PublicJwkP256 } from "../keys.js";
 import { libraryRefusal, sdJwtInstance } from "../sdjwt.js";
 import { linkToString, splitChain, type ChainLink } from "./serialize.js";
-import { DELEGATE_KB_TYP, DELEGATE_PAYLOAD_CLAIM } from "../delegate.js";
+import { DELEGATE_KB_TYP, DELEGATE_PAYLOAD_CLAIM, isDelegableKbTyp } from "../delegate.js";
 import { bindingHash, peekLink } from "./hop.js";
 
 export type ChainRefusalCode =
@@ -151,7 +151,7 @@ export async function verifyChain(token: string, opts: VerifyChainOptions): Prom
     // it is also what the AP2 Python SDK refuses.
     const typ = peekLink(links[i])?.header.typ;
     const wants = element.cnf ? DELEGATE_KB_TYP.delegable : DELEGATE_KB_TYP.terminal;
-    if (typ !== wants)
+    if (element.cnf ? !isDelegableKbTyp(typ) : typ !== wants)
       return refuse("typ", `link ${i}: typed ${String(typ)} but ${element.cnf ? "names" : "names no"} further key — expected ${wants}`);
     if (last && element.cnf) return refuse("typ", `link ${i}: the last hop names a further key, so the chain is not finished`);
     if (!last && !element.cnf) return refuse("typ", `link ${i}: names no key for the next hop`);

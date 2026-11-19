@@ -17,6 +17,7 @@ import { devSimulateWalletSignature } from "./simulate.js";
 import { boundsHash, type IntentBoundsInput } from "./bounds.js";
 import type { Origin } from "../origin.js";
 import { generateDelegate } from "../mandate.js";
+import { arrayDisclosure } from "./mandates.js";
 
 const SECRET = "stable-test-secret";
 const ORIGIN: Origin = { rpID: "shop.example", origin: "https://shop.example" };
@@ -581,5 +582,77 @@ describe("merchantUrl is required (#331)", () => {
     const verifyAs = (merchantUrl: string) => verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantUrl, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
     expect((await verifyAs(coffee)).ok).toBe(true);
     expect((await verifyAs(ORIGIN.origin)).ok).toBe(false);
+  });
+});
+
+// The updated Multipaz wallet (Multipaz #2178, `presentWithKbDisclosures`) answers in the Delegated
+// SD-JWT layout of draft §5.1.1: `<SD-JWT>~~<KB-JWT>~<disclosure>~…~`. The key binding is in the
+// MIDDLE and the string ends in `~`, so a verifier that reads the last part as the key binding
+// refuses a real signature ("presentation carries no key-binding JWT", #473).
+describe("the Delegated SD-JWT layout (#473)", () => {
+  async function verifyLayout(simOver: Parameters<typeof signFor>[1] = {}) {
+    const b = bounds();
+    const { req, result } = await signFor(b, { delegatedLayout: true, ...simOver });
+    return verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantUrl: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
+  }
+
+  it("accepts the layout, device-signed, and still accepts the earlier one", async () => {
+    const out = await verifyLayout();
+    expect(out.ok).toBe(true);
+    if (out.ok) expect(out.trustLevel).toBe("device-signed");
+    const b = bounds();
+    const { req, result } = await signFor(b);
+    const earlier = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantUrl: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
+    expect(earlier.ok).toBe(true);
+  });
+
+  it("stores the presentation in the earlier shape, so the chain code that spends it is unchanged", async () => {
+    const out = await verifyLayout();
+    expect(out.ok).toBe(true);
+    if (out.ok) {
+      expect(out.intent.presentation).not.toContain("~~");
+      expect(out.intent.presentation.endsWith("~")).toBe(false);
+    }
+  });
+
+  it("BYPASS: an sd_hash that does not cover the credential's chain → refused", async () => {
+    const out = await verifyLayout({ breakSdHash: true });
+    expect(out.ok).toBe(false);
+    if (!out.ok) expect(out.reason).toMatch(/sd_hash/);
+  });
+
+  it("BYPASS: another nonce → refused", async () => {
+    const out = await verifyLayout({ overrideNonce: "another-nonce" });
+    expect(out.ok).toBe(false);
+  });
+
+  it("BYPASS: a different audience → refused", async () => {
+    const b = bounds();
+    const { req, result } = await signFor(b, { delegatedLayout: true });
+    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: { rpID: "evil.example", origin: "https://evil.example" }, merchantUrl: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
+    expect(out.ok).toBe(false);
+  });
+
+  it("BYPASS: a disclosure behind the key binding that delegate_payload does not commit to → refused", async () => {
+    const forged = arrayDisclosure("forged-salt", { type: "payment.open", forged: true } as never);
+    const out = await verifyLayout({ kbDisclosureOverride: forged });
+    expect(out.ok).toBe(false);
+    if (!out.ok) expect(out.reason).toMatch(/disclosure/);
+  });
+
+  it("BYPASS: mandates in delegate_payload that are not the grant's → refused", async () => {
+    const out = await verifyLayout({ overrideMandates: [{ type: "payment.open", forged: true } as never] });
+    expect(out.ok).toBe(false);
+  });
+
+  it("BYPASS: nothing behind the `~~` → refused as no key binding", async () => {
+    const out = await verifyLayout({ omitKeyBinding: true });
+    expect(out.ok).toBe(false);
+    if (!out.ok) expect(out.reason).toMatch(/key-binding/);
+  });
+
+  it("BYPASS: a key binding signed by a key the credential does not name → refused", async () => {
+    const out = await verifyLayout({ forgeHolderKey: true });
+    expect(out.ok).toBe(false);
   });
 });

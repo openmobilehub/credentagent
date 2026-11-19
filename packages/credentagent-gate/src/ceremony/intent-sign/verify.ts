@@ -29,7 +29,7 @@ import * as jose from "jose";
 import { openReaderContext } from "../mdoc/readerContext.js";
 import { PAYMENT_CREDENTIAL_ID, PAYMENT_CREDENTIAL_VCTS, PAYMENT_CLAIMS } from "./dcql.js";
 import { boundsHash, deriveNonce, type IntentBoundsInput } from "./bounds.js";
-import { dcApiAudience, verifyDelegatedPresentation } from "./presentation.js";
+import { dcApiAudience, splitPresentation, verifyDelegatedPresentation } from "./presentation.js";
 import {
   delegateEntries,
   delegatePayloadMatches,
@@ -41,12 +41,12 @@ import {
 } from "./mandates.js";
 import type { TrustLevel } from "../../types.js";
 import { peekJwtHeader } from "../../ap2/jwt.js";
-import { DELEGATE_KB_TYP } from "../../ap2/delegate.js";
+import { DELEGATE_KB_TYP, isDelegableKbTyp } from "../../ap2/delegate.js";
 
-/** The `typ` of a presentation's Key Binding JWT — the JWS after the last `~`. Read only AFTER the
- *  backend has verified that JWS, so the header (which the signature covers) is the holder's. */
+/** The `typ` of a presentation's Key Binding JWT, wherever the wallet's layout puts it. Read only
+ *  AFTER the backend has verified that JWS, so the header (which the signature covers) is the holder's. */
 function keyBindingTyp(sdjwt: string): string | undefined {
-  const typ = peekJwtHeader(sdjwt.slice(sdjwt.lastIndexOf("~") + 1))?.typ;
+  const typ = peekJwtHeader(splitPresentation(sdjwt)?.kbJwt ?? "")?.typ;
   return typeof typ === "string" ? typ : undefined;
 }
 
@@ -273,6 +273,16 @@ export async function verifyIntentPresentation(args: {
     return { ok: false, reason: "mandate mismatch: the wallet signed different terms than the grant records" };
   }
 
+  // The Delegated SD-JWT layout carries the mandate disclosures behind the key binding. The key
+  // binding's `delegate_payload` commits to their digests, and the check above already pinned those
+  // to the grant, so a disclosure here that is not one the gate asked for is something the holder
+  // did not sign for. Refuse it rather than store it.
+  const layout = splitPresentation(sdjwt);
+  if (!layout?.normalized) return { ok: false, reason: "presentation carries no key-binding JWT" };
+  if (layout.kbDisclosures.some((d) => !disclosures.includes(d))) {
+    return { ok: false, reason: "mandate mismatch: a disclosure behind the key binding is not one the gate asked for" };
+  }
+
   // Sign nothing a merchant will refuse. These mandates name the agent's key in `cnf`, which
   // makes the wallet's hop a KB-SD-JWT+KB: Delegate SD-JWT §5.1.4 types it `kb+sd-jwt+kb`, and the
   // merchant's chain verifier (ap2/chain/verify.ts) refuses any other `typ`. When the agent holds
@@ -281,10 +291,10 @@ export async function verifyIntentPresentation(args: {
   // whose key the gate holds is spent by the gate, never by that verifier, and is unchanged.
   if (args.agentHeld) {
     const typ = keyBindingTyp(sdjwt);
-    if (typ !== DELEGATE_KB_TYP.delegable) {
+    if (!isDelegableKbTyp(typ)) {
       return {
         ok: false,
-        reason: `key binding is typed ${typ ?? "∅"}, but the mandates name the agent's key, so Delegate SD-JWT §5.1.4 requires ${DELEGATE_KB_TYP.delegable} — a merchant refuses any other (update the wallet)`,
+        reason: `key binding is typed ${typ ?? "∅"}, but the mandates name the agent's key, so Delegate SD-JWT §5.1.4 requires ${DELEGATE_KB_TYP.delegable} (or kb-sd-jwt+kb) — a merchant refuses any other (update the wallet)`,
       };
     }
   }
@@ -315,6 +325,8 @@ export async function verifyIntentPresentation(args: {
     verifiedBy: verdict.verifiedBy,
     credentialType,
     mandates: expected,
-    intent: { presentation: sdjwt, disclosures },
+    // Stored in the earlier layout (`<credential>~<disclosures>~<KB-JWT>`): the chain code that spends
+    // it re-attaches the mandate disclosures itself, so the ones behind the key binding are not kept.
+    intent: { presentation: layout.normalized, disclosures },
   };
 }

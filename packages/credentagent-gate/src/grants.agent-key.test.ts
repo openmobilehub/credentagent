@@ -29,7 +29,7 @@ function merchant() {
 
 /** The person signs the grant on their phone — the real rail, a simulated wallet. `wallet` makes
  *  that wallet behave like a particular real one (e.g. how it types its key binding). */
-async function signOnPhone(app: Express, id: string, wallet: Pick<SimulateOptions, "overrideKbTyp"> = {}) {
+async function signOnPhone(app: Express, id: string, wallet: Pick<SimulateOptions, "overrideKbTyp" | "delegatedLayout"> = {}) {
   const req = await request(app).get(`/credentagent/grants/${id}/sign/request`).set("Host", HOST);
   expect(req.status).toBe(200);
   const oid = req.body as { requests: { data: { request: string } }[]; dcql_query: unknown; readerContextToken: string };
@@ -198,6 +198,18 @@ describe("a grant whose key the agent holds (FR-5)", () => {
 
   // The other half: what the check spares. The same grant, typed `kb+sd-jwt+kb`, authorizes — and
   // the permission it hands the agent is one a merchant's `verifyDelegatedPurchase` accepts.
+  it("authorizes the same grant when the wallet types its hop `kb-sd-jwt+kb`, the draft's newer spelling (#473)", async () => {
+    const { credentagent, app } = merchant();
+    const g = await credentagent.grants.create({
+      merchant: "utopia",
+      budget: 200,
+      perSpend: 30,
+      allow: { skus: ["coffee"] },
+      agentKey: AgentKey.generate().publicJwk,
+    });
+    expect((await signOnPhone(app, g.id, { overrideKbTyp: "kb-sd-jwt+kb", delegatedLayout: true })).body).toMatchObject({ ok: true, status: "authorized" });
+  });
+
   it("authorizes the same grant when the wallet types its hop `kb+sd-jwt+kb`", async () => {
     const { credentagent, app } = merchant();
     const g = await credentagent.grants.create({

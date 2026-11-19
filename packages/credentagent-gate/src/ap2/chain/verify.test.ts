@@ -159,6 +159,18 @@ describe("each hop is bound to the one before it", () => {
 });
 
 describe("typ and disclosure rules (§5.1.4, §6)", () => {
+  // The draft's text now spells the delegable `typ` `kb-sd-jwt+kb`, and Multipaz sends it (#473).
+  // AP2's Python SDK accepts both, so this chain verifier does too.
+  it("accepts a wallet hop typed with the newer spelling, `kb-sd-jwt+kb`", async () => {
+    const { chain } = await chainFor({ walletTyp: "kb-sd-jwt+kb" });
+    expect(await verify(chain)).toMatchObject({ ok: true });
+  });
+
+  it("still refuses a spelling that is neither (bypass)", async () => {
+    const { chain } = await chainFor({ walletTyp: "kb+sd-jwt-kb" });
+    expect(await verify(chain)).toMatchObject({ ok: false, code: "typ" });
+  });
+
   // A wallet hop that names the agent's key in `cnf` is one that may be delegated again, so it
   // must say so. `kb+sd-jwt` means "the end of the chain" — and the AP2 Python SDK refuses it.
   it("refuses a wallet hop typed as terminal while naming a next key (bypass)", async () => {

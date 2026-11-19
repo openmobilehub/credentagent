@@ -84,6 +84,12 @@ export interface SimulateOptions {
    *  digest, two disclosures claiming it — a malformed presentation a verifier must not unpack
    *  into a claim it then trusts. */
   duplicateDisclosure?: boolean;
+  /** Answer in the Delegated SD-JWT layout the updated Multipaz wallet sends: the credential's
+   *  chain, an empty part, the key binding, then the mandate disclosures behind it (#473). */
+  delegatedLayout?: boolean;
+  /** TEST-ONLY, with `delegatedLayout`: put this disclosure behind the key binding in place of the
+   *  mandates' own — a disclosure the key binding's `delegate_payload` does not commit to. */
+  kbDisclosureOverride?: string;
 }
 
 /**
@@ -210,6 +216,7 @@ export async function devSimulateWalletSignature(
       // Delegate SD-JWT §7.1: the KB-JWT carries the DIGEST of the delegate payload.
       delegatePayload,
       ...(opts.overrideKbTyp ? { typ: opts.overrideKbTyp } : {}),
+      ...(opts.delegatedLayout ? { kbDisclosures: [opts.kbDisclosureOverride ?? disclosures[0] ?? "", ...disclosures.slice(1)] } : {}),
       ...(opts.breakSdHash ? { sdHashOver: `${disclosed}tampered` } : {}),
     });
   }

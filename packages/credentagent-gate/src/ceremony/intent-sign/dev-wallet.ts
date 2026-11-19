@@ -71,6 +71,10 @@ export function delegateKeyBinding(args: {
   typ?: string;
   /** The bytes `sd_hash` covers. Defaults to `presented`; a test passes others to break it. */
   sdHashOver?: string;
+  /** Present the Delegated SD-JWT layout (`<SD-JWT>~~<KB-JWT>~<disclosure>~…`, draft §5.1.1) with
+   *  these disclosures behind the key binding, as the Multipaz SDK's `presentWithKbDisclosures`
+   *  does. Omitted: the earlier layout, key binding last. */
+  kbDisclosures?: string[];
   iat?: number;
 }): string {
   const b64uJson = (v: unknown) => Buffer.from(JSON.stringify(v), "utf-8").toString("base64url");
@@ -85,5 +89,7 @@ export function delegateKeyBinding(args: {
   };
   const signingInput = `${b64uJson(header)}.${b64uJson(payload)}`;
   // The package's own ES256 signer, so a dev wallet signs exactly as the gate verifies.
-  return `${args.presented}${signingInput}.${es256Signer(args.holderKey)(signingInput)}`;
+  const kbJwt = `${signingInput}.${es256Signer(args.holderKey)(signingInput)}`;
+  if (args.kbDisclosures) return `${args.presented}~${kbJwt}~${args.kbDisclosures.map((d) => `${d}~`).join("")}`;
+  return `${args.presented}${kbJwt}`;
 }

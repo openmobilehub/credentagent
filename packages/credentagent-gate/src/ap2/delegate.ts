@@ -18,3 +18,17 @@ export const DELEGATE_PAYLOAD_CLAIM = "delegate_payload";
  * the tell that the delegation extension was never applied.
  */
 export const DELEGATE_KB_TYP = { delegable: "kb+sd-jwt+kb", terminal: "kb+sd-jwt" } as const;
+
+/**
+ * Both spellings of the delegable `typ` a verifier accepts. The draft's text moved from
+ * `kb+sd-jwt+kb` to `kb-sd-jwt+kb` (its changelog: "change kb+sd-jwt+kb to kb-sd-jwt+kb"), and
+ * Multipaz, CMWallet and AP2's Python SDK each pick one; AP2's SDK accepts both. This gate emits
+ * `DELEGATE_KB_TYP.delegable` and accepts either, so a wallet on the newer spelling is not refused
+ * for a difference the draft itself changed (#473).
+ */
+export const DELEGABLE_KB_TYPS: readonly string[] = [DELEGATE_KB_TYP.delegable, "kb-sd-jwt+kb"];
+
+/** Whether `typ` marks a hop whose payload names a further key — the delegable `typ`, either spelling. */
+export function isDelegableKbTyp(typ: unknown): boolean {
+  return typeof typ === "string" && DELEGABLE_KB_TYPS.includes(typ);
+}
