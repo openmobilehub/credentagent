@@ -646,6 +646,14 @@ describe("the Delegated SD-JWT layout (#473)", () => {
     await expect(signFor(bounds(), { overrideKbDisclosure: "x" })).rejects.toThrow(/delegatedLayout/);
   });
 
+  // The wallet's hop names the agent's key, so a terminal type of either spelling is wrong for it.
+  // `kb-sd-jwt` is accepted for the agent's LAST hop by the merchant's verifier, never on this page.
+  it("BYPASS: the wallet's hop typed `kb-sd-jwt`, a terminal type → refused", async () => {
+    const out = await verifyLayout({ overrideKbTyp: "kb-sd-jwt" });
+    expect(out.ok).toBe(false);
+    if (!out.ok) expect(out.reason).toMatch(/typed kb-sd-jwt/);
+  });
+
   it("BYPASS: mandates in delegate_payload that are not the grant's → refused", async () => {
     const out = await verifyLayout({ overrideMandates: [{ type: "payment.open", forged: true } as never] });
     expect(out.ok).toBe(false);
