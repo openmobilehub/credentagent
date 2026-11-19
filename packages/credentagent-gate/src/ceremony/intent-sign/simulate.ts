@@ -185,7 +185,8 @@ export async function devSimulateWalletSignature(
   if (opts.omitKeyBinding) {
     // Disclose everything, sign nothing. A verifier that accepts this has stopped checking
     // that anybody authorized anything.
-    presentation = disclosed;
+    // In the Delegated layout that is the credential's chain and the gap, with nothing behind it.
+    presentation = opts.delegatedLayout ? `${disclosed}~` : disclosed;
   } else {
     const kbKey = opts.forgeHolderKey ? p256().privateKey : holder.privateKey;
     if (opts.duplicateDisclosure) {

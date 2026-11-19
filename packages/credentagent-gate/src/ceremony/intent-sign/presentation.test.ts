@@ -12,7 +12,7 @@
 import { describe, it, expect } from "vitest";
 import { buildIntentSignRequest } from "./request.js";
 import { verifyIntentPresentation, memoryNonceGuard, inGateBackend, type IntentVerifyBackend } from "./verify.js";
-import { dcApiAudience } from "./presentation.js";
+import { dcApiAudience, splitPresentation } from "./presentation.js";
 import { devSimulateWalletSignature } from "./simulate.js";
 import { boundsHash, type IntentBoundsInput } from "./bounds.js";
 import type { Origin } from "../origin.js";
@@ -646,13 +646,76 @@ describe("the Delegated SD-JWT layout (#473)", () => {
   });
 
   it("BYPASS: nothing behind the `~~` → refused as no key binding", async () => {
-    const out = await verifyLayout({ omitKeyBinding: true });
+    const b = bounds();
+    const { req, result } = await signFor(b, { delegatedLayout: true, omitKeyBinding: true });
+    // The answer really is in the new layout: the credential's chain, then the gap, then nothing.
+    let seen = "";
+    const spy: IntentVerifyBackend = async (a) => {
+      seen = a.sdjwt;
+      return inGateBackend(a);
+    };
+    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantUrl: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS, backend: spy });
+    expect(seen).toMatch(/~~$/);
     expect(out.ok).toBe(false);
-    if (!out.ok) expect(out.reason).toMatch(/key-binding/);
+    if (!out.ok) expect(out.reason).toBe("presentation carries no key-binding JWT");
+  });
+
+  it("BYPASS: a backend that accepts an answer with nothing behind the `~~` → the gate still refuses", async () => {
+    const b = bounds();
+    const { req, result } = await signFor(b, { delegatedLayout: true, omitKeyBinding: true });
+    // A custom backend that vouches for everything. The gate must not store `<chain>undefined` as a
+    // presentation: with no key binding there is nothing signed to keep, whoever vouched for it.
+    const accepting: IntentVerifyBackend = async () => ({
+      ok: true,
+      trustLevel: "issuer-verified",
+      verifiedBy: "careless-verifier",
+      credentialType: "urn:emvco:dpc:card:1",
+      disclosed: { payment_instrument_id: "x" },
+      delegatePayload: req.delegateDigests.map((d) => ({ "...": d })),
+    });
+    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantUrl: ORIGIN.origin, nonceGuard: memoryNonceGuard(), backend: accepting, delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
+    expect(out.ok).toBe(false);
+    if (!out.ok) expect(out.reason).toBe("presentation carries no key-binding JWT");
   });
 
   it("BYPASS: a key binding signed by a key the credential does not name → refused", async () => {
     const out = await verifyLayout({ forgeHolderKey: true });
     expect(out.ok).toBe(false);
+  });
+});
+
+// `splitPresentation` is the one place the two layouts are told apart, so its odd shapes are pinned
+// directly. Each of these must come back with no key binding to store, or not at all.
+describe("splitPresentation", () => {
+  const C = "J.P.S~D1~"; // a credential's chain
+  const KB = "H.B.S";
+
+  it("reads the earlier layout, key binding last", () => {
+    expect(splitPresentation(`${C}${KB}`)).toMatchObject({ chain: C, kbJwt: KB, kbDisclosures: [], normalized: `${C}${KB}` });
+  });
+
+  it("reads the Delegated layout and stores it in the earlier shape", () => {
+    expect(splitPresentation(`${C}~${KB}~M1~M2~`)).toMatchObject({ chain: C, kbJwt: KB, kbDisclosures: ["M1", "M2"], normalized: `${C}${KB}` });
+  });
+
+  it("the gap with nothing behind it has no key binding to store", () => {
+    expect(splitPresentation(`${C}~`)?.normalized).toBeUndefined();
+    expect(splitPresentation(`${C}~`)?.kbJwt).toBeUndefined();
+  });
+
+  it("an empty key binding with a disclosure behind it has none to store", () => {
+    expect(splitPresentation(`${C}~~M1~`)?.normalized).toBeUndefined();
+  });
+
+  it("a Delegated answer not closed by `~` is refused", () => {
+    expect(splitPresentation(`${C}~${KB}`)).toBeUndefined();
+  });
+
+  it("an empty disclosure behind the key binding is refused", () => {
+    expect(splitPresentation(`${C}~${KB}~~M1~`)).toBeUndefined();
+  });
+
+  it("a non-string is refused", () => {
+    expect(splitPresentation(undefined as never)).toBeUndefined();
   });
 });
