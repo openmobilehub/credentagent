@@ -80,6 +80,9 @@ export interface SimulateOptions {
    *  disclosures actually presented — what tampering with the disclosure list after the holder
    *  signed looks like on the wire. */
   breakSdHash?: boolean;
+  /** TEST-ONLY: sign a key binding whose body carries one extra base64url character — valid
+   *  signature, same claims to a lenient reader, refused by a strict decoder. */
+  breakKbEncoding?: boolean;
   /** TEST-ONLY: present the SAME disclosure twice, with the key binding re-signed over it. One
    *  digest, two disclosures claiming it — a malformed presentation a verifier must not unpack
    *  into a claim it then trusts. */
@@ -223,6 +226,7 @@ export async function devSimulateWalletSignature(
       delegatePayload,
       ...(opts.overrideKbTyp ? { typ: opts.overrideKbTyp } : {}),
       ...(opts.delegatedLayout ? { kbDisclosures: [opts.overrideKbDisclosure ?? disclosures[0] ?? "", ...disclosures.slice(1)] } : {}),
+      ...(opts.breakKbEncoding ? { malformBody: true } : {}),
       ...(opts.breakSdHash ? { sdHashOver: `${disclosed}tampered` } : {}),
     });
   }

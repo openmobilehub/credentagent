@@ -249,7 +249,10 @@ export async function verifyDelegatedPresentation(args: {
   // is the property that has to hold before real issuer trust can mean anything.
   const disclosed: Record<string, unknown> = {};
   try {
-    const decoded = await decodeSdJwt(parts.chain, hasher);
+    // The chain AND the key binding, so the library decodes the key binding strictly, as it did when
+    // this decoded the whole answer: a body it cannot read is refused here, not at the purchase.
+    // (`parts.kbJwt` is set: a missing key binding was refused above.)
+    const decoded = await decodeSdJwt(`${parts.chain}${parts.kbJwt}`, hasher);
     await getClaims(decoded.jwt.payload, decoded.disclosures, hasher);
     // Past `getClaims`, every disclosure is one the issuer committed to, so its key/value is
     // the issuer's. Only the SELECTIVELY disclosed names are reported: the caller asks "did the

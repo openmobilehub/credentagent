@@ -654,7 +654,7 @@ describe("the Delegated SD-JWT layout (#473)", () => {
   // The wallet's hop names the agent's key, so the draft types it delegable. This page still lets
   // the terminal `kb+sd-jwt` through for a grant whose key the gate holds, because the gate spends
   // that grant itself (`verify.ts` refuses it when the agent holds the key; see grants.agent-key.test.ts).
-  it("lets a gate-held grant through with the wallet's hop typed `kb+sd-jwt`, as main did", async () => {
+  it("lets a gate-held grant through with the wallet's hop typed `kb+sd-jwt`, as 0.6.0 did", async () => {
     expect((await verifyLayout({ overrideKbTyp: "kb+sd-jwt" })).ok).toBe(true);
   });
 
@@ -664,6 +664,17 @@ describe("the Delegated SD-JWT layout (#473)", () => {
     const out = await verifyLayout({ overrideKbTyp: "kb-sd-jwt" });
     expect(out.ok).toBe(false);
     if (!out.ok) expect(out.reason).toMatch(/typed kb-sd-jwt/);
+  });
+
+  // A key binding whose body a strict decoder cannot read must be refused here, as it was when the
+  // whole answer was decoded, not authorized and then refused when the agent spends it.
+  it.each([
+    ["the Delegated layout", { delegatedLayout: true }],
+    ["the earlier layout", {}],
+  ])("BYPASS: a key binding with one extra base64url character in its body, in %s → refused", async (_name, layout) => {
+    const out = await verifyLayout({ ...layout, breakKbEncoding: true });
+    expect(out.ok).toBe(false);
+    if (!out.ok) expect(out.reason).toMatch(/^disclosures: /);
   });
 
   it("BYPASS: mandates in delegate_payload that are not the grant's → refused", async () => {
@@ -769,6 +780,7 @@ describe("splitPresentation", () => {
 describe("a real Multipaz Wallet answer, replayed (#473)", () => {
   const real = JSON.parse(readFileSync(new URL("./fixtures/multipaz-delegated-presentation.json", import.meta.url), "utf8")) as { sdjwt: string; audience: string; nonce: string };
   const nowMs = Date.parse("2026-11-19T19:31:00Z"); // the credential expires later; fixed so the test never ages out
+  const chainNow = nowMs + 60_000; // the wallet signed 32 seconds after nowMs; do not lean on clock leeway
   const replay = (over: Partial<Parameters<typeof verifyDelegatedPresentation>[0]> = {}) =>
     verifyDelegatedPresentation({ sdjwt: real.sdjwt, audience: real.audience, nonce: real.nonce, nowMs, ...over });
 
@@ -787,7 +799,7 @@ describe("a real Multipaz Wallet answer, replayed (#473)", () => {
     }
   });
 
-  // The merchant spends this answer through `verifyChain`. With an agent key that is not the one the
+  // The agent spends this answer and the merchant checks it with `verifyChain`. With an agent key that is not the one the
   // mandate names, it must get as far as the agent's own hop (link 2) and fail only there, so the real
   // wallet's `sd_hash` range and `kb-sd-jwt+kb` type are accepted by the merchant's checks too.
   it("reaches the agent's hop (link 2) when the merchant verifies it", async () => {
@@ -801,9 +813,9 @@ describe("a real Multipaz Wallet answer, replayed (#473)", () => {
         audience: "https://merchant.example",
         nonce: "n-1",
       });
-      const out = await verifyChain(chain, { audience: "https://merchant.example", nonce: "n-1", nowMs });
+      const out = await verifyChain(chain, { audience: "https://merchant.example", nonce: "n-1", nowMs: chainNow });
       expect(out).toMatchObject({ ok: false, code: "signature" });
-      if (!out.ok) expect(out.detail).toMatch(/^link 2/);
+      if (!out.ok) expect(out.detail).toMatch(/^link 2: .*Invalid JWT Signature/);
     }
   });
 

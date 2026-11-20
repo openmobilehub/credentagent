@@ -207,9 +207,9 @@ describe("a grant whose key the agent holds (FR-5)", () => {
     expect(after.mandate?.intent).toBeUndefined();
   });
 
-  // The other half: what the check spares. The same grant, typed `kb+sd-jwt+kb`, authorizes. (That
-  // the permission it hands the agent is then one a merchant accepts is pinned by the spend tests
-  // at the top of this file.)
+  // The other half: what the check spares. The same grant, typed with either delegable spelling,
+  // authorizes. (That the grant it hands the agent is then one a merchant accepts is pinned by the
+  // spend tests at the top of this file.)
   it("authorizes the same grant when the wallet types its hop `kb-sd-jwt+kb`, the spelling the draft uses in §6 (#473)", async () => {
     const { credentagent, app } = merchant();
     const g = await credentagent.grants.create({

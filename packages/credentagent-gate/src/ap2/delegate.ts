@@ -30,8 +30,9 @@ export const DELEGABLE_KB_TYPS: readonly string[] = [DELEGATE_KB_TYP.delegable, 
 
 /**
  * What the signing page accepts for the WALLET's hop: either delegable spelling, and the terminal
- * `kb+sd-jwt`, kept because main accepted it. That terminal type passes only where the caller lets
- * it: `verify.ts` refuses it for a grant whose key the agent holds. The other terminal spelling,
+ * `kb+sd-jwt`, kept because 0.6.0 and earlier accepted it. That terminal type passes only where
+ * the caller lets it: `ceremony/intent-sign/verify.ts` refuses it for a grant whose key the agent
+ * holds. The other terminal spelling,
  * `kb-sd-jwt`, is for the agent's last hop and is not accepted here.
  */
 export const WALLET_KB_TYPS: readonly string[] = [...DELEGABLE_KB_TYPS, DELEGATE_KB_TYP.terminal];

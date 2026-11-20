@@ -75,6 +75,9 @@ export function delegateKeyBinding(args: {
    *  these disclosures behind the key binding, as the Multipaz SDK's `presentWithKbDisclosures`
    *  does. Omitted: the earlier layout, key binding last. */
   kbDisclosures?: string[];
+  /** TEST-ONLY: sign a key binding whose body carries one extra base64url character. The signature
+   *  is valid over it, a lenient reader gets the same claims, and a strict decoder refuses it. */
+  malformBody?: boolean;
   iat?: number;
 }): string {
   const b64uJson = (v: unknown) => Buffer.from(JSON.stringify(v), "utf-8").toString("base64url");
@@ -87,7 +90,16 @@ export function delegateKeyBinding(args: {
     sd_hash: Buffer.from(hasher(args.sdHashOver ?? args.presented, "sha-256")).toString("base64url"),
     [DELEGATE_PAYLOAD_CLAIM]: args.delegatePayload,
   };
-  const signingInput = `${b64uJson(header)}.${b64uJson(payload)}`;
+  let body = b64uJson(payload);
+  if (args.malformBody) {
+    // Pad the JSON with spaces until its base64url length is a multiple of four, then add one
+    // character: the length becomes 4n+1, which a lenient `Buffer` read ignores and a strict decoder
+    // refuses, so the claims read back the same.
+    let json = JSON.stringify(payload);
+    while (Buffer.from(json, "utf-8").toString("base64url").length % 4 !== 0) json += " ";
+    body = `${Buffer.from(json, "utf-8").toString("base64url")}A`;
+  }
+  const signingInput = `${b64uJson(header)}.${body}`;
   // The package's own ES256 signer, so a dev wallet signs exactly as the gate verifies.
   const kbJwt = `${signingInput}.${es256Signer(args.holderKey)(signingInput)}`;
   if (args.kbDisclosures) return `${args.presented}~${kbJwt}~${args.kbDisclosures.map((d) => `${d}~`).join("")}`;
