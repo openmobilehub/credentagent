@@ -646,9 +646,16 @@ describe("the Delegated SD-JWT layout (#473)", () => {
     await expect(signFor(bounds(), { overrideKbDisclosure: "x" })).rejects.toThrow(/delegatedLayout/);
   });
 
-  // The wallet's hop names the agent's key, so a terminal type of either spelling is wrong for it.
-  // `kb-sd-jwt` is accepted for the agent's LAST hop by the merchant's verifier, never on this page.
-  it("BYPASS: the wallet's hop typed `kb-sd-jwt`, a terminal type → refused", async () => {
+  // The wallet's hop names the agent's key, so the draft types it delegable. This page still lets
+  // the terminal `kb+sd-jwt` through for a grant whose key the gate holds, because the gate spends
+  // that grant itself (`verify.ts` refuses it when the agent holds the key; see grants.agent-key.test.ts).
+  it("lets a gate-held grant through with the wallet's hop typed `kb+sd-jwt`, as main did", async () => {
+    expect((await verifyLayout({ overrideKbTyp: "kb+sd-jwt" })).ok).toBe(true);
+  });
+
+  // `kb-sd-jwt` is the other terminal spelling: accepted for the agent's LAST hop by the merchant's
+  // verifier, never on this page.
+  it("BYPASS: the wallet's hop typed `kb-sd-jwt`, the other terminal spelling → refused", async () => {
     const out = await verifyLayout({ overrideKbTyp: "kb-sd-jwt" });
     expect(out.ok).toBe(false);
     if (!out.ok) expect(out.reason).toMatch(/typed kb-sd-jwt/);

@@ -8,8 +8,8 @@
 //   • the credential was signed by the key in its own `x5c` certificate,
 //   • the KB-JWT was signed by the key that credential commits to in `cnf`,
 //   • that KB-JWT names THIS verifier (`aud`) and THIS ceremony (`nonce`),
-//   • it is typed `kb+sd-jwt` (ends the chain) or a delegable `kb+sd-jwt+kb` / `kb-sd-jwt+kb`, and
-//     carries a `delegate_payload` (Delegate SD-JWT §5.1.4, §7.1).
+//   • it is typed `kb+sd-jwt` (terminal; passes only for a gate-held grant) or a delegable
+//     `kb+sd-jwt+kb` / `kb-sd-jwt+kb`, and carries a `delegate_payload` (Delegate SD-JWT §5.1.4, §7.1).
 //
 // It does NOT mean the certificate chains to anyone we trust. The demo credential is
 // self-signed by `tools/demo-pki/mint/`, and checking a chain we minted against a root we
@@ -195,7 +195,10 @@ export async function verifyDelegatedPresentation(args: {
 
   // Delegate SD-JWT §5.1.4: a Delegate KB-JWT is typed `kb+sd-jwt` or a delegable type (either
   // spelling, see `DELEGABLE_KB_TYPS`), not the plain `kb+jwt` of an ordinary key binding. Only the
-  // WALLET's hop reaches this page, and its mandates always name the agent's key, so the other
+  // WALLET's hop reaches this page, and its mandates always name the agent's key, so the draft types
+  // it delegable. The terminal `kb+sd-jwt` is still let through for compatibility, and only a grant
+  // whose key the gate holds can pass with it: the gate spends that grant itself, never through the
+  // merchant's chain verifier, and `verify.ts` refuses it when the agent holds the key. The other
   // terminal spelling, `kb-sd-jwt`, is not accepted here: it belongs to the agent's last hop, which
   // only the merchant's chain verifier sees. A wallet that emits `kb+jwt` here has treated the
   // delegation as a normal presentation, which is the shape this rail shipped before #192 — so
