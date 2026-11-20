@@ -670,7 +670,7 @@ describe("the Delegated SD-JWT layout (#473)", () => {
   // whole answer was decoded, not authorized and then refused when the agent spends it.
   it.each([
     ["the Delegated layout", { delegatedLayout: true }],
-    ["the earlier layout", {}],
+    ["the earlier layout", { delegatedLayout: false }],
   ])("BYPASS: a key binding with one extra base64url character in its body, in %s → refused", async (_name, layout) => {
     const out = await verifyLayout({ ...layout, breakKbEncoding: true });
     expect(out.ok).toBe(false);
