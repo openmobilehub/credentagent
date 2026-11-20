@@ -89,20 +89,24 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
 - Signing a spending grant with the updated Multipaz Wallet (a development build, not released yet)
   no longer ends in "presentation carries no key-binding JWT" (#473). That wallet sends its
   signature in the middle of the answer, followed by the mandate disclosures (the Delegated SD-JWT
-  layout of the Delegate SD-JWT draft, §5.1.1), where the signing page looked for it at the end. The page reads both layouts and refuses
-  everything it refused before. Checked against a real answer captured on a phone from a
-  development build of that wallet, which is replayed as a test.
-  - The wallet also types its signature `kb-sd-jwt+kb`, the draft's newer spelling of the type for
-    a signature that names the agent's key. The signing page and the merchant's chain verifier
-    (`verifyDelegatedPurchase`) now accept either spelling. The gate does not choose the wallet's
-    type; the wallet does.
+  layout of the Delegate SD-JWT draft, §5.1.1), where the signing page looked for it at the end.
+  The page reads both layouts. It refuses what it refused before, except that it now accepts the
+  new layout and the new type spelling below. Checked against a real answer captured on a phone
+  from a development build of that wallet, which is replayed as a test.
+  - The wallet types its signature `kb-sd-jwt+kb`, a spelling the draft uses in §6 (§5.1.4 writes
+    `kb+sd-jwt+kb`). The signing page and the merchant's chain verifier (`verifyDelegatedPurchase`)
+    now accept either. The gate does not choose the wallet's type; the wallet does.
   - **Merchants:** `verifyDelegatedPurchase` also accepts the agent's last hop typed `kb-sd-jwt`
     (before, only `kb+sd-jwt`), as AP2's own verifier does. This reaches only agents built without
     this package; the gate's own agent still signs `kb+sd-jwt`. The signing page does not accept
     `kb-sd-jwt`: it sees only the wallet's hop.
-  - **Update stores and merchants together.** A merchant still on 0.6.0 accepts only
-    `kb+sd-jwt+kb`, so it refuses a permission this wallet signed with `code: "typ"` when the agent
-    spends it, after the person has left.
+  - **Update the gate and merchants together.** A merchant still on 0.6.0 accepts only
+    `kb+sd-jwt+kb`, so it refuses a spending grant this wallet signed, with `code: "typ"`, when the
+    agent spends it, after the user has left.
+  - **Custom backends:** an `IntentVerifyBackend` can now receive `sdjwt` in the Delegated layout:
+    a string that ends in `~` and contains `~~`, with the key binding in the middle. A backend
+    that reads the key binding after the last `~` will not find it; `inGateBackend` is the
+    reference.
   - `verifyIntentPresentation` now returns `intent.presentation` re-serialized for the new layout,
     in the earlier shape (`<credential>~<disclosures>~<key binding>`), so the code that spends it
     is unchanged.
