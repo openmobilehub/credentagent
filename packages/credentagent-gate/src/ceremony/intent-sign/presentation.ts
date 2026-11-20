@@ -8,8 +8,9 @@
 //   • the credential was signed by the key in its own `x5c` certificate,
 //   • the KB-JWT was signed by the key that credential commits to in `cnf`,
 //   • that KB-JWT names THIS verifier (`aud`) and THIS ceremony (`nonce`),
-//   • it is typed `kb+sd-jwt` (terminal; passes only for a gate-held grant) or a delegable
-//     `kb+sd-jwt+kb` / `kb-sd-jwt+kb`, and carries a `delegate_payload` (Delegate SD-JWT §5.1.4, §7.1).
+//   • it is typed `kb+sd-jwt` (terminal, kept for compatibility; `verify.ts` refuses it when the
+//     agent holds the key) or a delegable `kb+sd-jwt+kb` / `kb-sd-jwt+kb`, and carries a
+//     `delegate_payload` (Delegate SD-JWT §5.1.4, §7.1).
 //
 // It does NOT mean the certificate chains to anyone we trust. The demo credential is
 // self-signed by `tools/demo-pki/mint/`, and checking a chain we minted against a root we

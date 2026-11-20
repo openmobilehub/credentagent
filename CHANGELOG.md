@@ -99,7 +99,7 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
   - **Merchants:** `verifyDelegatedPurchase` also accepts the agent's last hop typed `kb-sd-jwt`
     (before, only `kb+sd-jwt`), as AP2's own verifier does. This reaches only agents built without
     this package; the gate's own agent still signs `kb+sd-jwt`. The signing page does not accept
-    it: it sees only the wallet's hop.
+    `kb-sd-jwt`: it sees only the wallet's hop.
   - **Update stores and merchants together.** A merchant still on 0.6.0 accepts only
     `kb+sd-jwt+kb`, so it refuses a permission this wallet signed with `code: "typ"` when the agent
     spends it, after the person has left.
