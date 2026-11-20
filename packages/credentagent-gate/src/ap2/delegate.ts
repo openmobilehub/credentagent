@@ -22,11 +22,19 @@ export const DELEGATE_KB_TYP = { delegable: "kb+sd-jwt+kb", terminal: "kb+sd-jwt
 /**
  * Both spellings of the delegable `typ` a verifier accepts. Draft -00 itself uses both: §2.2, §5.1.4
  * and its IANA section say `kb+sd-jwt+kb`, and §6 (steps 1.1, 3.e and 4.2) says `kb-sd-jwt+kb`. A
- * review of multipaz#2178 reports that a later draft settled on the `-`. Multipaz and CMWallet each
- * pick one, and AP2's Python SDK accepts both (as reported there; this repo never runs it). The gate
+ * review of multipaz#2178 reports that a later draft settled on the `-`. Multipaz sends the hyphen
+ * form, and AP2's Python SDK accepts both (as reported there; this repo never runs it). The gate
  * accepts either, so a wallet on one spelling is not refused for a difference the draft itself contains.
  */
 export const DELEGABLE_KB_TYPS: readonly string[] = [DELEGATE_KB_TYP.delegable, "kb-sd-jwt+kb"];
+
+/**
+ * What the signing page accepts for the WALLET's hop: either delegable spelling, and the terminal
+ * `kb+sd-jwt`, kept because main accepted it. That terminal type passes only where the caller lets
+ * it: `verify.ts` refuses it for a grant whose key the agent holds. The other terminal spelling,
+ * `kb-sd-jwt`, is for the agent's last hop and is not accepted here.
+ */
+export const WALLET_KB_TYPS: readonly string[] = [...DELEGABLE_KB_TYPS, DELEGATE_KB_TYP.terminal];
 
 /**
  * Both spellings of the terminal `typ`, for a hop that ends the chain. The same difference sits

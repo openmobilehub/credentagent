@@ -159,9 +159,9 @@ describe("each hop is bound to the one before it", () => {
 });
 
 describe("typ and disclosure rules (§5.1.4, §6)", () => {
-  // The draft's text now spells the delegable `typ` `kb-sd-jwt+kb`, and Multipaz sends it (#473).
+  // Draft -00 §6 writes the delegable `typ` `kb-sd-jwt+kb`, and Multipaz sends it (#473).
   // AP2's Python SDK accepts both, so this chain verifier does too.
-  it("accepts a wallet hop typed with the newer spelling, `kb-sd-jwt+kb`", async () => {
+  it("accepts a wallet hop typed with the hyphen spelling, `kb-sd-jwt+kb`", async () => {
     const { chain } = await chainFor({ walletTyp: "kb-sd-jwt+kb" });
     expect(await verify(chain)).toMatchObject({ ok: true });
   });

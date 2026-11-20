@@ -278,10 +278,10 @@ export async function verifyIntentPresentation(args: {
     return { ok: false, reason: "mandate mismatch: the wallet signed different terms than the grant records" };
   }
 
-  // The Delegated SD-JWT layout carries the mandate disclosures behind the key binding. The key
-  // binding's `delegate_payload` commits to their digests, and the check above already pinned those
-  // to the grant, so a disclosure here that is not one the gate asked for is something the holder
-  // did not sign for. Refuse it rather than store it.
+  // The Delegated SD-JWT layout carries the mandate disclosures behind the key binding. A disclosure
+  // there that is not one the gate asked for is refused as unexpected, though `delegate_payload` may
+  // legitimately hold more digests than the gate's (`delegatePayloadMatches` allows a superset). None
+  // of them is kept: `normalized` drops everything behind the key binding.
   const layout = splitPresentation(sdjwt);
   if (!layout?.normalized) return { ok: false, reason: "presentation carries no key-binding JWT" };
   if (layout.kbDisclosures.some((d) => !disclosures.includes(d))) {
@@ -300,7 +300,7 @@ export async function verifyIntentPresentation(args: {
     if (!isDelegableKbTyp(typ)) {
       return {
         ok: false,
-        reason: `key binding is typed ${typ ?? "∅"}, but the mandates name the agent's key, so Delegate SD-JWT §5.1.4 requires ${DELEGABLE_KB_TYPS.join(" or ")} — a merchant refuses any other (update the wallet)`,
+        reason: `key binding is typed ${typ ?? "∅"}, but the mandates name the agent's key, so Delegate SD-JWT §5.1.4 and §6 require ${DELEGABLE_KB_TYPS.join(" or ")} — a merchant refuses any other (update the wallet)`,
       };
     }
   }

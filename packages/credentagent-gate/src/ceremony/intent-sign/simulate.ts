@@ -84,8 +84,9 @@ export interface SimulateOptions {
    *  digest, two disclosures claiming it — a malformed presentation a verifier must not unpack
    *  into a claim it then trusts. */
   duplicateDisclosure?: boolean;
-  /** Answer in the Delegated SD-JWT layout the updated Multipaz wallet sends: the credential's
-   *  chain, an empty part, the key binding, then the mandate disclosures behind it (#473). */
+  /** TEST-ONLY: answer in the Delegated SD-JWT layout the updated Multipaz wallet sends: the
+   *  credential's chain, an empty part, the key binding, then the mandate disclosures behind it
+   *  (#473). With `omitKeyBinding`: the chain and the gap, nothing behind it. */
   delegatedLayout?: boolean;
   /** TEST-ONLY, only with `delegatedLayout` (it throws without): replace the FIRST disclosure behind
    *  the key binding with this one — a disclosure the key binding's `delegate_payload` does not

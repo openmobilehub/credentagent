@@ -12,6 +12,11 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { peekJwtHeader } from "../../ap2/jwt.js";
+import { appendAgentHop } from "../../ap2/chain/hop.js";
+import { walletChain } from "../../ap2/chain/serialize.js";
+import { verifyChain } from "../../ap2/chain/verify.js";
+import { VCT } from "../../ap2/types.js";
+import { p256 } from "./dev-wallet.js";
 import { buildIntentSignRequest } from "./request.js";
 import { verifyIntentPresentation, memoryNonceGuard, inGateBackend, type IntentVerifyBackend } from "./verify.js";
 import { dcApiAudience, splitPresentation, verifyDelegatedPresentation } from "./presentation.js";
@@ -779,6 +784,26 @@ describe("a real Multipaz Wallet answer, replayed (#473)", () => {
     if (out.ok) {
       expect(out.delegatePayload).toHaveLength(2);
       expect(Object.keys(out.disclosed)).toEqual(["credential_id"]);
+    }
+  });
+
+  // The merchant spends this answer through `verifyChain`. With an agent key that is not the one the
+  // mandate names, it must get as far as the agent's own hop (link 2) and fail only there, so the real
+  // wallet's `sd_hash` range and `kb-sd-jwt+kb` type are accepted by the merchant's checks too.
+  it("reaches the agent's hop (link 2) when the merchant verifies it", async () => {
+    const parts = splitPresentation(real.sdjwt)!;
+    for (const d of parts.kbDisclosures) {
+      const prefix = walletChain(parts.normalized!, d)!;
+      const chain = await appendAgentHop({
+        chain: prefix,
+        agentKey: p256().privateKey,
+        content: { vct: VCT.checkout, checkout_jwt: "h.p.s", checkout_hash: "hash" },
+        audience: "https://merchant.example",
+        nonce: "n-1",
+      });
+      const out = await verifyChain(chain, { audience: "https://merchant.example", nonce: "n-1", nowMs });
+      expect(out).toMatchObject({ ok: false, code: "signature" });
+      if (!out.ok) expect(out.detail).toMatch(/^link 2/);
     }
   });
 

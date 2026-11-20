@@ -210,7 +210,7 @@ describe("a grant whose key the agent holds (FR-5)", () => {
   // The other half: what the check spares. The same grant, typed `kb+sd-jwt+kb`, authorizes. (That
   // the permission it hands the agent is then one a merchant accepts is pinned by the spend tests
   // at the top of this file.)
-  it("authorizes the same grant when the wallet types its hop `kb-sd-jwt+kb`, the draft's newer spelling (#473)", async () => {
+  it("authorizes the same grant when the wallet types its hop `kb-sd-jwt+kb`, the spelling the draft uses in §6 (#473)", async () => {
     const { credentagent, app } = merchant();
     const g = await credentagent.grants.create({
       merchant: "utopia",
