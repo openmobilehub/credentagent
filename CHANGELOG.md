@@ -103,15 +103,16 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
   - **Update the gate and merchants together.** A merchant still on 0.6.0 accepts only
     `kb+sd-jwt+kb`, so it refuses a spending grant this wallet signed, with `code: "typ"`, when the
     agent spends it, after the user has left.
-  - **Custom backends:** an `IntentVerifyBackend` can now receive `sdjwt` in the Delegated layout:
-    a string that ends in `~` and contains `~~`, with the key binding in the middle. A backend
-    that reads the key binding after the last `~` will not find it; `inGateBackend` is the
-    reference.
+  - **Custom backends:** this wallet's answer reaches an `IntentVerifyBackend` as the wallet sent
+    it, in the Delegated layout: a string that ends in `~` and contains `~~`, with the key binding
+    in the middle. A backend that reads the key binding after the last `~` will not find it, and
+    one that accepts only `kb+sd-jwt+kb` refuses this wallet's `kb-sd-jwt+kb`. `inGateBackend` is
+    the reference.
   - `verifyIntentPresentation` now returns `intent.presentation` re-serialized for the new layout,
     in the earlier shape (`<credential>~<disclosures>~<key binding>`), so the code that spends it
     is unchanged.
   - New test-only options on the simulated wallet, `devSimulateWalletSignature`:
-    `delegatedLayout` and `overrideKbDisclosure`.
+    `delegatedLayout`, `overrideKbDisclosure` and `breakKbEncoding`.
 
 - Creating a spending grant from claude.ai no longer hangs with a product grid where the grant card
   should be. Three causes, fixed together:
