@@ -372,9 +372,9 @@ Claude review finishes on an agent:in-review PR, or the label is added   (or: ma
   on a ⛔ they may be what blocks. The loop reads two verdicts, ✅ and ⛔; a 💬 Ready — small notes (which the
   review is dropping) reads as ✅, for one release.
 - **One re-review, asked for by label.** After a fix push the push job adds **`review:again`**
-  (with `AGENT_GH_TOKEN`, once per cycle; it makes the label if it's missing). Until the Claude
-  review starts on that label instead of on a push, the label does nothing and the push still starts
-  the review. It is not `agent:in-review`, so adding it starts no review-loop run.
+  (with `AGENT_GH_TOKEN`, once per cycle; it makes the label if it's missing). That label, not the
+  push, starts the next Claude review; the review takes the label off when it's done. It is not
+  `agent:in-review`, so adding it starts no review-loop run.
 - **Only PRs labelled into the loop, only from this repository.** It acts only on PRs from branches
   in this repository that carry `agent:in-review` (so a PR a human has taken over is left alone),
   and spends no fix session when `AGENT_GH_TOKEN` is missing. Every job checks out `main`'s harness
@@ -428,8 +428,8 @@ Claude review finishes on an agent:in-review PR, or the label is added   (or: ma
   `agent:needs-human` or `agent:ready-for-human`), which starts a run by itself. That gets a PR
   stopped on a second ⛔ nowhere — it stops again at once, whatever the cap; fix that one by hand. To give a PR stopped at the cap more cycles, raise the cap — the repo variable
   `ISSUE_AGENT_MAX_REVIEW_CYCLES` (`gh variable set ISSUE_AGENT_MAX_REVIEW_CYCLES --body 4`) for
-  Actions runs, or the same environment variable locally. A review cancelled by hand without a new
-  push starts nothing: run the loop by hand to resume it.
+  Actions runs, or the same environment variable locally. A review cancelled by hand starts nothing (nor
+  does a push): add `review:again`, or run the loop by hand, to resume it.
 
 ## What it trusts — and what it doesn't
 

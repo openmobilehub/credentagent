@@ -239,7 +239,8 @@ jobs:
           git config --global user.email "issue-agent@users.noreply.github.com"
       - name: Push the fix and answer the review
         env:
-          # The PAT's push starts the next review; without it the loop hands over to a human.
+          # The PAT's review:again label starts the next review (one added with GITHUB_TOKEN starts no
+          # workflow); without the PAT the loop hands over to a human.
           GH_TOKEN: ${{ secrets.AGENT_GH_TOKEN || github.token }}
           ISSUE_AGENT_REVIEW_LOOP: ${{ secrets.AGENT_GH_TOKEN != '' && 'on' || '' }}
           ISSUE_AGENT_DISPATCH_TOKEN: ${{ github.token }} # starting a run by hand works with it

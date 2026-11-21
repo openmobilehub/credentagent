@@ -1543,8 +1543,8 @@ function pushReview(dir, review) {
       dispatchReviewLoop(review.pr);
     }
     git(["worktree", "remove", "--force", wt], { allowFail: true });
-    // Ask for one re-review (tested in checks.mjs), with this job's token. Until the review starts on
-    // this label instead of on a push, the label does nothing and the push still starts the review.
+    // Ask for one re-review (tested in checks.mjs), with this job's token: this label, not the push,
+    // starts the next Claude review (claude-code-review.yml), and a label added with GITHUB_TOKEN would not.
     for (const call of reReviewCalls({ sha, url: review.url, repo: REPO })) sh("gh", call, { allowFail: true });
   }
 
