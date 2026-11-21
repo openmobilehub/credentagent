@@ -88,16 +88,7 @@ PRs get both automated and human review. The checklist both run is
 [`REVIEW.md`](REVIEW.md) (repo root) — read it before opening a PR to know exactly what
 your diff will be held against.
 
-Before you ask a person to review, run `/review-to-the-bar` on your own PR in Claude Code and put
-its cold-read packet and scorecard at the top of the description. This repository's
-`.claude/settings.json` offers the plugin when you open it; install it once for this repository so
-that it keeps itself up to date:
-
-```bash
-claude plugin install review-to-the-bar@review-to-the-bar --scope project
-```
-
-Without that install the plugin works until its next release, then stops loading.
+Before you mark a PR ready, review it to the bar yourself (below).
 
 ### Automated Claude review
 
@@ -128,8 +119,14 @@ Without that install the plugin works until its next release, then stops loading
 
 Open the PR as a **draft**, and run the
 [review-to-the-bar](https://github.com/openmobilehub/review-to-the-bar) skill on it in Claude Code
-(`/review-to-the-bar`; install it once with `/plugin marketplace add openmobilehub/review-to-the-bar`,
-then `/plugin install review-to-the-bar@review-to-the-bar`). It measures the code a developer has to write, checks the PR's claims
+(`/review-to-the-bar`). This repository's `.claude/settings.json` offers the plugin when you open
+it; install it once for this repository so that it keeps itself up to date:
+
+```bash
+claude plugin install review-to-the-bar@review-to-the-bar --scope project
+```
+
+Without that install the plugin works until its next release, then stops loading. It measures the code a developer has to write, checks the PR's claims
 against tests, and runs the standards, correctness and developer-experience lenses on your diff.
 Fix what it finds, then put its **scorecard**, the **cold-read packet** (the docs and the sample
 code a new developer would see, with three questions for your reviewer) and **what you couldn't
