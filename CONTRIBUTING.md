@@ -88,6 +88,17 @@ PRs get both automated and human review. The checklist both run is
 [`REVIEW.md`](REVIEW.md) (repo root) — read it before opening a PR to know exactly what
 your diff will be held against.
 
+Before you ask a person to review, run `/review-to-the-bar` on your own PR in Claude Code and put
+its cold-read packet and scorecard at the top of the description. This repository's
+`.claude/settings.json` offers the plugin when you open it; install it once for this repository so
+that it keeps itself up to date:
+
+```bash
+claude plugin install review-to-the-bar@review-to-the-bar --scope project
+```
+
+Without that install the plugin works until its next release, then stops loading.
+
 ### Automated Claude review
 
 - **Same-repo PRs** — an automated Claude review (`anthropics/claude-code-action`) runs on every
