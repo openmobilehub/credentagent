@@ -187,8 +187,10 @@ finding that mattered.
    §8, a correctness bug, or a release or README claim the code does not back (§6). For
    each: what is wrong, why it matters (an everyday example), and what to do, in one
    sentence each.
-4. **Worth a look** (optional, **first review only**): at most 3 one-line notes. They
-   are not tasks: the author decides, no fix is expected, and none asks for a re-review.
+4. **Worth a look** (optional, **full review only**: the first one, or after the PR is
+   marked ready again): at most 3 one-line notes. They are not tasks: the PR's owner (its
+   author; for an agent PR, whoever added the `agent` label) decides, no fix is expected,
+   and none asks for a re-review.
 5. On a follow-up review, one line first: "Since the last review: N fixed, M still open".
    A follow-up checks only the earlier ⛔ items and blocking problems in the new commits;
    it adds no new notes.
@@ -209,6 +211,6 @@ passed.
 `file:line`, the invariant or principle it maps to, CONFIRMED or PLAUSIBLE, and the
 evidence; then the coverage line from §7.
 
-Findings that map to §1–§4 or §8, a correctness bug, or a release claim the code does
-not back (§6) are ⛔ Needs changes. Everything else, §5 included, is at most a Worth a
+Findings that map to §1–§4 or §8, a correctness bug, or a release or README claim the code
+does not back (§6) are ⛔ Needs changes. Everything else, §5 included, is at most a Worth a
 look note on the first review, or left out.

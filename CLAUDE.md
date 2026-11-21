@@ -322,8 +322,8 @@ With an `AGENT_GH_TOKEN` secret, the agent also works through the Claude review 
 (`.github/workflows/issue-agent-review.yml`), labelled `agent:in-review` meanwhile: it **fixes only
 what blocks** — a ⛔ review's "Fix before merging" items and threads people with write access
 opened — pushes, and adds the `review:again` label to ask for one re-review. A ✅ goes to a human
-as ready (`agent:ready-for-human`), with the reviewer's optional notes listed as no action needed and
-no commit made for them; a second ⛔ stops as `agent:needs-human`, as does any other stated reason.
+as ready (`agent:ready-for-human`), with no commit made for the reviewer's optional notes (they are in
+its summary, not threads); a second ⛔ stops as `agent:needs-human`, as does any other stated reason.
 The cycle cap is 2. Before any hand-over as ready it checks the issue's acceptance
 criteria on the final code and ticks the PR's checklist. If `main` moves and an agent PR now
 conflicts with it, the loop resolves the conflict itself (a sweep runs on every push to `main`) or

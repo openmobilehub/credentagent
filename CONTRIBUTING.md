@@ -94,8 +94,8 @@ your diff will be held against.
   non-draft PR opened from a branch in this repo. It's grounded in this project's security
   invariants. **The review is opt-in and currently ON** — it only runs when the repo variable
   `ENABLE_CLAUDE_REVIEW` is `"true"`, and posts one summary comment: ✅ Ready to merge or ⛔ Needs
-  changes, what blocks (at most 3 items), and on the first review at most 3 optional notes, which
-  are not tasks. It posts no comments on lines, so it opens no thread you must resolve. Something
+  changes, what blocks (at most 3 items), and on a full review at most 3 optional notes, which
+  are not tasks: you decide (for an agent PR, whoever added the `agent` label). It posts no comments on lines, so it opens no thread you must resolve. Something
   only a maintainer can do goes into a `follow-up` issue, not onto you. It is not a required check,
   so human review is the gate. (Draft PRs are skipped to save cost; mark a PR ready for
   review to trigger a run.)
