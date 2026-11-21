@@ -10,6 +10,12 @@ Write this for a HUMAN who did NOT write the code.
 Delete this comment before you submit.
 -->
 
+## Review to the bar
+
+<!-- Before you mark this PR ready, run `/review-to-the-bar` on it (CONTRIBUTING.md, "Before you mark
+     it ready"). Paste here: the scorecard, the cold-read packet (folded in <details>, so your
+     reviewer reads it cold), and what you couldn't verify, with the reason. -->
+
 ## Before and after
 
 <!-- First, before any prose: what a developer (or a user) sees on main and with this change.

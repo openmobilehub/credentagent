@@ -4,7 +4,8 @@ run-name: "issue-agent-review · ${{ github.event_name == 'push' && 'main moved:
 
 # The review loop: after every Claude review of a PR in the loop (labelled agent:in-review — an issue
 # agent's PR, or any maintainer's PR given the label, e.g. by a coding agent), the agent fixes what
-# the review asks, pushes, replies to and resolves each thread — and the push starts the next review.
+# the review asks, pushes, replies to and resolves each thread, and adds review:again, which starts
+# the next review (a push alone no longer does).
 # It hands the PR to a human only when the review is ✅ Ready to merge, or 💬 with every thread
 # resolved, or when it stops (cycle cap, budget, a change it may not publish), saying why.
 # How it works and what it trusts: ci/issue-agent/README.md, "The review loop".
@@ -75,8 +76,9 @@ jobs:
   assess:
     # Only reviews of PRs from branches in this repository. Which of those are in the loop is decided by
     # run.mjs from main (loopRefusal: agent:in-review, and a write-access author unless it's an issue
-    # agent's branch); the rest skip in seconds. Any conclusion but "cancelled" (a newer push superseded
-    # it): a failed or verdict-less review is handed to a human rather than left waiting.
+    # agent's branch); the rest skip in seconds. Any conclusion but "cancelled" (a newer run superseded
+    # it) or "skipped" (any label but review:again starts a review run whose job is skipped, and that is
+    # no review): a failed or verdict-less review is handed to a human rather than left waiting.
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'pull_request_target' &&
@@ -84,6 +86,7 @@ jobs:
        github.event.pull_request.head.repo.full_name == github.repository) ||
       (github.event.workflow_run.event == 'pull_request' &&
        github.event.workflow_run.conclusion != 'cancelled' &&
+       github.event.workflow_run.conclusion != 'skipped' &&
        github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-latest
     timeout-minutes: 10

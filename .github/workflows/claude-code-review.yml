@@ -2,23 +2,29 @@ name: Claude Code Review
 
 on:
   pull_request:
-    types: [opened, synchronize, ready_for_review, reopened]
-
-# One review per PR at a time: a new push cancels the run still reviewing the old head. Nothing
-# is lost — a cancelled run never counts as reviewed, so the next run's scope still covers it.
-concurrency:
-  group: claude-review-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+    # Not on push (`synchronize`): a PR is reviewed once, when it opens or is marked ready, and
+    # again only when someone adds the `review:again` label (the issue agent does after a fix).
+    # Pushing a fix for every note started the next review, which found the next note: #415 got
+    # 10 reviews, #474 got 10 in a day. Run review-to-the-bar before marking ready (CONTRIBUTING.md).
+    types: [opened, ready_for_review, reopened, labeled]
 
 jobs:
   claude-review:
+    # One review per PR at a time: a newer review run cancels the one still running. Nothing is
+    # lost — a cancelled run never counts as reviewed, so the next run's scope still covers it.
+    # On the job, not the workflow: adding any other label starts a run whose job is skipped, and
+    # in a workflow-level group that run would cancel the review in progress.
+    concurrency:
+      group: claude-review-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
     # OPT-IN — off by default. The CLAUDE_CODE_OAUTH_TOKEN secret exists, but the
     # account cannot use it, so the action errored on EVERY PR; as a required status
     # check that blocked all merges. Gating the job means it is *skipped* rather than
     # failed, and a skipped job counts as passing for a required check — no fake green.
     # Turn the review back on with:  gh variable set ENABLE_CLAUDE_REVIEW --body true
     # (Draft PRs are also skipped to save cost — mark ready-for-review to trigger a run.)
-    if: ${{ !github.event.pull_request.draft && vars.ENABLE_CLAUDE_REVIEW == 'true' }}
+    # Of the label events, only `review:again` asks for a review.
+    if: ${{ !github.event.pull_request.draft && vars.ENABLE_CLAUDE_REVIEW == 'true' && (github.event.action != 'labeled' || github.event.label.name == 'review:again') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -48,11 +54,11 @@ jobs:
             exit 1
           fi
 
-      # Tiered, so a review costs what the push changed:
+      # Tiered, so a review costs what changed since the last one:
       #   full  — the PR opened, reopened or left draft (or nothing earlier was reviewed);
-      #   delta — a later push: review only the PR's new commits since the last reviewed head;
-      #   skip  — the push left the PR's own diff unchanged (it only merged main in) and main
-      #           touched none of the PR's files. CI still tests it; there is nothing new to read.
+      #   delta — `review:again`: review only the PR's new commits since the last reviewed head;
+      #   skip  — the new commits leave the PR's own diff unchanged (they only merged main in) and
+      #           main touched none of the PR's files. CI still tests it; there is nothing new to read.
       #   capped — this PR already got MAX_ROUNDS Claude reviews since it was last marked ready
       #           for review (default 2). A human decides now: merge, close, or redesign. On
       #           #415 one day of push → review → 1–5 line fix → push ran six rounds on comment
@@ -71,7 +77,7 @@ jobs:
           # Unset or not a whole number ≥ 1 → 2.
           [[ "$MAX_ROUNDS" =~ ^[1-9][0-9]*$ ]] || MAX_ROUNDS=2
           mode="full"; last=""; commits=""; overlap=""
-          if [ "$ACTION" = synchronize ]; then
+          if [ "$ACTION" = labeled ]; then
             # The newest earlier head this workflow finished on for this branch (a review or a skip).
             last=$(gh api -X GET "repos/$GITHUB_REPOSITORY/actions/workflows/claude-code-review.yml/runs" \
               -f event=pull_request -f branch="$HEAD_REF" -f status=success -F per_page=50 \
@@ -153,7 +159,7 @@ jobs:
             | awk '{s+=$1} END {print s+0}')
           if [ "$posted" -eq 0 ]; then
             gh pr comment "$PR" --body "$marker
-          **Claude review paused: $MAX_ROUNDS rounds done.** More pushes won't be reviewed automatically. A person now decides: merge, close, or step back and redesign. Don't push fixes for review notes that aren't blocking. To get one more round after a real change, mark the PR as draft, then ready for review."
+          **Claude review paused: $MAX_ROUNDS rounds done.** \`review:again\` won't start another one. A person now decides: merge, close, or step back and redesign. Don't push fixes for review notes that aren't blocking. To get one more round after a real change, mark the PR as draft, then ready for review."
           fi
 
       - name: Record review start time
@@ -335,3 +341,12 @@ jobs:
             exit 1
           fi
           echo "Claude posted $n review summary comment(s)."
+
+      # Take `review:again` off whatever happened (reviewed, skipped, capped or failed), so the
+      # next request is a fresh `labeled` event. Each label is one request, never a standing order.
+      - name: Remove the review:again label
+        if: always() && github.event.action == 'labeled'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: gh api -X DELETE "repos/$GITHUB_REPOSITORY/issues/$PR/labels/review%3Aagain" --silent || true
