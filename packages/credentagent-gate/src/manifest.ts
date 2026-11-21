@@ -13,6 +13,7 @@ import type {
   TrustLevel,
   VerificationManifestEntry,
 } from "./types.js";
+import { REQUIREMENTS_PARAM, savedRequirementsFor, sealRequirements } from "./ceremony/saved-requirements.js";
 
 export interface ResolveContext {
   /** Origin the per-order approve link binds to. */
@@ -39,6 +40,11 @@ export interface ResolveContext {
    * per-credential dc-payment / credential rails. A discount stays on the credential rail.
    */
   delegated?: boolean;
+  /**
+   * The mounted rails' signing key (#444). With mounted routes, every approve link then carries
+   * the order's requirements, sealed under it, so the first page opened saves them.
+   */
+  sealKey?: string;
 }
 
 /** Per-order approve link, e.g. `https://shop.example/credential-gate/age?order=ORD-1`. */
@@ -122,5 +128,14 @@ export function resolveRequirements(
   // Stable payment-last: non-authorize entries keep their order, then authorize.
   const settleLast = entries.filter((e) => e.effect === "authorize");
   const rest = entries.filter((e) => e.effect !== "authorize");
-  return [...rest, ...settleLast];
+  const manifest = [...rest, ...settleLast];
+
+  // Seal the order's requirements onto each mounted approve link (#444): whichever page the
+  // buyer opens first saves them. The legacy `/credential-gate/*` links are the host's own
+  // routes, which would not read it.
+  if (ctx.mountedRoutes && ctx.sealKey) {
+    const seal = sealRequirements(order.id, savedRequirementsFor(order, manifest), ctx.sealKey);
+    for (const e of manifest) if (e.approveUrl) e.approveUrl += `&${REQUIREMENTS_PARAM}=${seal}`;
+  }
+  return manifest;
 }

@@ -109,6 +109,12 @@ describe("008 — delegated approve-link routing", () => {
     completion: async () => ({ completed: true as const }),
     signingKey: "stable-test-secret",
   });
+  // The link's route, without the sealed requirements every mounted link also carries (#444).
+  const routeOf = (approveUrl: string) => {
+    const u = new URL(approveUrl);
+    u.searchParams.delete("requirements");
+    return u.toString();
+  };
   const verifier = {
     buildRequest: async () => ({ reference: "r", handoff: {} }),
     consume: async () => ({ approved: true, trust_level: "presence-only-demo" as const, claims: {}, binding: { amount: 0, currency: "USD", payee: { id: "shop.example" } } }),
@@ -120,7 +126,7 @@ describe("008 — delegated approve-link routing", () => {
     // regardless of whether the rail's HTTP routes register.
     ca.mount({ locals: {} }, { ...minimalCeremony(), verifier });
     const manifest = ca.requirements(alcoholOrder, fullPolicy);
-    const url = (id: string) => manifest.find((e) => e.credential === id)!.approveUrl;
+    const url = (id: string) => routeOf(manifest.find((e) => e.credential === id)!.approveUrl!);
     // Two-step: age is proven on the built-in credential rail FIRST (a real OpenID4VP mdoc
     // step), NOT folded into the delegated ceremony — only the payment goes delegated.
     expect(url("age")).toBe("https://shop.example/credentagent/credential?order=ORD-1&cred=age");
@@ -133,7 +139,7 @@ describe("008 — delegated approve-link routing", () => {
     const ca = new CredentAgent({ walletOrigin: "https://shop.example" });
     ca.mount({ locals: {} }, minimalCeremony()); // no verifier
     const manifest = ca.requirements(alcoholOrder, fullPolicy);
-    const url = (id: string) => manifest.find((e) => e.credential === id)!.approveUrl;
+    const url = (id: string) => routeOf(manifest.find((e) => e.credential === id)!.approveUrl!);
     expect(url("age")).toBe("https://shop.example/credentagent/credential?order=ORD-1&cred=age");
     expect(url("payment")).toBe("https://shop.example/credentagent/dc-payment?order=ORD-1");
   });

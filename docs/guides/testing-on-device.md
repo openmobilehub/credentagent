@@ -8,6 +8,12 @@ Digital Credentials API needs it), the demo credentials + trust lists from
 **[Trusted demo credentials](trusted-demo-credentials.md)**, and a phone on USB with
 `adb devices` showing it authorized.
 
+> **Signing a spending grant?** That uses a different card than the sections below: the
+> SD-JWT "Payment card" from the official issuer, and a Multipaz Wallet development build (no
+> released wallet signs a grant yet). Follow the three steps in the
+> [gate README, "Device-signed grants"](../../packages/credentagent-gate/README.md#device-signed-grants--the-wallet-signs-the-grant-first-spec-012).
+> The `.mpzpass` import below is for the age, loyalty and checkout ceremonies.
+
 ## 1. Import trust first (VICAL + RICAL)
 
 Do this **before** importing credentials, so cards land already-trusted.
@@ -94,7 +100,7 @@ warnings** appear — issuer (via the imported **VICAL**) *and* verifier (via th
 | Symptom | Cause / fix |
 | :-- | :-- |
 | "Import pass from file" greys the file out | Expected (SAF MIME filter). Use the open-intent (step 2) or a hosted link. Don't fight the button. |
-| "Your info wasn't found" at presentation | The requested credential isn't in *this* wallet (wrong device, or not imported). Re-check step 2 on the presenting device. |
+| "Your info wasn't found" at presentation | The requested credential isn't in *this* wallet (wrong device, or not imported). Re-check step 2 on the presenting device. For a **spending grant** it also means the wrong card: the issuer lists two "Payment card" entries, and only the SD-JWT one matches (gate README, "Device-signed grants"). |
 | Red "untrusted issuer" warning **when sideloading a card** | The VICAL isn't imported, or the wallet doesn't trust the signer. Import the VICAL (step 1), then re-open the pass. NOTE: this is a *wallet-hold* check at import — the **gate does not verify the issuer yet** (`presence-only-demo`; issuer/device verification is [#14](https://github.com/openmobilehub/credentagent/issues/14)). Removing the VICAL *after* a card is imported does **not** re-flag the held card, and no gate ceremony consults the VICAL today. |
 | Red "unknown website / unknown verifier" **even though a RICAL is already imported** | **Stale RICAL** — the device holds an *older* `utopia.rical` (from a prior `gen-pki` run) whose reader cert no longer matches what the gate presents. **Re-import the current `utopia.rical`** (Settings → Trusted verifiers → Import RICAL). Trust shows immediately: presentment reads *"The website requesting this data is trusted"* and names the reader. Note: `verify-reader-trust.mjs` validates the **repo's** `out/utopia.rical` and can't see a stale device copy, so a green tool run + red on-device warning ⇒ suspect the device import first. |
 | "Unknown verifier" warning (no RICAL imported) | Import the RICAL (step 1) so the gate's reader identity (#84) matches. |

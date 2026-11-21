@@ -127,6 +127,8 @@ revision has no sessions — with two consequences:
   multi round-trip result for a client that declared `elicitation`, and the SDK's client answers
   and retries by itself (`examples/mrtr-client.mjs`). Every other client gets the same questions as
   tool output plus a `requestState` to echo back — sealed and checked the same way on both paths.
+  The wait for the human's approval is never one of those rounds: every client gets the pending
+  grant as the tool's result, so the host can draw its card and the approve link.
 
 ## Which version is live — `GET /version`
 
@@ -271,6 +273,17 @@ The MRTR envelope (`resultType` / `inputRequests`) is sent **only to a client th
 Every other client gets the same questions as ordinary tool output and answers through the tool's
 own `requestState` + `answers` arguments, so the round trip completes either way.
 
+Only the **product questions** (step 1) use that envelope. The pending grant of step 2 is ordinary
+tool output on **every** client, and step 3 is the agent's own redial. The human approves at
+`approveUrl`, not in a form: a client that can elicit keeps the call open behind the form, so the
+host never receives a result to draw the grant card from, and the link is text nobody can open.
+
+A client re-sends the last request-level `requestState` by itself. If one is left over from a flow
+nobody finished and has **lapsed** (15 minutes), the call starts over as if it carried none —
+nothing in it is believed. A forged or hand-edited state is still refused; a fresh state minted for
+a different call or session is still refused; and so is a lapsed one the agent passed as the tool's
+`requestState` argument. (A state is not single-use: the same fresh one is accepted again.)
+
 ## The three execution contexts
 
 `createStorefront()` is built around the split the gate enforces — conflating these is forbidden
@@ -314,8 +327,9 @@ import { GrantCard, grantViews, defineGrantView, BudgetMeter } from "./grants";
 
 // Zero-config: picks the most specific fitting view automatically — a single-SKU grant renders the
 // flagship product card (name/price/image + "up to 3 per purchase"), a category grant renders chips,
-// a pending grant renders the Approve/Decline consent card, a spent/revoked grant renders a closed
-// card with no live buttons.
+// a pending grant renders the Approve/Decline consent card (its buttons only for an https: link, or
+// http: on localhost, 127.0.0.1 or [::1]), a spent/revoked grant renders a closed card with no live
+// buttons.
 <GrantCard grant={grant} />
 
 // Choose or reorder the candidate views (e.g. the compact one-line meter for a dense list):

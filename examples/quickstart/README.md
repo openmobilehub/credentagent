@@ -108,13 +108,15 @@ trust anchor yet** — a self-crafted credential would pass. This quickstart dem
 *flow*; do not present the age gate as a real safety control until issuer-verified trust
 lands ([roadmap](../../ROADMAP.md)).
 
-**Spending grants need a wallet no store ships yet.** Since 0.6.0, approving a grant on the phone
+**Spending grants need a wallet development build.** Since 0.6.0, approving a grant on the phone
 (`signing: "device"`, the default) asks the wallet for an SD-JWT payment credential (`vct`
 `urn:emvco:dpc:card:1` or `com.emvco.dpc`) and AP2's `delegate` request, which **no released wallet
 supports yet**. A wallet set up for 0.5.0's mdoc `org.multipaz.payment.sca.1` can't sign one. So on
 this quickstart and on the hosted demo (`credentagent.ai/marketplace`), `create-spending-grant`
-returns an approve page, but phone approval only completes with a wallet holding a demo DPC
-credential (`node tools/demo-pki/mint/mint-dpc-sdjwt.mjs --mpzpass` from the repo root mints one).
+returns an approve page, but phone approval only completes with a Multipaz Wallet development
+build (from [multipaz-wallet#48](https://github.com/openwallet-foundation/multipaz-wallet/pull/48)) holding
+the SD-JWT "Payment card" from the official issuer. The steps are in the
+[gate README](../../packages/credentagent-gate/README.md#device-signed-grants--the-wallet-signs-the-grant-first-spec-012).
 To demo a grant without a wallet, pass `signing: "page"` to `create-spending-grant`: the human
 approves with a click on the page instead of a wallet signature. Checkout, the age gate and the
 loyalty discount are unaffected. In tests, use `devSimulateWalletSignature`.

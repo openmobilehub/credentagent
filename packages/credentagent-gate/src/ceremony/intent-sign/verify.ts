@@ -27,7 +27,7 @@
 // different terms — which is what the bypass tests pin.
 import * as jose from "jose";
 import { openReaderContext } from "../mdoc/readerContext.js";
-import { PAYMENT_CREDENTIAL_ID, PAYMENT_CREDENTIAL_VCTS, PAYMENT_INSTRUMENT_CLAIM } from "./dcql.js";
+import { PAYMENT_CREDENTIAL_ID, PAYMENT_CREDENTIAL_VCTS, PAYMENT_CLAIMS } from "./dcql.js";
 import { boundsHash, deriveNonce, type IntentBoundsInput } from "./bounds.js";
 import { dcApiAudience, verifyDelegatedPresentation } from "./presentation.js";
 import {
@@ -289,15 +289,18 @@ export async function verifyIntentPresentation(args: {
     }
   }
 
-  // Require the payment credential — the right type AND its instrument claim disclosed
-  // (invariant 5: an explicit positive claim, not merely "a token was present").
+  // Require the payment credential — the right type AND one of its accepted claims disclosed
   const credentialType = verdict.credentialType ?? "";
   if (!(PAYMENT_CREDENTIAL_VCTS as readonly string[]).includes(credentialType)) {
     return { ok: false, reason: `wrong credential: expected one of ${PAYMENT_CREDENTIAL_VCTS.join(", ")}, got ${credentialType || "∅"}` };
   }
-  const instrumentId = verdict.disclosed?.[PAYMENT_INSTRUMENT_CLAIM];
-  if (instrumentId == null || (typeof instrumentId === "string" && instrumentId.length === 0)) {
-    return { ok: false, reason: `payment credential did not disclose ${PAYMENT_INSTRUMENT_CLAIM}` };
+  const disclosed = verdict.disclosed ?? {};
+  const hasClaim = PAYMENT_CLAIMS.some((name) => {
+    const value = disclosed[name];
+    return value != null && !(typeof value === "string" && value.length === 0);
+  });
+  if (!hasClaim) {
+    return { ok: false, reason: `payment credential did not disclose any of: ${PAYMENT_CLAIMS.join(", ")}` };
   }
 
   // Single-use: consume the nonce LAST, so a failed verify does not burn it (a genuine

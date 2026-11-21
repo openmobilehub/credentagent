@@ -26,7 +26,7 @@ import type { Branding } from "./types.js";
 import { registerIntentSignRail } from "./ceremony/intent-sign/routes.js";
 import { renderIntentSignPage } from "./ceremony/intent-sign/page.js";
 import { registerGrantCredentialGate } from "./ceremony/grant-credential/routes.js";
-import { pageHead, brandHeader, progressRail, type RailStep } from "./ceremony/theme.js";
+import { pageHead, brandHeader, progressRail, deviceSignedTrustFooter, type RailStep } from "./ceremony/theme.js";
 import { basePathOf } from "./ceremony/origin.js";
 
 /** Structural Express app — the package stays dependency-free (mirrors orders-serve). */
@@ -71,6 +71,19 @@ const trustLine = (g?: Grant) =>
       ? " The wallet credential is presence-only-demo: the wire crypto is real; the issuer trust anchor is not."
       : ""
   }</div></div>`;
+
+/**
+ * The honesty line for a grant that is no longer pending. The page-mode line says "approving here
+ * stands in for the wallet ceremony", which is false once someone signed with a wallet and for a
+ * grant nobody approved, so a settled grant's line comes from its state and its level (#429).
+ */
+const settledTrustLine = (g: Grant): string => {
+  if (g.status === "denied" || (g.signing === "device" && g.trustLevel === "server-issued-demo")) {
+    // Declined, or a wallet grant that never got a signature (revoked while pending).
+    return `<div class="trust"><div class="trust-line">🔒 ${esc(g.presence)} — nothing was approved or signed on this grant; no real money moves.</div></div>`;
+  }
+  return g.signing === "device" && g.trustLevel === "device-signed" ? deviceSignedTrustFooter() : trustLine(g);
+};
 
 /** What the grant is bounded to, as a plain-English row value. */
 function scopeValue(g: Grant): string {
@@ -242,7 +255,7 @@ export function serveGrants(app: GrantsApp, grants: Grants): void {
         shell(`Spending grant · ${g.id}`, `${brandHeader({ h1: "Spending grant", tagline: `At ${g.merchant}` }, branding)}
   ${limitsCard(g)}
   <div class="card"><div class="${line?.row ?? "row-pending"}">${line ? line.text : esc(g.status)}</div></div>
-  ${trustLine(g)}`, branding),
+  ${settledTrustLine(g)}`, branding),
       );
     }
 

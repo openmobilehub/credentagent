@@ -98,37 +98,46 @@ export function decodeVpToken(vpToken: unknown): DisclosedEntry[] {
   });
 }
 
-// The payment binding lives in deviceSigned, not issuerSigned. Returns the
-// transaction_data_hash bytes as base64url, or null.
-export function extractTransactionDataHash(
-  response: DeviceResponse,
-  namespace = "urn:eudi:sca:payment:1",
-  element = "transaction_data_hash",
-): string | null {
+// The element names the wallet signs the binding under. Multipaz renamed them to
+// camelCase in its #1904 (2026-08-13, "match latest draft"); wallets built before that
+// still send snake_case. Both are read: the value is re-checked against our own hash
+// either way, so accepting the old spelling widens nothing.
+const TX_HASH_ELEMENTS = ["transactionDataHash", "transaction_data_hash"];
+const TX_HASH_ALG_ELEMENTS = ["transactionDataHashAlg", "transaction_data_hash_alg"];
+
+// The first value of the right type under any of `elements`, in `namespace` of any
+// document's deviceSigned — a wrongly-typed value is skipped, not returned.
+function deviceSignedElement<T>(response: DeviceResponse, namespace: string, elements: string[], is: (v: unknown) => v is T): T | null {
   for (const doc of response.documents ?? []) {
-    const ns = decodeTagged(doc.deviceSigned?.nameSpaces);
-    const val = ns?.[namespace]?.[element];
-    if (val instanceof Uint8Array) return Buffer.from(val).toString("base64url");
+    const ns = decodeTagged(doc.deviceSigned?.nameSpaces)?.[namespace];
+    for (const element of elements) if (is(ns?.[element])) return ns[element];
   }
   return null;
 }
 
+// The payment binding lives in deviceSigned, not issuerSigned. Returns the
+// transaction data hash bytes as base64url, or null.
+export function extractTransactionDataHash(
+  response: DeviceResponse,
+  namespace = "urn:eudi:sca:payment:1",
+  elements = TX_HASH_ELEMENTS,
+): string | null {
+  const val = deviceSignedElement(response, namespace, elements, (v): v is Uint8Array => v instanceof Uint8Array);
+  return val ? Buffer.from(val).toString("base64url") : null;
+}
+
 // The COSE hash-algorithm id the wallet bound the transaction_data with, read from
-// `transaction_data_hash_alg` in the SAME deviceSigned namespace. Multipaz OMITS this
+// `transactionDataHashAlg` (or the older `transaction_data_hash_alg`) in the SAME
+// deviceSigned namespace. Multipaz OMITS this
 // element when it used its SHA-256 default (mdocPresentment.kt), so `null` means
 // "SHA-256"; otherwise it is the raw COSE integer (e.g. -43 for SHA-384) that verify
 // maps to a hash function.
 export function extractTransactionDataHashAlg(
   response: DeviceResponse,
   namespace = "urn:eudi:sca:payment:1",
-  element = "transaction_data_hash_alg",
+  elements = TX_HASH_ALG_ELEMENTS,
 ): number | null {
-  for (const doc of response.documents ?? []) {
-    const ns = decodeTagged(doc.deviceSigned?.nameSpaces);
-    const val = ns?.[namespace]?.[element];
-    if (typeof val === "number") return val;
-  }
-  return null;
+  return deviceSignedElement(response, namespace, elements, (v): v is number => typeof v === "number");
 }
 
 export interface AuthBlocks {

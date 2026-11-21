@@ -31,6 +31,7 @@ import { renderDcPaymentPage } from "./page.js";
 import { checkoutRail, proofLinksHtml } from "../theme.js";
 import { withoutPresentations } from "../proofs.js";
 import { presentationForInspection } from "../inspect.js";
+import { REQUIREMENTS_PARAM, saveSealedRequirements } from "../saved-requirements.js";
 
 // Minimal structural request/response shapes — the real Express req/res satisfy
 // them, so the package never imports express.
@@ -85,6 +86,7 @@ export const registerDcPaymentGate: RailRegistrar = (app: CeremonyApp, ctx: Cere
   get("/credentagent/dc-payment", async (req, res) => {
     const order = await resolveOrder(ctx, typeof req.query.order === "string" ? req.query.order : undefined, { cartMandate: decodeCartMandateParam(req.query.cart) });
     if (!order) { res.status(404).type("html").send("<!doctype html><h1>Order not found</h1>"); return; }
+    await saveSealedRequirements(ctx, order.id, req.query[REQUIREMENTS_PARAM]);
     // Order-derived stepper with Pay current: reflects only the gates THIS order has, and
     // shows Age ✓ only when it was ACTUALLY verified (read from the store) — never hardcoded.
     const verified = (await ctx.verificationStore.read(order.id)) ?? {};

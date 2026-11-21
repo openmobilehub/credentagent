@@ -55,15 +55,18 @@ const INSTRUMENT = {
 // claims + an issuerAuth + deviceAuth block + a deviceSigned transaction_data_hash.
 // When `coseAlg` is given it also emits `transaction_data_hash_alg` (the COSE id),
 // mirroring Multipaz's mdocPresentment.kt (which omits it for its SHA-256 default).
-function paymentDeviceResponseB64(transactionDataHashHex: string | null, coseAlg?: number): string {
+// `naming` picks the element names: "snake" (`transaction_data_hash`) is what Multipaz
+// wrote before its #1904 (2026-08-13); "camel" (`transactionDataHash`) is what it writes now.
+function paymentDeviceResponseB64(transactionDataHashHex: string | null, coseAlg?: number, naming: "snake" | "camel" = "snake"): string {
+  const [hashEl, algEl] = naming === "camel" ? ["transactionDataHash", "transactionDataHashAlg"] : ["transaction_data_hash", "transaction_data_hash_alg"];
   const ns = "org.multipaz.payment.sca.1";
   const issuerItems = Object.entries(INSTRUMENT).map(([elementIdentifier, elementValue], digestID) =>
     new Tag(cbor({ digestID, random: Buffer.alloc(16), elementIdentifier, elementValue }), 24),
   );
   const deviceSignedNs = transactionDataHashHex
     ? new Tag(cbor({ "urn:eudi:sca:payment:1": {
-        ...(coseAlg !== undefined ? { transaction_data_hash_alg: coseAlg } : {}),
-        transaction_data_hash: Buffer.from(transactionDataHashHex, "hex"),
+        ...(coseAlg !== undefined ? { [algEl]: coseAlg } : {}),
+        [hashEl]: Buffer.from(transactionDataHashHex, "hex"),
       } }), 24)
     : new Tag(cbor({}), 24);
   const dr = cbor({
@@ -184,6 +187,35 @@ describe("dc-payment REAL OpenID4VP presentation", () => {
     // screenshot tells a tester to update the wallet instead of filing a crypto bug (#180).
     expect(amountGate?.detail).toContain("signed no transaction_data_hash");
     expect(amountGate?.detail).not.toContain("mismatch");
+  });
+
+  // Multipaz renamed the mdoc elements to transactionDataHash / transactionDataHashAlg in
+  // its #1904 (2026-08-13). A current wallet DID sign the amount; reading only the old
+  // name made the gate say "signed no transaction_data_hash … update the wallet app".
+  it.each([
+    ["the SHA-256 default (no alg element)", undefined, "sha256"],
+    ["a declared SHA-256 (COSE -16)", -16, "sha256"],
+    ["a declared SHA-384 (COSE -43)", -43, "sha384"],
+  ] as const)("ACCEPTS a current-Multipaz response (camelCase transactionDataHash) with %s", async (_label, coseAlg, alg) => {
+    const order: CeremonyOrder = catalog.createOrder([{ productId: "aurora-headphones", quantity: 1 }], "ORD-CAMEL");
+    const req = await buildDcPaymentRequest(order, ORIGIN, SECRET);
+    const dpc = paymentDeviceResponseB64(txHashHexWith(alg, req.transaction_data[0]), coseAlg, "camel");
+    const response = await walletEncrypt(encJwkOf(req.request), dpc);
+    const out = await verifyDcPresentation({ order, origin: ORIGIN, result: { data: { response } }, readerContextToken: req.readerContextToken, secret: SECRET });
+    const amountGate = out.gates.find((g) => g.gate === "Amount binding");
+    expect(amountGate?.detail).toContain(`hash ✓ (${alg})`);
+    expect(out.gates.every((g) => g.pass)).toBe(true);
+  });
+
+  it("REJECTS a camelCase transactionDataHash bound to a DIFFERENT transaction_data", async () => {
+    const order: CeremonyOrder = catalog.createOrder([{ productId: "aurora-headphones", quantity: 1 }], "ORD-CAMEL-X");
+    const req = await buildDcPaymentRequest(order, ORIGIN, SECRET);
+    const dpc = paymentDeviceResponseB64(txHashHex("a-different-transaction-data-string"), undefined, "camel");
+    const response = await walletEncrypt(encJwkOf(req.request), dpc);
+    const out = await verifyDcPresentation({ order, origin: ORIGIN, result: { data: { response } }, readerContextToken: req.readerContextToken, secret: SECRET });
+    const amountGate = out.gates.find((g) => g.gate === "Amount binding");
+    expect(amountGate?.pass).toBe(false);
+    expect(amountGate?.detail).toContain("mismatch");
   });
 
   it("HONORS a non-SHA-256 transaction_data_hash_alg: a SHA-384-bound wallet response verifies", async () => {

@@ -15,6 +15,7 @@ import type { OrderStore } from "./orders.js";
 class SharedVerificationStore implements VerificationStore {
   read(): VerificationRecord | undefined { return undefined; }
   write(): void {}
+  writePart(): void {} // like redisStorage()'s (#444)
   clear(): void {}
 }
 class SharedOrderStore<T> implements OrderStore<T> {
@@ -158,6 +159,31 @@ describe("formatDoctorReport", () => {
     const block = formatDoctorReport(runDoctor(healthy({ hasGateSecret: false })));
     expect(block).toContain("ephemeral-gate-secret");
     expect(block).toContain("openssl rand -hex 32");
+  });
+});
+
+describe("runDoctor — a shared verification store without writePart (#444)", () => {
+  const MERGES = "verification-store-merges-parts";
+
+  it("warns on a deployment: two proofs saved for one order at once can overwrite each other", () => {
+    const finding = runDoctor(healthy({ verificationStoreWritesParts: false })).findings.find((f) => f.code === MERGES);
+    expect(finding?.level).toBe("warn");
+    expect(finding?.fix).toMatch(/writePart/);
+  });
+
+  it("stays quiet when the store has writePart, in local dev, and for the in-memory default (reported on its own)", () => {
+    expect(codes(healthy({ verificationStoreWritesParts: true }))).not.toContain(MERGES);
+    expect(codes(healthy({ verificationStoreWritesParts: false, env: {} }))).not.toContain(MERGES);
+    expect(codes(healthy({ verificationStoreWritesParts: false, sharedVerificationStore: false }))).not.toContain(MERGES);
+  });
+
+  it("CredentAgent.doctor() reads it off the injected store", () => {
+    vi.stubEnv("VERCEL", "1");
+    const merging: VerificationStore = { read: () => undefined, write: () => {}, clear: () => {} };
+    const found = (store: VerificationStore) => new CredentAgent({ walletOrigin: "https://shop.example", store }).doctor().findings.map((f) => f.code);
+    expect(found(merging)).toContain(MERGES);
+    expect(found(new SharedVerificationStore())).not.toContain(MERGES);
+    vi.unstubAllEnvs();
   });
 });
 

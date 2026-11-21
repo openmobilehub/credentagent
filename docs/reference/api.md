@@ -264,9 +264,17 @@ one shopper's verification can never unlock another's checkout). Swap in your ow
 implementation (e.g. Redis / Upstash) for serverless.
 
 ```ts
-read(orderId: string): VerificationRecord | undefined
+read(orderId: string): VerificationRecord | undefined   // the record, with every part merged in
 write(orderId: string, record: VerificationRecord): void
-clear(orderId: string): void
+writePart(orderId: string, slot: VerificationSlot, part: VerificationRecord): void
+clear(orderId: string): void                             // the record and every part
+```
+
+For a store of your own, two helpers:
+
+```ts
+mergeVerificationRecord(record, part): VerificationRecord   // how read() merges a part in
+verificationSlots(requirements?): VerificationSlot[]        // every slot the gate saves an order's parts in
 ```
 
 ---
@@ -345,6 +353,13 @@ interface VerificationManifestEntry {
 }
 ```
 
+Once `mount()` has wired the rails, every `approveUrl` also carries `&requirements=<seal>`: the
+order's requirements as base64url JSON, then a `.`, then an HMAC under the rails' signing key, bound
+to the order id (about 150–250 characters). The first credential, dc-payment or delegated page opened
+from such a link saves them in the order's verification record, once; a forged or altered seal, or
+one for another order, saves nothing. A link a host builds by hand carries no seal, so opening it
+saves nothing yet (#446). Nothing reads the saved requirements yet (#445, #446).
+
 ### Honesty types
 
 These two fields carry the honest status **in the type**, not in prose:
@@ -381,15 +396,35 @@ interface DcqlQuery { credentials: DcqlCredentialOption[]; }
 
 ```ts
 interface VerificationRecord {
+  requirements?: SavedRequirement[];  // what the order needs, saved once by the first page opened (#444)
   ageVerified?: boolean;
+  provenOver?: number;                // the age the age proof was made at
   loyalty?: { applied: boolean; membershipNumber: string | null };
-  [credentialId: string]: unknown;   // custom credential results, keyed by id
+  verifiedGates?: Record<string, true>;   // custom gate() credentials proven, keyed by id
+  proofs?: ProofEntry[];                  // the order proof receipt
 }
+
+interface SavedRequirement {
+  credential: string;
+  required: boolean;
+  effect: "gate" | "discount" | "authorize";
+  minAge?: number;      // age: the stricter of the policy's age.over(n) and the highest minimumAge tag
+  discountPct?: number; // discount only
+}
+
+type VerificationSlot = "requirements" | "age" | "membership" | `gate:${string}`;
 
 interface VerificationStore {
   read(orderId: string): VerificationRecord | undefined | Promise<VerificationRecord | undefined>;
   write(orderId: string, record: VerificationRecord): void | Promise<void>;
   clear(orderId: string): void | Promise<void>;
+  // Optional: save one part (the requirements, or one proof) without rewriting the rest, so two
+  // proofs saved for one order at the same moment can't overwrite each other. The gate only sends
+  // slots verificationSlots(requirements) lists. A custom proof the saved requirements don't name is
+  // merged into the record through write() instead, as for a store without writePart, so two of
+  // those saved at once can still overwrite each other (doctor() warns about a shared store
+  // without it on a deployment).
+  writePart?(orderId: string, slot: VerificationSlot, part: VerificationRecord): void | Promise<void>;
 }
 ```
 

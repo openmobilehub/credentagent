@@ -32,10 +32,14 @@ Both version in lockstep (bump them together), Apache-2.0, ESM, ship their own t
         }')
       ```
 - [x] The storefront's runtime asset `dist/ui/mcp-app.html` (read via `readFile` at request time) **is**
-      in the tarball (`npm pack --dry-run` confirms). The `files` allowlist covers it via `"dist"`.
-- [x] No heavy/demo deps leak into either package's `dependencies` or built `dist` (no `@upstash/redis`,
+      in the tarball (`npm pack --dry-run` confirms). The `files` allowlist covers it via `"dist"`. So is
+      the gate's card page, `dist/cards/cards.html`.
+- [x] No heavy/demo deps leak into either package's `dependencies` or built `dist` JS (no `@upstash/redis`,
       `@hashgraph/sdk`, `cors`, `react`). Hedera/Upstash appear only as UI copy strings; settlement is the
-      injected `settle?` seam.
+      injected `settle?` seam. React is a dev dependency of both packages, inlined only into the two
+      self-contained pages above, which no package code imports. The MCP Apps client is inlined there too;
+      its package, `@modelcontextprotocol/ext-apps`, is a gate dev dependency but a regular storefront
+      dependency, because the storefront's server imports its `/server` helpers at runtime.
 - [x] `@simplewebauthn/browser` (resolved at runtime by the passkey rail) is a declared gate dependency.
 - [x] LICENSE + README present in both packages and in `files`.
 - [x] Full suite green (`npm test`) including the security bypass tests.

@@ -148,8 +148,9 @@ const html = (body: string) =>
  * Register the checkout onto `app`: the ceremony rails (via `mountCeremony`), the checkout
  * page at `/credentagent/orders/:id`, the instant-demo place path (ungated only), and the
  * status poll. Idempotent per app is the caller's concern (the client guards double-serve).
+ * Returns the rails' signing key, which `requirements()` seals each order's requirements under (#444).
  */
-export function serveOrders(app: CeremonyApp, deps: ServeOrdersDeps): void {
+export function serveOrders(app: CeremonyApp, deps: ServeOrdersDeps): string {
   // A synchronous mirror of the stored order, warmed by every `orderStore.read` (which the
   // rails call before the synchronous catalog re-price). Keyed by order id; prices only.
   const warm = new Map<string, CreatedOrder>();
@@ -195,7 +196,7 @@ export function serveOrders(app: CeremonyApp, deps: ServeOrdersDeps): void {
     },
   };
 
-  mountCeremony(app, {
+  const mounted = mountCeremony(app, {
     orderStore,
     catalog,
     // Scope the custom-gate sweep to THIS order's stored policy (#59 finding 2): the credential
@@ -300,4 +301,5 @@ export function serveOrders(app: CeremonyApp, deps: ServeOrdersDeps): void {
   get("/credentagent/orders/:id", page);
   post("/credentagent/orders/:id/place", place);
   get("/credentagent/orders/:id/status", status);
+  return mounted.signingKey;
 }

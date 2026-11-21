@@ -237,6 +237,7 @@ Each finding is `{ level: "error" | "warn", code, message, fix }`. It checks the
 | `ephemeral-gate-secret` | no `gateSecret` on a deployment (serverless ⇒ error, else warn) | set `GATE_SECRET` — `openssl rand -hex 32` — and pass `{ gateSecret }` |
 | `localhost-wallet-origin` | `walletOrigin` is localhost on a deployment | pass your public `https` origin |
 | `in-memory-verification-store` | the default in-memory `store` on a deployment | inject a shared `{ store }` (Redis/Upstash) |
+| `verification-store-merges-parts` | a shared `store` with no `writePart()` on a deployment (**warn**): two proofs saved for one order at the same moment can overwrite each other | implement `writePart(orderId, slot, part)`, or use `redisStorage()` |
 | `in-memory-order-store` | the default in-memory order stores on a deployment | inject `{ orderStore, completedOrderStore }` |
 | `ephemeral-mandate-key` | no `mandateSigningKey` on a deployment — the AP2 key was generated at boot (**error** on any deployment) | pass a stable private P-256 JWK as `{ mandateSigningKey }` |
 | `ephemeral-checkout-key` | no `checkoutSigningKey` on a deployment — the key carts are quoted with was generated at boot (**warn**) | pass a second, different private P-256 JWK as `{ checkoutSigningKey }` — one per store |
@@ -524,7 +525,13 @@ app.post("/checkout/:id", async (req, res) => {
   serve, and the buyer lands on a dead link.
 - **`host.verificationStore`** is the per-order proof store (default in-memory; inject a shared store
   — e.g. Redis — for a multi-instance deploy). The rails write it when the buyer proves; your
-  completion reads it.
+  completion reads it. It also holds the order's requirements: `requirements()` seals them into
+  each approve link, and the first credential, dc-payment or delegated page opened from one saves
+  them (`record.requirements`). A link you build by hand carries no seal, so it saves nothing yet.
+  For a store of your own, add the optional `writePart(orderId, slot, part)` so two proofs saved at
+  the same moment don't overwrite each other (except a custom proof the order's saved requirements
+  don't name, which the gate still merges into the record); `read()` then returns the record with
+  each part merged in by `mergeVerificationRecord`, from the slots `verificationSlots(requirements)` lists.
 - **Fail-closed like `mount()`:** `defineHost` throws at construction on an incomplete or contradictory
   seam set (missing `catalog`/`orderStore`, both `records` and a `completion`, or neither a `signingKey`
   nor `allowEphemeralKey`).
@@ -621,8 +628,8 @@ Honesty is carried in the **types**, not prose (Principle VII):
   signing: "device" })`, below). Here the gate **does** verify the wallet's signature over the
   grant's exact bounds — an SD-JWT VC Key Binding JWT carrying the AP2 Mandate Content, checked
   against the key the credential names in `cnf`, with every revealed claim checked against the
-  issuer-signed `_sd` digests — a real holder-of-key binding, one step past presence-only. What is still demo is only the trust **anchor**: the payment credential is a
-  self-minted demo credential with no issuer/VICAL check (that is the roadmap `issuer-verified`
+  issuer-signed `_sd` digests — a real holder-of-key binding, one step past presence-only. What is still demo is only the trust **anchor**: the gate does not
+  check who issued the payment credential (no issuer/VICAL check; that is the roadmap `issuer-verified`
   line, issue #14), so a self-crafted device key would still pass. The signature is real; the
   anchor is not — the page and the type both say exactly that, and the gate never claims
   `issuer-verified` for the in-gate check.
@@ -878,7 +885,7 @@ that was never device-signed can never spend; a spend always traces to the exact
 **real** — the gate verifies the holder's Key Binding JWT against the key the credential names in
 `cnf`, checks the `sd_hash` that binds it to the disclosures presented, and rebuilds the Mandate
 Content from its own grant record to require the wallet signed those exact terms. What is **still
-demo** is the trust **anchor**: the payment credential is self-minted with **no issuer check** (that
+demo** is the trust **anchor**: the gate does **not** check who issued the payment credential (that
 hardening is issue #14), so a self-crafted credential would pass. The
 verify runs through a **seam** — the in-gate backend attests `device-signed` / `verifiedBy: "gate"`;
 wiring an external verifier (the `DelegatedVerifier` seam) that reports a stronger, issuer-backed level
@@ -888,15 +895,44 @@ is the fast-follow, and the gate **relays** that level verbatim with the attesto
 Test the whole flow **with no phone** using the exported simulated wallet — see
 [`examples/device-signed-grants.mjs`](https://github.com/openmobilehub/credentagent/blob/main/examples/device-signed-grants.mjs)
 (`devSimulateWalletSignature` produces a real device signature the way Stripe's test cards stand in
-for a real card). **That is the way to test today.** Signing on a real phone needs a wallet that
-supports AP2's `delegate` request, and **no released wallet does yet**: the Multipaz change
-([openwallet-foundation/multipaz#2011](https://github.com/openwallet-foundation/multipaz/pull/2011))
-was closed without merging, and a released Multipaz wallet rejects the request. With a patched
-wallet build, the grant asks for an **SD-JWT** payment credential (`vct` `urn:emvco:dpc:card:1` or
-`com.emvco.dpc`); from a clone of this repo, mint one with
-[`node tools/demo-pki/mint/mint-dpc-sdjwt.mjs --mpzpass`](https://github.com/openmobilehub/credentagent/blob/main/tools/demo-pki/mint/mint-dpc-sdjwt.mjs),
-which writes `tools/demo-pki/keys/dpc.mpzpass` to import into that build. The mdoc
-`payment.mpzpass` from the demo set no longer matches.
+for a real card). **That is the way to test in CI.**
+
+**Sign a grant on your phone, in three steps:**
+
+1. Install a Multipaz Wallet **development build** that supports AP2's `delegate` request. It comes
+   from pull requests that are still open ([multipaz-wallet#48](https://github.com/openwallet-foundation/multipaz-wallet/pull/48),
+   [multipaz#2178](https://github.com/openwallet-foundation/multipaz/pull/2178) and
+   [multipaz#2196](https://github.com/openwallet-foundation/multipaz/pull/2196)), so there is no
+   release yet. Download the [debug APK](https://drive.google.com/file/d/13NRT4uTDY4DZT6NMYmq-x2ABMY9eOR5j/view?usp=share_link)
+   that signed the grant in [issue #466](https://github.com/openmobilehub/credentagent/issues/466)
+   (a debug build that reports the version `2026.W46.0-pr-48-176-git-55db8c2-dirty`, SHA-256
+   `fc36639981b13b74ececdc156253811f516f365c45dd7467270c7c3e1d9bcc8d`: check it before you install, with `shasum -a 256 <file>` on macOS, `sha256sum <file>` on Linux or
+   `certutil -hashfile <file> SHA256` on Windows). It is an earlier version of multipaz-wallet#48 plus one fix, built from the branch
+   [`build/466-recorded-wallet`](https://github.com/TheBlackBit/multipaz-wallet/tree/build/466-recorded-wallet).
+   **No released wallet signs a grant yet**; a released one rejects the request. When a release
+   includes those changes, this link is replaced by it (tracked in issue #472).
+2. In the wallet, add the **Payment card** from the official issuer at
+   [`issuer.multipaz.org`](https://issuer.multipaz.org/issuer/?config_id=payment_sca_sd_jwt)
+   (credential configuration `payment_sca_sd_jwt`). The issuer lists **two** cards both named
+   "Payment card"; the grant needs the **SD-JWT** one, because AP2's `delegate` request exists only
+   for SD-JWT. The mdoc one (`payment_sca_mdoc`) won't match, and the phone says "Your info wasn't found" (seen
+   on a phone, [issue #466](https://github.com/openmobilehub/credentagent/issues/466)). Nor will the
+   repo's mdoc `payment.mpzpass`: the request is SD-JWT only.
+3. Open the approve link and press "Sign with your wallet". On a computer, scan the QR code with the
+   phone. Then approve in the wallet.
+
+The grant asks for an SD-JWT payment credential (`vct` `urn:emvco:dpc:card:1` or `com.emvco.dpc`)
+that discloses `credential_id` (the official card) or `payment_instrument_id` (the repo's test
+card, below). This was run on an Android phone against the hosted dev store and ended with the
+grant `authorized` ([issue #466](https://github.com/openmobilehub/credentagent/issues/466)). The
+wallet shows the requester as unknown: unless the host passes a `readerIdentity`, the server signs
+its request with a self-signed certificate that no reader trust list (RICAL) in the wallet lists (see
+[Presenting a stable reader identity](#presenting-a-stable-reader-identity-optional)). The gate does **not** check who issued the card, so a grant it verifies stays
+`device-signed`, not `issuer-verified`.
+
+The repo's own test card, `node tools/demo-pki/mint/mint-dpc-sdjwt.mjs --mpzpass`, is a **test
+fixture** for this repo's tests, not the way to try the product. It has not been tried on a phone
+with the current request.
 
 ### Credentials on a grant — presented before you authorize, or not at all
 
@@ -1010,7 +1046,7 @@ defineCredential({ id, request, verify, effect, appliesTo?, ui })
 dcql({ docType, claims })  ·  gate()  ·  discount({ percent?, amount? })  ·  authorize()
 
 // Stores + host-side composition seam
-MemoryVerificationStore  ·  completeOrder(input, ctx)
+MemoryVerificationStore  ·  mergeVerificationRecord(record, part)  ·  verificationSlots(requirements?)  ·  completeOrder(input, ctx)
 
 // Bring your own host — the typed seam contract (builds completion + publishes the seams)
 defineHost({ catalog, orderStore, records | completion, signingKey | allowEphemeralKey })
@@ -1041,7 +1077,7 @@ gated()  ·  buildVerificationRequired()  ·  isVerificationRequired()  ·  enve
 ageDcql()  ·  ENVELOPE_VERSION  ·  ENVELOPE_SENTINEL
 
 // Types: CredentAgentOptions, GateOrder, OrderLine, Credential, Step, Effect,
-//        VerificationManifestEntry, VerificationStore, VerificationRecord,
+//        VerificationManifestEntry, VerificationStore, VerificationRecord, SavedRequirement, VerificationSlot,
 //        TrustLevel, DcqlQuery, DcqlClaim, DcqlCredentialOption, ExpressApp,
 //        CompletionSeam / SettlementSeam / CeremonyOrder (host composition)
 //        DelegatedVerifier / DelegatedVerdict / DelegatedHandoff / SettlementRecordLike (delegated seam)
@@ -1049,8 +1085,8 @@ ageDcql()  ·  ENVELOPE_VERSION  ·  ENVELOPE_SENTINEL
 // Entry points besides the root
 "@openmobilehub/credentagent-gate/agent"   // the AGENT's side; holds its private key, so never imported by a store
   AgentKey.generate() · AgentKey.fromJwk(jwk) · DelegatedIntent.fromWalletPresentation({ presentation, disclosures }) · intent.spend(args) → DelegatedPurchaseProof
-"@openmobilehub/credentagent-gate/cards"   // the card kit, first slice: the permission card's data contract
-  GRANT_VIEW_KIND · GrantViewData · GrantViewProduct
+"@openmobilehub/credentagent-gate/cards"   // the card kit, first slice: the grant card's data contract
+  GRANT_VIEW_KIND · REVOKE_TOOL_META · GrantViewData · GrantViewProduct
 ```
 
 More on the API: [`docs/reference/api.md`](https://github.com/openmobilehub/credentagent/blob/main/docs/reference/api.md).

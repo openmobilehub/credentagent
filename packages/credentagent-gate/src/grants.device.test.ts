@@ -91,6 +91,26 @@ describe("device-signed grants — e2e over the served HTTP rail", () => {
     }
   });
 
+  // #429: the page the signing ceremony returns to must not call a wallet-signed grant a click-through
+  // demo, nor describe a grant nobody signed as wallet-approved.
+  it("the grant page's honesty line follows the grant's state, not the page-mode line", async () => {
+    const ca = makeAgent();
+    const app = serve(ca);
+    const page = async (id: string) => (await request(app).get(`/credentagent/grants/${id}`).set("Host", HOST)).text;
+
+    const signed = await ca.grants.create({ merchant: "utopia", budget: 200, perSpend: 130, signing: "device" });
+    await signOverHttp(app, signed.id);
+    const signedPage = await page(signed.id);
+    expect(signedPage).toContain("the device signature is real");
+    expect(signedPage).not.toContain("stands in for the wallet ceremony");
+
+    const revoked = await ca.grants.create({ merchant: "utopia", budget: 200, perSpend: 130, signing: "device" });
+    await revoked.revoke();
+    const revokedPage = await page(revoked.id);
+    expect(revokedPage).toContain("nothing was approved or signed on this grant");
+    expect(revokedPage).not.toContain("the device signature is real");
+  });
+
   it("refuses a signature made over a DIFFERENT nonce (cross-request replay)", async () => {
     const ca = makeAgent();
     const app = serve(ca);
