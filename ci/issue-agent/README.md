@@ -358,8 +358,8 @@ Claude review finishes on an agent:in-review PR, or the label is added   (or: ma
 - **Same trust split:** assess and push are trusted code; fix runs in a job with no GitHub token.
   Only threads started by the review bot (a GitHub App account, not any user named `claude`) or by
   people with write access are read, and only their replies; only the maintainers' are answered.
-- **Only what blocks gets fixed.** A ✅ review goes to you at once, even with optional notes open:
-  they are listed and linked as "no action needed", and the agent pushes no commit for them. Chasing
+- **Only what blocks gets fixed.** A ✅ review goes to you at once, even with optional notes: they
+  are in the review's summary, not threads, and the agent pushes no commit for them. Chasing
   them cost a cycle each and found a new, smaller note every time — on pull request #347 (issue
   #322's fix) the reviews went ⛔ → 💬 → 💬 → ⛔ → 💬, and on pull request #415 a cycle pushed a
   commit that only reworded comments. ⛔ gets one fix cycle; **a second ⛔ goes to you as
@@ -370,7 +370,7 @@ Claude review finishes on an agent:in-review PR, or the label is added   (or: ma
   cap.) The push job sets the mark from its own checked values, not from the agents' output. A bot note a person with write access replied on is answered like
   their own thread. On a stop, the bot's open notes are listed plainly, not as "no action needed" —
   on a ⛔ they may be what blocks. The loop reads two verdicts, ✅ and ⛔; a 💬 Ready — small notes (which the
-  review is dropping) reads as ✅, for one release.
+  review no longer gives) reads as ✅, for one release.
 - **One re-review, asked for by label.** After a fix push the push job adds **`review:again`**
   (with `AGENT_GH_TOKEN`, once per cycle; it makes the label if it's missing). That label, not the
   push, starts the next Claude review; the review takes the label off when it's done. It is not
@@ -558,7 +558,7 @@ is left, so together they can't pass the cap. A run that hits its cap stops and 
 | `ISSUE_AGENT_BUDGET_USD` | `25` | per-session cap |
 | `ISSUE_AGENT_RUN_BUDGET_USD` | `100` | per-run cap |
 | `ISSUE_AGENT_LABEL` | `agent` | the label `--poll` looks for |
-| `ISSUE_AGENT_MAX_REVIEW_CYCLES` | `2` | review-loop fix cycles; ✅ → `agent:ready-for-human` (optional notes listed), a second ⛔ → `agent:needs-human` |
+| `ISSUE_AGENT_MAX_REVIEW_CYCLES` | `2` | review-loop fix cycles; ✅ → `agent:ready-for-human`, a second ⛔ → `agent:needs-human` |
 | `ISSUE_AGENT_DISCUSS_ROUTINE`, `ISSUE_AGENT_DISCUSS_TOKEN` | — | secrets: the brief's "talk it through live" routine ("The brief") |
 
 Secrets/variables: `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` (+ `CLAUDE_AUTH`), and

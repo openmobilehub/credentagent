@@ -131,8 +131,8 @@ export function openWorkList(items, { self, isTrusted }) {
 export const isReviewBot = (author) => author?.__typename === "Bot" && author?.login === "claude";
 
 /**
- * "ready" (✅ Ready to merge), "changes" (⛔ Needs changes), or undefined. The review is dropping
- * 💬 Ready — small notes; for one release a 💬 still reads as ✅.
+ * "ready" (✅ Ready to merge), "changes" (⛔ Needs changes), or undefined. The review no longer
+ * gives 💬 Ready — small notes; for one release a stray 💬 still reads as ✅.
  */
 export function parseVerdict(body) {
   const m = String(body ?? "").match(/\*\*Verdict:\s*(✅|💬|⛔)/u);
