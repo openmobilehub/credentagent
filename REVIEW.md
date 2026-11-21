@@ -180,13 +180,26 @@ finding that mattered.
 
 **Visible part (what a person reads), at most ~200 words:**
 
-1. `## Claude review`, then a verdict in plain words: **✅ Ready to merge**,
-   **💬 Ready — small notes**, or **⛔ Needs changes**.
+1. `## Claude review`, then one of two verdicts in plain words: **✅ Ready to merge**
+   or **⛔ Needs changes**. There is no third one: a PR with only notes is ✅.
 2. One or two sentences: what the PR does and whether it is safe to merge.
-3. **Fix before merging** (only for ⛔, at most 3 items). For each: what is
-   wrong, why it matters (an everyday example), and what to do, in one sentence each.
-4. **Worth a look** (optional): at most 5 one-line, non-blocking notes.
+3. **Fix before merging** (only for ⛔, at most 3 items), and only what blocks: §1–§4,
+   §8, a correctness bug, or a release or README claim the code does not back (§6). For
+   each: what is wrong, why it matters (an everyday example), and what to do, in one
+   sentence each.
+4. **Worth a look** (optional, **first review only**): at most 3 one-line notes. They
+   are not tasks: the author decides, no fix is expected, and none asks for a re-review.
 5. On a follow-up review, one line first: "Since the last review: N fixed, M still open".
+   A follow-up checks only the earlier ⛔ items and blocking problems in the new commits;
+   it adds no new notes.
+
+**Summary only.** No inline comments: every finding is in the summary. On this repo a
+thread on a line is mandatory work before merge, so a note there turns into a task.
+
+**Maintainer-only items.** Something blocking that only a maintainer can do (a repo
+setting, a secret, a release step, a bug outside this PR) is not put on the author: the
+review files a `follow-up` issue for it (after searching for an open one on the same
+thing) and links it in Details. The PR's verdict doesn't wait on it.
 
 Above the details: no file paths, line numbers, invariant numbers, rubric codes or
 bare issue numbers. Name the thing instead ("the payment page"). Don't list what
@@ -196,5 +209,6 @@ passed.
 `file:line`, the invariant or principle it maps to, CONFIRMED or PLAUSIBLE, and the
 evidence; then the coverage line from §7.
 
-Findings that map to §1–§4 or §8 (or a release claim the code does not back, §6)
-are ⛔ Needs changes. §5 findings are 💬 notes unless they compound.
+Findings that map to §1–§4 or §8, a correctness bug, or a release claim the code does
+not back (§6) are ⛔ Needs changes. Everything else, §5 included, is at most a Worth a
+look note on the first review, or left out.

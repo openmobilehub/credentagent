@@ -93,10 +93,11 @@ your diff will be held against.
 - **Same-repo PRs** — an automated Claude review (`anthropics/claude-code-action`) runs on every
   non-draft PR opened from a branch in this repo. It's grounded in this project's security
   invariants. **The review is opt-in and currently ON** — it only runs when the repo variable
-  `ENABLE_CLAUDE_REVIEW` is `"true"`, and posts its findings as PR comments. It is not a required
-  check, so human review is the gate — but its comments on specific lines are review threads, and
-  those must be resolved before merge (below). Its summary comment has no Resolve button and
-  doesn't block. (Draft PRs are skipped to save cost; mark a PR ready for
+  `ENABLE_CLAUDE_REVIEW` is `"true"`, and posts one summary comment: ✅ Ready to merge or ⛔ Needs
+  changes, what blocks (at most 3 items), and on the first review at most 3 optional notes, which
+  are not tasks. It posts no comments on lines, so it opens no thread you must resolve. Something
+  only a maintainer can do goes into a `follow-up` issue, not onto you. It is not a required check,
+  so human review is the gate. (Draft PRs are skipped to save cost; mark a PR ready for
   review to trigger a run.)
 - **It reviews once.** A push is not reviewed. For one more review after a real fix, add the
   **`review:again`** label; the bot takes it off when it's done. It stops at **2 reviews** since

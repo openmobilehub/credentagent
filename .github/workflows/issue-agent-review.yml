@@ -6,8 +6,8 @@ run-name: "issue-agent-review · ${{ github.event_name == 'push' && 'main moved:
 # agent's PR, or any maintainer's PR given the label, e.g. by a coding agent), the agent fixes what
 # the review asks, pushes, replies to and resolves each thread, and adds review:again, which starts
 # the next review (a push alone no longer does).
-# It hands the PR to a human only when the review is ✅ Ready to merge, or 💬 with every thread
-# resolved, or when it stops (cycle cap, budget, a change it may not publish), saying why.
+# It hands the PR to a human only when the review is ✅ Ready to merge with no maintainer's thread
+# open, or when it stops (a second ⛔, cycle cap, budget, a change it may not publish), saying why.
 # How it works and what it trusts: ci/issue-agent/README.md, "The review loop".
 #
 # Same three-job split as issue-agent.yml, so code an agent writes never shares a job with a token:

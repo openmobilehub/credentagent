@@ -370,7 +370,7 @@ Claude review finishes on an agent:in-review PR, or the label is added   (or: ma
   cap.) The push job sets the mark from its own checked values, not from the agents' output. A bot note a person with write access replied on is answered like
   their own thread. On a stop, the bot's open notes are listed plainly, not as "no action needed" —
   on a ⛔ they may be what blocks. The loop reads two verdicts, ✅ and ⛔; a 💬 Ready — small notes (which the
-  review is dropping) reads as ✅, for one release.
+  review no longer gives) reads as ✅, for one release.
 - **One re-review, asked for by label.** After a fix push the push job adds **`review:again`**
   (with `AGENT_GH_TOKEN`, once per cycle; it makes the label if it's missing). That label, not the
   push, starts the next Claude review; the review takes the label off when it's done. It is not
