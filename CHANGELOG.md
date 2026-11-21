@@ -95,12 +95,13 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
   no longer ends in "presentation carries no key-binding JWT" (#473). That wallet sends its
   signature in the middle of the answer, followed by the mandate disclosures (the Delegated SD-JWT
   layout of the Delegate SD-JWT draft, §5.1.1), where the signing page looked for it at the end.
-  The page reads both layouts. It refuses what it refused before, except that it now accepts the
-  new layout and the new type spelling below. Checked against a real answer captured on a phone
+  The page reads both layouts. It now accepts the new layout and the new type spelling below, and
+  refuses one more kind of malformed signature. Checked against a real answer captured on a phone
   from a development build of that wallet, which is replayed as a test.
   - The page already refused a key binding with the wrong number of parts. It now also refuses,
-    in either layout, one whose signature is padded with `=` or written with `+` or `/`: 0.6.0
-    authorized such a grant, and the merchant then refused it when the agent spent it.
+    in either layout, one whose signature has a character outside base64url, such as `=`, `+` or
+    `/`. 0.6.0 authorized such a grant. If the agent held its key, the agent could not spend it.
+    If the gate held the key, the gate spent it as usual; that grant is now refused at signing.
   - The wallet types its signature `kb-sd-jwt+kb`, a spelling the draft uses in §6 (§5.1.4 writes
     `kb+sd-jwt+kb`). The signing page and the merchant's chain verifier (`verifyDelegatedPurchase`)
     now accept either. The gate does not choose the wallet's type; the wallet does.
