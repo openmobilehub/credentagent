@@ -234,7 +234,7 @@ export function stillOpen({ threads, notes = [], responses }) {
  * The review verdict that applies to the PR's head. `summaries` are the review bot's summary
  * comments, oldest first. Times are compared as instants (GitHub reports a commit's time in the
  * committer's own zone). A head that only merges main in (two parents) gets no new summary — the
- * review skips a push that leaves the PR's own diff unchanged — so the last verdict still applies.
+ * review skips a head that leaves the PR's own diff unchanged — so the last verdict still applies.
  */
 export function latestVerdict({ summaries, headAt, headIsMerge, conclusion }) {
   const fresh = summaries.filter((s) => Date.parse(s.createdAt) >= Date.parse(headAt)).at(-1);
