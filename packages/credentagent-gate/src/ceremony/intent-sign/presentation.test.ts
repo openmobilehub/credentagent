@@ -697,6 +697,25 @@ describe("the Delegated SD-JWT layout (#473)", () => {
     if (!out.ok) expect(out.reason).toBe("presentation carries no key-binding JWT");
   });
 
+  // An empty first disclosure makes the answer `<chain>~<key binding>~~…`, which the gate cannot split.
+  // A backend that vouches for it must still get a refusal, not a thrown error: without the guard
+  // in verify.ts this call throws "Cannot read properties of undefined".
+  it("BYPASS: a backend that accepts an answer the gate cannot read → refused as not a compact SD-JWT presentation", async () => {
+    const b = bounds();
+    const { req, result } = await signFor(b, { delegatedLayout: true, overrideKbDisclosure: "" });
+    const accepting: IntentVerifyBackend = async () => ({
+      ok: true,
+      trustLevel: "issuer-verified",
+      verifiedBy: "careless-verifier",
+      credentialType: "urn:emvco:dpc:card:1",
+      disclosed: { payment_instrument_id: "x" },
+      delegatePayload: req.delegateDigests.map((d: string) => ({ "...": d })),
+    });
+    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantUrl: ORIGIN.origin, nonceGuard: memoryNonceGuard(), backend: accepting, delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
+    expect(out.ok).toBe(false);
+    if (!out.ok) expect(out.reason).toBe("not a compact SD-JWT presentation");
+  });
+
   it("BYPASS: a backend that accepts an answer with nothing behind the `~~` → the gate still refuses", async () => {
     const b = bounds();
     const { req, result } = await signFor(b, { delegatedLayout: true, omitKeyBinding: true });

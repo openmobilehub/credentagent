@@ -95,7 +95,7 @@ export interface IntentTrustVerdict {
  *
  *  `sdjwt` arrives in either layout: the key binding last (`<credential>~<disclosures>~<KB-JWT>`),
  *  or the Delegated SD-JWT layout (`<credential>~<disclosures>~~<KB-JWT>~<disclosures>~`, draft
- *  §5.1.1), which ends in `~`. In that layout `sd_hash` covers `<credential>~<disclosures>~`, up to
+ *  §5.1.1), which ends in `~`. In that layout `sd_hash` covers `<credential>~<disclosures>~`, before
  *  the second `~` of `~~`; the disclosures behind the key binding are bound by `delegate_payload`,
  *  not hashed. A backend that does not need to read the answer itself should wrap `inGateBackend`,
  *  which reads both layouts. */

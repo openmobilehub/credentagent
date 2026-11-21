@@ -98,7 +98,9 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
   The page reads both layouts. It refuses what it refused before, except that it now accepts the
   new layout and the new type spelling below. Checked against a real answer captured on a phone
   from a development build of that wallet, which is replayed as a test.
-  - The page still refuses a key binding that is not three base64url parts, in either layout.
+  - The page already refused a key binding with the wrong number of parts. It now also refuses,
+    in either layout, one whose signature is padded with `=` or written with `+` or `/`: 0.6.0
+    authorized such a grant, and the merchant then refused it when the agent spent it.
   - The wallet types its signature `kb-sd-jwt+kb`, a spelling the draft uses in §6 (§5.1.4 writes
     `kb+sd-jwt+kb`). The signing page and the merchant's chain verifier (`verifyDelegatedPurchase`)
     now accept either. The gate does not choose the wallet's type; the wallet does.
