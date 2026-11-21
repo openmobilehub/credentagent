@@ -1,9 +1,14 @@
 {
+  "enabledPlugins": {
+    "review-to-the-bar@review-to-the-bar": true
+  },
   "extraKnownMarketplaces": {
     "review-to-the-bar": {
-      "source": { "source": "github", "repo": "openmobilehub/review-to-the-bar" },
+      "source": {
+        "source": "github",
+        "repo": "openmobilehub/review-to-the-bar"
+      },
       "autoUpdate": true
     }
-  },
-  "enabledPlugins": { "review-to-the-bar@review-to-the-bar": true }
+  }
 }
