@@ -83,8 +83,38 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
   built from the gate's `walletOrigin`, so a wallet origin on plain `http:` anywhere else (a LAN
   address, a `.local` name, a `*.localhost` subdomain) no longer gets the buttons: serve it over
   `https:` or use `localhost` (#434).
+- `verifyDelegatedPurchase` accepts the agent's last hop typed `kb-sd-jwt` as well as `kb+sd-jwt`
+  (before, only `kb+sd-jwt`), as AP2's own verifier does; `cnf` still decides whether a hop ends the
+  chain. This reaches only agents built without this package: the gate's own agent signs
+  `kb+sd-jwt`. The signing page does not accept `kb-sd-jwt`, because it sees only the wallet's hop
+  (#473).
 
 ### Fixed
+
+- Signing a spending grant with the updated Multipaz Wallet (a development build, not released yet)
+  no longer ends in "presentation carries no key-binding JWT" (#473). That wallet sends its
+  signature in the middle of the answer, followed by the mandate disclosures (the Delegated SD-JWT
+  layout of the Delegate SD-JWT draft, §5.1.1), where the signing page looked for it at the end.
+  The page reads both layouts. It now accepts the new layout and the new type spelling below, and
+  refuses one more kind of malformed signature. Checked against a real answer captured on a phone
+  from a development build of that wallet, which is replayed as a test.
+  - The page already refused a key binding with the wrong number of parts. It now also refuses,
+    in either layout, one whose signature has a character outside base64url, such as `=`, `+` or
+    `/`. 0.6.0 authorized such a grant. If the agent held its key, the agent could not spend it.
+    If the gate held the key, the gate spent it as usual; that grant is now refused at signing.
+  - The wallet types its signature `kb-sd-jwt+kb`, a spelling the draft uses in §6 (§5.1.4 writes
+    `kb+sd-jwt+kb`). The signing page and the merchant's chain verifier (`verifyDelegatedPurchase`)
+    now accept either. The gate does not choose the wallet's type; the wallet does.
+  - **Update the gate and merchants together.** A merchant still on 0.6.0 accepts only
+    `kb+sd-jwt+kb`, so it refuses a spending grant this wallet signed, with `code: "typ"`, when the
+    agent spends it, after the user has left.
+  - If you call `verifyIntentPresentation` with your own `IntentVerifyBackend`, wrap
+    `inGateBackend`; it reads both layouts and both type spellings.
+  - `verifyIntentPresentation` now returns `intent.presentation` re-serialized for the new layout,
+    in the earlier shape (`<credential>~<disclosures>~<key binding>`), so the code that spends it
+    is unchanged.
+  - New test-only options on the simulated wallet, `devSimulateWalletSignature`:
+    `delegatedLayout`, `overrideKbDisclosure` and `breakKbEncoding`.
 
 - Creating a spending grant from claude.ai no longer hangs with a product grid where the grant card
   should be. Three causes, fixed together:

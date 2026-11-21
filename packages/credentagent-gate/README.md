@@ -887,10 +887,11 @@ that was never device-signed can never spend; a spend always traces to the exact
 Content from its own grant record to require the wallet signed those exact terms. What is **still
 demo** is the trust **anchor**: the gate does **not** check who issued the payment credential (that
 hardening is issue #14), so a self-crafted credential would pass. The
-verify runs through a **seam** — the in-gate backend attests `device-signed` / `verifiedBy: "gate"`;
-wiring an external verifier (the `DelegatedVerifier` seam) that reports a stronger, issuer-backed level
-is the fast-follow, and the gate **relays** that level verbatim with the attestor recorded in
-`verifiedBy`.
+verify runs through a **seam**, the `IntentVerifyBackend` type, which only direct callers of
+`verifyIntentPresentation` can plug into (the signing route always uses the in-gate backend). The
+in-gate backend attests `device-signed` / `verifiedBy: "gate"`; wiring an external verifier (the
+`DelegatedVerifier` seam) that reports a stronger, issuer-backed level is the fast-follow, and the
+gate **relays** that level verbatim with the attestor recorded in `verifiedBy`.
 
 Test the whole flow **with no phone** using the exported simulated wallet — see
 [`examples/device-signed-grants.mjs`](https://github.com/openmobilehub/credentagent/blob/main/examples/device-signed-grants.mjs)

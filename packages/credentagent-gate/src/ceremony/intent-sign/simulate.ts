@@ -80,10 +80,21 @@ export interface SimulateOptions {
    *  disclosures actually presented — what tampering with the disclosure list after the holder
    *  signed looks like on the wire. */
   breakSdHash?: boolean;
+  /** TEST-ONLY: sign a key binding whose body carries one extra base64url character — valid
+   *  signature, same claims to a lenient reader, refused by a strict decoder. */
+  breakKbEncoding?: boolean;
   /** TEST-ONLY: present the SAME disclosure twice, with the key binding re-signed over it. One
    *  digest, two disclosures claiming it — a malformed presentation a verifier must not unpack
    *  into a claim it then trusts. */
   duplicateDisclosure?: boolean;
+  /** TEST-ONLY: answer in the Delegated SD-JWT layout the updated Multipaz wallet sends: the
+   *  credential's chain, an empty part, the key binding, then the mandate disclosures behind it
+   *  (#473). With `omitKeyBinding`: the chain and the gap, nothing behind it. */
+  delegatedLayout?: boolean;
+  /** TEST-ONLY, only with `delegatedLayout` (it throws without): replace the FIRST disclosure behind
+   *  the key binding with this one — a disclosure the key binding's `delegate_payload` does not
+   *  commit to. The others stay the mandates' own. */
+  overrideKbDisclosure?: string;
 }
 
 /**
@@ -97,6 +108,9 @@ export async function devSimulateWalletSignature(
   const instrumentId = opts.instrumentId ?? "demo-instrument-0001";
   if (opts.cardShape !== undefined && opts.cardShape !== "multipaz-dpc" && opts.cardShape !== "demo-dpc") {
     throw new Error(`devSimulateWalletSignature: unknown cardShape "${String(opts.cardShape)}"; use "multipaz-dpc" or "demo-dpc" (the default)`);
+  }
+  if (opts.overrideKbDisclosure !== undefined && !opts.delegatedLayout) {
+    throw new Error("devSimulateWalletSignature: overrideKbDisclosure only applies with delegatedLayout");
   }
   // The one claim the gate accepts as proof of the card, which depends on the card's shape.
   const acceptedClaim = opts.cardShape === "multipaz-dpc" ? "credential_id" : "payment_instrument_id";
@@ -179,7 +193,8 @@ export async function devSimulateWalletSignature(
   if (opts.omitKeyBinding) {
     // Disclose everything, sign nothing. A verifier that accepts this has stopped checking
     // that anybody authorized anything.
-    presentation = disclosed;
+    // In the Delegated layout that is the credential's chain and the gap, with nothing behind it.
+    presentation = opts.delegatedLayout ? `${disclosed}~` : disclosed;
   } else {
     const kbKey = opts.forgeHolderKey ? p256().privateKey : holder.privateKey;
     if (opts.duplicateDisclosure) {
@@ -210,6 +225,8 @@ export async function devSimulateWalletSignature(
       // Delegate SD-JWT §7.1: the KB-JWT carries the DIGEST of the delegate payload.
       delegatePayload,
       ...(opts.overrideKbTyp ? { typ: opts.overrideKbTyp } : {}),
+      ...(opts.delegatedLayout ? { kbDisclosures: [opts.overrideKbDisclosure ?? disclosures[0] ?? "", ...disclosures.slice(1)] } : {}),
+      ...(opts.breakKbEncoding ? { malformBody: true } : {}),
       ...(opts.breakSdHash ? { sdHashOver: `${disclosed}tampered` } : {}),
     });
   }

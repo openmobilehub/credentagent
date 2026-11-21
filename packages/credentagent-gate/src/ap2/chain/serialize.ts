@@ -20,7 +20,8 @@ export interface ChainLink {
   disclosures: string[];
 }
 
-const isCompactJwt = (s: string): boolean => /^[\w-]+\.[\w-]+\.[\w-]+$/.test(s);
+/** Exactly three dot-separated base64url parts — what the chain code can split, spend and re-serialize. */
+export const isCompactJwt = (s: string): boolean => /^[\w-]+\.[\w-]+\.[\w-]+$/.test(s);
 
 /**
  * Join links, each an SD-JWT serialization ending in `~`, into one dSD-JWT.
@@ -62,9 +63,11 @@ export function splitChain(token: string): ChainLink[] | undefined {
  * disclosures the request carried.
  *
  * The wallet's key binding IS the second link (Delegate SD-JWT §4: "the KB-JWT in the preceding
- * SD-JWT+KB fulfils the role of the Issuer-JWT for the next"). Its disclosures were never on
- * the wire — the verifier sent them in the request — so they are re-attached here, one at a
- * time: §5.1.4 requires exactly one delegate payload disclosed per chain.
+ * SD-JWT+KB fulfils the role of the Issuer-JWT for the next"). `presentation` is held in the
+ * earlier layout, key binding last: the intent-sign rail stores a Delegated-layout answer that way
+ * and drops the mandate disclosures behind its key binding. The disclosures the verifier sent in
+ * the request are re-attached here, one at a time: §5.1.4 requires exactly one delegate payload
+ * disclosed per chain.
  */
 export function walletChain(presentation: string, disclosure: string): string | undefined {
   const cut = presentation.lastIndexOf("~");
