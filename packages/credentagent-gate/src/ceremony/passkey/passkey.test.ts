@@ -35,6 +35,8 @@ import { buildRegistrationOptions, verifyPasskeyAssertion } from "./verify.js";
 import { renderPasskeyPage } from "./page.js";
 import { issueChallenge } from "../challengeToken.js";
 import type { CeremonyCatalog, CeremonyOrder, CompletionInput } from "../types.js";
+import { CredentAgent } from "../../client.js";
+import { membership, optional, payment, required } from "../../credentials.js";
 
 // ── Catalog (source of truth for price + age restriction) ─────────────────────
 
@@ -247,6 +249,35 @@ describe("CT6 — the four deterministic gates run on a real passkey ceremony", 
     expect(JSON.stringify(h.records.get("ORD-LEGACY"))).not.toContain("LEGACY-RAW");
   });
 
+  // #360 review — on a plain `mount(app, seams)` host the HOST's catalog prices the member
+  // discount (like the storefront's priceCart, at a fixed 10%), whatever percent the policy names.
+  // The passkey rail must check what that catalog priced, not the policy's percent: holding a 10%
+  // catalog order to a `membership.discount(15)` policy refused every member payment.
+  it("a member payment on a plain mount(app, seams) host completes at the catalog's discount, whatever the policy's percent", async () => {
+    const ca = new CredentAgent({ walletOrigin: ORIGIN });
+    const records = new Map<string, CompletedRecord>();
+    const stored = catalog.createOrder([{ productId: "aurora-headphones", quantity: 1 }], "ORD-M", { loyaltyApplied: true });
+    const app = express();
+    ca.mount(app as never, {
+      orderStore: { read: async (id) => (id === "ORD-M" ? stored : null) },
+      catalog,
+      completion: (input) => completeOrder(input, {
+        catalog, verificationStore: ca.store, cart: { clear: async () => {} },
+        records: { read: async (id) => records.get(id), write: async (rec) => void records.set(rec.orderId, rec) },
+      }),
+      signingKey: SIGNING_KEY,
+    });
+    ca.requirements(
+      { id: "ORD-M", total: 199, currency: "USD", lines: [{ id: "aurora-headphones", quantity: 1, unitPrice: 199 }] },
+      [optional(membership.discount(15)), required(payment.in("usd"))],
+    );
+    await ca.store.write("ORD-M", { loyalty: { applied: true, membershipNumber: "M-1" } });
+    const res = await authorize({ app } as Harness, "ORD-M");
+    expect(res.body.gates.find((g: { gate: string }) => g.gate === "Amount integrity")?.pass).toBe(true);
+    expect(res.body.completed).toBe(true);
+    expect(records.get("ORD-M")?.amount).toBe(179.1); // $199 − the catalog's 10%
+  });
+
   it("a replayed verify is idempotent — it records/settles nothing twice", async () => {
     const h = harness();
     h.seed("ORD-P", [{ id: "aurora-headphones", quantity: 1 }]);
@@ -338,6 +369,43 @@ describe("CT7 — a tampered amount is refused by the amount-integrity gate", ()
     const order = catalog.createOrder([{ productId: "aurora-headphones", quantity: 1 }], "ORD-OK");
     const mandate = buildPasskeyMandate({ order, authenticator: AUTH, origin: { rpID: HOST, origin: ORIGIN } });
     expect(runGates(mandate).find((g) => g.gate === "Amount integrity")!.pass).toBe(true);
+  });
+
+  // #360 — a host re-pricer that adds float dollars, unrounded (like examples/bring-your-own-host.mjs):
+  // 3 × 4.90 = 14.700000000000001. Gate 1 compares in whole cents, so it is 1470 on every side.
+  const floatOrder = (unitPrice: number, quantity: number, discount = 0): CeremonyOrder => ({
+    id: "ORD-F", lines: [{ id: "tea", unitPrice, quantity, lineTotal: unitPrice * quantity }],
+    subtotal: unitPrice * quantity, discount, total: unitPrice * quantity - discount, currency: "USD",
+  });
+  const amountGate = (order: CeremonyOrder, amount: number, pct?: number) => {
+    const mandate = buildPasskeyMandate({ order, authenticator: AUTH, origin: { rpID: HOST, origin: ORIGIN } });
+    mandate.payment.amount = amount;
+    return runGates(mandate, pct === undefined ? {} : { loyaltyDiscountPct: pct }).find((g) => g.gate === "Amount integrity")!;
+  };
+
+  it("#360: an unrounded host total of 3 × 4.90 passes when paid 14.70 — and 14.69 is still refused", () => {
+    expect(floatOrder(4.9, 3).total).toBe(14.700000000000001);
+    expect(amountGate(floatOrder(4.9, 3), 14.7).pass).toBe(true);
+    expect(amountGate(floatOrder(4.9, 3), 14.69).pass).toBe(false);
+  });
+
+  it("#360: a real fraction of a cent is REFUSED, never rounded ($0.004 is not $0.00)", () => {
+    const gate = amountGate(floatOrder(0.004, 1), 0);
+    expect(gate.pass).toBe(false);
+    expect(gate.detail).toContain("refused");
+  });
+
+  it("a 15% member discount passes at the order's own percent, and is refused at the default 10%", () => {
+    const order = floatOrder(20, 1, 3); // $20 − 15% = $17
+    expect(amountGate(order, 17, 15).pass).toBe(true);
+    expect(amountGate(order, 17).pass).toBe(false); // the rails' default 10% expects $2 off
+  });
+
+  it("a discount percent outside 0–100 is REFUSED — 150% would bless a negative price", () => {
+    const negative = floatOrder(10, 1, 15); // $10 − 150% = −$5, every amount agreeing at −500 cents
+    const gate = amountGate(negative, -5, 150);
+    expect(gate.pass).toBe(false);
+    expect(gate.detail).toContain("outside 0–100");
   });
 
   it("resolveOrder re-prices a hand-edited (tampered) stored total from the catalog, never the token", async () => {

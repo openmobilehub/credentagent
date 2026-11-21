@@ -176,7 +176,7 @@ export const registerPasskeyGate: RailRegistrar = (app: CeremonyApp, ctx: Ceremo
         secret: ctx.signingKey,
       });
       const mandate = buildPasskeyMandate({ order, authenticator, origin });
-      const gates = runGates(mandate);
+      const gates = runGates(mandate, { loyaltyDiscountPct: await ctx.discountPercentFor?.(order.id) });
       // The order's earlier proofs — read BEFORE completion clears the verification record, so the
       // finished page can list every credential of the order. Without credential bytes (#320): this
       // caller may not be the browser that presented them.
