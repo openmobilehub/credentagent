@@ -73,8 +73,6 @@ export interface SplitPresentation {
   kbJwt: string | undefined;
   /** Disclosures behind the key binding (Delegated layout only). */
   kbDisclosures: string[];
-  /** The presentation in the earlier layout, `<chain><KB-JWT>`; what the chain code stores and spends. */
-  normalized: string | undefined;
 }
 
 export function splitPresentation(sdjwt: string): SplitPresentation | undefined {
@@ -86,20 +84,20 @@ export function splitPresentation(sdjwt: string): SplitPresentation | undefined 
     const rest = sdjwt.slice(gap + 2).split("~");
     if (rest.pop() !== "" || rest.some((p, i) => i > 0 && p === "")) return undefined;
     const [kbJwt, ...kbDisclosures] = rest;
-    if (!kbJwt) return { chain, kbJwt: undefined, kbDisclosures: [], normalized: undefined };
+    if (!kbJwt) return { chain, kbJwt: undefined, kbDisclosures: [] };
     // A key binding that is not three base64url parts is refused where it is read. One with a
     // fourth part, or with `=`, `+` or `/` in its signature, would still verify (the signature is
     // decoded leniently), then be stored, authorized and refused when the agent spends it. One with
     // fewer than three parts fails the signature check, but gets the same refusal here.
     if (!isCompactJwt(kbJwt)) return undefined;
-    return { chain, kbJwt, kbDisclosures, normalized: `${chain}${kbJwt}` };
+    return { chain, kbJwt, kbDisclosures };
   }
   const cut = sdjwt.lastIndexOf("~");
   if (cut < 0) return undefined;
   const kbJwt = sdjwt.slice(cut + 1) || undefined;
   if (kbJwt !== undefined && !isCompactJwt(kbJwt)) return undefined;
   const chain = sdjwt.slice(0, cut + 1);
-  return { chain, kbJwt, kbDisclosures: [], normalized: kbJwt ? sdjwt : undefined };
+  return { chain, kbJwt, kbDisclosures: [] };
 }
 
 export type PresentationResult =
@@ -206,7 +204,7 @@ export async function verifyDelegatedPresentation(args: {
   // accepting it would let the old, non-conformant output keep passing unnoticed.
   const kbTyp = segment<{ typ?: string }>(parts.kbJwt, 0)?.typ;
   if (!kbTyp || !WALLET_KB_TYPS.includes(kbTyp)) {
-    return { ok: false, reason: `key binding is typed ${kbTyp ?? "∅"}; the wallet's hop must be typed ${DELEGABLE_KB_TYPS.join(" or ")} (update the wallet)` };
+    return { ok: false, reason: `key binding is typed ${kbTyp ?? "∅"}, which is not accepted for the wallet's hop here; type it ${DELEGABLE_KB_TYPS.join(" or ")} (update the wallet)` };
   }
 
   const delegatePayload = kb[DELEGATE_PAYLOAD_CLAIM];

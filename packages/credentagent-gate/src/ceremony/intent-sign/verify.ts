@@ -43,13 +43,6 @@ import type { TrustLevel } from "../../types.js";
 import { peekJwtHeader } from "../../ap2/jwt.js";
 import { DELEGABLE_KB_TYPS, isDelegableKbTyp } from "../../ap2/delegate.js";
 
-/** The `typ` of a presentation's Key Binding JWT, wherever the wallet's layout puts it. Read only
- *  AFTER the backend has verified that JWS, so the header (which the signature covers) is the holder's. */
-function keyBindingTyp(sdjwt: string): string | undefined {
-  const typ = peekJwtHeader(splitPresentation(sdjwt)?.kbJwt ?? "")?.typ;
-  return typeof typ === "string" ? typ : undefined;
-}
-
 /** Single-use nonce ledger: `consume` records a nonce and returns true only the FIRST
  *  time (false on replay). In-process (grants are process-local); a multi-instance
  *  deploy would back this with a shared store, like the grant records themselves. */
@@ -102,7 +95,10 @@ export interface IntentTrustVerdict {
  *
  *  `sdjwt` arrives in either layout: the key binding last (`<credential>~<disclosures>~<KB-JWT>`),
  *  or the Delegated SD-JWT layout (`<credential>~<disclosures>~~<KB-JWT>~<disclosures>~`, draft
- *  §5.1.1), which ends in `~`. `splitPresentation` (presentation.ts) cuts either. */
+ *  §5.1.1), which ends in `~`. In that layout `sd_hash` covers `<credential>~<disclosures>~`, up to
+ *  the second `~` of `~~`; the disclosures behind the key binding are bound by `delegate_payload`,
+ *  not hashed. A backend that does not need to read the answer itself should wrap `inGateBackend`,
+ *  which reads both layouts. */
 export type IntentVerifyBackend = (args: {
   /** The compact SD-JWT presentation from `vp_token`. */
   sdjwt: string;
@@ -281,9 +277,10 @@ export async function verifyIntentPresentation(args: {
   // The Delegated SD-JWT layout carries the mandate disclosures behind the key binding. A disclosure
   // there that is not one the gate asked for is refused as unexpected, though `delegate_payload` may
   // legitimately hold more digests than the gate's (`delegatePayloadMatches` allows a superset). None
-  // of them is kept: `normalized` drops everything behind the key binding.
+  // of them is kept: the stored presentation is the chain and the key binding only.
   const layout = splitPresentation(sdjwt);
-  if (!layout?.normalized) return { ok: false, reason: "presentation carries no key-binding JWT" };
+  if (!layout) return { ok: false, reason: "not a compact SD-JWT presentation" };
+  if (!layout.kbJwt) return { ok: false, reason: "presentation carries no key-binding JWT" };
   if (layout.kbDisclosures.some((d) => !disclosures.includes(d))) {
     return { ok: false, reason: "mandate mismatch: a disclosure behind the key binding is not one the gate asked for" };
   }
@@ -296,7 +293,9 @@ export async function verifyIntentPresentation(args: {
   // the person "signed" for a permission every merchant then refused — after they had left. A grant
   // whose key the gate holds is spent by the gate, never by that verifier, and is unchanged.
   if (args.agentHeld) {
-    const typ = keyBindingTyp(sdjwt);
+    // Read only AFTER the backend verified this JWS, so the header (which the signature covers) is the holder's.
+    const headerTyp = peekJwtHeader(layout.kbJwt)?.typ;
+    const typ = typeof headerTyp === "string" ? headerTyp : undefined;
     if (!isDelegableKbTyp(typ)) {
       return {
         ok: false,
@@ -333,6 +332,6 @@ export async function verifyIntentPresentation(args: {
     mandates: expected,
     // Stored in the earlier layout (`<credential>~<disclosures>~<KB-JWT>`): the chain code that spends
     // it re-attaches the mandate disclosures itself, so the ones behind the key binding are not kept.
-    intent: { presentation: layout.normalized, disclosures },
+    intent: { presentation: `${layout.chain}${layout.kbJwt}`, disclosures },
   };
 }

@@ -644,7 +644,7 @@ describe("the Delegated SD-JWT layout (#473)", () => {
     const forged = arrayDisclosure("forged-salt", { type: "payment.open", forged: true } as never);
     const out = await verifyLayout({ overrideKbDisclosure: forged });
     expect(out.ok).toBe(false);
-    if (!out.ok) expect(out.reason).toMatch(/disclosure/);
+    if (!out.ok) expect(out.reason).toMatch(/behind the key binding is not one the gate asked for/);
   });
 
   it("the simulated wallet throws on overrideKbDisclosure without delegatedLayout instead of ignoring it", async () => {
@@ -728,20 +728,19 @@ describe("splitPresentation", () => {
   const KB = "H.B.S";
 
   it("reads the earlier layout, key binding last", () => {
-    expect(splitPresentation(`${C}${KB}`)).toMatchObject({ chain: C, kbJwt: KB, kbDisclosures: [], normalized: `${C}${KB}` });
+    expect(splitPresentation(`${C}${KB}`)).toEqual({ chain: C, kbJwt: KB, kbDisclosures: [] });
   });
 
   it("reads the Delegated layout and stores it in the earlier shape", () => {
-    expect(splitPresentation(`${C}~${KB}~M1~M2~`)).toMatchObject({ chain: C, kbJwt: KB, kbDisclosures: ["M1", "M2"], normalized: `${C}${KB}` });
+    expect(splitPresentation(`${C}~${KB}~M1~M2~`)).toEqual({ chain: C, kbJwt: KB, kbDisclosures: ["M1", "M2"] });
   });
 
   it("the gap with nothing behind it has no key binding to store", () => {
-    expect(splitPresentation(`${C}~`)?.normalized).toBeUndefined();
-    expect(splitPresentation(`${C}~`)?.kbJwt).toBeUndefined();
+    expect(splitPresentation(`${C}~`)).toEqual({ chain: C, kbJwt: undefined, kbDisclosures: [] });
   });
 
   it("an empty key binding with a disclosure behind it has none to store", () => {
-    expect(splitPresentation(`${C}~~M1~`)?.normalized).toBeUndefined();
+    expect(splitPresentation(`${C}~~M1~`)?.kbJwt).toBeUndefined();
   });
 
   it("a Delegated answer not closed by `~` is refused", () => {
@@ -805,7 +804,7 @@ describe("a real Multipaz Wallet answer, replayed (#473)", () => {
   it("reaches the agent's hop (link 2) when the merchant verifies it", async () => {
     const parts = splitPresentation(real.sdjwt)!;
     for (const d of parts.kbDisclosures) {
-      const prefix = walletChain(parts.normalized!, d)!;
+      const prefix = walletChain(`${parts.chain}${parts.kbJwt}`, d)!;
       const chain = await appendAgentHop({
         chain: prefix,
         agentKey: p256().privateKey,
