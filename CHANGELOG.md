@@ -83,6 +83,11 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
   built from the gate's `walletOrigin`, so a wallet origin on plain `http:` anywhere else (a LAN
   address, a `.local` name, a `*.localhost` subdomain) no longer gets the buttons: serve it over
   `https:` or use `localhost` (#434).
+- `verifyDelegatedPurchase` accepts the agent's last hop typed `kb-sd-jwt` as well as `kb+sd-jwt`
+  (before, only `kb+sd-jwt`), as AP2's own verifier does; `cnf` still decides whether a hop ends the
+  chain. This reaches only agents built without this package: the gate's own agent signs
+  `kb+sd-jwt`. The signing page does not accept `kb-sd-jwt`, because it sees only the wallet's hop
+  (#473).
 
 ### Fixed
 
@@ -93,21 +98,15 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
   The page reads both layouts. It refuses what it refused before, except that it now accepts the
   new layout and the new type spelling below. Checked against a real answer captured on a phone
   from a development build of that wallet, which is replayed as a test.
+  - The page still refuses a key binding that is not three base64url parts, in either layout.
   - The wallet types its signature `kb-sd-jwt+kb`, a spelling the draft uses in §6 (§5.1.4 writes
     `kb+sd-jwt+kb`). The signing page and the merchant's chain verifier (`verifyDelegatedPurchase`)
     now accept either. The gate does not choose the wallet's type; the wallet does.
-  - **Merchants:** `verifyDelegatedPurchase` also accepts the agent's last hop typed `kb-sd-jwt`
-    (before, only `kb+sd-jwt`), as AP2's own verifier does. This reaches only agents built without
-    this package; the gate's own agent still signs `kb+sd-jwt`. The signing page does not accept
-    `kb-sd-jwt`: it sees only the wallet's hop.
   - **Update the gate and merchants together.** A merchant still on 0.6.0 accepts only
     `kb+sd-jwt+kb`, so it refuses a spending grant this wallet signed, with `code: "typ"`, when the
     agent spends it, after the user has left.
-  - **Custom backends:** this wallet's answer reaches an `IntentVerifyBackend` as the wallet sent
-    it, in the Delegated layout: a string that ends in `~` and contains `~~`, with the key binding
-    in the middle. A backend that reads the key binding after the last `~` will not find it, and
-    one that accepts only `kb+sd-jwt+kb` refuses this wallet's `kb-sd-jwt+kb`. `inGateBackend` is
-    the reference.
+  - If you call `verifyIntentPresentation` with your own `IntentVerifyBackend`, wrap
+    `inGateBackend`; it reads both layouts and both type spellings.
   - `verifyIntentPresentation` now returns `intent.presentation` re-serialized for the new layout,
     in the earlier shape (`<credential>~<disclosures>~<key binding>`), so the code that spends it
     is unchanged.
