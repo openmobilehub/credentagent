@@ -116,7 +116,8 @@ your diff will be held against.
 
 Open the PR as a **draft**, and run the
 [review-to-the-bar](https://github.com/openmobilehub/review-to-the-bar) skill on it in Claude Code
-(`/review-to-the-bar`). It measures the code a developer has to write, checks the PR's claims
+(`/review-to-the-bar`; install it once with `/plugin marketplace add openmobilehub/review-to-the-bar`,
+then `/plugin install review-to-the-bar@review-to-the-bar`). It measures the code a developer has to write, checks the PR's claims
 against tests, and runs the standards, correctness and developer-experience lenses on your diff.
 Fix what it finds, then put its **scorecard**, the **cold-read packet** (the docs and the sample
 code a new developer would see, with three questions for your reviewer) and **what you couldn't

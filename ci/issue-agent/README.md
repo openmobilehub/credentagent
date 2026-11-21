@@ -396,7 +396,7 @@ Claude review finishes on an agent:in-review PR, or the label is added   (or: ma
 - **Never stranded.** A review that fails, or ends with no verdict for the latest commit (paused),
   hands the PR to a human with that reason — and so does a PR still in the loop once
   `AGENT_GH_TOKEN` is gone. A head that only merges `main` in (GitHub's *Update branch*) isn't
-  reviewed again — the review skips a push that leaves the PR's diff unchanged — so the last
+  reviewed again — a review it asks for skips a head that leaves the PR's diff unchanged — so the last
   verdict still applies.
 - **Main is brought in when it matters — and conflicts get resolved, not waited on.** If `main` has
   changed a file the PR also changes, the fix job merges `main` first (the review reads the PR

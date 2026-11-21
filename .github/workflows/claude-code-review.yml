@@ -8,15 +8,17 @@ on:
     # 10 reviews, #474 got 10 in a day. Run review-to-the-bar before marking ready (CONTRIBUTING.md).
     types: [opened, ready_for_review, reopened, labeled]
 
+# One review per PR at a time: a newer review run cancels the one still running. Nothing is lost —
+# a cancelled run never counts as reviewed, so the next run's scope still covers it. Any other
+# label's run (its job is skipped) gets a group of its own, as in issue-agent-review.yml: in the
+# PR's group it would cancel the review in progress, e.g. the opening review of a PR created with
+# labels, or when the issue agent adds agent:in-review.
+concurrency:
+  group: ${{ (github.event.action == 'labeled' && github.event.label.name != 'review:again') && format('claude-review-other-label-{0}', github.run_id) || format('claude-review-{0}', github.event.pull_request.number) }}
+  cancel-in-progress: true
+
 jobs:
   claude-review:
-    # One review per PR at a time: a newer review run cancels the one still running. Nothing is
-    # lost — a cancelled run never counts as reviewed, so the next run's scope still covers it.
-    # On the job, not the workflow: adding any other label starts a run whose job is skipped, and
-    # in a workflow-level group that run would cancel the review in progress.
-    concurrency:
-      group: claude-review-${{ github.event.pull_request.number }}
-      cancel-in-progress: true
     # OPT-IN — off by default. The CLAUDE_CODE_OAUTH_TOKEN secret exists, but the
     # account cannot use it, so the action errored on EVERY PR; as a required status
     # check that blocked all merges. Gating the job means it is *skipped* rather than
@@ -138,11 +140,11 @@ jobs:
         env:
           LAST: ${{ steps.scope.outputs.last }}
         run: |
-          echo "::notice::No review: this push leaves the PR's own diff unchanged since $LAST (it only merged main in), and main touched none of the PR's files."
+          echo "::notice::No review: the new commits leave the PR's own diff unchanged since $LAST (it only merged main in), and main touched none of the PR's files."
           echo "No Claude review needed: the PR's diff is unchanged since \`$LAST\`." >> "$GITHUB_STEP_SUMMARY"
 
       # Say so on the PR once per cap, so the author stops pushing fixes for the bot and a
-      # person picks it up. A later push while capped posts nothing more.
+      # person picks it up. A later review:again while capped posts nothing more.
       - name: Stop — review cap reached
         if: steps.scope.outputs.mode == 'capped'
         env:
@@ -159,7 +161,7 @@ jobs:
             | awk '{s+=$1} END {print s+0}')
           if [ "$posted" -eq 0 ]; then
             gh pr comment "$PR" --body "$marker
-          **Claude review paused: $MAX_ROUNDS rounds done.** \`review:again\` won't start another one. A person now decides: merge, close, or step back and redesign. Don't push fixes for review notes that aren't blocking. To get one more round after a real change, mark the PR as draft, then ready for review."
+          **Claude review paused: $MAX_ROUNDS rounds done.** \`review:again\` won't start another one. A person now decides: merge, close, or step back and redesign. Don't push fixes for review notes that aren't blocking. To start over after a real change, mark the PR as draft, then ready for review."
           fi
 
       - name: Record review start time
