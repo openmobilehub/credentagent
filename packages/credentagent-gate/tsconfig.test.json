@@ -8,6 +8,7 @@
     "src/types.test-d.ts",
     "src/ap2/**/*.test.ts",
     "src/ceremony/mdoc/mdoc.test.ts",
-    "src/ceremony/dc-payment/presentation.test.ts"
+    "src/ceremony/dc-payment/presentation.test.ts",
+    "src/cards/*.test.ts"
   ]
 }

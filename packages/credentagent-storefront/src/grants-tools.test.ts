@@ -14,6 +14,7 @@ import type { Product } from "./index.js";
 import { SAMPLE_CATALOG } from "./index.js";
 import { projectGrantView } from "./grant-project.js";
 import { CredentAgent } from "@openmobilehub/credentagent-gate";
+import { AgentKey } from "@openmobilehub/credentagent-gate/agent";
 
 // The gate's priced catalog (dollars): whiskey is age-restricted → non-delegable. Ids/prices match
 // the storefront's SAMPLE_CATALOG so the two agree (the grant tools re-price against the storefront).
@@ -263,6 +264,19 @@ describe("grant tools — GrantViewData projection (spec 011)", () => {
     expect(asRecord.spend).toBeUndefined();   // the live grant's methods must NOT have leaked
     expect(asRecord.revoke).toBeUndefined();
     expect(asRecord.usage).toBeUndefined();
+  });
+
+  // The card's revoked text reads this: say "no further purchases" for a grant whose permission the
+  // agent holds, and the card lies (GLOSSARY.md, Revoke). Drop the field → both go red.
+  it("BYPASS: agentHeld says whether revoking recalls the grant", async () => {
+    const ca = new CredentAgent({ walletOrigin: "http://localhost:3005", catalog: GATE_CATALOG });
+    const served = await ca.grants.create({ merchant: "Utopia", budget: 200, perSpend: 60, allow: { skus: ["drift-mouse"] } });
+    const agents = await ca.grants.create({
+      merchant: "Utopia", budget: 200, perSpend: 60, allow: { skus: ["drift-mouse"] }, signing: "device", agentKey: AgentKey.generate().publicJwk,
+    });
+    for (const g of [served, agents]) await (await ca.grants.retrieve(g.id))!.revoke();
+    expect((await projectGrantView((await ca.grants.retrieve(served.id))!, { catalog: SAMPLE_CATALOG })).agentHeld).toBe(false);
+    expect((await projectGrantView((await ca.grants.retrieve(agents.id))!, { catalog: SAMPLE_CATALOG })).agentHeld).toBe(true);
   });
 });
 

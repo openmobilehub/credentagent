@@ -28,11 +28,18 @@ function merchant() {
 }
 
 /** The person signs the grant on their phone — the real rail, a simulated wallet. `wallet` makes
- *  that wallet behave like a particular real one (e.g. how it types its key binding). */
-async function signOnPhone(app: Express, id: string, wallet: Pick<SimulateOptions, "overrideKbTyp"> = {}) {
+ *  that wallet behave like a particular real one (e.g. how it types its key binding). `whileSigning`
+ *  runs after the phone fetched the request and before its signature arrives. */
+async function signOnPhone(
+  app: Express,
+  id: string,
+  wallet: Pick<SimulateOptions, "overrideKbTyp"> = {},
+  whileSigning?: () => Promise<unknown>,
+) {
   const req = await request(app).get(`/credentagent/grants/${id}/sign/request`).set("Host", HOST);
   expect(req.status).toBe(200);
   const oid = req.body as { requests: { data: { request: string } }[]; dcql_query: unknown; readerContextToken: string };
+  await whileSigning?.();
   const result = await devSimulateWalletSignature({
     request: { request: oid.requests[0].data.request, dcql_query: oid.dcql_query as never },
     origin: ORIGIN,
@@ -218,4 +225,34 @@ describe("a grant that leaves `signing` out is a device grant", () => {
     expect(g.signing).toBe("device");
     expect((await request(app).get(`/credentagent/grants/${g.id}/sign/request`).set("Host", HOST)).status).toBe(200);
   });
+});
+
+// A grant card says "If it was approved before being revoked, the agent keeps its signed copy", and
+// every revoked or declined line rests on the same fact: a signature that arrives after the grant was
+// stopped is refused, so nobody gets a permission the person already took back. Delete the
+// `status !== "pending"` check in `_authorizeDevice` and these go red.
+describe("BYPASS: a phone signature that lands after the grant was stopped is refused", () => {
+  const stops = {
+    revoked: async (credentagent: CredentAgent, id: string) => (await credentagent.grants.retrieve(id))!.revoke(),
+    denied: (credentagent: CredentAgent, id: string) => credentagent.grants._deny(id),
+  };
+  for (const agentHeld of [false, true]) {
+    for (const [stopped, stop] of Object.entries(stops)) {
+      it(`${agentHeld ? "agent-held" : "gate-held"} key, ${stopped} while the person was signing`, async () => {
+        const { credentagent, app } = merchant();
+        const created = await credentagent.grants.create({
+          merchant: "utopia",
+          budget: 200,
+          perSpend: 30,
+          allow: { skus: ["coffee"] },
+          ...(agentHeld ? { agentKey: AgentKey.generate().publicJwk } : {}),
+        });
+        const late = await signOnPhone(app, created.id, {}, () => stop(credentagent, created.id));
+        expect(late.status).toBe(409);
+        const after = (await credentagent.grants.retrieve(created.id))!;
+        expect(after.status).toBe(stopped);
+        expect(after.mandate).toBeUndefined();
+      });
+    }
+  }
 });
