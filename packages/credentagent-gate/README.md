@@ -559,7 +559,7 @@ function buildServer() {
 }
 
 // With the gate's grants, `viewOf` is one line: the gate's `grantView` over the grant you retrieve.
-const viewOf = async (grantId) => grantView((await credentagent.grants.retrieve(grantId))!);
+const viewOf = async (grantId) => grantView(await credentagent.grants.retrieve(grantId));
 // revokeMyGrant(grantId) is yours. If your grants don't come from the gate, build the GrantViewData
 // yourself: the grant's plain data (kind: GRANT_VIEW_KIND) with the money already computed on your server.
 
