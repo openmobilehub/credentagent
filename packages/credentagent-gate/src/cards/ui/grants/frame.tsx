@@ -59,7 +59,8 @@ function ActionFooter({ grant }: { grant: GrantViewData }) {
     if (!isSafeLink(grant.approveUrl)) {
       return <div className={styles.deeplink}>The merchant&apos;s link isn&apos;t a safe web address, so this card doesn&apos;t show it.</div>;
     }
-    // Both buttons open the CredentAgent approval page — consent happens there, never in the widget.
+    // Both buttons open the merchant's approval page — consent happens there, never in the widget. Any
+    // server supplies the link through `cards.grant()`, so the line below names its host, not a brand.
     // Equal weight, Approve first by reading order (anti-dark-pattern, design §4.4).
     const open = (e: MouseEvent) => {
       if (actions.openLink) {
@@ -73,7 +74,7 @@ function ActionFooter({ grant }: { grant: GrantViewData }) {
           <a className={`${styles.btn} ${styles.btnApprove}`} href={grant.approveUrl} onClick={open}>Approve</a>
           <a className={`${styles.btn} ${styles.btnDecline}`} href={grant.approveUrl} onClick={open}>Decline</a>
         </div>
-        <div className={styles.deeplink}>Opens the CredentAgent approval page ↗</div>
+        <div className={styles.deeplink}>Opens the merchant&apos;s approval page at {new URL(grant.approveUrl).host} ↗</div>
       </>
     );
   }

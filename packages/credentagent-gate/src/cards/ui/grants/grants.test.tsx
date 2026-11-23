@@ -187,6 +187,14 @@ describe("display-only projection (A1) — a view can never touch the live grant
 describe("Approve / Decline carry only a safe link (spec 015 FR-11)", () => {
   const opener = { openLink: () => {} };
 
+  // The link is whatever the merchant's server supplied, so the card says whose page it opens and where
+  // (the host), not "CredentAgent". Name the gate again, or drop the host → red.
+  it("BYPASS: the link line names the merchant's page and shows its host, never a fixed brand", () => {
+    const html = render(<GrantCard grant={{ ...pending, approveUrl: "https://pay.shop.example:8443/credentagent/grants/g1" }} actions={opener} />);
+    expect(html).toContain("Opens the merchant&#x27;s approval page at pay.shop.example:8443");
+    expect(html).not.toContain("Opens the CredentAgent approval page");
+  });
+
   it("a safe link is on both buttons", () => {
     expect(count(render(<GrantCard grant={pending} actions={opener} />), `href="${pending.approveUrl}"`)).toBe(2);
   });
@@ -208,7 +216,7 @@ describe("selection by specificity (A3) — highest score wins, not array order"
   it("a pending grant selects the approvalCard over the active cards", () => {
     const html = render(<GrantCard grant={pending} />);
     expect(html).toContain("Approve a spending grant"); // approvalCard body
-    expect(html).toContain("Opens the CredentAgent approval page"); // its disclosed deep-link
+    expect(html).toContain("Opens the merchant&#x27;s approval page at localhost:3005"); // its disclosed deep-link
   });
 
   it("a single-SKU grant selects the flagship productGrantCard over the categoryGrantCard", () => {
