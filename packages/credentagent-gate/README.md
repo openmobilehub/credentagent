@@ -506,14 +506,21 @@ model can't reword:
 
 ### What you write
 
-`createCards` once per process, the rest once per server:
+With the gate's own grants, that is about seven lines. `createCards` once per process, the rest once per server:
 
 ```js
-const cards = createCards();                                               // 1. once per process
-cards.register(server);                                                    // 2. serves the card page
-server.registerTool("get-grant", { inputSchema, _meta: cards.toolMeta() }, // 3. links the tool to the card (only the model calls it)
-  async ({ grantId }) => cards.grant(await viewOf(grantId)));              // 4. returns the result as a card
+const cards = createCards();                                               // once per process
+cards.register(server);                                                    // serves the card page
+server.registerTool("get-grant", { inputSchema, _meta: cards.toolMeta() }, async ({ grantId }) => { // only the model calls it
+  const grant = await credentagent.grants.retrieve(grantId);               // your grant, from the gate
+  if (!grant) return { isError: true, content: [{ type: "text", text: "No such grant." }] };
+  return cards.grant(await grantView(grant));                              // `grantView` turns it into plain card data
+});
 ```
+
+`grantView(grant)` is exported from `@openmobilehub/credentagent-gate`: it reads the grant's money and lifecycle
+and returns the data a card renders, so you write no projection of your own. A server whose grants don't come
+from the gate builds a `GrantViewData` itself (see the full example below).
 
 To draw the card's Revoke button, name your revoke tool in
 `createCards({ tools: { revoke: "revoke-grant" } })` and register it with
@@ -527,6 +534,7 @@ storefront or an agent — with no widget code of its own:
 ```js
 import { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
+import { grantView } from "@openmobilehub/credentagent-gate";
 import { createCards } from "@openmobilehub/credentagent-gate/cards";
 
 // Once per process — fails at startup if the package was built without its page. `tools.revoke` names
@@ -550,18 +558,19 @@ function buildServer() {
   return server;
 }
 
-// viewOf(grantId) and revokeMyGrant(grantId) are yours. viewOf returns a GrantViewData: the grant's
-// plain data (kind: GRANT_VIEW_KIND), with the money already computed on your server. With the gate's
-// grants, build it from `const grant = await credentagent.grants.retrieve(grantId)`.
+// With the gate's grants, `viewOf` is one line: the gate's `grantView` over the grant you retrieve.
+const viewOf = async (grantId) => grantView((await credentagent.grants.retrieve(grantId))!);
+// revokeMyGrant(grantId) is yours. If your grants don't come from the gate, build the GrantViewData
+// yourself: the grant's plain data (kind: GRANT_VIEW_KIND) with the money already computed on your server.
 
 app.get("/cards", (_req, res) => res.type("html").send(cards.html)); // your Express app · preview: /cards?view=grant-product
 ```
 
-`createStorefront()` builds this data from a live grant for its own grant tools; another server passes its own `GrantViewData` (the type and `GRANT_VIEW_KIND` are exported from `@openmobilehub/credentagent-gate/cards`).
+`createStorefront()` calls `grantView` for its own grant tools, adding the product it looks up in its catalog (`grantView(grant, { product })`). The `GrantViewData` type and `GRANT_VIEW_KIND` are exported from `@openmobilehub/credentagent-gate/cards`.
 
 **Which tools a card can call.** `cards.toolMeta()` lets only the model call a tool. A tool that sets no visibility of its own is different: MCP Apps hosts such as Claude let a card call it. So give every tool that spends `_meta: { ui: { visibility: ["model"] } }`, and leave `openai/widgetAccessible` unset or `false` for ChatGPT, or use `cards.toolMeta()` if its result is a card. `toolMeta({ callableFromCard: true })` opts a tool in for a card's own button, such as Revoke. The grant card's **Revoke** button calls the tool you name in `tools.revoke`, with `{ grantId }`: `cards.grant()` names it in the result's `_meta` under `REVOKE_TOOL_META` (`"credentagent/revokeTool"`). Without `tools.revoke` the card draws no Revoke button, because the page never guesses a tool name. If the call fails, the card says "This card couldn't complete that action".
 
-**What a grant card says about trust.** Its honesty line is one of the kit's fixed sentences, picked by `trustLevel` (`server-issued-demo`, `device-signed` or `presence-only-demo`) and worded as the merchant's claim, since the card can't check it. Two states don't show the level's sentence, because it may not be true of how the grant was approved: a grant waiting for approval, or declined, says it isn't approved and can't spend, and a revoked grant with nothing spent says only that it is revoked. What a card says revoking stops comes from the grant data's `agentHeld`, because revoking doesn't recall a permission the agent holds itself (a grant created with `agentKey`): with `false` a revoked card says "No further purchases will be made.", with `true` it says "If it was approved before being revoked, the agent keeps its signed copy: revoking doesn't recall it.", and left out it says neither for sure. The approval card follows the same rule. Set it from how the grant was created, signed or not yet: `agentHeld: grant.agentKey !== undefined`. `createStorefront()` does this for you. Any other level, `issuer-verified` included, shows "Trust level not recognised by this card; treat it as unverified." The merchant's own `presence` text never appears. A pending grant's Approve and Decline buttons show only for an `https:` link (or `http:` on localhost, 127.0.0.1 or [::1]); for any other link the card says it isn't a safe web address, and `cards.grant()` tells the model not to pass it on.
+**What a grant card says about trust.** Its honesty line is one of the kit's fixed sentences, picked by `trustLevel` (`server-issued-demo`, `device-signed` or `presence-only-demo`) and worded as the merchant's claim, since the card can't check it. Two states don't show the level's sentence, because it may not be true of how the grant was approved: a grant waiting for approval, or declined, says it isn't approved and can't spend, and a revoked grant with nothing spent says only that it is revoked. What a card says revoking stops comes from the grant data's `agentHeld`, because revoking doesn't recall a permission the agent holds itself (a grant created with `agentKey`): with `false` a revoked card says "No further purchases will be made.", with `true` it says "If it was approved before being revoked, the agent keeps its signed copy: revoking doesn't recall it.", and left out it says neither for sure. The approval card follows the same rule. `grantView()` sets it from how the grant was created, signed or not yet (`grant.agentKey !== undefined`); a view you build by hand must set it the same way. Any other level, `issuer-verified` included, shows "Trust level not recognised by this card; treat it as unverified." The merchant's own `presence` text never appears. A pending grant's Approve and Decline buttons show only for an `https:` link (or `http:` on localhost, 127.0.0.1 or [::1]); for any other link the card says it isn't a safe web address, and `cards.grant()` tells the model not to pass it on.
 
 `/cards` runs on Node: `createCards()` reads the built page with `node:fs`, so don't bundle it for a browser.
 
@@ -1145,6 +1154,7 @@ ageDcql()  ·  ENVELOPE_VERSION  ·  ENVELOPE_SENTINEL
 "@openmobilehub/credentagent-gate/agent"   // the AGENT's side; holds its private key, so never imported by a store
   AgentKey.generate() · AgentKey.fromJwk(jwk) · DelegatedIntent.fromWalletPresentation({ presentation, disclosures }) · intent.spend(args) → DelegatedPurchaseProof
 "@openmobilehub/credentagent-gate/cards"   // the card kit: one card page any MCP server serves (see Cards)
+  grantView(grant, { product? }) → Promise<GrantViewData>   // a live grant as plain card data (exported from the root)
   createCards({ tools?: { revoke? } }) → { html, register(server), toolMeta({ invoking?, invoked?, callableFromCard? }), grant(view, { note? }) → CardResult }
   GRANT_VIEW_KIND · REVOKE_TOOL_META · GrantViewData · GrantViewProduct · CardsOptions · CardResult · CardsServer · CardToolMeta · CardToolMetaOptions
 ```

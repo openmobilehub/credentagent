@@ -62,6 +62,10 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
   `openai/widgetAccessible` unset or `false`. The storefront's own tools don't follow this yet,
   `spend-from-grant` included: they move onto `cards.toolMeta()` in a later step (#293). The `/cards`
   entry point now runs on Node: it reads the built page with `node:fs` (#435).
+- `grantView(grant, { product? })` from `@openmobilehub/credentagent-gate`: a live grant as the plain
+  data a card renders. A server on the gate's grants writes
+  `cards.grant(await grantView(await credentagent.grants.retrieve(id)))`, with no projection of its
+  own. It moved out of the storefront, which now calls it and adds only its catalog lookup (#435).
 - `GrantViewData.agentHeld` from `@openmobilehub/credentagent-gate/cards`: `true` for a grant created
   with `agentKey`, signed or not yet, so a card never says revoking stops what it can't. Set it with
   `agentHeld: grant.agentKey !== undefined`; `createStorefront()` does (#435).

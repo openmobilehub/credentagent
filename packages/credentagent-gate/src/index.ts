@@ -40,7 +40,7 @@ export type { OrderStore, CreatedOrder, CompletedOrder, OrderDoor, OrderDoorCode
 // `await credentagent.grants.create({ merchant, budget, perSpend, allow? })` → a pending grant;
 // the human approves once (grant.approveUrl) → `grant.spend({ idempotencyKey, items })` runs the
 // REAL engine (per-spend cap, budget, single-use, revocation, age-non-delegable) → typed door.
-export { Grants, grantLifecycle } from "./grants.js";
+export { Grants, grantLifecycle, grantView } from "./grants.js";
 export type { Grant, GrantStatus, GrantLifecycle, GrantUsage, GrantDoorCode, GrantAllow, CreateGrantOptions, GrantSigning, GrantMandateEvidence, SpendDoor, SpendItems } from "./grants.js";
 // `grant.ageScope` — the age-restricted products a grant's bounds NAME, so the page can say so
 // before the human authorizes (#172). Read straight from the catalog; disclosure, not enforcement.

@@ -9,8 +9,7 @@
 // This module is a LEAF on purpose: it imports only TYPES, so the card page that imports
 // `GRANT_VIEW_KIND` + the types never pulls the gate's Node runtime in. It moved here from the
 // storefront (spec 015) so any MCP server can render a grant, not only createStorefront(). The
-// projection that BUILDS a GrantViewData (a live grant handle + the catalog) stays in the
-// storefront's `grant-project.ts`.
+// projection that BUILDS a GrantViewData from a live grant is `grantView` in `../grants.ts`.
 
 import type { GrantLifecycle, GrantStatus } from "../grants.js";
 
