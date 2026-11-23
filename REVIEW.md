@@ -71,6 +71,14 @@ regressions:
   public API needs a plumbing block — assembling stores, a context, calling a
   low-level primitive by hand — the API failed; fix the API, never dress up the
   example.
+- **The sample app is the measurement.** The code a sample app needs in order to
+  use a new/changed feature is the code every developer will have to write. It
+  fits on one screen — about 30 lines for one feature — and reads top to bottom
+  as what the developer is trying to do: no setup block before the point, no
+  type they must look up to follow it, names that state what they do. Longer
+  than that, or it needs explaining → the API is not finished; request changes
+  on the API. A screen or flow every app would have to hand-build belongs in the
+  library, with an override for an app that wants its own (Principle 12).
 
 Quick gate: configure once then declarative calls; result is typed plain data
 (`{ ok, reason, … }`); consistent with sibling shapes/verbs; names state the
@@ -90,6 +98,13 @@ proof "verified", "secure" or "trusted"), is request-changes. Saying a check ran
 name or wire field (`verified`); shipped UI copy that reads as a trust claim (e.g. "✓ Age
 verified" on a presence-only rail) is flagged for an issue, not blocking on an unrelated
 diff.
+
+**A consent screen shows what is signed and enforced.** Where a person approves
+something that is then signed or enforced, a diff that adds or changes that screen is
+request-changes unless: every term the approval covers is visible before it is given;
+each value the other side enforces (an id, an amount, a date, a key) is shown, and not
+only its friendly name; and a value that cannot be parsed or displayed is a refusal,
+never an omission (Principle 10).
 
 ## 5. Conventions (expected; flag, don't block alone)
 

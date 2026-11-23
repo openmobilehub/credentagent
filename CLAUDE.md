@@ -159,6 +159,11 @@ The one rule that catches most regressions:
   assembling stores, a context, calling a low-level primitive by hand — the **API** failed; fix the API,
   never dress up the example. (`DelegatedGate` exists because its example was ugly — see the worked
   ugly→elegant case in the rubric, Principle 12.)
+- **The sample app is the measurement.** The code a sample app needs to use a feature is what every
+  developer will write: one screen (about 30 lines for one feature), readable without opening the source.
+  Longer, or it needs explaining → stop and raise it as an API question; do not write the longer sample.
+  This holds for work done for this project in other repos too (CONTRIBUTING.md, "The same bar outside
+  this repo").
 
 Quick gate for any new/changed public API (full list in the rubric):
 

@@ -170,6 +170,14 @@ contract. Fix the API. Never dress up the example.
 - **Push further:** a public API ships with an example, and the example is reviewed *as part of the API*. If a
   reviewer must read plumbing before the intent, request changes on the API, not the example. And names in the
   example must state the important thing they do (`spend`, not `show`).
+- **The sample app is the measurement.** The code a sample app needs in order to use a feature is the code
+  every developer will have to write, so its length and readability are properties of the API, not of the
+  sample. It fits on one screen — about 30 lines for one feature — and someone new to the library follows it
+  without opening the source: no setup block before the point, no type they must look up, names that state
+  what they do. When it runs longer, or needs explaining, stop and raise it as an API question; do not write
+  the longer sample. The usual fix is to move the work into the library: a consent screen every app would
+  otherwise hand-build (hundreds of lines per platform) ships as the default, with an override for an app
+  that wants its own look.
 
 ## The review checklist (the teeth)
 
@@ -177,6 +185,8 @@ For any new API or change, ask:
 
 - [ ] **The example is the test.** Written first, from the caller's side — does it read top-to-bottom with NO
       plumbing block before the point? If it needs wiring, fix the API. (→ P12)
+- [ ] **The sample app is the measurement.** Does the code a sample app needs fit on one screen (about 30
+      lines for one feature), and does a newcomer follow it without opening the source? (→ P12)
 
 - [ ] **Five-minute test.** Can a newcomer reach a correct result by copying a short snippet? Did we add
       a *required* argument to an existing call? (→ P1)
