@@ -69,7 +69,7 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
 - `createCards()` from `@openmobilehub/credentagent-gate/cards`: any MCP server can now show the card
   kit's grant cards in Claude and ChatGPT. `cards.register(server)` serves the card page,
   `cards.toolMeta()` links a tool to it, and `cards.grant(view)` returns a grant as a card. A tool
-  linked with `cards.toolMeta()` is called only by the model; `toolMeta({ callableFromCard: true })`
+  linked with `cards.toolMeta()` asks the host to let only the model call it; `toolMeta({ callableFromCard: true })`
   lets a card's button call one, such as the Revoke tool you name in
   `createCards({ tools: { revoke } })`. A tool with no visibility of its own can be called by a card
   in Claude, so give every tool that spends `_meta: { ui: { visibility: ["model"] } }` and leave

@@ -5,6 +5,10 @@ Design pass for spec `011-grant-widgets` (issue #143). Companion to this doc:
 state, rendered in light **and** dark side by side (including one host-branded custom
 view). This document explains the *why*; the mockup is the *what it looks like*.
 
+> **Changed by spec 015 (FR-10):** the trust line shown below (`delegated-demo · limits enforced
+> server-side · consent is dev-sealed, …`) is the earlier design. The card now prints one of the kit's
+> fixed sentences, "As the merchant reports it: …", chosen by `trustLevel` and the grant's lifecycle.
+
 Read `spec.md` first. This doc resolves its four open questions (§8), critiques its
 component contract (§9), and recommends spec amendments (§10).
 

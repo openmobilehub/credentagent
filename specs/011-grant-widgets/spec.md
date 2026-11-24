@@ -96,6 +96,11 @@ public interface exposes **no way to render a view without the frame** — mirro
 `trustFooter()`'s non-overridable rule from #132. Bypass test: every gallery view and a custom
 view render the exact trust line; the test fails if the frame becomes skippable.
 
+> **Changed by spec 015 (FR-10):** the card no longer prints `presence` or the `delegated-demo` token.
+> Its trust line is one of the kit's fixed sentences, chosen by `trustLevel` and the grant's lifecycle and
+> worded as the merchant's claim. The frame is still non-skippable. The wording in this spec and in
+> `design.md` is the earlier design.
+
 **FR-5 — Display-only + live.** No enforcement in the widget: Approve/Decline/Revoke are
 deep-links to the server ceremony or calls to the existing grant tools; the card re-renders
 from tool results / a `retrieve` refresh (the checkout widget's poll pattern). A stale card
