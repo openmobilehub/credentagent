@@ -88,16 +88,23 @@ PRs get both automated and human review. The checklist both run is
 [`REVIEW.md`](REVIEW.md) (repo root) — read it before opening a PR to know exactly what
 your diff will be held against.
 
+Before you mark a PR ready, review it to the bar yourself (below).
+
 ### Automated Claude review
 
 - **Same-repo PRs** — an automated Claude review (`anthropics/claude-code-action`) runs on every
   non-draft PR opened from a branch in this repo. It's grounded in this project's security
   invariants. **The review is opt-in and currently ON** — it only runs when the repo variable
-  `ENABLE_CLAUDE_REVIEW` is `"true"`, and posts its findings as PR comments. It is not a required
-  check, so human review is the gate — but its comments on specific lines are review threads, and
-  those must be resolved before merge (below). Its summary comment has no Resolve button and
-  doesn't block. (Draft PRs are skipped to save cost; mark a PR ready for
+  `ENABLE_CLAUDE_REVIEW` is `"true"`, and posts one summary comment: ✅ Ready to merge or ⛔ Needs
+  changes, what blocks (at most 3 items), and on a full review at most 3 optional notes, which
+  are not tasks: you decide (for an agent PR, whoever added the `agent` label). It posts no comments on lines, so it opens no thread you must resolve. Something
+  only a maintainer can do goes into a `follow-up` issue, not onto you. It is not a required check,
+  so human review is the gate. (Draft PRs are skipped to save cost; mark a PR ready for
   review to trigger a run.)
+- **It reviews once.** A push is not reviewed. For one more review after a real fix, add the
+  **`review:again`** label; the bot takes it off when it's done. It stops at **2 reviews** since
+  the PR was last marked ready, and a person decides from there: merge, close, or redesign.
+  Don't push a fix for every note it leaves — fix what blocks (⛔), then ask once.
 - **Fork / external-contributor PRs** — the automated job is **skipped** (fork runs can't read the
   secret), and a skipped required check counts as passing, so it never blocks you. External PRs are
   reviewed instead by a maintainer commenting **`@claude review this PR against REVIEW.md and post a summary`** on the PR (which runs in base-repo
@@ -107,6 +114,25 @@ your diff will be held against.
   `claude-review` by design and needs an admin merge. For a review, a maintainer comments
   **`@claude review this PR against REVIEW.md and post a summary`** — a bare `@claude` only does
   what the comment asks.
+
+### Before you mark it ready: review it to the bar
+
+Open the PR as a **draft**, and run the
+[review-to-the-bar](https://github.com/openmobilehub/review-to-the-bar) skill on it in Claude Code
+(`/review-to-the-bar`). This repository's `.claude/settings.json` offers the plugin when you open
+it; install it once for this repository so that it keeps itself up to date:
+
+```bash
+claude plugin install review-to-the-bar@review-to-the-bar --scope project
+```
+
+Without that install the plugin works until its next release, then stops loading. It measures the code a developer has to write, checks the PR's claims
+against tests, and runs the standards, correctness and developer-experience lenses on your diff.
+Fix what it finds, then put its **scorecard**, the **cold-read packet** (the docs and the sample
+code a new developer would see, with three questions for your reviewer) and **what you couldn't
+verify** at the top of the PR description, and mark the PR ready. The automated review then reads a
+PR that already meets the bar, and your reviewer starts with a two-minute cold read, not a full
+review.
 
 ### Human review
 
@@ -210,6 +236,8 @@ turns up something off, fix it or flag it.
 - [ ] For any UI/flow change: you drove the real UI end-to-end and confirmed **every screen tells the truth** — not just that the happy path completes (no stale/locked page for a paid order, no step or label claiming something that didn't happen).
 - [ ] Every commit is signed off (`git commit -s`); the DCO check will be green.
 - [ ] You pushed a branch to this repo (not a fork) so the automated review can run.
+- [ ] You ran `/review-to-the-bar` on the draft and put its scorecard, cold-read packet and what
+      you couldn't verify at the top of the description, before marking it ready.
 - [ ] No presence-only gate is presented as a real safety control.
 - [ ] A change someone using the npm packages would notice adds a line under `[Unreleased]` in [`CHANGELOG.md`](CHANGELOG.md) — marked **BREAKING** if their code has to change.
 - [ ] Anything broken you noticed along the way is fixed or filed — never silently ignored.

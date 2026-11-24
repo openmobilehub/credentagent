@@ -62,7 +62,8 @@ export class DelegatedIntent {
     this.disclosures = disclosures;
   }
 
-  /** From what the intent-sign rail holds after the ceremony: `vp_token` and the request's disclosures. */
+  /** From what the intent-sign rail holds after the ceremony: the wallet's answer, kept with its key
+   *  binding last whichever layout the wallet sent, and the request's disclosures. */
   static fromWalletPresentation(args: { presentation: string; disclosures: readonly string[] }): DelegatedIntent {
     const byVct = (vct: string) => args.disclosures.find((d) => decodeDisclosure(d)?.vct === vct);
     const checkout = byVct(VCT.openCheckout);

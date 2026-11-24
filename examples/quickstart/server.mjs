@@ -81,8 +81,9 @@ const store = createStorefront({
   baseUrl: deployedOrigin, // local stays unset → checkout links derive from each request's origin
   // Grant records + the delegated ledger live in THIS process's memory: on a multi-instance
   // deploy a grant made on one instance is invisible to its siblings. Fine for this demo;
-  // the durable, cross-instance grant store is issue #152. Approving a grant on a phone needs an
-  // SD-JWT payment credential that no released wallet signs yet (0.6.0; README "Honest status").
+  // the durable, cross-instance grant store is issue #152. Approving a grant on a phone needs the
+  // official SD-JWT Payment card and a Multipaz Wallet development build (no released wallet signs
+  // yet; gate README, "Device-signed grants").
   grants: credentagent.grants, // human-NOT-present: adds create/get/spend/revoke grant tools
   merchant: "Utopia", // the merchant a created grant is sealed + audited as
 });

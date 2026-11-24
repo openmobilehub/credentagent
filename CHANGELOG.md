@@ -28,6 +28,20 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
 
 ### Added
 
+- The grant signing page now accepts the SD-JWT Payment card from Multipaz's issuer
+  (`payment_sca_sd_jwt` at `issuer.multipaz.org`), as well as the test card `tools/demo-pki/mint/`
+  mints. The request asks the wallet for either `credential_id` (the official card) or
+  `payment_instrument_id` (the test card), as DCQL `claim_sets`, and `/verify` requires one of them
+  to be disclosed, non-empty and signed by the key in the card's own certificate. The gate does not
+  check who issued the card: a card anyone mints with these claim names passes too, so a grant it
+  verifies itself stays `device-signed`, not `issuer-verified`. Before, the request asked only for
+  `payment_instrument_id`, which the official card does not carry, so the phone showed "Your info
+  wasn't found". Checked once on a phone, for the official card only, with a development wallet
+  build against a local server; the test card is covered by tests but has not been tried on a phone
+  with the new request. Signing a grant still needs a wallet that supports AP2's `delegate`
+  request; no released wallet does yet. The issuer lists two cards both named "Payment card": a
+  grant needs the SD-JWT one, not the mdoc one. `SimulateOptions` gains `cardShape: "multipaz-dpc"` for
+  tests; the simulator signs that card itself (#465, part of #464).
 - Each order's requirements are now saved with its proofs, in the order's verification record
   (`record.requirements`), so a server that never ran `requirements()` can read what the order
   needs. `requirements()` seals them into every mounted approve link (a new `requirements=` query
@@ -106,12 +120,59 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
   copy: revoking doesn't recall it." and the approval card "Once you sign, revoking won't recall it
   from the agent." Without it, neither card says what revoking stops for sure. The storefront fills it
   in (#435).
+- `verifyDelegatedPurchase` accepts the agent's last hop typed `kb-sd-jwt` as well as `kb+sd-jwt`
+  (before, only `kb+sd-jwt`), as AP2's own verifier does; `cnf` still decides whether a hop ends the
+  chain. This reaches only agents built without this package: the gate's own agent signs
+  `kb+sd-jwt`. The signing page does not accept `kb-sd-jwt`, because it sees only the wallet's hop
+  (#473).
 
 ### Fixed
 
+- Signing a spending grant with the updated Multipaz Wallet (a development build, not released yet)
+  no longer ends in "presentation carries no key-binding JWT" (#473). That wallet sends its
+  signature in the middle of the answer, followed by the mandate disclosures (the Delegated SD-JWT
+  layout of the Delegate SD-JWT draft, §5.1.1), where the signing page looked for it at the end.
+  The page reads both layouts. It now accepts the new layout and the new type spelling below, and
+  refuses one more kind of malformed signature. Checked against a real answer captured on a phone
+  from a development build of that wallet, which is replayed as a test.
+  - The page already refused a key binding with the wrong number of parts. It now also refuses,
+    in either layout, one whose signature has a character outside base64url, such as `=`, `+` or
+    `/`. 0.6.0 authorized such a grant. If the agent held its key, the agent could not spend it.
+    If the gate held the key, the gate spent it as usual; that grant is now refused at signing.
+  - The wallet types its signature `kb-sd-jwt+kb`, a spelling the draft uses in §6 (§5.1.4 writes
+    `kb+sd-jwt+kb`). The signing page and the merchant's chain verifier (`verifyDelegatedPurchase`)
+    now accept either. The gate does not choose the wallet's type; the wallet does.
+  - **Update the gate and merchants together.** A merchant still on 0.6.0 accepts only
+    `kb+sd-jwt+kb`, so it refuses a spending grant this wallet signed, with `code: "typ"`, when the
+    agent spends it, after the user has left.
+  - If you call `verifyIntentPresentation` with your own `IntentVerifyBackend`, wrap
+    `inGateBackend`; it reads both layouts and both type spellings.
+  - `verifyIntentPresentation` now returns `intent.presentation` re-serialized for the new layout,
+    in the earlier shape (`<credential>~<disclosures>~<key binding>`), so the code that spends it
+    is unchanged.
+  - New test-only options on the simulated wallet, `devSimulateWalletSignature`:
+    `delegatedLayout`, `overrideKbDisclosure` and `breakKbEncoding`.
+
+- Creating a spending grant from claude.ai no longer hangs with a product grid where the grant card
+  should be. Three causes, fixed together:
+  - On a client that can ask the person questions itself (MCP 2026-07-28 with `elicitation`, which
+    claude.ai's connectors now are), `create-spending-grant` asked for the approval in a form. The
+    call stayed open behind it, so the host got no result to draw the card from, the approve link
+    was text inside the form, and the client retried the form up to 10 times, each one holding
+    `approvalHoldMs` (45 s). The pending grant is now the tool's result on every client; only the
+    product questions (size, colour) still use `input_required`.
+  - The storefront widget fell back to the product picker whenever a grant tool's answer carried no
+    grant (questions, a refusal) or had not arrived within two seconds. A widget a grant tool opened
+    now shows a one-line notice instead, with "Show products" as the way to the picker.
+  - A client re-sends the last request-level `requestState` by itself. One left over from an
+    unfinished flow, past its 15 minutes, got the next call refused as `expired` although the agent
+    had sent none. It is now dropped and the call starts over, believing nothing from it. Still
+    refused: a forged or edited state, a fresh one minted for another call or session, and a lapsed
+    one passed as the tool's own argument.
 - The storefront widget no longer flashes the product grid before a spending-grant card. It now
   shows nothing until the tool result that opened it arrives, then the card for that result; a host
-  that never sends one still gets the product picker after two seconds (#428).
+  that never sends one still gets the product picker after two seconds, or the notice above when a
+  grant tool opened the widget (#428).
 - Paying with a current Multipaz wallet no longer fails with "this wallet signed no
   transaction_data_hash … (update the wallet app)". Multipaz renamed the signed amount fields to
   `transactionDataHash` / `transactionDataHashAlg` in August 2026, and the gate only read the old

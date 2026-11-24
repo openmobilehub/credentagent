@@ -10,7 +10,8 @@
 // credential at all would give:
 //
 //   1. `claims` MUST be present. An mdoc query matches on `meta.doctype_value` alone; a
-//      `dc+sd-jwt` query with `meta.vct_values` alone matches nothing.
+//      `dc+sd-jwt` query with `meta.vct_values` alone matches nothing. It also needs
+//      `claim_sets` to ask for "either of these claims" rather than all of them (see below).
 //   2. The credential's issuer JWT MUST carry an `x5c` chain, or the wallet exports it to the
 //      Android matcher with no claims and it can never match. That is the minter's job, not
 //      this file's — see `tools/demo-pki/mint/mint-dpc-sdjwt.mjs`.
@@ -30,10 +31,18 @@ export const PAYMENT_CREDENTIAL_VCTS = ["urn:emvco:dpc:card:1", "com.emvco.dpc"]
 export const PAYMENT_CREDENTIAL_ID = "dpc_credential";
 
 /**
- * The instrument leaf /verify requires disclosed (invariant 5: an explicit positive claim,
- * not merely "a token was present"). Also the claim that makes the query match at all.
+ * The claims that prove a payment card, ONE of which a wallet must disclose. The single source
+ * for both what the request asks for and what /verify requires, so the two cannot drift.
+ *
+ * - `credential_id` — carried by the official Multipaz Payment card (`payment_sca_sd_jwt` at
+ *   `issuer.multipaz.org`). Matched on a phone; the card's other claims (`network`, `last_four`)
+ *   are read from Multipaz `main` and not requested.
+ * - `payment_instrument_id` — carried by the test card `tools/demo-pki/mint/` mints.
+ *
+ * Invariant 5 holds: /verify needs an explicit, non-empty, issuer-signed value for one of
+ * these, never merely "a token was present".
  */
-export const PAYMENT_INSTRUMENT_CLAIM = "payment_instrument_id";
+export const PAYMENT_CLAIMS = ["credential_id", "payment_instrument_id"] as const;
 
 /** The DCQL the signed request embeds. */
 export function buildIntentSignDcql(): DcqlQuery {
@@ -43,7 +52,12 @@ export function buildIntentSignDcql(): DcqlQuery {
         id: PAYMENT_CREDENTIAL_ID,
         format: "dc+sd-jwt",
         meta: { vct_values: [...PAYMENT_CREDENTIAL_VCTS] },
-        claims: [{ path: [PAYMENT_INSTRUMENT_CLAIM] }],
+        claims: PAYMENT_CLAIMS.map((name) => ({ id: name, path: [name] })),
+        // "Either claim": one option per card. Confirmed on a phone (2026-11-13): Android's matcher
+        // honours `claim_sets` and offered the official Payment card for it (Multipaz Wallet dev
+        // build, one run against a local server). Without `claim_sets` this would ask for BOTH
+        // claims, and no single card carries both.
+        claim_sets: PAYMENT_CLAIMS.map((name) => [name]),
       },
     ],
   } as unknown as DcqlQuery;

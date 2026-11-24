@@ -10,13 +10,21 @@
 // "device-signed", never "issuer-verified") is the issuer trust anchor: the credential is
 // self-certified, exactly as the demo minter makes it (#14).
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { peekJwtHeader } from "../../ap2/jwt.js";
+import { appendAgentHop } from "../../ap2/chain/hop.js";
+import { walletChain } from "../../ap2/chain/serialize.js";
+import { verifyChain } from "../../ap2/chain/verify.js";
+import { VCT } from "../../ap2/types.js";
+import { p256 } from "./dev-wallet.js";
 import { buildIntentSignRequest } from "./request.js";
 import { verifyIntentPresentation, memoryNonceGuard, inGateBackend, type IntentVerifyBackend } from "./verify.js";
-import { dcApiAudience } from "./presentation.js";
+import { dcApiAudience, splitPresentation, verifyDelegatedPresentation } from "./presentation.js";
 import { devSimulateWalletSignature } from "./simulate.js";
 import { boundsHash, type IntentBoundsInput } from "./bounds.js";
 import type { Origin } from "../origin.js";
 import { generateDelegate } from "../mandate.js";
+import { arrayDisclosure } from "./mandates.js";
 
 const SECRET = "stable-test-secret";
 const ORIGIN: Origin = { rpID: "shop.example", origin: "https://shop.example" };
@@ -225,6 +233,87 @@ describe("intent-sign REAL device-signed presentation", () => {
     const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantUrl: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
     expect(out.ok).toBe(false);
     if (!out.ok) expect(out.reason).toMatch(/payment_instrument_id/);
+  });
+
+  // The official Multipaz Payment card (`payment_sca_sd_jwt`) carries `credential_id`, not
+  // `payment_instrument_id`. These tests use `cardShape: "multipaz-dpc"`, which copies that card's
+  // claim names; the simulator signs the card itself, so none of this says the card is genuine.
+  // A phone run (2026-11-13) matched the real card on `credential_id`.
+  it("verifies a card with the Multipaz card's layout: credential_id disclosed, no payment_instrument_id", async () => {
+    const b = bounds();
+    const { req, result } = await signFor(b, { cardShape: "multipaz-dpc" });
+    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantUrl: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
+    expect(out.ok).toBe(true);
+    if (out.ok) {
+      expect(out.trustLevel).toBe("device-signed");
+      expect(out.credentialType).toBe("urn:emvco:dpc:card:1");
+      // Prove the Multipaz layout really ran: the card discloses credential_id and no payment_instrument_id.
+      const disclosed = out.intent.presentation.split("~").slice(1, -1)
+        .map((d) => JSON.parse(Buffer.from(d, "base64url").toString("utf8"))[1]);
+      expect(disclosed).toContain("credential_id");
+      expect(disclosed).not.toContain("payment_instrument_id");
+    }
+  });
+
+  // A typo must not quietly mint the demo card: the multipaz-dpc refusal tests below would still pass on it, testing the wrong layout.
+  it("the simulated wallet throws on an unknown cardShape instead of minting the demo card", async () => {
+    await expect(signFor(bounds(), { cardShape: "multipaz" as never })).rejects.toThrow(/unknown cardShape "multipaz"; use "multipaz-dpc" or "demo-dpc"/);
+  });
+
+  // The error calls "demo-dpc" the default, so naming it must make the same card as leaving it out:
+  // the test card, which carries payment_instrument_id. If either one changes, this fails.
+  it("cardShape \"demo-dpc\" makes the default card: payment_instrument_id disclosed, no credential_id", async () => {
+    for (const over of [{}, { cardShape: "demo-dpc" as const }]) {
+      const b = bounds();
+      const { req, result } = await signFor(b, over);
+      const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantUrl: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
+      expect(out.ok).toBe(true);
+      if (out.ok) {
+        const disclosed = out.intent.presentation.split("~").slice(1, -1)
+          .map((d) => JSON.parse(Buffer.from(d, "base64url").toString("utf8"))[1]);
+        expect(disclosed).toContain("payment_instrument_id");
+        expect(disclosed).not.toContain("credential_id");
+      }
+    }
+  });
+
+  // Delete the `hasClaim` check in verify.ts and this FAILS: a card that proves nothing
+  // about itself would authorize the grant.
+  it("BYPASS: the multipaz-dpc card discloses none of the accepted claims → refused", async () => {
+    const b = bounds();
+    const { req, result } = await signFor(b, { cardShape: "multipaz-dpc", omitInstrumentId: true });
+    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantUrl: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
+    expect(out.ok).toBe(false);
+    if (!out.ok) expect(out.reason).toMatch(/did not disclose any of: credential_id, payment_instrument_id/);
+  });
+
+  // A claim that is disclosed but EMPTY proves nothing about the card. Remove the empty-string
+  // clause from the `hasClaim` check in verify.ts and this fails: only that clause refuses it.
+  it("BYPASS: the multipaz-dpc card discloses an EMPTY credential_id → refused", async () => {
+    const b = bounds();
+    const { req, result } = await signFor(b, { cardShape: "multipaz-dpc", instrumentId: "" });
+    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantUrl: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
+    expect(out.ok).toBe(false);
+    if (!out.ok) expect(out.reason).toMatch(/did not disclose any of/);
+  });
+
+  // Same attack as the `payment_instrument_id` one above, on the new claim: a credential_id the
+  // issuer never signed a digest for. Only the `_sd` digest check can refuse it.
+  it("BYPASS: a credential_id the ISSUER never signed, on the multipaz-dpc card → refused", async () => {
+    const b = bounds();
+    const { req, result } = await signFor(b, { cardShape: "multipaz-dpc", forgeRevealedClaim: "attacker-card" });
+    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantUrl: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
+    expect(out.ok).toBe(false);
+    if (!out.ok) expect(out.reason).toMatch(/Unreferenced disclosure/i);
+  });
+
+  // Carrying an accepted claim is not enough: the card must also be the right TYPE.
+  it("BYPASS: the multipaz-dpc card's claims under a DIFFERENT credential type → refused", async () => {
+    const b = bounds();
+    const { req, result } = await signFor(b, { cardShape: "multipaz-dpc", overrideVct: "org.iso.18013.5.1.mDL" });
+    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantUrl: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
+    expect(out.ok).toBe(false);
+    if (!out.ok) expect(out.reason).toMatch(/wrong credential/);
   });
 });
 
@@ -500,5 +589,272 @@ describe("merchantUrl is required (#331)", () => {
     const verifyAs = (merchantUrl: string) => verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantUrl, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
     expect((await verifyAs(coffee)).ok).toBe(true);
     expect((await verifyAs(ORIGIN.origin)).ok).toBe(false);
+  });
+});
+
+// The updated Multipaz wallet (Multipaz #2178, `presentWithKbDisclosures`) answers in the Delegated
+// SD-JWT layout of draft §5.1.1: `<SD-JWT>~~<KB-JWT>~<disclosure>~…~`. The key binding is in the
+// MIDDLE and the string ends in `~`, so a verifier that reads the last part as the key binding
+// refuses a real signature ("presentation carries no key-binding JWT", #473).
+describe("the Delegated SD-JWT layout (#473)", () => {
+  async function verifyLayout(simOver: Parameters<typeof signFor>[1] = {}) {
+    const b = bounds();
+    const { req, result } = await signFor(b, { delegatedLayout: true, ...simOver });
+    return verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantUrl: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
+  }
+
+  it("accepts the layout, device-signed, and still accepts the earlier one", async () => {
+    const out = await verifyLayout();
+    expect(out.ok).toBe(true);
+    if (out.ok) expect(out.trustLevel).toBe("device-signed");
+    const b = bounds();
+    const { req, result } = await signFor(b);
+    const earlier = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantUrl: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
+    expect(earlier.ok).toBe(true);
+  });
+
+  it("stores the presentation in the earlier shape, so the chain code that spends it is unchanged", async () => {
+    const out = await verifyLayout();
+    expect(out.ok).toBe(true);
+    if (out.ok) {
+      expect(out.intent.presentation).not.toContain("~~");
+      expect(out.intent.presentation.endsWith("~")).toBe(false);
+    }
+  });
+
+  it("BYPASS: an sd_hash that does not cover the credential's chain → refused", async () => {
+    const out = await verifyLayout({ breakSdHash: true });
+    expect(out.ok).toBe(false);
+    if (!out.ok) expect(out.reason).toMatch(/sd_hash/);
+  });
+
+  it("BYPASS: another nonce → refused", async () => {
+    const out = await verifyLayout({ overrideNonce: "another-nonce" });
+    expect(out.ok).toBe(false);
+  });
+
+  it("BYPASS: a different audience → refused", async () => {
+    const b = bounds();
+    const { req, result } = await signFor(b, { delegatedLayout: true });
+    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: { rpID: "evil.example", origin: "https://evil.example" }, merchantUrl: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
+    expect(out.ok).toBe(false);
+  });
+
+  it("BYPASS: a disclosure behind the key binding that delegate_payload does not commit to → refused", async () => {
+    const forged = arrayDisclosure("forged-salt", { type: "payment.open", forged: true } as never);
+    const out = await verifyLayout({ overrideKbDisclosure: forged });
+    expect(out.ok).toBe(false);
+    if (!out.ok) expect(out.reason).toMatch(/behind the key binding is not one the gate asked for/);
+  });
+
+  it("the simulated wallet throws on overrideKbDisclosure without delegatedLayout instead of ignoring it", async () => {
+    await expect(signFor(bounds(), { overrideKbDisclosure: "x" })).rejects.toThrow(/delegatedLayout/);
+  });
+
+  // The wallet's hop names the agent's key, so the draft types it delegable. This page still lets
+  // the terminal `kb+sd-jwt` through for a grant whose key the gate holds, because the gate spends
+  // that grant itself (`verify.ts` refuses it when the agent holds the key; see grants.agent-key.test.ts).
+  it("lets a gate-held grant through with the wallet's hop typed `kb+sd-jwt`, as 0.6.0 did", async () => {
+    expect((await verifyLayout({ overrideKbTyp: "kb+sd-jwt" })).ok).toBe(true);
+  });
+
+  // `kb-sd-jwt` is the other terminal spelling: accepted for the agent's LAST hop by the merchant's
+  // verifier, never on this page.
+  it("BYPASS: the wallet's hop typed `kb-sd-jwt`, the other terminal spelling → refused", async () => {
+    const out = await verifyLayout({ overrideKbTyp: "kb-sd-jwt" });
+    expect(out.ok).toBe(false);
+    if (!out.ok) expect(out.reason).toMatch(/typed kb-sd-jwt/);
+  });
+
+  // A key binding whose body a strict decoder cannot read must be refused here, as it was when the
+  // whole answer was decoded, not authorized and then refused when the agent spends it.
+  it.each([
+    ["the Delegated layout", { delegatedLayout: true }],
+    ["the earlier layout", { delegatedLayout: false }],
+  ])("BYPASS: a key binding with one extra base64url character in its body, in %s → refused", async (_name, layout) => {
+    const out = await verifyLayout({ ...layout, breakKbEncoding: true });
+    expect(out.ok).toBe(false);
+    if (!out.ok) expect(out.reason).toMatch(/^disclosures: /);
+  });
+
+  it("BYPASS: mandates in delegate_payload that are not the grant's → refused", async () => {
+    const out = await verifyLayout({ overrideMandates: [{ type: "payment.open", forged: true } as never] });
+    expect(out.ok).toBe(false);
+  });
+
+  it("BYPASS: nothing behind the `~~` → refused as no key binding", async () => {
+    const b = bounds();
+    const { req, result } = await signFor(b, { delegatedLayout: true, omitKeyBinding: true });
+    // The answer really is in the new layout: the credential's chain, then the gap, then nothing.
+    let seen = "";
+    const spy: IntentVerifyBackend = async (a) => {
+      seen = a.sdjwt;
+      return inGateBackend(a);
+    };
+    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantUrl: ORIGIN.origin, nonceGuard: memoryNonceGuard(), delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS, backend: spy });
+    expect(seen).toMatch(/~~$/);
+    expect(out.ok).toBe(false);
+    if (!out.ok) expect(out.reason).toBe("presentation carries no key-binding JWT");
+  });
+
+  // An empty first disclosure makes the answer `<chain>~<key binding>~~…`, which the gate cannot split.
+  // A backend that vouches for it must still get a refusal, not a thrown error: without the guard
+  // in verify.ts this call throws "Cannot read properties of undefined".
+  it("BYPASS: a backend that accepts an answer the gate cannot read → refused as not a compact SD-JWT presentation", async () => {
+    const b = bounds();
+    const { req, result } = await signFor(b, { delegatedLayout: true, overrideKbDisclosure: "" });
+    const accepting: IntentVerifyBackend = async () => ({
+      ok: true,
+      trustLevel: "issuer-verified",
+      verifiedBy: "careless-verifier",
+      credentialType: "urn:emvco:dpc:card:1",
+      disclosed: { payment_instrument_id: "x" },
+      delegatePayload: req.delegateDigests.map((d: string) => ({ "...": d })),
+    });
+    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantUrl: ORIGIN.origin, nonceGuard: memoryNonceGuard(), backend: accepting, delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
+    expect(out.ok).toBe(false);
+    if (!out.ok) expect(out.reason).toBe("not a compact SD-JWT presentation");
+  });
+
+  it("BYPASS: a backend that accepts an answer with nothing behind the `~~` → the gate still refuses", async () => {
+    const b = bounds();
+    const { req, result } = await signFor(b, { delegatedLayout: true, omitKeyBinding: true });
+    // A custom backend that vouches for everything. The gate must not store `<chain>undefined` as a
+    // presentation: with no key binding there is nothing signed to keep, whoever vouched for it.
+    const accepting: IntentVerifyBackend = async () => ({
+      ok: true,
+      trustLevel: "issuer-verified",
+      verifiedBy: "careless-verifier",
+      credentialType: "urn:emvco:dpc:card:1",
+      disclosed: { payment_instrument_id: "x" },
+      delegatePayload: req.delegateDigests.map((d) => ({ "...": d })),
+    });
+    const out = await verifyIntentPresentation({ result, readerContextToken: req.readerContextToken, secret: SECRET, bounds: b, origin: ORIGIN, merchantUrl: ORIGIN.origin, nonceGuard: memoryNonceGuard(), backend: accepting, delegate: DELEGATE, mandateExp: MANDATE_EXP, allowedSkus: ALLOWED_SKUS });
+    expect(out.ok).toBe(false);
+    if (!out.ok) expect(out.reason).toBe("presentation carries no key-binding JWT");
+  });
+
+  it("BYPASS: a key binding signed by a key the credential does not name → refused", async () => {
+    const out = await verifyLayout({ forgeHolderKey: true });
+    expect(out.ok).toBe(false);
+  });
+});
+
+// `splitPresentation` is the one place the two layouts are told apart, so its odd shapes are pinned
+// directly. Each of these must come back with no key binding to store, or not at all.
+describe("splitPresentation", () => {
+  const C = "J.P.S~D1~"; // a credential's chain
+  const KB = "H.B.S";
+
+  it("reads the earlier layout, key binding last", () => {
+    expect(splitPresentation(`${C}${KB}`)).toEqual({ chain: C, kbJwt: KB, kbDisclosures: [] });
+  });
+
+  it("reads the Delegated layout and stores it in the earlier shape", () => {
+    expect(splitPresentation(`${C}~${KB}~M1~M2~`)).toEqual({ chain: C, kbJwt: KB, kbDisclosures: ["M1", "M2"] });
+  });
+
+  it("the gap with nothing behind it has no key binding to store", () => {
+    expect(splitPresentation(`${C}~`)).toEqual({ chain: C, kbJwt: undefined, kbDisclosures: [] });
+  });
+
+  it("an empty key binding with a disclosure behind it has none to store", () => {
+    expect(splitPresentation(`${C}~~M1~`)?.kbJwt).toBeUndefined();
+  });
+
+  it("a Delegated answer not closed by `~` is refused", () => {
+    expect(splitPresentation(`${C}~${KB}`)).toBeUndefined();
+  });
+
+  it("an empty disclosure behind the key binding is refused", () => {
+    expect(splitPresentation(`${C}~${KB}~~M1~`)).toBeUndefined();
+  });
+
+  it("a key binding that is not three parts is refused, in both layouts", () => {
+    expect(splitPresentation(`${C}${KB}.x`)).toBeUndefined();
+    expect(splitPresentation(`${C}~${KB}.x~M1~`)).toBeUndefined();
+    expect(splitPresentation(`${C}H.B`)).toBeUndefined();
+  });
+
+  // Three parts is not enough: the signature is decoded leniently, so `S==` would verify and be
+  // stored, then be refused by `walletChain` when the agent spends it.
+  it("a three-part key binding with characters outside base64url is refused, in both layouts", () => {
+    expect(splitPresentation(`${C}${KB}==`)).toBeUndefined();
+    expect(splitPresentation(`${C}~${KB}=~M1~`)).toBeUndefined();
+    // Standard base64's `+` and `/` decode leniently too, and `walletChain` refuses them.
+    expect(splitPresentation(`${C}H.B.S+/`)).toBeUndefined();
+    expect(splitPresentation(`${C}~H.B.S+/~M1~`)).toBeUndefined();
+  });
+
+  it("a non-string is refused", () => {
+    expect(splitPresentation(undefined as never)).toBeUndefined();
+  });
+});
+
+// Everything above builds its answers with this repo's own simulated wallet, which hashes the same
+// bytes the page does — so those tests alone cannot tell whether the page and a real wallet agree
+// on what `sd_hash` covers. This one answer came off a phone: the updated Multipaz Wallet signing a
+// spending grant on 2026-11-19 (#473). Replayed, it pins the range, the layout and the type.
+describe("a real Multipaz Wallet answer, replayed (#473)", () => {
+  const real = JSON.parse(readFileSync(new URL("./fixtures/multipaz-delegated-presentation.json", import.meta.url), "utf8")) as { sdjwt: string; audience: string; nonce: string };
+  const nowMs = Date.parse("2026-11-19T19:31:00Z"); // the credential expires later; fixed so the test never ages out
+  const chainNow = nowMs + 60_000; // the wallet signed 32 seconds after nowMs; do not lean on clock leeway
+  const replay = (over: Partial<Parameters<typeof verifyDelegatedPresentation>[0]> = {}) =>
+    verifyDelegatedPresentation({ sdjwt: real.sdjwt, audience: real.audience, nonce: real.nonce, nowMs, ...over });
+
+  it("is in the Delegated layout, typed `kb-sd-jwt+kb`", () => {
+    const parts = splitPresentation(real.sdjwt)!;
+    expect(parts.kbDisclosures).toHaveLength(2);
+    expect(peekJwtHeader(parts.kbJwt!)?.typ).toBe("kb-sd-jwt+kb");
+  });
+
+  it("verifies: the wallet's sd_hash covers the credential's chain, as the page computes it", async () => {
+    const out = await replay();
+    expect(out).toMatchObject({ ok: true, vct: "urn:emvco:dpc:card:1" });
+    if (out.ok) {
+      expect(out.delegatePayload).toHaveLength(2);
+      expect(Object.keys(out.disclosed)).toEqual(["credential_id"]);
+    }
+  });
+
+  // The agent spends this answer and the merchant checks it with `verifyChain`. With an agent key that is not the one the
+  // mandate names, it must get as far as the agent's own hop (link 2) and fail only there, so the real
+  // wallet's `sd_hash` range and `kb-sd-jwt+kb` type are accepted by the merchant's checks too.
+  it("reaches the agent's hop (link 2) when the merchant verifies it", async () => {
+    const parts = splitPresentation(real.sdjwt)!;
+    for (const d of parts.kbDisclosures) {
+      const prefix = walletChain(`${parts.chain}${parts.kbJwt}`, d)!;
+      const chain = await appendAgentHop({
+        chain: prefix,
+        agentKey: p256().privateKey,
+        content: { vct: VCT.checkout, checkout_jwt: "h.p.s", checkout_hash: "hash" },
+        audience: "https://merchant.example",
+        nonce: "n-1",
+      });
+      const out = await verifyChain(chain, { audience: "https://merchant.example", nonce: "n-1", nowMs: chainNow });
+      expect(out).toMatchObject({ ok: false, code: "signature" });
+      if (!out.ok) expect(out.detail).toMatch(/^link 2: .*Invalid JWT Signature/);
+    }
+  });
+
+  it("BYPASS: the same answer with the credential's disclosure dropped → refused (sd_hash)", async () => {
+    const [jwt, , ...behind] = real.sdjwt.split("~"); // drops the credential_id disclosure
+    const out = await replay({ sdjwt: [jwt, ...behind].join("~") });
+    expect(out.ok).toBe(false);
+    if (!out.ok) expect(out.reason).toMatch(/sd_hash/);
+  });
+
+  // The signature is checked on the key binding's first three parts, so a fourth leaves it valid.
+  // Such an answer used to be authorized and then refused when the agent spent it (#474 review).
+  it("BYPASS: the key binding with a fourth part → refused at signing, not at the purchase", async () => {
+    const parts = real.sdjwt.split("~");
+    parts[3] = `${parts[3]}.extra`;
+    const out = await replay({ sdjwt: parts.join("~") });
+    expect(out).toEqual({ ok: false, reason: "not a compact SD-JWT presentation" });
+  });
+
+  it("BYPASS: the same answer for another nonce or another audience → refused", async () => {
+    expect((await replay({ nonce: "another-nonce" })).ok).toBe(false);
+    expect((await replay({ audience: "origin:https://evil.example" })).ok).toBe(false);
   });
 });

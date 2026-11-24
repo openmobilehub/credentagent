@@ -16,7 +16,7 @@
 import * as jose from "jose";
 import { SDJwtInstance } from "@sd-jwt/core";
 import { dcApiAudience, hasher } from "./presentation.js";
-import { PAYMENT_CREDENTIAL_VCTS, PAYMENT_INSTRUMENT_CLAIM } from "./dcql.js";
+import { PAYMENT_CREDENTIAL_VCTS } from "./dcql.js";
 import { peekJson } from "../../ap2/jwt.js";
 import { delegateKeyBinding, p256, saltGenerator, selfSignedCert } from "./dev-wallet.js";
 import { es256Signer } from "../../ap2/sdjwt.js";
@@ -39,13 +39,21 @@ export interface SimulateOptions {
   request: Pick<SignedIntentRequest, "request" | "dcql_query">;
   /** The web origin the wallet addresses the key binding to (must match the gate's). */
   origin: string;
-  /** The payment instrument id the credential discloses (default the demo fixture's). */
+  /** Which card LAYOUT the simulated wallet mints. `"multipaz-dpc"` copies the claim names of the
+   *  SD-JWT Payment card at `issuer.multipaz.org`, as read from Multipaz `main` (`credential_id`,
+   *  `network`, `last_four`, and NO `payment_instrument_id`). Either way the card is signed by
+   *  this simulator's own demo issuer, never by Multipaz. `"demo-dpc"` carries
+   *  `payment_instrument_id`, like the test card `tools/demo-pki/mint/` mints. Default `"demo-dpc"`. Any other value throws. */
+  cardShape?: "multipaz-dpc" | "demo-dpc";
+  /** The id the credential discloses in its accepted claim (default the demo fixture's):
+   *  `payment_instrument_id` on the `"demo-dpc"` card, `credential_id` on the `"multipaz-dpc"` one. */
   instrumentId?: string;
   /** TEST-ONLY: bind to a different nonce than the request asked for (replay/tamper). */
   overrideNonce?: string;
   /** TEST-ONLY: present a different credential type (wrong-credential refusal). */
   overrideVct?: string;
-  /** TEST-ONLY: omit the instrument claim (missing-claim refusal). */
+  /** TEST-ONLY: omit the card's accepted claim (missing-claim refusal) — `payment_instrument_id`
+   *  or `credential_id`, whichever the chosen `cardShape` carries. */
   omitInstrumentId?: boolean;
   /** TEST-ONLY: sign DIFFERENT mandates than the gate asked for. The single most important
    *  bypass: a wallet that returns terms other than the ones requested must be refused. */
@@ -63,7 +71,7 @@ export interface SimulateOptions {
   /** TEST-ONLY: put the mandates in the KB-JWT as plain objects instead of digests — the
    *  pre-#192 shape, which a draft-conformant verifier must no longer accept. */
   plainDelegatePayload?: boolean;
-  /** TEST-ONLY: a MALICIOUS WALLET. The credential is minted without the instrument claim, and
+  /** TEST-ONLY: a MALICIOUS WALLET. The credential is minted without its accepted claim, and
    *  an unsigned disclosure for it is appended to the presentation — then the key binding is
    *  signed over the tampered bytes, which a wallet holding the `cnf` key can do. Only the
    *  issuer's `_sd` digests can catch this; `sd_hash` cannot, because the wallet recomputed it. */
@@ -72,10 +80,21 @@ export interface SimulateOptions {
    *  disclosures actually presented — what tampering with the disclosure list after the holder
    *  signed looks like on the wire. */
   breakSdHash?: boolean;
+  /** TEST-ONLY: sign a key binding whose body carries one extra base64url character — valid
+   *  signature, same claims to a lenient reader, refused by a strict decoder. */
+  breakKbEncoding?: boolean;
   /** TEST-ONLY: present the SAME disclosure twice, with the key binding re-signed over it. One
    *  digest, two disclosures claiming it — a malformed presentation a verifier must not unpack
    *  into a claim it then trusts. */
   duplicateDisclosure?: boolean;
+  /** TEST-ONLY: answer in the Delegated SD-JWT layout the updated Multipaz wallet sends: the
+   *  credential's chain, an empty part, the key binding, then the mandate disclosures behind it
+   *  (#473). With `omitKeyBinding`: the chain and the gap, nothing behind it. */
+  delegatedLayout?: boolean;
+  /** TEST-ONLY, only with `delegatedLayout` (it throws without): replace the FIRST disclosure behind
+   *  the key binding with this one — a disclosure the key binding's `delegate_payload` does not
+   *  commit to. The others stay the mandates' own. */
+  overrideKbDisclosure?: string;
 }
 
 /**
@@ -87,6 +106,14 @@ export async function devSimulateWalletSignature(
   const { request, origin } = opts;
   const vct = opts.overrideVct ?? PAYMENT_CREDENTIAL_VCTS[0];
   const instrumentId = opts.instrumentId ?? "demo-instrument-0001";
+  if (opts.cardShape !== undefined && opts.cardShape !== "multipaz-dpc" && opts.cardShape !== "demo-dpc") {
+    throw new Error(`devSimulateWalletSignature: unknown cardShape "${String(opts.cardShape)}"; use "multipaz-dpc" or "demo-dpc" (the default)`);
+  }
+  if (opts.overrideKbDisclosure !== undefined && !opts.delegatedLayout) {
+    throw new Error("devSimulateWalletSignature: overrideKbDisclosure only applies with delegatedLayout");
+  }
+  // The one claim the gate accepts as proof of the card, which depends on the card's shape.
+  const acceptedClaim = opts.cardShape === "multipaz-dpc" ? "credential_id" : "payment_instrument_id";
 
   const payload = jose.decodeJwt(request.request) as {
     nonce: string;
@@ -125,10 +152,15 @@ export async function devSimulateWalletSignature(
   const holder = p256();
   const x5c = await selfSignedCert(issuer, "CredentAgent Simulated Wallet Issuer");
 
-  const claims: Record<string, unknown> = { issuer_name: "Bank of Utopia", masked_account_reference: "•••• 4444" };
+  // The `multipaz-dpc` card's other claims are placeholders: only their NAMES are read from Multipaz
+  // `main`, and a phone run (#466) is what confirms them.
+  const claims: Record<string, unknown> =
+    opts.cardShape === "multipaz-dpc"
+      ? { network: "visa", last_four: "4242" }
+      : { issuer_name: "Bank of Utopia", masked_account_reference: "•••• 4444" };
   // `forgeRevealedClaim` leaves the real claim OUT of what the issuer signs, so the forged
   // disclosure appended below has no `_sd` digest behind it — the whole point of the bypass.
-  if (!opts.omitInstrumentId && opts.forgeRevealedClaim === undefined) claims[PAYMENT_INSTRUMENT_CLAIM] = instrumentId;
+  if (!opts.omitInstrumentId && opts.forgeRevealedClaim === undefined) claims[acceptedClaim] = instrumentId;
 
   const iat = Math.floor(Date.now() / 1000);
   const issuerInstance = new SDJwtInstance<Record<string, unknown>>({
@@ -161,7 +193,8 @@ export async function devSimulateWalletSignature(
   if (opts.omitKeyBinding) {
     // Disclose everything, sign nothing. A verifier that accepts this has stopped checking
     // that anybody authorized anything.
-    presentation = disclosed;
+    // In the Delegated layout that is the credential's chain and the gap, with nothing behind it.
+    presentation = opts.delegatedLayout ? `${disclosed}~` : disclosed;
   } else {
     const kbKey = opts.forgeHolderKey ? p256().privateKey : holder.privateKey;
     if (opts.duplicateDisclosure) {
@@ -174,7 +207,7 @@ export async function devSimulateWalletSignature(
     // so `sd_hash` still matches and only the `_sd` digest check is left to refuse it.
     if (opts.forgeRevealedClaim !== undefined) {
       const forged = Buffer.from(
-        JSON.stringify(["forged-salt-0000000000", PAYMENT_INSTRUMENT_CLAIM, opts.forgeRevealedClaim]),
+        JSON.stringify(["forged-salt-0000000000", acceptedClaim, opts.forgeRevealedClaim]),
         "utf-8",
       ).toString("base64url");
       disclosed = `${disclosed}${forged}~`;
@@ -192,6 +225,8 @@ export async function devSimulateWalletSignature(
       // Delegate SD-JWT §7.1: the KB-JWT carries the DIGEST of the delegate payload.
       delegatePayload,
       ...(opts.overrideKbTyp ? { typ: opts.overrideKbTyp } : {}),
+      ...(opts.delegatedLayout ? { kbDisclosures: [opts.overrideKbDisclosure ?? disclosures[0] ?? "", ...disclosures.slice(1)] } : {}),
+      ...(opts.breakKbEncoding ? { malformBody: true } : {}),
       ...(opts.breakSdHash ? { sdHashOver: `${disclosed}tampered` } : {}),
     });
   }

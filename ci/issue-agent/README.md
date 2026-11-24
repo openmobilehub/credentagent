@@ -358,8 +358,8 @@ Claude review finishes on an agent:in-review PR, or the label is added   (or: ma
 - **Same trust split:** assess and push are trusted code; fix runs in a job with no GitHub token.
   Only threads started by the review bot (a GitHub App account, not any user named `claude`) or by
   people with write access are read, and only their replies; only the maintainers' are answered.
-- **Only what blocks gets fixed.** A ✅ review goes to you at once, even with optional notes open:
-  they are listed and linked as "no action needed", and the agent pushes no commit for them. Chasing
+- **Only what blocks gets fixed.** A ✅ review goes to you at once, even with optional notes: they
+  are in the review's summary, not threads, and the agent pushes no commit for them. Chasing
   them cost a cycle each and found a new, smaller note every time — on pull request #347 (issue
   #322's fix) the reviews went ⛔ → 💬 → 💬 → ⛔ → 💬, and on pull request #415 a cycle pushed a
   commit that only reworded comments. ⛔ gets one fix cycle; **a second ⛔ goes to you as
@@ -370,11 +370,11 @@ Claude review finishes on an agent:in-review PR, or the label is added   (or: ma
   cap.) The push job sets the mark from its own checked values, not from the agents' output. A bot note a person with write access replied on is answered like
   their own thread. On a stop, the bot's open notes are listed plainly, not as "no action needed" —
   on a ⛔ they may be what blocks. The loop reads two verdicts, ✅ and ⛔; a 💬 Ready — small notes (which the
-  review is dropping) reads as ✅, for one release.
+  review no longer gives) reads as ✅, for one release.
 - **One re-review, asked for by label.** After a fix push the push job adds **`review:again`**
-  (with `AGENT_GH_TOKEN`, once per cycle; it makes the label if it's missing). Until the Claude
-  review starts on that label instead of on a push, the label does nothing and the push still starts
-  the review. It is not `agent:in-review`, so adding it starts no review-loop run.
+  (with `AGENT_GH_TOKEN`, once per cycle; it makes the label if it's missing). That label, not the
+  push, starts the next Claude review; the review takes the label off when it's done. It is not
+  `agent:in-review`, so adding it starts no review-loop run.
 - **Only PRs labelled into the loop, only from this repository.** It acts only on PRs from branches
   in this repository that carry `agent:in-review` (so a PR a human has taken over is left alone),
   and spends no fix session when `AGENT_GH_TOKEN` is missing. Every job checks out `main`'s harness
@@ -396,7 +396,7 @@ Claude review finishes on an agent:in-review PR, or the label is added   (or: ma
 - **Never stranded.** A review that fails, or ends with no verdict for the latest commit (paused),
   hands the PR to a human with that reason — and so does a PR still in the loop once
   `AGENT_GH_TOKEN` is gone. A head that only merges `main` in (GitHub's *Update branch*) isn't
-  reviewed again — the review skips a push that leaves the PR's diff unchanged — so the last
+  reviewed again — a review it asks for skips a head that leaves the PR's diff unchanged — so the last
   verdict still applies.
 - **Main is brought in when it matters — and conflicts get resolved, not waited on.** If `main` has
   changed a file the PR also changes, the fix job merges `main` first (the review reads the PR
@@ -428,8 +428,8 @@ Claude review finishes on an agent:in-review PR, or the label is added   (or: ma
   `agent:needs-human` or `agent:ready-for-human`), which starts a run by itself. That gets a PR
   stopped on a second ⛔ nowhere — it stops again at once, whatever the cap; fix that one by hand. To give a PR stopped at the cap more cycles, raise the cap — the repo variable
   `ISSUE_AGENT_MAX_REVIEW_CYCLES` (`gh variable set ISSUE_AGENT_MAX_REVIEW_CYCLES --body 4`) for
-  Actions runs, or the same environment variable locally. A review cancelled by hand without a new
-  push starts nothing: run the loop by hand to resume it.
+  Actions runs, or the same environment variable locally. A review cancelled by hand starts nothing (nor
+  does a push): add `review:again`, or run the loop by hand, to resume it.
 
 ## What it trusts — and what it doesn't
 
@@ -558,7 +558,7 @@ is left, so together they can't pass the cap. A run that hits its cap stops and 
 | `ISSUE_AGENT_BUDGET_USD` | `25` | per-session cap |
 | `ISSUE_AGENT_RUN_BUDGET_USD` | `100` | per-run cap |
 | `ISSUE_AGENT_LABEL` | `agent` | the label `--poll` looks for |
-| `ISSUE_AGENT_MAX_REVIEW_CYCLES` | `2` | review-loop fix cycles; ✅ → `agent:ready-for-human` (optional notes listed), a second ⛔ → `agent:needs-human` |
+| `ISSUE_AGENT_MAX_REVIEW_CYCLES` | `2` | review-loop fix cycles; ✅ → `agent:ready-for-human`, a second ⛔ → `agent:needs-human` |
 | `ISSUE_AGENT_DISCUSS_ROUTINE`, `ISSUE_AGENT_DISCUSS_TOKEN` | — | secrets: the brief's "talk it through live" routine ("The brief") |
 
 Secrets/variables: `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` (+ `CLAUDE_AUTH`), and
