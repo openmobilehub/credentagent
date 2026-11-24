@@ -61,7 +61,8 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
   in Claude, so give every tool that spends `_meta: { ui: { visibility: ["model"] } }` and leave
   `openai/widgetAccessible` unset or `false`. The storefront's own tools don't follow this yet,
   `spend-from-grant` included: they move onto `cards.toolMeta()` in a later step (#293). The `/cards`
-  entry point now runs on Node: it reads the built page with `node:fs` (#435).
+  entry point now runs on Node: it reads the built page with `node:fs` (#435). 0.6.0 exported only
+  types and one constant from it, so code that imported it into a browser bundle must stop.
 - `grantView(grant, { product? })` from `@openmobilehub/credentagent-gate`: a live grant as the plain
   data a card renders. A server on the gate's grants writes
   `cards.grant(await grantView(await credentagent.grants.retrieve(id)))`, with no projection of its
@@ -91,9 +92,10 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
 - A spending-grant card's honesty line, in the storefront widget too, is now one of the card kit's
   fixed sentences, chosen by the grant's `trustLevel` and worded as the merchant's claim. A
   click-approved grant now reads "As the merchant reports it: a demo, approved with a click on a page —
-  nothing was signed on a phone. No real money moves." instead of "delegated-demo · limits enforced
-  server-side · consent is dev-sealed, not wallet-signed", which was false for a grant signed on a
-  phone. A grant waiting for approval, or declined, reads "As the merchant reports it: not approved, so
+  nothing was signed on a phone. No real money moves." with no `delegated-demo · limits enforced
+  server-side · ` in front of it (0.6.0 said "delegated-demo · limits enforced server-side · consent is
+  dev-sealed, not wallet-signed", which was false for a grant signed on a phone; the sentence had
+  already changed on `main` in #458). A grant waiting for approval, or declined, reads "As the merchant reports it: not approved, so
   this grant can't spend anything.", and a revoked one with nothing spent "As the merchant reports it:
   revoked." A level the card doesn't know shows "Trust level not recognised by this card; treat it as
   unverified." (#435).

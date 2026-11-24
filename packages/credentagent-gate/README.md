@@ -534,8 +534,10 @@ storefront or an agent — with no widget code of its own:
 ```js
 import { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
-import { grantView } from "@openmobilehub/credentagent-gate";
+import { CredentAgent, grantView } from "@openmobilehub/credentagent-gate";
 import { createCards } from "@openmobilehub/credentagent-gate/cards";
+
+const credentagent = new CredentAgent({ walletOrigin: "https://my-server.example", catalog: { /* your priced catalog */ } });
 
 // Once per process — fails at startup if the package was built without its page. `tools.revoke` names
 // the tool a grant card's Revoke button calls; leave it out and the card draws no Revoke.
@@ -551,20 +553,29 @@ function buildServer() {
     cards.grant(await viewOf(grantId)),
   );
   // The card's Revoke button calls this one, so it opts in. Never opt in a tool that spends.
+  // It must return the grant as a card: the button redraws the card from this result.
   server.registerTool("revoke-grant", { inputSchema, _meta: cards.toolMeta({ callableFromCard: true }) }, async ({ grantId }) => {
-    await revokeMyGrant(grantId);
+    await (await credentagent.grants.retrieve(grantId))?.revoke(); // yours to do; here, the gate's own grant
     return cards.grant(await viewOf(grantId));
   });
   return server;
 }
 
-// With the gate's grants, `viewOf` is one line: the gate's `grantView` over the grant you retrieve.
-const viewOf = async (grantId) => grantView(await credentagent.grants.retrieve(grantId));
-// revokeMyGrant(grantId) is yours. If your grants don't come from the gate, build the GrantViewData
-// yourself: the grant's plain data (kind: GRANT_VIEW_KIND) with the money already computed on your server.
+// With the gate's grants, `viewOf` is the gate's `grantView` over the grant you retrieve.
+const viewOf = async (grantId) => {
+  const grant = await credentagent.grants.retrieve(grantId);
+  if (!grant) throw new Error("No such grant."); // `retrieve` returns null for an unknown id
+  return grantView(grant);
+};
+// If your grants don't come from the gate, build the GrantViewData yourself: the grant's plain data
+// (kind: GRANT_VIEW_KIND) with the money already computed on your server.
 
-app.get("/cards", (_req, res) => res.type("html").send(cards.html)); // your Express app · preview: /cards?view=grant-product
+// Your Express app: the card preview, and the approve page a pending card's Approve button opens.
+app.get("/cards", (_req, res) => res.type("html").send(cards.html)); // preview: /cards?view=grant-product
+credentagent.grants.serve(app); // without it Approve opens a 404
 ```
+
+A runnable version, with a spend tool and the MCP wiring, is [`examples/cards-grant.mjs`](https://github.com/openmobilehub/credentagent/blob/main/examples/cards-grant.mjs). If the card's Revoke button fails, check three things: the tool's name matches `tools.revoke`, it is registered with `cards.toolMeta({ callableFromCard: true })`, and it returns `cards.grant(view)`.
 
 `createStorefront()` calls `grantView` for its own grant tools, adding the product it looks up in its catalog (`grantView(grant, { product })`). The `GrantViewData` type and `GRANT_VIEW_KIND` are exported from `@openmobilehub/credentagent-gate/cards`.
 

@@ -563,7 +563,7 @@ spec first. The steps already open, and what each takes from this spec:
 | 1 | #258 — the gallery moves into the gate | (as is) |
 | 2 | #294 — this spec | — |
 | 3 | #259 — the card page | FR-9 |
-| 4 | #272 — `createCards()` serves it | FR-6, FR-7 (`toolMeta()` model-only by default; the storefront switches to it with #293, when it moves onto the kit); FR-10 and FR-11 for `grant()` (the list's sentence, the link check) |
+| 4 | #272 — `createCards()` serves it | FR-6, FR-7 (`toolMeta()` model-only by default; the storefront switches to it with #293, when it moves onto the kit); FR-10 and FR-11 for `grant()` (the list's sentence, the link check); and `grantView(grant, { product? })` in the gate, exported from its root: the one projection from a live grant to `GrantViewData`, which the storefront's `projectGrantView` now calls and adds only its catalog lookup to (added in the review of #272, so a server on the gate's grants writes no projection of its own) |
 | 5 | #273 — becomes `createPermissions()` in `/agent` | FR-1 to FR-3: `trackingId`, async memory with compare-and-set, final statuses, expiry, the shared read, the wait and its limits |
 | 6 | #274 — `cards.permission()` and the wait tool | FR-11, FR-12 (status tool), FR-13 |
 | 7 | #275 — the permission card | FR-10 (honesty line, label), `perSpend` / `budget`, currency formatting |
