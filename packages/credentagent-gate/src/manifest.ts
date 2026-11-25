@@ -15,6 +15,19 @@ import type {
 } from "./types.js";
 import { REQUIREMENTS_PARAM, savedRequirementsFor, sealRequirements } from "./ceremony/saved-requirements.js";
 
+/** The discount percent a policy grants THIS order (its first `discount` step that applies — the
+ *  same `appliesTo` / `.when()` filter `resolveRequirements` uses), if any. What `orders.serve`
+ *  prices a member's discount at and the payment rails hold it to (#360). */
+export function discountPercentOf(order: GateOrder, policy: readonly Step[]): number | undefined {
+  for (const s of policy) {
+    if (s.credential.appliesTo && !s.credential.appliesTo(order)) continue;
+    if (s.credential.effect.kind === "discount") {
+      return s.credential.effect.percent ?? s.credential.params?.percent;
+    }
+  }
+  return undefined;
+}
+
 export interface ResolveContext {
   /** Origin the per-order approve link binds to. */
   walletOrigin: string;

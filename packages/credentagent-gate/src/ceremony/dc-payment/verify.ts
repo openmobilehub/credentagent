@@ -19,7 +19,7 @@
 // catalog-priced lines.
 import { randomUUID } from "node:crypto";
 import * as jose from "jose";
-import { buildBindingFields, DEFAULT_LOYALTY_DISCOUNT_PCT } from "../mandate.js";
+import { buildBindingFields, checkAmounts, DEFAULT_LOYALTY_DISCOUNT_PCT } from "../mandate.js";
 import type { CeremonyOrder } from "../types.js";
 import type { Origin } from "../origin.js";
 import { buildTransactionData, decodeTransactionData, encodeTransactionData, hashTransactionData, txHashNameFromCose } from "./txData.js";
@@ -32,10 +32,6 @@ import {
   inspectAuthBlocks,
   type DeviceResponse,
 } from "../mdoc/mdoc.js";
-
-function round2(n: number): number {
-  return Math.round(n * 100) / 100;
-}
 
 /** First bytes of a base64url digest — enough to compare two hashes by eye. */
 function abbrev(hash: string | null): string {
@@ -161,11 +157,10 @@ export function runDcGates(mandate: DcMandate, origin: Origin, opts: { loyaltyDi
   // presented payment.amount. A loyalty discount, if present, must be either zero
   // or EXACTLY the configured percentage of the line sum (this lets a legitimately
   // discounted order pass and rejects an arbitrary discount). The stored amount is
-  // NOT trusted; everything is re-derived here.
-  const lineSum = round2(cart.lines.reduce((sum, l) => sum + l.lineTotal, 0));
-  const discount = cart.discount ?? 0;
-  const discountOk = discount === 0 || discount === round2(lineSum * (pct / 100));
-  const payable = round2(lineSum - discount);
+  // NOT trusted; everything is re-derived here, in whole minor units (checkAmounts — the
+  // same check the passkey rail runs).
+  const txd = decodeTransactionData(ua.transactionData);
+  const { ok: amountOk, payable, refused } = checkAmounts(cart, pct, [cart.total, mandate.payment.amount, Number(txd.payload.amount)]);
   // Honor the wallet's declared hash algorithm before comparing. A null/absent id ⇒
   // Multipaz's SHA-256 default; a known COSE id ⇒ that hash; an UNKNOWN id ⇒ `nodeAlg`
   // is null so we do NOT recompute and hashOk stays false (fail closed rather than
@@ -186,8 +181,6 @@ export function runDcGates(mandate: DcMandate, origin: Origin, opts: { loyaltyDi
       : nodeAlg === null
         ? `hash ✗ — the wallet used an unsupported hash algorithm (COSE ${ua.transactionDataHashAlg})`
         : `hash ✗ — mismatch (${nodeAlg}: wallet ${abbrev(ua.transactionDataHash)} vs ours ${abbrev(recomputed)})`;
-  const txd = decodeTransactionData(ua.transactionData);
-  const amountOk = discountOk && payable === cart.total && payable === mandate.payment.amount && Number(txd.payload.amount) === payable;
   const currencyOk = txd.payload.currency === cart.currency;
   // Payee must be THIS RP — re-derived from the request origin, not the token. An
   // attacker re-pointing the request to their own origin fails here (invariant 6).
@@ -196,7 +189,7 @@ export function runDcGates(mandate: DcMandate, origin: Origin, opts: { loyaltyDi
   results.push({
     gate: "Amount binding",
     pass: hashOk && amountOk && currencyOk && payeeOk,
-    detail: `${hashDetail} · amount ${amountOk ? "✓" : "✗"} (${txd.payload.amount}/${mandate.payment.amount} vs ${payable}) · currency ${currencyOk ? "✓" : "✗"} · payee ${payeeOk ? "✓" : "✗"} (${txd.payload.payee?.id} vs ${expectedPayee})`,
+    detail: `${hashDetail} · amount ${amountOk ? "✓" : "✗"} (${txd.payload.amount}/${mandate.payment.amount} vs ${payable}${refused ? `; refused: ${refused}` : ""}) · currency ${currencyOk ? "✓" : "✗"} · payee ${payeeOk ? "✓" : "✗"} (${txd.payload.payee?.id} vs ${expectedPayee})`,
   });
 
   // Gate 2 — authorization present. On the REAL path, the wallet's mdoc carries
@@ -305,8 +298,10 @@ export async function verifyDcPresentation(args: {
   result: { protocol?: string; data?: unknown };
   readerContextToken: string;
   secret: string;
+  /** The order's loyalty discount percent for the amount check (absent ⇒ the default 10). */
+  loyaltyDiscountPct?: number;
 }): Promise<DcVerification> {
-  const { order, origin, result, readerContextToken, secret } = args;
+  const { order, origin, result, readerContextToken, secret, loyaltyDiscountPct } = args;
   const ctx = await openReaderContext(readerContextToken, secret);
 
   let data: unknown = result?.data;
@@ -324,6 +319,6 @@ export async function verifyDcPresentation(args: {
   if (!vpStr) throw new Error("no vp_token.dpc in decrypted response");
 
   const mandate = buildDcMandateFromPresentation({ order, vpStr, transactionDataB64: ctx.transactionDataB64 });
-  const gates = runDcGates(mandate, origin);
+  const gates = runDcGates(mandate, origin, { loyaltyDiscountPct });
   return { mandate, gates };
 }

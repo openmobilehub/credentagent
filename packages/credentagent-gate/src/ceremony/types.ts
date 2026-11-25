@@ -25,7 +25,8 @@ export interface CeremonyOrderLine {
   unitPrice: number;
   /** Quantity. */
   quantity: number;
-  /** unitPrice × quantity. */
+  /** unitPrice × quantity. Float noise is fine (3 × 4.90 = 14.700000000000001 reads as 14.70 —
+   *  the amount checks compare whole minor units); a real fraction of a cent is refused. */
   lineTotal: number;
   /** ISO 4217 (optional; order-level currency is authoritative). */
   currency?: string;

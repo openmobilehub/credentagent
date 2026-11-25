@@ -76,7 +76,7 @@ export interface OrderLine {
   id: string;
   /** Quantity (matches the demo's `PricedCartLine.quantity`). */
   quantity: number;
-  /** Cents; authoritative (catalog). */
+  /** Major units (dollars: 4.9 is $4.90); authoritative (catalog). */
   unitPrice: number;
   /**
    * Per-product age threshold (21 for alcohol), re-derived server-side onto the
@@ -97,7 +97,7 @@ export interface OrderLine {
 export interface GateOrder {
   /** Stable per checkout (created once). */
   id: string;
-  /** Cents; re-derived server-side. */
+  /** Major units (dollars: 14.7 is $14.70); re-derived server-side. */
   total: number;
   /** ISO 4217. */
   currency: string;
