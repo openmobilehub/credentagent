@@ -81,6 +81,8 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
   data a card renders. A server on the gate's grants writes
   `cards.grant(await grantView(await credentagent.grants.retrieve(id)))`, with no projection of its
   own. It moved out of the storefront, which now calls it and adds only its catalog lookup (#435).
+  `product` is kept only for a grant that allows exactly that one SKU and no categories; for any other
+  grant the card lists everything the person approves.
 - A pending grant's card now says whose page Approve opens: "Opens the merchant's approval page at
   {host} ↗", where it said "Opens the CredentAgent approval page ↗". With `cards.grant()` any server
   supplies that link, so the card shows its host instead of naming the gate (#435).

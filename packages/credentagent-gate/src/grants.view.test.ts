@@ -103,6 +103,20 @@ describe("grantView — a live grant as plain card data", () => {
     expect("product" in (await grantView(grant))).toBe(false);
   });
 
+  it("BYPASS: a product is dropped when the grant also allows categories — the card must show every term", async () => {
+    const ca = client();
+    const grant = await authorized(ca, { skus: ["coffee"], categories: ["Beverages"] });
+    const product = { id: "coffee", name: "Coffee", price: 18, currency: "USD", category: "Beverages" };
+    expect("product" in (await grantView(grant, { product }))).toBe(false);
+  });
+
+  it("BYPASS: a product is dropped when its id is not the grant's one SKU", async () => {
+    const ca = client();
+    const grant = await authorized(ca, { skus: ["coffee"] });
+    const other = { id: "wine", name: "Wine", price: 21, currency: "USD", category: "Beverages" };
+    expect("product" in (await grantView(grant, { product: other }))).toBe(false);
+  });
+
   it("names the grant's merchant, approve link and trust level as the grant holds them", async () => {
     const ca = client();
     const grant = await authorized(ca);

@@ -157,11 +157,16 @@ export function grantLifecycle(input: { status: GrantStatus; budget: number; rem
  *   const grant = await credentagent.grants.retrieve(grantId);
  *   return cards.grant(await grantView(grant));
  *
- * `product` is the one thing the gate can't know: the catalog entry of a single-SKU grant, so the card
- * shows its real name, price and image. The caller resolves it from its own catalog.
+ * `product` is the one thing the gate can't know: the catalog entry of a grant that allows exactly that one
+ * SKU and no categories, so the card shows its real name, price and image. The caller resolves it from its own
+ * catalog. For any other grant, `product` is dropped: the card must list everything the person approves.
  */
 export async function grantView(grant: Grant, options: { product?: GrantViewProduct } = {}): Promise<GrantViewData> {
   const { budget, spent, remaining } = await grant.usage();
+  const skus = grant.allow?.skus ?? [];
+  const categories = grant.allow?.categories ?? [];
+  const product = options.product;
+  const single = product && categories.length === 0 && skus.length === 1 && skus[0] === product.id;
   return {
     kind: GRANT_VIEW_KIND,
     id: grant.id,
@@ -188,7 +193,7 @@ export async function grantView(grant: Grant, options: { product?: GrantViewProd
         ? { trustLevel: grant.ageProof?.trust_level ?? grant.membershipProof!.trust_level }
         : {}),
     },
-    ...(options.product ? { product: options.product } : {}),
+    ...(single ? { product } : {}),
   };
 }
 
