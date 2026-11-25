@@ -506,9 +506,13 @@ model can't reword:
 
 ### What you write
 
-With the gate's own grants, that is about seven lines. `createCards` once per process, the rest once per server:
+Put this where you build your MCP server (where you create your `McpServer`).
+With the gate's own grants, that is about seven lines (ten with imports). `createCards` once per process, the rest once per server:
 
 ```js
+import { grantView } from "@openmobilehub/credentagent-gate";
+import { createCards } from "@openmobilehub/credentagent-gate/cards";
+
 const cards = createCards();                                               // once per process
 cards.register(server);                                                    // serves the card page
 server.registerTool("get-grant", { inputSchema, _meta: cards.toolMeta() }, async ({ grantId }) => { // asks the host to keep it model-only
