@@ -9,8 +9,7 @@
 // This module is a LEAF on purpose: it imports only TYPES, so the card page that imports
 // `GRANT_VIEW_KIND` + the types never pulls the gate's Node runtime in. It moved here from the
 // storefront (spec 015) so any MCP server can render a grant, not only createStorefront(). The
-// projection that BUILDS a GrantViewData (a live grant handle + the catalog) stays in the
-// storefront's `grant-project.ts`.
+// projection that BUILDS a GrantViewData from a live grant is `grantView` in `../grants.ts`.
 
 import type { GrantLifecycle, GrantStatus } from "../grants.js";
 
@@ -54,9 +53,15 @@ export interface GrantViewData {
   description?: string;
   /** Where the human approves once — the ceremony deep-link the approvalCard links to. */
   approveUrl: string;
-  /** Honesty axis — carried verbatim into the non-omittable trust line (FR-4). */
+  /** The merchant's own honesty label. A card never shows it: its trust line is the kit's fixed
+   *  sentence for `lifecycle` and `trustLevel` (spec 015 FR-10). */
   presence: string;
   trustLevel: string;
+  /** `true` for a grant created with `agentKey`, signed or not yet (`grant.agentKey !== undefined`):
+   *  the approval card reads it before anyone signs, and once signed the agent holds the permission
+   *  itself, so revoking doesn't recall it (GLOSSARY.md, Revoke). `false` when the server spends the
+   *  grant, so revoking refuses every later spend. Left out, a card says neither. */
+  agentHeld?: boolean;
   /** Present for single-SKU grants: the resolved product (the flagship productGrantCard). */
   product?: GrantViewProduct;
   /**

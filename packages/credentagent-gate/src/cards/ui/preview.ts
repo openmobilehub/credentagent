@@ -18,6 +18,7 @@ const grant = (over: Partial<GrantViewData>): GrantViewData => ({
   approveUrl: "https://utopia.example/credentagent/grants/grant_preview",
   presence: "delegated-demo",
   trustLevel: "server-issued-demo",
+  agentHeld: false,
   credentials: { ageVerified: null, loyaltyDiscountPct: null },
   ...over,
 });

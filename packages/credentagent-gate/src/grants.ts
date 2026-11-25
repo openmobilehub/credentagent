@@ -30,6 +30,8 @@ import type { Branding, ReaderIdentity, TrustLevel } from "./types.js";
 import { AmountError, toMinorUnits } from "./ap2/money.js";
 import { importVerifyKey } from "./ap2/keys.js";
 import { KeyedMutex } from "./keyed-mutex.js";
+// grant-view.ts is a leaf (it imports only types from here), so this value import is no runtime cycle.
+import { GRANT_VIEW_KIND, type GrantViewData, type GrantViewProduct } from "./cards/grant-view.js";
 
 /** Why a grant operation refused — a TYPED union (never `string`; #95 review). */
 export type GrantDoorCode =
@@ -144,6 +146,55 @@ export function grantLifecycle(input: { status: GrantStatus; budget: number; rem
   if (remaining <= 0) return "exhausted";
   if (remaining <= LOW_BUDGET_FRACTION * budget) return "low";
   return "active";
+}
+
+/**
+ * A live grant as the plain data a card renders (spec 015). The ONE place that builds a
+ * {@link GrantViewData}: it reads the engine's money (`grant.usage()`) and runs {@link grantLifecycle},
+ * so no card and no server re-derives either, and it copies fields rather than spreading the grant, so
+ * the view carries no method that could spend or revoke (display-only by construction).
+ *
+ *   const grant = await credentagent.grants.retrieve(grantId);
+ *   return cards.grant(await grantView(grant));
+ *
+ * `product` is the one thing the gate can't know: the catalog entry of a grant that allows exactly that one
+ * SKU and no categories, so the card shows its real name, price and image. The caller resolves it from its own
+ * catalog. For any other grant, `product` is dropped: the card must list everything the person approves.
+ */
+export async function grantView(grant: Grant, options: { product?: GrantViewProduct } = {}): Promise<GrantViewData> {
+  const { budget, spent, remaining } = await grant.usage();
+  const skus = grant.allow?.skus ?? [];
+  const categories = grant.allow?.categories ?? [];
+  const product = options.product;
+  const single = product && categories.length === 0 && skus.length === 1 && skus[0] === product.id;
+  return {
+    kind: GRANT_VIEW_KIND,
+    id: grant.id,
+    merchant: grant.merchant,
+    status: grant.status,
+    lifecycle: grantLifecycle({ status: grant.status, budget, remaining }),
+    budget,
+    spent,
+    remaining,
+    perSpend: grant.perSpend,
+    allow: { skus: grant.allow?.skus ?? [], categories: grant.allow?.categories ?? [] },
+    ...(grant.description ? { description: grant.description } : {}),
+    approveUrl: grant.approveUrl,
+    presence: grant.presence,
+    trustLevel: grant.trustLevel,
+    // Whether revoking recalls it: a permission the agent holds itself stays spendable (GLOSSARY.md, Revoke).
+    agentHeld: grant.agentKey !== undefined,
+    // ALWAYS present, both fields always set (null when unproved): an agent must be able to read
+    // "no age proof" as a fact, not infer it from a missing key (#172).
+    credentials: {
+      ageVerified: grant.ageProof?.provenAge ?? null,
+      loyaltyDiscountPct: grant.membershipProof?.discountPct ?? null,
+      ...(grant.ageProof?.trust_level ?? grant.membershipProof?.trust_level
+        ? { trustLevel: grant.ageProof?.trust_level ?? grant.membershipProof!.trust_level }
+        : {}),
+    },
+    ...(single ? { product } : {}),
+  };
 }
 
 /** The one spend door (spec 009 FR-003 shape). A retried idempotency key replays the ORIGINAL

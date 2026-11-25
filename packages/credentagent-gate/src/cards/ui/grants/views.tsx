@@ -137,15 +137,29 @@ export const approvalCard = defineGrantView({
       </div>
       <div className={styles.scopeBlock}>
         <div className={styles.sbLabel}>Who</div>
-        <div className={styles.whoText}>Your agent spends <b>unattended</b> until the budget runs out — or you revoke it.</div>
+        <div className={styles.whoText}>Your agent spends <b>unattended</b> until the budget runs out{untilRevoked(grant)}</div>
       </div>
     </>
   ),
 });
 
+// What revoking stops, said only as far as the server told the card: a permission the agent holds
+// itself stays spendable after a revoke (GLOSSARY.md, Revoke). Only an exact boolean counts.
+function untilRevoked(grant: GrantViewData): string {
+  if (grant.agentHeld === false) return " — or you revoke it.";
+  if (grant.agentHeld === true) return ". Once you sign, revoking won't recall it from the agent.";
+  return ".";
+}
+
+function revokedSub(grant: GrantViewData): string {
+  if (grant.agentHeld === false) return "No further purchases will be made.";
+  if (grant.agentHeld === true) return "If it was approved before being revoked, the agent keeps its signed copy: revoking doesn't recall it.";
+  return "Spending is refused from now on, unless the agent holds its own signed copy of this permission: revoking doesn't recall that.";
+}
+
 function terminalCopy(grant: GrantViewData): { line: string; sub: string } {
   if (grant.lifecycle === "exhausted") return { line: `Budget spent — ${usd(grant.budget)} of ${usd(grant.budget)} used`, sub: "This grant is closed." };
-  if (grant.lifecycle === "revoked") return { line: "Revoked", sub: "No further purchases will be made." };
+  if (grant.lifecycle === "revoked") return { line: "Revoked", sub: revokedSub(grant) };
   return { line: "Declined", sub: "This grant was never activated." };
 }
 

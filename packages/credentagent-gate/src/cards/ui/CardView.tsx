@@ -6,7 +6,7 @@ import { GrantCard, GRANT_VIEW_KIND, type GrantActions, type GrantViewData } fro
 import type { Bridge } from "./bridge";
 import { REVOKE_TOOL_META } from "../grant-view";
 import { readCard, type CardStore, type ShownCard } from "./card-store";
-import { isSafeLink } from "./links";
+import { isSafeLink } from "../links";
 
 export interface CardViewProps {
   card: ShownCard | null;
