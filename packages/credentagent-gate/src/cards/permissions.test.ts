@@ -162,6 +162,20 @@ describe("cardStatus — the card follows the signature, and the server decides 
     expect(await watch.cardStatus("g1")).toEqual({ status: "unknown", announce: false, final: true }); // the card's lookup forgets it too
   });
 
+  it("a permission with a wait in flight is not forgotten, even when another grant is issued meanwhile", async () => {
+    const clock = virtualClock();
+    const hour = 3_600_000;
+    const watch = watchFor(clock, storeSigningAt(clock, hour + 30_000).read);
+    watch.issued(permission);
+    clock.advance(hour - 10); // a moment before the hour since its last use runs out…
+    const model = watch.waitForSignature("g1"); // …the model starts waiting (the first read is already out)
+    clock.advance(20_000); // the hour passes while that wait is still open
+    watch.issued({ ...permission, grantId: "g2" }); // a new permission sweeps the stale entries
+    expect((await model).status).toBe("authorized");
+    // g1 was in use, so it was not swept: the model's "authorized" is still remembered and the card stays quiet
+    expect(await watch.cardStatus("g1")).toEqual({ status: "authorized", trustLevel: "device-signed", announce: false, final: true });
+  });
+
   it("a permission in use is not forgotten", async () => {
     const clock = virtualClock();
     const watch = watchFor(clock, storeSigningAt(clock, 0).read);

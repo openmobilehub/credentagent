@@ -106,6 +106,7 @@ export function createPermissionWatch<R extends PermissionStatus>(options: {
       const entry = lookup(grantId);
       if (!entry) return { status: "unknown" };
       entry.openWaits += 1;
+      entry.lastUsed = now(); // in use from the start, so a sweep during a long wait cannot forget it
       try {
         const answer = await hold(entry, holdMs);
         if (answer.status === "authorized") entry.told = true;
