@@ -19,7 +19,7 @@ describe("README — Permissions", () => {
     const grantId = "g1";                                       // the id the shop gave the permission when it created it
 
     const permissions = createPermissions({
-      // `wait()` calls this with the `store` and `grantId` you gave to `track()`.
+      // `wait()` calls this with what you gave to `track()`: `store` is `{ id: "beanbarn" }` (the shop), `grantId` is `"g1"`.
       // Answer what the shop says: { status, trustLevel? }, `status` being "pending", "authorized", "denied" or "revoked".
       read: async ({ store, grantId }) => (await fetch(`${storeUrls[store.id]}/agent/grants/${grantId}`)).json(),
     });
