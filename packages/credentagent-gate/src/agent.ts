@@ -16,3 +16,14 @@ export type { DelegatedPurchaseProof } from "./ap2/chain/purchase.js";
 export type { PrivateJwkP256 } from "./ap2/keys.js";
 export type { Amount, Merchant, PaymentInstrument, OpenCheckoutMandate, OpenPaymentMandate } from "./ap2/types.js";
 export { DELEGATE_SD_JWT_REVISION } from "./ap2/chain/serialize.js";
+export { createPermissions } from "./agent/permissions.js";
+export type {
+  Permissions,
+  PermissionsOptions,
+  PermissionRead,
+  PermissionReadAnswer,
+  PermissionResult,
+  PermissionStatus,
+  PermissionStore,
+} from "./agent/permissions.js";
+export type { PermissionMemory } from "./agent/permission-memory.js";

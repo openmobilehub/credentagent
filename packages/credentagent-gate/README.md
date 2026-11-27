@@ -455,6 +455,56 @@ does not remember.
   against its own checkout key), and each store sees only its own `spent`: a "$200 in total"
   permission is $200 at each of them. Set `budget` with that in mind.
 
+### Permissions — remember what you asked a person to sign, and wait for it
+
+When an agent asks a person to sign a spending permission on their phone, the agent's server has to
+remember the request and wait for the signature. `createPermissions()` does both, as plain data in and
+out: no chat and no card page are needed, so a text-only agent or a timer uses it the same way.
+
+```js
+import { createPermissions } from "@openmobilehub/credentagent-gate/agent";
+
+const permissions = createPermissions({
+  // How to ask the shop that issued a permission about it: { status, trustLevel? }.
+  read: ({ store, grantId }) => getJson(`${storeUrls[store.id]}/agent/grants/${grantId}`),
+});
+
+const trackingId = await permissions.track({ store: { id: "beanbarn" }, grantId }); // same id every time for this pair
+const result = await permissions.wait(trackingId);                                 // holds up to 45 s
+if (result.ok) {
+  // approved: result.trustLevel is the shop's own claim about how it checked
+} else if (!result.stop) {
+  // still waiting: call wait() again
+} else {
+  // result.status says why to stop: "denied", "revoked", "unknown" or "read-failed", or "pending" after 15 minutes
+}
+```
+
+- **`track()`** remembers a permission under a random `trackingId` and returns the same id for the
+  same `(store.id, grantId)`. Two shops that both call a permission `"g1"` get two ids. It throws,
+  saying what to pass, when `store.id` or `grantId` is missing.
+- **`wait()`** reads the shop every 1.5 s and holds up to `approvalHoldMs` (default 45 s, under
+  claude.ai's 60 s tool-call limit). It returns `{ ok: true, status: "authorized", trustLevel? }`, or
+  `{ ok: false, status, stop }` with `status` one of `"pending"`, `"denied"`, `"revoked"`,
+  `"unknown"` (this server does not know the `trackingId`; it may have restarted) or `"read-failed"`.
+  `stop` says whether waiting again can help.
+- **A failed read is not "not approved".** A throw, no answer, or a `status` that is not
+  `"pending" | "authorized" | "denied" | "revoked"` is a failed read: the wait keeps reading until its
+  hold ends, then says `"read-failed"`. After `readFailureMs` (default 2 minutes) of reads with no
+  success, `stop` is `true`.
+- **A run of waits.** Consecutive waits (each starting within `modelGraceMs`, default 20 s, of the
+  last one ending) are one run. A permission still pending after `approvalWindowMs` (default 15
+  minutes) of one run gets `stop: true`; a wait that starts later begins a new run with the full window.
+- **`denied` and `revoked` are final:** every later reader sees them, from memory, without reading
+  the shop again. An entry is forgotten 24 hours after it was tracked (never approved) or became
+  final, and 30 days after its last use once approved.
+- **One running copy by default.** The default memory lives in this process: after a restart, or on
+  another copy of the server, a `trackingId` is `unknown`. Pass `memory`, a `PermissionMemory` with
+  `get`, `set` (compare-and-set, with `ifVersion`) and `delete`, to share it. The time limits then
+  hold across copies. No shared implementation ships yet.
+- **It never decides whether anything may be bought.** The shop enforces every limit on every
+  purchase. `trustLevel` is the shop's claim, passed on as given.
+
 ### Webhooks — tell a *different* service when an order settles
 
 `on("order.settled", …)` only fires in the process that settled the order. When fulfillment runs
@@ -1198,6 +1248,7 @@ ageDcql()  ·  ENVELOPE_VERSION  ·  ENVELOPE_SENTINEL
 // Entry points besides the root
 "@openmobilehub/credentagent-gate/agent"   // the AGENT's side; holds its private key, so never imported by a store
   AgentKey.generate() · AgentKey.fromJwk(jwk) · DelegatedIntent.fromWalletPresentation({ presentation, disclosures }) · intent.spend(args) → DelegatedPurchaseProof
+  createPermissions({ read, memory?, approvalHoldMs?, approvalWindowMs?, readFailureMs?, modelGraceMs? }) → { track({ store, grantId }) → trackingId, wait(trackingId) → PermissionResult, forget(trackingId) }
 "@openmobilehub/credentagent-gate/cards"   // the card kit: one card page any MCP server serves (see Cards)
   grantView(grant, { product? }) → Promise<GrantViewData>   // a live grant as plain card data (exported from the root)
   createCards({ tools?: { revoke? } }) → { html, register(server), toolMeta({ invoking?, invoked?, callableFromCard? }), grant(view, { note? }) → CardResult }
