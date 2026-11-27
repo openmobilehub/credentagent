@@ -470,6 +470,7 @@ const grantId = "g1";                                       // the id the shop g
 const permissions = createPermissions({
   // `wait()` calls this with what you gave to `track()`: `store` is `{ id: "beanbarn" }` (the shop), `grantId` is `"g1"`.
   // Answer what the shop says: { status, trustLevel? }, `status` being "pending", "authorized", "denied" or "revoked".
+  // `/agent/grants/<id>` is this example shop's own route for that: use yours.
   read: async ({ store, grantId }) => (await fetch(`${storeUrls[store.id]}/agent/grants/${grantId}`)).json(),
 });
 
@@ -484,7 +485,8 @@ if (result.ok) {
 }
 ```
 
-- **`track()`** remembers a permission under a random `trackingId` and returns the same id for the
+- **`store` is the shop** that issued the permission (`{ id, name? }`), not a data store: the place permissions are remembered is called `memory`.
+- **`track()`** remembers a permission under a random `trackingId` (`trk_…`) and returns the same id for the
   same `(store.id, grantId)`. Two shops that both call a permission `"g1"` get two ids. It throws,
   saying what to pass, when `store.id` or `grantId` is missing.
 - **`wait()`** reads the shop every 1.5 s and holds up to `approvalHoldMs` (default 45 s, under
@@ -494,14 +496,16 @@ if (result.ok) {
   `stop` says whether waiting again can help.
 - **A failed read is not "not approved".** A throw, no answer, or a `status` that is not
   `"pending" | "authorized" | "denied" | "revoked"` is a failed read: the wait keeps reading until its
-  hold ends, then says `"read-failed"`. After `readFailureMs` (default 2 minutes) of reads with no
+  hold ends, then says `"read-failed"`. A read that has not answered after 10 s counts as failed too, so a hanging shop cannot hold a wait past its limit. Pass `onReadError` to hear why each read failed (a typo in the URL looks the same as an outage otherwise). After `readFailureMs` (default 2 minutes) of reads with no
   success, `stop` is `true`.
 - **A run of waits.** Consecutive waits (each starting within `modelGraceMs`, default 20 s, of the
   last one ending) are one run. A permission still pending after `approvalWindowMs` (default 15
-  minutes) of one run gets `stop: true`; a wait that starts later begins a new run with the full window.
+  minutes) of one run gets `stop: true`; a wait that starts later begins a new run with the full window and a fresh count of failed reads.
 - **`denied` and `revoked` are final:** every later reader sees them, from memory, without reading
   the shop again. An entry is forgotten 24 hours after it was tracked (never approved) or became
   final, and 30 days after its last use once approved.
+- **Save what you need to ask again.** A `trackingId` lives in `memory`. After a restart, call `track()` again with the same shop id and `grantId`: it starts a fresh entry.
+- **`wait()` rejects only when `memory` itself fails;** everything about the shop and the permission is in the result.
 - **One running copy by default.** The default memory lives in this process: after a restart, or on
   another copy of the server, a `trackingId` is `unknown`. Pass `memory`, a `PermissionMemory` with
   `get`, `set` (compare-and-set, with `ifVersion`) and `delete`, to share it. The time limits then
@@ -1252,7 +1256,7 @@ ageDcql()  ·  ENVELOPE_VERSION  ·  ENVELOPE_SENTINEL
 // Entry points besides the root
 "@openmobilehub/credentagent-gate/agent"   // the AGENT's side; holds its private key, so never imported by a store
   AgentKey.generate() · AgentKey.fromJwk(jwk) · DelegatedIntent.fromWalletPresentation({ presentation, disclosures }) · intent.spend(args) → DelegatedPurchaseProof
-  createPermissions({ read, memory?, approvalHoldMs?, approvalWindowMs?, readFailureMs?, modelGraceMs? }) → { track({ store, grantId }) → trackingId, wait(trackingId) → PermissionResult, forget(trackingId) }
+  createPermissions({ read, memory?, approvalHoldMs?, approvalWindowMs?, readFailureMs?, modelGraceMs?, onReadError? }) → { track({ store, grantId }) → trackingId, wait(trackingId) → PermissionResult, forget(trackingId) }
 "@openmobilehub/credentagent-gate/cards"   // the card kit: one card page any MCP server serves (see Cards)
   grantView(grant, { product? }) → Promise<GrantViewData>   // a live grant as plain card data (exported from the root)
   createCards({ tools?: { revoke? } }) → { html, register(server), toolMeta({ invoking?, invoked?, callableFromCard? }), grant(view, { note? }) → CardResult }

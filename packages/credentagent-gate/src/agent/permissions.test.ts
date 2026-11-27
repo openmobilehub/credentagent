@@ -1,8 +1,10 @@
 // `createPermissions()` (spec 015, Part 1: FR-1 to FR-3). A virtual clock runs the waits instantly:
 // `sleep(ms)` advances time by `ms`. Every test here fails when the control it names is removed.
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { createPermissions, type PermissionReadAnswer, type PermissionsOptions } from "./permissions.js";
 import { createInMemoryPermissionMemory, type PermissionMemory } from "./permission-memory.js";
+
+afterEach(() => vi.useRealTimers());
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -72,8 +74,98 @@ describe("track — one handle per grant", () => {
   });
 });
 
+describe("round 2 of the review — found, then fixed", () => {
+  it("an approved permission used every month keeps its trackingId: track() after 31 days gives the same id", async () => {
+    const clock = virtualClock();
+    const permissions = permissionsFor(clock, signedAt(clock, 0));
+    const id = await permissions.track({ store: beanbarn, grantId: "g1" });
+    await permissions.wait(id);
+    clock.advance(29 * DAY);
+    await permissions.wait(id); // a use: the permission now lives until day 59
+    clock.advance(2 * DAY); // day 31
+    expect(await permissions.track({ store: beanbarn, grantId: "g1" })).toBe(id);
+  });
+
+  it("a read that never answers is a failed read, so a hold ends on time; and onReadError says why", async () => {
+    vi.useFakeTimers();
+    const clock = virtualClock();
+    const errors: string[] = [];
+    const permissions = permissionsFor(clock, { read: () => new Promise<never>(() => {}) }, { onReadError: (error) => errors.push(error.message) });
+    const id = await permissions.track({ store: beanbarn, grantId: "g1" });
+    const result = permissions.wait(id);
+    await vi.advanceTimersByTimeAsync(10_001); // 10 s, not a minute: the first read has been given up on
+    expect(errors[0]).toContain("did not answer within 10 s");
+    await vi.runAllTimersAsync();
+    expect(await result).toEqual({ ok: false, status: "read-failed", stop: false });
+  });
+
+  it("onReadError hears a throw and an answer that is not a status, and a throwing hook changes nothing", async () => {
+    const clock = virtualClock();
+    const errors: string[] = [];
+    let n = 0;
+    const permissions = permissionsFor(clock, { read: async () => (n++ === 0 ? Promise.reject(new Error("404 from the shop")) : ({ status: "PENDING" } as never)) }, {
+      approvalHoldMs: 3_000,
+      onReadError: (error) => { errors.push(error.message); throw new Error("a broken logger"); },
+    });
+    const id = await permissions.track({ store: beanbarn, grantId: "g1" });
+    expect(await permissions.wait(id)).toEqual({ ok: false, status: "read-failed", stop: false });
+    expect(errors[0]).toBe("404 from the shop");
+    expect(errors[1]).toContain('"pending" | "authorized" | "denied" | "revoked"');
+  });
+
+  it("a reader whose memory lookup began before another read finished does not ask the shop again", async () => {
+    const clock = virtualClock();
+    const inner = createInMemoryPermissionMemory(clock.now);
+    let snapshot: { value: unknown; version: string } | undefined;
+    let staleIn = -1; // the lookup that gets the older record
+    const memory: PermissionMemory = {
+      ...inner,
+      get: async (k) => (k.startsWith("permission:") && staleIn-- === 0 ? snapshot : inner.get(k)),
+    };
+    let reads = 0;
+    const permissions = permissionsFor(clock, { read: async () => { reads++; return { status: "pending" }; } }, { memory, approvalHoldMs: 0 });
+    const id = await permissions.track({ store: beanbarn, grantId: "g1" });
+    snapshot = await inner.get(`permission:${id}`); // the record before any read
+    await permissions.wait(id);
+    expect(reads).toBe(1);
+    clock.advance(100);
+    staleIn = 1; // this wait's second lookup (its shared read) still sees the record from before the first read
+    await permissions.wait(id);
+    expect(reads).toBe(1);
+  });
+
+  it("forget() leaves the index alone when it points at a newer trackingId", async () => {
+    const clock = virtualClock();
+    const memory = createInMemoryPermissionMemory(clock.now);
+    const permissions = permissionsFor(clock, signedAt(clock, Infinity), { memory });
+    const old = await permissions.track({ store: beanbarn, grantId: "g1" });
+    const indexKey = `permission-index:${JSON.stringify(["beanbarn", "g1"])}`;
+    const index = (await memory.get(indexKey))!;
+    await memory.set(indexKey, "trk_newer", { ifVersion: index.version }); // another copy tracked the pair again
+    await permissions.forget(old);
+    expect((await memory.get(indexKey))?.value).toBe("trk_newer");
+  });
+
+  it("a wait that ends early closes its own 'open until'", async () => {
+    const clock = virtualClock();
+    const memory = createInMemoryPermissionMemory(clock.now);
+    const permissions = permissionsFor(clock, signedAt(clock, 0), { memory });
+    const id = await permissions.track({ store: beanbarn, grantId: "g1" });
+    await permissions.wait(id);
+    const run = ((await memory.get(`permission:${id}`))!.value as { run: { openUntil?: number; endedAt?: number } }).run;
+    expect(run.openUntil).toBeUndefined();
+    expect(run.endedAt).toBeDefined();
+  });
+
+  it("trackingIds start with trk_, as the spec says", async () => {
+    const clock = virtualClock();
+    const permissions = permissionsFor(clock, signedAt(clock, 0));
+    expect(await permissions.track({ store: beanbarn, grantId: "g1" })).toMatch(/^trk_[\w-]{20,}$/);
+  });
+});
+
 describe("wait — what each outcome says", () => {
-  it("authorized: answers ok with the store's trust level, once the person signs", async () => {
+  it("authorized: answers ok with the store's trust level, once the person approves", async () => {
     const clock = virtualClock();
     const permissions = permissionsFor(clock, signedAt(clock, clock.now() + 3_000));
     const id = await permissions.track({ store: beanbarn, grantId: "g1" });

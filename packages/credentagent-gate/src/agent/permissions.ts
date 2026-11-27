@@ -25,7 +25,7 @@ export interface PermissionReadAnswer {
   status: GrantStatus;
   /** The store's claim about how strongly it checked the person — never verified here. */
   trustLevel?: string;
-  /** What the store hands over once approved. Passed on as given; never kept in memory (it is read each time). */
+  /** What the store hands over once approved, for `buy()` in a later step. Not kept in memory (it is read each time) and not returned by `wait()` yet. */
   approval?: unknown;
 }
 
@@ -52,10 +52,13 @@ export interface PermissionsOptions {
   readFailureMs?: number;
   /** After a wait ends, how long the caller still counts as waiting — it joins consecutive waits into one run, in ms. Default 20 000. */
   modelGraceMs?: number;
+  /** Called with why a read failed: it threw, took longer than 10 s, or answered something that is not a status. The wait still answers `read-failed`; this is how you find a typo in the URL. A throw from it is ignored. */
+  onReadError?: (error: Error, permission: { store: PermissionStore; grantId: string }) => void;
   /** Test seam: a clock whose `sleep` can run instantly. Default: the real one. */
   clock?: { now(): number; sleep(ms: number): Promise<void> };
 }
 
+/** `wait()` rejects only when the memory itself fails; everything about the shop and the permission is in the result. */
 export interface Permissions {
   /** Remember a permission and return its `trackingId`: the same id for the same `(store.id, grantId)`, a new random one otherwise. */
   track(permission: { store: PermissionStore; grantId: string }): Promise<string>;
@@ -66,6 +69,8 @@ export interface Permissions {
 }
 
 const POLL_MS = 1_500;
+/** A read that has not answered by then is a failed read, so a hold ends on time even when the shop hangs. */
+const READ_TIMEOUT_MS = 10_000;
 const HOUR = 3_600_000;
 const NEVER_APPROVED_TTL = 24 * HOUR;
 const FINAL_TTL = 24 * HOUR;
@@ -105,6 +110,17 @@ function expiresAt(record: PermissionRecord): number {
   return record.approved ? record.lastUsedAt + APPROVED_TTL : record.trackedAt + NEVER_APPROVED_TTL;
 }
 
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`the shop did not answer within ${ms / 1000} s`)), ms);
+    timer.unref?.();
+    promise.then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (error) => { clearTimeout(timer); reject(error); },
+    );
+  });
+}
+
 export function createPermissions(options: PermissionsOptions): Permissions {
   if (typeof options?.read !== "function") {
     throw new TypeError("createPermissions needs `read`: an async function that asks the store for a permission, `({ store, grantId }) => ({ status, trustLevel? })`.");
@@ -119,6 +135,8 @@ export function createPermissions(options: PermissionsOptions): Permissions {
   const memory = options.memory ?? createInMemoryPermissionMemory(now);
   /** Reads in flight in this copy, so a second reader awaits the first instead of asking the store again. */
   const inFlight = new Map<string, Promise<ReadOutcome>>();
+  /** What this copy last read, for a reader whose memory lookup began before that read finished and so still sees an older record. */
+  const recent = new Map<string, { at: number; outcome: ReadOutcome }>();
 
   /** Read, change, compare-and-set — retried on a conflict. `undefined` when the permission is not remembered (any more). */
   async function update(trackingId: string, change: (record: PermissionRecord) => void): Promise<PermissionRecord | undefined> {
@@ -127,19 +145,40 @@ export function createPermissions(options: PermissionsOptions): Permissions {
       if (!got) return undefined;
       const record = got.value as PermissionRecord;
       change(record);
-      if (await memory.set(recordKey(trackingId), record, { ifVersion: got.version, expiresAt: expiresAt(record) })) return record;
+      if (await memory.set(recordKey(trackingId), record, { ifVersion: got.version, expiresAt: expiresAt(record) })) {
+        if (record.approved && !record.final) await keepIndexAsLongAs(trackingId, record);
+        return record;
+      }
     }
     throw new Error("createPermissions: the memory kept refusing an update (a conflict on every try). Check that its compare-and-set honours `ifVersion`.");
   }
 
+  /** An approved permission lives 30 days after its last use, so the index that finds it must live as long (else a second id for one grant). */
+  async function keepIndexAsLongAs(trackingId: string, record: PermissionRecord): Promise<void> {
+    const key = indexKey(record.store.id, record.grantId);
+    const index = await memory.get(key);
+    if (index && index.value === trackingId) await memory.set(key, trackingId, { ifVersion: index.version, expiresAt: expiresAt(record) });
+  }
+
+  function reportReadError(error: Error, record: PermissionRecord): void {
+    try {
+      options.onReadError?.(error, { store: record.store, grantId: record.grantId });
+    } catch {
+      // a broken logger must not change what a wait answers
+    }
+  }
+
   async function readOnce(trackingId: string, record: PermissionRecord): Promise<ReadOutcome> {
     let answer: PermissionReadAnswer | undefined;
+    let failure: Error | undefined;
     try {
-      answer = await read({ store: record.store, grantId: record.grantId });
-    } catch {
+      answer = await withTimeout(read({ store: record.store, grantId: record.grantId }), READ_TIMEOUT_MS);
+    } catch (error) {
       answer = undefined;
+      failure = error instanceof Error ? error : new Error(String(error));
     }
     const valid = typeof answer === "object" && answer !== null && GRANT_STATUSES.includes(answer.status);
+    if (!valid) reportReadError(failure ?? new Error('read answered something that is not { status: "pending" | "authorized" | "denied" | "revoked" }'), record);
     const at = now();
     if (!valid) {
       const updated = await update(trackingId, (r) => {
@@ -161,14 +200,24 @@ export function createPermissions(options: PermissionsOptions): Permissions {
 
   /** The one shared read (FR-2): a final status is answered from memory, a read under 1.5 s old is reused, a read in flight is awaited. */
   async function sharedRead(trackingId: string): Promise<ReadOutcome> {
+    const already = inFlight.get(trackingId);
+    if (already) return already;
+    const just = recent.get(trackingId);
+    if (just && now() - just.at < POLL_MS) return just.outcome;
     const got = await memory.get(recordKey(trackingId));
     if (!got) return { kind: "unknown" };
     const record = got.value as PermissionRecord;
     if (record.final) return { kind: "answer", status: record.final.status, trustLevel: record.final.trustLevel };
     if (record.lastRead && now() - record.lastRead.at < POLL_MS) return { kind: "answer", status: record.lastRead.status, trustLevel: record.lastRead.trustLevel };
-    const flying = inFlight.get(trackingId);
+    const flying = inFlight.get(trackingId); // a read may have started while this lookup was waiting
     if (flying) return flying;
-    const started = readOnce(trackingId, record).finally(() => inFlight.delete(trackingId));
+    const started = readOnce(trackingId, record).then((outcome) => {
+      if (outcome.kind === "answer") {
+        for (const [id, seen] of recent) if (now() - seen.at >= POLL_MS) recent.delete(id);
+        recent.set(trackingId, { at: now(), outcome });
+      }
+      return outcome;
+    }).finally(() => inFlight.delete(trackingId));
     inFlight.set(trackingId, started);
     return started;
   }
@@ -183,7 +232,7 @@ export function createPermissions(options: PermissionsOptions): Permissions {
       for (let attempt = 0; attempt < 20; attempt++) {
         const index = await memory.get(key);
         if (index && (await memory.get(recordKey(index.value as string)))) return index.value as string;
-        const trackingId = `perm_${randomBytes(16).toString("base64url")}`;
+        const trackingId = `trk_${randomBytes(16).toString("base64url")}`;
         const at = now();
         const store: PermissionStore = { id: storeId, ...(permission.store.name ? { name: permission.store.name } : {}) };
         const record: PermissionRecord = { store, grantId, trackedAt: at, lastUsedAt: at, approved: false, seen: false };
@@ -237,9 +286,12 @@ export function createPermissions(options: PermissionsOptions): Permissions {
     async forget(trackingId) {
       const got = await memory.get(recordKey(trackingId));
       await memory.delete(recordKey(trackingId));
+      recent.delete(trackingId);
       if (got) {
         const record = got.value as PermissionRecord;
-        await memory.delete(indexKey(record.store.id, record.grantId));
+        const key = indexKey(record.store.id, record.grantId);
+        const index = await memory.get(key);
+        if (index && index.value === trackingId) await memory.delete(key); // not a newer id's index
       }
     },
   };
