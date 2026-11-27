@@ -199,7 +199,8 @@ export function createPermissions(options: PermissionsOptions): Permissions {
       const myOpenUntil = startedAt + holdMs;
       const begun = await update(trackingId, (r) => {
         const run = r.run;
-        const continuing = run !== undefined && (run.endedAt === undefined ? (run.openUntil ?? 0) > startedAt : startedAt - run.endedAt <= graceMs);
+        // Another wait still open, or the last one ended within the grace window: the same run.
+        const continuing = run !== undefined && ((run.openUntil ?? 0) > startedAt || (run.endedAt !== undefined && startedAt - run.endedAt <= graceMs));
         if (!continuing) r.failingSince = undefined; // a new run starts clean
         r.run = continuing ? { ...run!, endedAt: undefined, openUntil: Math.max(run!.openUntil ?? 0, myOpenUntil) } : { startedAt, openUntil: myOpenUntil };
         r.lastUsedAt = startedAt;

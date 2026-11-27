@@ -129,6 +129,19 @@ describe("wait — the limits", () => {
     expect(await permissions.wait(id)).toMatchObject({ status: "pending", stop: false });
   });
 
+  it("a wait that starts while another wait is still open continues the run, even when an earlier wait ended long ago", async () => {
+    const clock = virtualClock();
+    const memory = createInMemoryPermissionMemory(clock.now);
+    const permissions = permissionsFor(clock, signedAt(clock, Infinity), { memory });
+    const id = await permissions.track({ store: beanbarn, grantId: "g1" });
+    // The state two overlapping waits leave: one ended 30 s ago, the other is open for 10 s more; the run began 40 s ago.
+    const got = (await memory.get(`permission:${id}`))!;
+    const record = got.value as { run?: object };
+    record.run = { startedAt: clock.now() - 40_000, endedAt: clock.now() - 30_000, openUntil: clock.now() + 10_000 };
+    await memory.set(`permission:${id}`, record, { ifVersion: got.version });
+    expect(await permissions.wait(id)).toEqual({ ok: false, status: "pending", stop: true }); // 40 s into a 25 s window: the run went on
+  });
+
   it("reads failing with no success for readFailureMs get 'stop' — and a failed read does not end the hold", async () => {
     const clock = virtualClock();
     const s = store(clock, () => new Error("store unreachable"));
