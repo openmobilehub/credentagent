@@ -29,7 +29,7 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
 ### Added
 
 - `createPermissions()` in `@openmobilehub/credentagent-gate/agent`: an agent remembers the spending
-  permissions it asked a person to sign, and waits for the signature. `track({ store, grantId })`
+  permissions it asked a person to approve, and waits for the approval. `track({ store, grantId })`
   returns a `trackingId` (the same id for the same `store.id` and `grantId`); `wait(trackingId)`
   reads the shop every 1.5 s, holds up to 45 s, and answers `{ ok, status, stop }`; `forget()` drops
   one. A failed read is never "not approved", a denied or revoked permission stays that way for

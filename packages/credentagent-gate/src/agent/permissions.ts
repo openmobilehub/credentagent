@@ -1,5 +1,5 @@
-// `createPermissions()` — the agent remembers the spending permissions it asked a person to sign, and
-// waits for the signature (spec 015, Part 1: FR-1 to FR-3). Plain data in and out: no chat and no card
+// `createPermissions()` — the agent remembers the spending permissions it asked a person to approve, and
+// waits for the approval (spec 015, Part 1: FR-1 to FR-3). Plain data in and out: no chat and no card
 // are needed, so a text-only agent or a timer uses it the same way a chat does.
 //
 //   const permissions = createPermissions({ read: ({ store, grantId }) => getJson(`${urls[store.id]}/agent/grants/${grantId}`) });
@@ -59,7 +59,7 @@ export interface PermissionsOptions {
 export interface Permissions {
   /** Remember a permission and return its `trackingId`: the same id for the same `(store.id, grantId)`, a new random one otherwise. */
   track(permission: { store: PermissionStore; grantId: string }): Promise<string>;
-  /** Wait for the person to sign: re-reads every 1.5 s and holds up to `approvalHoldMs`. */
+  /** Wait for the person to approve: re-reads every 1.5 s and holds up to `approvalHoldMs`. */
   wait(trackingId: string): Promise<PermissionResult>;
   /** Drop what is remembered about a permission. */
   forget(trackingId: string): Promise<void>;

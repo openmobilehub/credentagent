@@ -455,10 +455,10 @@ does not remember.
   against its own checkout key), and each store sees only its own `spent`: a "$200 in total"
   permission is $200 at each of them. Set `budget` with that in mind.
 
-### Permissions — remember what you asked a person to sign, and wait for it
+### Permissions — remember what you asked a person to approve, and wait for it
 
-When an agent asks a person to sign a spending permission on their phone, the agent's server has to
-remember the request and wait for the signature. `createPermissions()` does both, as plain data in and
+When an agent asks a person to approve a spending permission (on their phone, or with a click on the
+shop's page), the agent's server has to remember the request and wait for the approval. `createPermissions()` does both, as plain data in and
 out: no chat and no card page are needed, so a text-only agent or a timer uses it the same way.
 
 ```js
