@@ -464,9 +464,13 @@ out: no chat and no card page are needed, so a text-only agent or a timer uses i
 ```js
 import { createPermissions } from "@openmobilehub/credentagent-gate/agent";
 
+const storeUrls = { beanbarn: "https://beanbarn.example" }; // your shops, by ids you choose
+const grantId = "g1";                                       // the id the shop gave the permission when it created it
+
 const permissions = createPermissions({
-  // How to ask the shop that issued a permission about it: { status, trustLevel? }.
-  read: ({ store, grantId }) => getJson(`${storeUrls[store.id]}/agent/grants/${grantId}`),
+  // `wait()` calls this with the `store` and `grantId` you gave to `track()`.
+  // Answer what the shop says: { status, trustLevel? }, `status` being "pending", "authorized", "denied" or "revoked".
+  read: async ({ store, grantId }) => (await fetch(`${storeUrls[store.id]}/agent/grants/${grantId}`)).json(),
 });
 
 const trackingId = await permissions.track({ store: { id: "beanbarn" }, grantId }); // same id every time for this pair
