@@ -28,6 +28,15 @@ npm actually serves with `npm view @openmobilehub/credentagent-gate version`.
 
 ### Added
 
+- `createPermissions()` in `@openmobilehub/credentagent-gate/agent`: an agent remembers the spending
+  permissions it asked a person to approve, and waits for the approval. `track({ store, grantId })`
+  returns a `trackingId` (the same id for the same `store.id` and `grantId`); `wait(trackingId)`
+  reads the shop every 1.5 s, holds up to 45 s, and answers `{ ok, status, stop }`; `forget()` drops
+  one. A failed read is never "not approved", a denied or revoked permission stays that way for
+  every reader, and a run of waits stops after 15 minutes pending or 2 minutes of failed reads.
+  A read that has not answered after 10 s counts as a failed read, and `onReadError` says why a read
+  failed. `trackingId`s start with `trk_`. Permissions are remembered in this process unless a
+  `PermissionMemory` is passed; no shared one ships yet. Nothing in the packages calls it yet (#436, part of #256).
 - The grant signing page now accepts the SD-JWT Payment card from Multipaz's issuer
   (`payment_sca_sd_jwt` at `issuer.multipaz.org`), as well as the test card `tools/demo-pki/mint/`
   mints. The request asks the wallet for either `credential_id` (the official card) or
